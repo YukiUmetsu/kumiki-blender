@@ -79,9 +79,20 @@ jobs:
         run: |
           python -m kumiki_blender audit --model .review/ci/lattice-tower/model.glb
           python -m kumiki_blender audit --model .review/ci/portico/model.glb
+          python -m kumiki_blender audit-revision --root .review/ci/lattice-tower
+          python -m kumiki_blender audit-revision --root .review/ci/portico
           python -m unittest tests.test_export_audit tests.test_glb_audit -v
           test -s .review/ci/lattice-tower/previews/detail.png
           test -s .review/ci/portico/previews/detail.png
+      - name: Preserve Blender crash diagnostics
+        if: failure()
+        run: |
+          mkdir -p .review/ci/diagnostics
+          for crash in /tmp/*.crash.txt; do
+            if [ -f "$crash" ]; then
+              cp "$crash" .review/ci/diagnostics/
+            fi
+          done
       - name: Upload Blender preview, source and GLB artifacts
         if: always()
         uses: actions/upload-artifact@v4
@@ -90,3 +101,4 @@ jobs:
           path: .review/ci/
           if-no-files-found: warn
           retention-days: 7
+          include-hidden-files: true

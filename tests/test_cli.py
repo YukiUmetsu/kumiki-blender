@@ -28,6 +28,14 @@ class CLITests(unittest.TestCase):
             self.assertEqual(code, 0)
             self.assertEqual(json.loads(stream.getvalue())["meshes"], 1)
 
+    def test_audit_revision_command_checks_asset_package(self):
+        stream = io.StringIO()
+        with patch("kumiki_blender.cli.audit_revision", return_value={"verified": True, "output_count": 6}), \
+                contextlib.redirect_stdout(stream):
+            code = main(["audit-revision", "--root", "example/revision"])
+        self.assertEqual(code, 0)
+        self.assertTrue(json.loads(stream.getvalue())["verified"])
+
     def test_validate_prints_machine_readable_structure(self):
         stream = io.StringIO()
         with contextlib.redirect_stdout(stream):

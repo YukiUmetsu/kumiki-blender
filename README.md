@@ -79,6 +79,14 @@ PYTHONPATH=src python3 -m kumiki_blender audit --model .review/lattice-observati
 
 The lightweight auditor checks the GLB 2.0 envelope, declared file length, mesh list, number of named semantic nodes and absence of external texture/buffer dependencies. It does **not** replace a full glTF validator, mesh manifold analysis or visual QA. Actual builds also check `.blend` and PNG signatures before writing their manifest.
 
+After building, cross-check **every file against the manifest** before importing it into another repository:
+
+```bash
+PYTHONPATH=src python3 -m kumiki_blender audit-revision --root .review/lattice-observation-tower/r01
+```
+
+This detects missing or path-escaping files, signature errors, mismatched file sizes, stale GLB audits and missing semantic node tags. ContentGen and Kumiki-UI should treat a passing revision audit as an asset-integrity prerequisite, not a substitute for visual approval.
+
 ## Test
 
 ```bash

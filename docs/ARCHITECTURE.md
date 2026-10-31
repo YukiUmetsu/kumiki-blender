@@ -29,9 +29,10 @@ Recipes never accept executable Python or arbitrary paths. A recipe cannot direc
 - Structural beams carry stable names and a `kumiki_part` custom property for future camera-target and semantic part bindings.
 - The preview uses Cycles, a neutral sky, daylight sun, a ground plane and an architecture-framing camera. Four deterministic camera poses cover hero, front, side and construction detail, with cheaper sampling on secondary views.
 - The GLB contains only selected model objects; shader compatibility and visual parity must be checked by a real glTF/Three.js import before release.
-- `blender_output.py` owns the shared immutable revision exporter, camera passes, manifest construction and output audits for both tower and portico models.
+- `blender_output.py` owns the shared immutable revision exporter, camera passes, manifest construction and output audits for both tower and portico models. It saves the editable `.blend` **before** baking evaluated modifiers into the transient export scene, preserving source editing while ensuring the portable GLB contains real bevel and normal details. This also avoids an observed Blender 4.5 headless glTF-export crash with the exporter's global Apply Modifiers option.
 - `render_profiles.py` provides a production profile and a resource-capped smoke profile. `KUMIKI_RENDER_PROFILE=smoke` affects only sample count and preview resolution, never model mesh fidelity or GLB exports. The selected profile and its dimensions are recorded in the manifest.
 - A GLB envelope audit detects malformed exports and external texture/buffer references. The build verifies native `.blend` and PNG file signatures, then includes the audit report and output file sizes in the manifest.
+- `revision_audit.py` independently rechecks the full delivered asset package against its manifest, rejecting missing/tampered/path-escaping files, GLB audit mismatches and absent semantic part tags. It is the asset-integrity boundary for future consumers.
 - A source digest and Blender version are recorded to aid repeatability and provenance.
 
 ### Headless Blender CI

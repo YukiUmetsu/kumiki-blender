@@ -21,6 +21,27 @@ def aim_at(obj: Any, target: tuple[float, float, float]) -> None:
     obj.rotation_euler = (Vector(target) - obj.location).to_track_quat("-Z", "Y").to_euler()
 
 
+def bake_export_meshes(bpy: Any, objects: Sequence[Any]) -> None:
+    """Bake evaluated bevels/normals after saving the editable source blend.
+
+    The glTF exporter's global Apply Modifiers option has crashed in our
+    Blender 4.5 headless smoke test with hundreds of individual members.
+    Capture evaluated meshes explicitly, before mutating any source object,
+    so GLB still contains the same physical edge details as the Cycles scene.
+    """
+    depsgraph = bpy.context.evaluated_depsgraph_get()
+    baked = []
+    for obj in objects:
+        evaluated = obj.evaluated_get(depsgraph)
+        mesh = bpy.data.meshes.new_from_object(evaluated, preserve_all_data_layers=True, depsgraph=depsgraph)
+        if mesh is None or not mesh.vertices or not mesh.polygons:
+            raise RuntimeError(f"Failed to bake modified mesh: {obj.name}")
+        baked.append((obj, mesh))
+    for obj, mesh in baked:
+        obj.modifiers.clear()
+        obj.data = mesh
+
+
 def export_revision(
     bpy: Any,
     scene: Any,
@@ -52,6 +73,8 @@ def export_revision(
     with bpy.context.temp_override(scene=scene, view_layer=scene.view_layers[0]):
         bpy.ops.wm.save_as_mainfile(filepath=str(destination / "source.blend"))
 
+        bake_export_meshes(bpy, objects)
+
         # Explicit model selection excludes all studio-only lights and ground.
         bpy.ops.object.select_all(action="DESELECT")
         for obj in objects:
@@ -60,7 +83,7 @@ def export_revision(
             filepath=str(destination / "model.glb"), export_format="GLB",
             use_selection=True, export_materials="EXPORT", export_animations=False,
             export_cameras=False, export_lights=False, export_extras=True,
-            export_apply=True,  # Bake bevel/normal modifiers into portable mesh geometry.
+            export_apply=False,  # Explicitly baked above; avoid the global modifier exporter path.
         )
         glb_report = audit_glb(destination / "model.glb")
         bpy.ops.object.select_all(action="DESELECT")

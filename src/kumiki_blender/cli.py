@@ -13,6 +13,7 @@ from .lattice import make_lattice_tower
 from .portico import PorticoError, make_portico_study
 from .recipe import RecipeError, load_recipe
 from .render_profiles import RenderProfileError
+from .revision_audit import RevisionAuditError, audit_revision
 from .surfaces import SurfaceError
 
 
@@ -31,11 +32,16 @@ def main(argv: list[str] | None = None) -> int:
             subcommand.add_argument("--output", type=Path, required=True)
     audit_parser = subcommands.add_parser("audit")
     audit_parser.add_argument("--model", type=Path, required=True)
+    revision_parser = subcommands.add_parser("audit-revision")
+    revision_parser.add_argument("--root", type=Path, required=True)
     args = parser.parse_args(argv)
 
     try:
         if args.command == "audit":
             print(json.dumps(audit_glb(args.model), indent=2))
+            return 0
+        if args.command == "audit-revision":
+            print(json.dumps(audit_revision(args.root), indent=2))
             return 0
         if args.command in ("plan-portico", "build-portico"):
             study = make_portico_study(bays=args.bays)
@@ -87,7 +93,7 @@ def main(argv: list[str] | None = None) -> int:
         manifest = build_scene(recipe, plan, output, bpy_module=bpy)
         print(json.dumps(manifest, indent=2))
         return 0
-    except (RecipeError, PorticoError, RenderProfileError, AuditError, ExportAuditError,
+    except (RecipeError, PorticoError, RenderProfileError, RevisionAuditError, AuditError, ExportAuditError,
             SurfaceError, RuntimeError, OSError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 2

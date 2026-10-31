@@ -50,12 +50,14 @@ class BlenderOutputTests(unittest.TestCase):
             )
             shots = (QualityShot("hero", (8, -12, 9), (0, 0, 3), 12),
                      QualityShot("front", (0, -20, 4), (0, 0, 3), 10))
-            with patch("kumiki_blender.blender_output.aim_at"):
+            with patch("kumiki_blender.blender_output.aim_at"), \
+                    patch("kumiki_blender.blender_output.bake_export_meshes") as bake:
                 manifest = export_revision(bpy, scene, camera, [model], shots, output,
                                            samples=32, metadata={"asset_id": "test-study"})
             self.assertEqual(manifest["files"]["quality_views"], ["preview.png", "previews/front.png"])
             self.assertEqual(manifest["glb_audit"]["semantic_nodes"], 1)
-            self.assertTrue(export_options["export_apply"], "Must bake bevel/weighted-normal modifiers to GLB")
+            bake.assert_called_once_with(bpy, [model])
+            self.assertFalse(export_options["export_apply"], "Modifiers were baked into temporary export geometry")
             self.assertTrue(export_options["export_extras"])
             self.assertEqual(render.filepath, str(output / "previews/front.png"))
             self.assertTrue((output / "manifest.json").is_file())
