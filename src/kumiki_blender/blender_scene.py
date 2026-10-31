@@ -13,6 +13,7 @@ from typing import Any
 from .blender_output import export_revision
 from .lattice import Beam, GussetPlate, TowerPlan
 from .recipe import TowerRecipe
+from .render_profiles import select_render_profile
 from .shots import plan_quality_shots
 from .surfaces import PBRSurface, get_surface
 
@@ -151,15 +152,16 @@ def build_scene(recipe: TowerRecipe, plan: TowerPlan, destination: Path, *, bpy_
     if destination.exists() or destination.is_symlink():
         raise RuntimeError(f"Output revision already exists: {destination}")
 
+    profile = select_render_profile(recipe.preview_width, recipe.preview_height, recipe.samples)
     scene = bpy.data.scenes.new(f"Kumiki / {recipe.asset_id}")
     # Background Blender builds may have no window; scene overrides work without
     # relying on a visible UI. Never remove or replace an existing scene.
     if bpy.context.window is not None:
         bpy.context.window.scene = scene
     scene.render.engine = "CYCLES"
-    scene.cycles.samples = recipe.samples
-    scene.render.resolution_x = recipe.preview_width
-    scene.render.resolution_y = recipe.preview_height
+    scene.cycles.samples = profile.samples
+    scene.render.resolution_x = profile.width
+    scene.render.resolution_y = profile.height
     scene.render.resolution_percentage = 100
     scene.render.image_settings.file_format = "PNG"
     scene.view_settings.view_transform = "AgX"
@@ -220,6 +222,8 @@ def build_scene(recipe: TowerRecipe, plan: TowerPlan, destination: Path, *, bpy_
         "status": "structural-prototype / visual-review-pending",
         "provenance": "Original procedural demonstration; NOT a verified replica of a landmark",
         "recipe_sha256": recipe.recipe_sha256,
+        "render_profile": {"name": profile.name, "width": profile.width,
+                           "height": profile.height, "samples": profile.samples},
         "units": "meters",
         "native_axes": "Blender Z-up; exported GLB has glTF-compatible axes",
         "named_parts": {"beams": len(plan.beams), "decks": len(plan.decks),
@@ -227,4 +231,4 @@ def build_scene(recipe: TowerRecipe, plan: TowerPlan, destination: Path, *, bpy_
         "bounds_m": [plan.bounds_min, plan.bounds_max],
     }
     return export_revision(bpy, scene, camera, objects, shots, destination,
-                           samples=recipe.samples, metadata=metadata)
+                           samples=profile.samples, metadata=metadata)

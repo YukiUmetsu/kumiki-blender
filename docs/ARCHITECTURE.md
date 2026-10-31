@@ -30,8 +30,13 @@ Recipes never accept executable Python or arbitrary paths. A recipe cannot direc
 - The preview uses Cycles, a neutral sky, daylight sun, a ground plane and an architecture-framing camera. Four deterministic camera poses cover hero, front, side and construction detail, with cheaper sampling on secondary views.
 - The GLB contains only selected model objects; shader compatibility and visual parity must be checked by a real glTF/Three.js import before release.
 - `blender_output.py` owns the shared immutable revision exporter, camera passes, manifest construction and output audits for both tower and portico models.
+- `render_profiles.py` provides a production profile and a resource-capped smoke profile. `KUMIKI_RENDER_PROFILE=smoke` affects only sample count and preview resolution, never model mesh fidelity or GLB exports. The selected profile and its dimensions are recorded in the manifest.
 - A GLB envelope audit detects malformed exports and external texture/buffer references. The build verifies native `.blend` and PNG file signatures, then includes the audit report and output file sizes in the manifest.
 - A source digest and Blender version are recorded to aid repeatability and provenance.
+
+### Headless Blender CI
+
+The pull-request CI job installs a pinned official Blender 4.5 LTS Linux release and checks its SHA-256 against the Blender Foundation manifest before execution. It builds both the lattice and portico studies, audits GLB portability and uploads previews, editable source and manifests to GitHub workflow artifacts. Low-sample smoke renders are intended to catch broken geometry/export/camera setups; final cinematic acceptance still requires production-resolution renders and visual review.
 
 ## Materials
 

@@ -88,6 +88,23 @@ python3 -m compileall -q src scripts
 
 The Blender end-to-end test automatically runs when a `blender` executable is on `PATH`; otherwise it reports a skip. It may take several minutes to render. Tests that run only in Python cannot certify a visual result.
 
+### Automated Blender render QA
+
+Every pull request now has a Blender 4.5 LTS headless job. It downloads the version-pinned Blender archive, verifies its official SHA-256 checksum, builds both sample scenes, checks the generated GLBs, and uploads the editable `.blend`, GLB, manifests and PNG previews as a **Blender QA artifact** for visual review.
+
+The CI job uses `KUMIKI_RENDER_PROFILE=smoke`, capping previews at 640 × 360 and 8 Cycles samples. It keeps the full geometry and material settings for meaningful export validation. The normal CLI uses `production` mode, preserving the sample and resolution settings in each asset recipe. A smoke preview is **not** a photorealistic acceptance render.
+
+To run a faster local validation before a full production render:
+
+```bash
+KUMIKI_RENDER_PROFILE=smoke /Applications/Blender.app/Contents/MacOS/Blender \
+  --background --factory-startup --python-exit-code 1 \
+  --python scripts/blender_entry.py -- \
+  build-portico --bays 3 --output .review/portico/smoke-r01
+```
+
+Use a new output revision for each attempt; revisions cannot overwrite old files.
+
 ## Architecture
 
 See [Architecture](docs/ARCHITECTURE.md), the [design spec](docs/superpowers/specs/2026-10-31-blender-foundation-design.md), and the [implementation plan](docs/superpowers/plans/2026-10-31-blender-foundation.md).

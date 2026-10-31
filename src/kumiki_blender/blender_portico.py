@@ -10,6 +10,7 @@ from typing import Any
 from .blender_output import export_revision
 from .blender_scene import _create_box, _material
 from .portico import PorticoStudy
+from .render_profiles import select_render_profile
 from .shots import QualityShot
 from .surfaces import get_surface
 
@@ -25,13 +26,14 @@ def build_portico_scene(study: PorticoStudy, destination: Path, *, bpy_module: A
     if destination.exists() or destination.is_symlink():
         raise RuntimeError(f"Output revision already exists: {destination}")
 
+    profile = select_render_profile(1440, 900, 48)
     scene = bpy.data.scenes.new(f"Kumiki / {study.asset_id}")
     if bpy.context.window is not None:
         bpy.context.window.scene = scene
     scene.render.engine = "CYCLES"
-    scene.cycles.samples = 48
-    scene.render.resolution_x = 1440
-    scene.render.resolution_y = 900
+    scene.cycles.samples = profile.samples
+    scene.render.resolution_x = profile.width
+    scene.render.resolution_y = profile.height
     scene.render.resolution_percentage = 100
     scene.render.image_settings.file_format = "PNG"
     scene.render.film_transparent = False
@@ -124,6 +126,8 @@ def build_portico_scene(study: PorticoStudy, destination: Path, *, bpy_module: A
         "status": "architectural-detail-study / visual-review-pending",
         "provenance": "Original illustrative architecture; no reference landmark claimed",
         "recipe_sha256": hashlib.sha256(f"portico-study-v1:bays={study.bays}".encode()).hexdigest(),
+        "render_profile": {"name": profile.name, "width": profile.width,
+                           "height": profile.height, "samples": profile.samples},
         "parameters": {"bays": study.bays, "bay_pitch_m": 4.2},
         "units": "meters",
         "native_axes": "Blender Z-up; GLB exported with glTF-compatible axes",
@@ -132,4 +136,5 @@ def build_portico_scene(study: PorticoStudy, destination: Path, *, bpy_module: A
         "instances": len(study.instances),
         "bounds_m": [study.bounds_min, study.bounds_max],
     }
-    return export_revision(bpy, scene, camera, objects, shots, destination, samples=48, metadata=metadata)
+    return export_revision(bpy, scene, camera, objects, shots, destination,
+                           samples=profile.samples, metadata=metadata)

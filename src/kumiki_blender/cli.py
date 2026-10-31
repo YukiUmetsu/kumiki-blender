@@ -12,6 +12,7 @@ from .glb_audit import AuditError, audit_glb
 from .lattice import make_lattice_tower
 from .portico import PorticoError, make_portico_study
 from .recipe import RecipeError, load_recipe
+from .render_profiles import RenderProfileError
 from .surfaces import SurfaceError
 
 
@@ -86,7 +87,8 @@ def main(argv: list[str] | None = None) -> int:
         manifest = build_scene(recipe, plan, output, bpy_module=bpy)
         print(json.dumps(manifest, indent=2))
         return 0
-    except (RecipeError, PorticoError, AuditError, ExportAuditError, SurfaceError, RuntimeError, OSError) as error:
+    except (RecipeError, PorticoError, RenderProfileError, AuditError, ExportAuditError,
+            SurfaceError, RuntimeError, OSError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 2
 
