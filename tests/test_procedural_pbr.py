@@ -1,0 +1,68 @@
+import struct
+import unittest
+import zlib
+
+from kumiki_blender.procedural_pbr import _tile_noise, make_pbr_maps
+from kumiki_blender.surfaces import get_surface
+
+
+def decode_png_pixels(payload):
+    assert payload.startswith(b"\x89PNG\r\n\x1a\n")
+    offset, chunks, size = 8, [], None
+    while offset < len(payload):
+        length = struct.unpack_from(">I", payload, offset)[0]
+        kind = payload[offset + 4:offset + 8]
+        content = payload[offset + 8:offset + 8 + length]
+        if kind == b"IHDR":
+            size = struct.unpack_from(">II", content)
+        elif kind == b"IDAT":
+            chunks.append(content)
+        offset += 12 + length
+    raw = zlib.decompress(b"".join(chunks))
+    width, height = size
+    rows = [raw[row * (width * 3 + 1) + 1:(row + 1) * (width * 3 + 1)] for row in range(height)]
+    return size, b"".join(rows)
+
+
+class ProceduralPBRTests(unittest.TestCase):
+    def test_generates_valid_distinct_embeddable_png_maps(self):
+        maps = make_pbr_maps("natural-stone", "#BDB4A5", 0.76, resolution=32)
+        self.assertEqual(maps.resolution, 32)
+        base_size, base = decode_png_pixels(maps.base_color_png)
+        rough_size, rough = decode_png_pixels(maps.roughness_png)
+        normal_size, normal = decode_png_pixels(maps.normal_png)
+        self.assertEqual(base_size, (32, 32))
+        self.assertEqual(rough_size, base_size)
+        self.assertEqual(normal_size, base_size)
+        self.assertEqual(len(base), 32 * 32 * 3)
+        self.assertGreater(len(set(base[::3])), 4, "Stone albedo should have non-uniform grain")
+        self.assertGreater(len(set(rough[::3])), 4, "Roughness should have physical variation")
+        self.assertGreater(min(normal[2::3]), 180, "Normal map should not introduce inverted surfaces")
+        self.assertNotEqual(maps.base_color_png, maps.roughness_png)
+
+    def test_repeatable_and_periodic(self):
+        a = make_pbr_maps("cast-concrete", "#888888", 0.8, resolution=32)
+        b = make_pbr_maps("cast-concrete", "#888888", 0.8, resolution=32)
+        c = make_pbr_maps("cast-concrete", "#888888", 0.7, resolution=32)
+        self.assertEqual(a, b)
+        self.assertNotEqual(a.roughness_png, c.roughness_png)
+        for v in (0, 0.15, 0.74):
+            self.assertAlmostEqual(_tile_noise(0, v, 11, 42), _tile_noise(1, v, 11, 42))
+            self.assertAlmostEqual(_tile_noise(v, 0, 11, 42), _tile_noise(v, 1, 11, 42))
+
+    def test_materials_retain_procedural_texture_identity_after_override(self):
+        stone = get_surface("natural-stone", color="#CCBB99")
+        self.assertEqual(stone.texture_kind, "natural-stone")
+        self.assertEqual(get_surface("optical-glass").texture_kind, "")
+
+    def test_rejects_unsupported_or_excessive_texture_specs(self):
+        for spec in (("unknown", "#888888", 0.5, 32),
+                     ("natural-stone", "red", 0.5, 32),
+                     ("natural-stone", "#888888", 2.0, 32),
+                     ("natural-stone", "#888888", 0.5, 300)):
+            with self.subTest(spec=spec), self.assertRaises(ValueError):
+                make_pbr_maps(spec[0], spec[1], spec[2], resolution=spec[3])
+
+
+if __name__ == "__main__":
+    unittest.main()

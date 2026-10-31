@@ -9,6 +9,7 @@ from typing import Any
 
 from .blender_output import create_model_scene, export_revision
 from .blender_scene import _create_box, _material
+from .blender_textures import ensure_metric_uvs
 from .portico import PorticoStudy
 from .render_profiles import select_render_profile
 from .shots import plan_portico_shots
@@ -59,6 +60,7 @@ def build_portico_scene(study: PorticoStudy, destination: Path, *, bpy_module: A
             mesh = bpy.data.meshes.new(f"Geometry / {instance.name}")
             mesh.from_pydata(instance.mesh.vertices, [], instance.mesh.faces)
             mesh.update()
+            ensure_metric_uvs(mesh)
             mesh.materials.append(palette[instance.material])
             if instance.name.startswith(("column-", "arch-")):
                 for polygon in mesh.polygons:

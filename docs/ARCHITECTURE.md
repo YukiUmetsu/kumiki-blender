@@ -43,7 +43,7 @@ The pull-request CI job installs a pinned official Blender 4.5 LTS Linux release
 
 ## Materials
 
-`surfaces.py` defines immutable PBR presets for painted steel (dielectric coating), galvanized metal, concrete, stone, timber, and glass. `blender_scene.py` converts their sRGB colors to linear Blender shader inputs and maps metallic/roughness/transmission values to Principled BSDF. No shader-only procedural textures are silently assumed to transfer to GLB: a tested bake pipeline is required before texture-based fidelity claims.
+`surfaces.py` defines immutable PBR presets for painted steel (dielectric coating), galvanized metal, concrete, stone, timber, and glass. `procedural_pbr.py` deterministically generates tileable base-color, roughness and tangent-normal PNGs using only the standard library; `blender_textures.py` packs those images into the native scene and wires them to glTF-supported Principled BSDF sockets. Both procedural mesh builders receive per-face meter-scaled UVs. This makes the image textures portable to GLB without an external dependency or shader bake. A separate `--require-pbr-textures` GLB check gates texture image/UV retention. These generic noise patterns are a foundation, not asset-specific historic masonry detail or actual scanned surface measurements.
 
 ## Artifact states
 

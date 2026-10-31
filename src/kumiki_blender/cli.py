@@ -33,6 +33,7 @@ def main(argv: list[str] | None = None) -> int:
             subcommand.add_argument("--output", type=Path, required=True)
     audit_parser = subcommands.add_parser("audit")
     audit_parser.add_argument("--model", type=Path, required=True)
+    audit_parser.add_argument("--require-pbr-textures", action="store_true")
     revision_parser = subcommands.add_parser("audit-revision")
     revision_parser.add_argument("--root", type=Path, required=True)
     source_parser = subcommands.add_parser("inspect-asset")
@@ -45,7 +46,7 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         if args.command == "audit":
-            print(json.dumps(audit_glb(args.model), indent=2))
+            print(json.dumps(audit_glb(args.model, require_pbr_textures=args.require_pbr_textures), indent=2))
             return 0
         if args.command == "audit-revision":
             print(json.dumps(audit_revision(args.root), indent=2))

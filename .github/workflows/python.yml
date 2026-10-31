@@ -102,9 +102,9 @@ jobs:
         env:
           PYTHONPATH: src
         run: |
-          python -m kumiki_blender audit --model .review/ci/lattice-tower/model.glb
-          python -m kumiki_blender audit --model .review/ci/portico/model.glb
-          python -m kumiki_blender audit --model .review/ci/imported-portico/model.glb
+          python -m kumiki_blender audit --model .review/ci/lattice-tower/model.glb --require-pbr-textures
+          python -m kumiki_blender audit --model .review/ci/portico/model.glb --require-pbr-textures
+          python -m kumiki_blender audit --model .review/ci/imported-portico/model.glb --require-pbr-textures
           python -m kumiki_blender audit-revision --root .review/ci/lattice-tower
           python -m kumiki_blender audit-revision --root .review/ci/portico
           python -m kumiki_blender audit-revision --root .review/ci/imported-portico

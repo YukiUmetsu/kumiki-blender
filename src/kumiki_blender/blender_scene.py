@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from .blender_output import create_model_scene, export_revision
+from .blender_textures import attach_packed_pbr, ensure_metric_uvs
 from .lattice import Beam, GussetPlate, TowerPlan
 from .recipe import TowerRecipe
 from .render_profiles import select_render_profile
@@ -38,6 +39,7 @@ def _material(bpy: Any, spec: PBRSurface) -> Any:
     if spec.transmission:
         shader.inputs["Transmission Weight"].default_value = spec.transmission
         shader.inputs["IOR"].default_value = spec.ior
+    attach_packed_pbr(bpy, material, spec)
     return material
 
 
@@ -45,6 +47,7 @@ def _attach_mesh(bpy: Any, collection: Any, name: str, vertices: list[tuple[floa
     mesh = bpy.data.meshes.new(name)
     mesh.from_pydata(vertices, [], faces)
     mesh.update()
+    ensure_metric_uvs(mesh)
     obj = bpy.data.objects.new(name, mesh)
     collection.objects.link(obj)
     obj.data.materials.append(material)

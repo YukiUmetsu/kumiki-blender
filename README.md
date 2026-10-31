@@ -69,7 +69,11 @@ This writes editable geometry, GLB, a hero preview and front/detail views throug
 
 ## Reusable PBR surfaces
 
-The pure Python material catalog defines physically distinct presets for painted structural steel, galvanized metal, concrete, stone, timber and optical glass. Recipes may override sRGB color and roughness without mutating shared presets. The Blender adapter applies these to Principled BSDF materials; procedural microtexture and reliable GLB texture baking are future work, not claimed capabilities.
+The pure Python material catalog defines physically distinct presets for painted structural steel, galvanized metal, concrete, stone, timber and optical glass. Recipes may override sRGB color and roughness without mutating shared presets.
+
+The toolkit now **generates deterministic, seamless PBR maps locally**, with no asset-site downloads or runtime Python dependencies. For stone, concrete, timber and metal it creates subtle color grain, roughness variation and a tangent-space normal map, projects metric tile UVs onto generated mesh faces, and packs the PNGs into both the editable `.blend` and the GLB. The normal/roughness/color images use glTF-supported Principled BSDF links—not Blender-only shader nodes that would disappear on export.
+
+CI runs `audit --require-pbr-textures` and the official Khronos validator on each example, including a re-imported model, so missing UVs or dropped material maps fail the build. These are **generic procedural surfaces**, not yet the measured, weathered, historically specific textures required for a photorealistic landmark replica.
 
 ## Import a reviewed asset from any source
 
@@ -103,6 +107,8 @@ PYTHONPATH=src python3 -m kumiki_blender audit --model .review/lattice-observati
 ```
 
 The lightweight auditor checks the GLB 2.0 envelope, declared file length, mesh list, number of named semantic nodes and absence of external texture/buffer dependencies. It does **not** replace a full glTF validator, mesh manifold analysis or visual QA. Actual builds also check `.blend` and PNG signatures before writing their manifest.
+
+Pass `--require-pbr-textures` to additionally require UV0 and embedded albedo, roughness and normal texture hookups. This is intentionally optional for older untextured GLBs and third-party source models.
 
 After building, cross-check **every file against the manifest** before importing it into another repository:
 

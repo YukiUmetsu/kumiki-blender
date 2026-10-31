@@ -15,8 +15,8 @@ class AuditError(ValueError):
     """A generated artifact is missing, malformed, or not self-contained."""
 
 
-def audit_glb(path: str | Path) -> dict[str, Any]:
-    """Check the GLB 2.0 envelope, JSON scene and external dependencies."""
+def audit_glb(path: str | Path, *, require_pbr_textures: bool = False) -> dict[str, Any]:
+    """Check the GLB envelope and optionally require portable PBR texture paths."""
     source = Path(path)
     try:
         size = source.stat().st_size
@@ -58,8 +58,10 @@ def audit_glb(path: str | Path) -> dict[str, Any]:
         raise AuditError("GLB contains a mesh with invalid primitives")
 
     images, buffers = data.get("images", []), data.get("buffers", [])
-    if not isinstance(images, list) or not isinstance(buffers, list):
-        raise AuditError("GLB image/buffer collections must be arrays")
+    materials, textures = data.get("materials", []), data.get("textures", [])
+    if (not isinstance(images, list) or not isinstance(buffers, list)
+            or not isinstance(materials, list) or not isinstance(textures, list)):
+        raise AuditError("GLB image/buffer/material/texture collections must be arrays")
     dependencies = [*images, *buffers]
     if any(not isinstance(item, dict) for item in dependencies):
         raise AuditError("GLB has invalid image/buffer metadata")
@@ -68,6 +70,20 @@ def audit_glb(path: str | Path) -> dict[str, Any]:
     if external:
         raise AuditError(f"GLB has {len(external)} external image/buffer references; export portable embedded assets")
 
+    if require_pbr_textures:
+        textured_materials = (
+            material for material in materials if isinstance(material, dict)
+            and isinstance(material.get("pbrMetallicRoughness"), dict)
+            and isinstance(material["pbrMetallicRoughness"].get("baseColorTexture"), dict)
+            and isinstance(material["pbrMetallicRoughness"].get("metallicRoughnessTexture"), dict)
+            and isinstance(material.get("normalTexture"), dict)
+        )
+        if (not images or not textures or not any(textured_materials)
+                or not any(isinstance(primitive.get("attributes"), dict)
+                           and "TEXCOORD_0" in primitive["attributes"]
+                           for mesh in meshes for primitive in mesh["primitives"])):
+            raise AuditError("GLB is missing embedded albedo/roughness/normal PBR textures or UV0")
+
     semantic_nodes = sum(
         1 for node in nodes if isinstance(node, dict) and isinstance(node.get("extras"), dict)
         and isinstance(node["extras"].get("kumiki_part"), str)
@@ -75,7 +91,7 @@ def audit_glb(path: str | Path) -> dict[str, Any]:
     return {
         "meshes": len(meshes),
         "nodes": len(nodes),
-        "materials": len(data.get("materials", [])),
+        "materials": len(materials),
         "semantic_nodes": semantic_nodes,
         "external_references": 0,
         "bytes": size,
