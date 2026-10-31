@@ -1,0 +1,57 @@
+"""Command-line entry point for headless asset validation and building."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from pathlib import Path
+
+from .lattice import make_lattice_tower
+from .recipe import RecipeError, load_recipe
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(prog="kumiki-blender")
+    subcommands = parser.add_subparsers(dest="command", required=True)
+    for command in ("validate", "build"):
+        subcommand = subcommands.add_parser(command)
+        subcommand.add_argument("--recipe", type=Path, required=True)
+        if command == "build":
+            subcommand.add_argument("--output", type=Path, required=True)
+    args = parser.parse_args(argv)
+
+    try:
+        recipe = load_recipe(args.recipe)
+        plan = make_lattice_tower(recipe)
+        if args.command == "validate":
+            print(json.dumps({
+                "asset_id": recipe.asset_id,
+                "generator": "lattice-tower",
+                "beams": len(plan.beams),
+                "decks": len(plan.decks),
+                "bounds_m": [plan.bounds_min, plan.bounds_max],
+                "recipe_sha256": recipe.recipe_sha256,
+            }, indent=2))
+            return 0
+
+        output = args.output.resolve()
+        if output.exists() or output.is_symlink():
+            raise RecipeError(f"Output already exists: {output}. Choose a new revision directory.")
+        try:
+            import bpy  # type: ignore[import-not-found]  # Blender's bundled interpreter only.
+        except ImportError as error:
+            raise RuntimeError("Building requires Blender. Run via: blender --background --factory-startup --python-exit-code 1 --python scripts/blender_entry.py -- build --recipe <recipe.json> --output <new-directory>") from error
+
+        from .blender_scene import build_scene
+
+        manifest = build_scene(recipe, plan, output, bpy_module=bpy)
+        print(json.dumps(manifest, indent=2))
+        return 0
+    except (RecipeError, RuntimeError, OSError) as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

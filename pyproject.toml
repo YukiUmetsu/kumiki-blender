@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kumiki-blender"
+version = "0.1.0"
+description = "Reusable Blender Python toolkit for cinematic procedural 3D authoring"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+authors = [{name = "Yuki Umetsu"}]
+dependencies = []
+
+[project.scripts]
+kumiki-blender = "kumiki_blender.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
