@@ -8,7 +8,7 @@ The library separates testable Python geometry planning from Blender's `bpy` mod
 
 - Python 3.11+ for recipe validation and unit tests (no runtime pip dependencies)
 - Blender 4.2+ for geometry creation, `.blend` / GLB export and Cycles preview rendering
-- Tested development targets: macOS with Blender installed and a standard Python environment; Blender integration has not yet been executed in the project author's current tool environment
+- Blender 4.5 LTS is exercised headlessly on Linux in GitHub Actions; macOS commands below are examples, not yet independently verified
 
 ## Validate a recipe without Blender
 
@@ -65,11 +65,11 @@ On a Mac with Blender installed, render and export a new revision:
   build-portico --bays 3 --output .review/portico/r01
 ```
 
-This writes editable geometry, GLB, a hero preview and front/detail views through the **same export and audit pipeline** as the lattice tower. No Blender-based visual validation has yet been performed in this environment.
+This writes editable geometry, GLB, a hero preview and front/detail views through the **same export and audit pipeline** as the lattice tower. Headless Blender 4.5 has rendered both models successfully; smoke-quality previews still require artistic review before a claim of cinematic realism.
 
 ## Reusable PBR surfaces
 
-The pure Python material catalog defines physically distinct presets for painted structural steel, galvanized metal, concrete, stone, timber and optical glass. Recipes may override sRGB color and roughness without mutating shared presets.
+The pure Python material catalog defines physically distinct presets for painted structural steel, galvanized metal, concrete, stone, timber and optical glass. Recipes may override sRGB color and roughness without mutating shared presets. A plain, untextured `studio-matte` surface is available for presentation floors, keeping floor noise separate from the modeled object.
 
 The toolkit now **generates deterministic, seamless PBR maps locally**, with no asset-site downloads or runtime Python dependencies. For stone, concrete, timber and metal it creates subtle color grain, roughness variation and a tangent-space normal map, projects metric tile UVs onto generated mesh faces, and packs the PNGs into both the editable `.blend` and the GLB. The normal/roughness/color images use glTF-supported Principled BSDF links—not Blender-only shader nodes that would disappear on export.
 
@@ -79,7 +79,7 @@ CI runs `audit --require-pbr-textures` and the official Khronos validator on eac
 
 The first source-independent intake path accepts a **local, static, self-contained `.glb`**. It can come from a licensed Sketchfab/Fab/CGTrader download, a scan, or your own work. It **does not search marketplaces, download assets, accept rigs or animations, or assume a model's source license permits redistribution**.
 
-First, examine the GLB without Blender:
+First, examine the GLB **and its exact material names** without Blender:
 
 ```bash
 PYTHONPATH=src python3 -m kumiki_blender inspect-asset --input /path/to/model.glb
@@ -98,7 +98,11 @@ KUMIKI_RENDER_PROFILE=smoke /Applications/Blender.app/Contents/MacOS/Blender \
   --output .review/my-import/r01
 ```
 
-The importer uses Blender's built-in glTF reader with image packing and semantic-node extras enabled. It checks imported mesh bounds/materials, rejects missing semantic part metadata, saves editable source, and uses the same Cycles multi-view/GLB/revision audits as the procedural models. The pull-request CI round-trips our own MIT-licensed portico through this path; no third-party artwork is copied into the repository.
+To improve or recolor a specific imported material without editing Python, make a JSON mapping like [restyle-portico.json](examples/restyle-portico.json). Pass its path with `--material-overrides /path/to/overrides.json` to the same `import-asset` command. Each entry names an **exact material** reported by `inspect-asset`, a Kumiki preset (`natural-stone`, `cast-concrete`, `timber`, `painted-steel`, etc.), and optional hex `color`/`roughness`. Unrecognized, duplicate or ambiguous material names **fail before Blender creates a revision**; no heuristic keyword-based replacement is performed.
+
+The replacement material gets the same packed glTF-compatible albedo, roughness and normal maps used by the generated architecture. Existing UVs are respected; missing UVs receive metric planar projection. The revision manifest lists all substitutions. Leave the overrides flag out to preserve all original materials. This is **visual restyling**, not an authenticity claim or permission to redistribute an asset.
+
+The importer uses Blender's built-in glTF reader with image packing and semantic-node extras enabled. It checks imported mesh bounds/materials, rejects missing semantic part metadata, saves editable source, and uses the same Cycles multi-view/GLB/revision audits as the procedural models. The pull-request CI round-trips our own MIT-licensed portico both unchanged and with one explicit material override; no third-party artwork is copied into the repository.
 
 ## Inspect a GLB without Blender
 
@@ -163,8 +167,8 @@ For third-party materials, Geometry Nodes, rigging, BIM and export-validation ca
 
 ### Next milestones
 
-1. Run the Blender integration test on macOS, inspect native `.blend` and imported GLB from several angles, and correct defects.
-2. Create a material and texture-baking pipeline with physically meaningful surface variation and no missing texture paths after GLB export.
+1. Conduct human review of higher-sample Blender renders and imported GLB from several angles; correct photographic and architectural defects.
+2. Expand the deterministic PBR pipeline with reference-based material scans, physically scaled weathering, and texture baking for landmark-specific surfaces.
 3. Extend the new profile, extrusion, arch and instancing kernel with roofs, window surrounds, lattice joints and repeated ornament systems; add a separate render-only mode for licensed reference assets that cannot be redistributed as GLB.
 4. Model a reference-verified landmark (proposed: Tokyo Tower), separately from the generic demonstration, and require human close-up review.
 5. Add Geometry Nodes asset-library tools, LOD generation, scene-template previews, and optional asset catalog integration.

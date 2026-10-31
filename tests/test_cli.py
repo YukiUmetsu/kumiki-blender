@@ -79,6 +79,25 @@ class CLITests(unittest.TestCase):
             self.assertEqual(adapter.call_args.args[0], model)
             self.assertEqual(adapter.call_args.args[1].license, "MIT")
 
+    def test_import_asset_preflights_material_override_name_without_blender(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            model, record = root / "model.glb", root / "source.json"
+            config, destination = root / "override.json", root / "revision"
+            fixture_glb(model, materials=["Original limestone"])
+            record.write_text(json.dumps(provenance_json()))
+            config.write_text(json.dumps({
+                "schema_version": 1,
+                "overrides": [{"material_name": "Typo limestone", "preset": "natural-stone"}],
+            }))
+            errors = io.StringIO()
+            with contextlib.redirect_stderr(errors):
+                code = main(["import-asset", "--input", str(model), "--provenance", str(record),
+                             "--material-overrides", str(config), "--output", str(destination)])
+            self.assertEqual(code, 2)
+            self.assertIn("matches 0", errors.getvalue())
+            self.assertFalse(destination.exists())
+
     def test_validate_prints_machine_readable_structure(self):
         stream = io.StringIO()
         with contextlib.redirect_stdout(stream):

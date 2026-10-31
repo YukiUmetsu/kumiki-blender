@@ -82,7 +82,7 @@ def build_portico_scene(study: PorticoStudy, destination: Path, *, bpy_module: A
         obj.modifiers.new("Masonry weighted normals", "WEIGHTED_NORMAL")
         objects.append(obj)
 
-    floor_material = _material(bpy, get_surface("cast-concrete", color="#737673", roughness=0.93))
+    floor_material = _material(bpy, get_surface("studio-matte", color="#737673", roughness=0.97))
     extent = study.bounds_max[0] - study.bounds_min[0]
     _create_box(bpy, stage, "Stage / matte ground", (extent * 1.8, 22, 0.4),
                 (0, 0, -0.56), floor_material)

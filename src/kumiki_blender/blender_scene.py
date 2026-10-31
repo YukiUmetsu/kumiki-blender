@@ -177,7 +177,7 @@ def build_scene(recipe: TowerRecipe, plan: TowerPlan, destination: Path, *, bpy_
     fastener_steel = _material(bpy, get_surface("galvanized-steel"))
     trim = _material(bpy, get_surface("galvanized-steel", color="#9EA8AD", roughness=0.35))
     platform = _material(bpy, get_surface("cast-concrete", color="#70767B", roughness=0.78))
-    ground_mat = _material(bpy, get_surface("natural-stone", color="#77736A", roughness=0.93))
+    ground_mat = _material(bpy, get_surface("studio-matte", color="#77736A", roughness=0.97))
 
     objects = []
     for beam in plan.beams:

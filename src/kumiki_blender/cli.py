@@ -11,6 +11,7 @@ from .asset_import import AssetImportError, inspect_source_glb, load_asset_prove
 from .export_audit import ExportAuditError
 from .glb_audit import AuditError, audit_glb
 from .lattice import make_lattice_tower
+from .material_overrides import load_material_overrides, verify_material_overrides
 from .portico import PorticoError, make_portico_study
 from .recipe import RecipeError, load_recipe
 from .render_profiles import RenderProfileError
@@ -41,6 +42,7 @@ def main(argv: list[str] | None = None) -> int:
     import_parser = subcommands.add_parser("import-asset")
     import_parser.add_argument("--input", type=Path, required=True)
     import_parser.add_argument("--provenance", type=Path, required=True)
+    import_parser.add_argument("--material-overrides", type=Path)
     import_parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args(argv)
 
@@ -56,7 +58,9 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.command == "import-asset":
             provenance = load_asset_provenance(args.provenance)
-            inspect_source_glb(args.input, provenance)
+            report = inspect_source_glb(args.input, provenance)
+            overrides = load_material_overrides(args.material_overrides) if args.material_overrides else ()
+            verify_material_overrides(report["material_names"], overrides)
             output = args.output.resolve()
             if output.exists() or output.is_symlink():
                 raise AssetImportError(f"Output already exists: {output}. Choose a new revision directory.")
@@ -66,7 +70,8 @@ def main(argv: list[str] | None = None) -> int:
                 raise RuntimeError("Importing a model requires Blender. Run via: blender --background --factory-startup --python-exit-code 1 --python scripts/blender_entry.py -- import-asset --input model.glb --provenance source.json --output <new-directory>") from error
             from .blender_import import build_imported_scene
 
-            print(json.dumps(build_imported_scene(args.input, provenance, output, bpy_module=bpy), indent=2))
+            print(json.dumps(build_imported_scene(args.input, provenance, output,
+                                                 material_overrides=overrides, bpy_module=bpy), indent=2))
             return 0
         if args.command in ("plan-portico", "build-portico"):
             study = make_portico_study(bays=args.bays)

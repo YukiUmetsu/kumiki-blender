@@ -1,7 +1,7 @@
 """Domain-neutral physically based material definitions for Blender/GLB.
 
-All parameters map to core glTF PBR or well-known extensions. Image/normal
-textures are intentionally deferred until there is a tested bake pipeline.
+Parameters map to glTF PBR and optional deterministic image textures. Glass
+remains a transparent shader preset without a generated surface texture.
 """
 
 from __future__ import annotations
@@ -27,6 +27,8 @@ class PBRSurface:
 
 
 _SURFACES = {
+    # Untextured studio card intentionally avoids large-scale patterned floors.
+    "studio-matte": PBRSurface("Neutral studio matte", "#777875", 0.0, 0.96),
     "painted-steel": PBRSurface("Painted structural steel", "#9F3D33", 0.04, 0.43, texture_kind="painted-steel"),
     "galvanized-steel": PBRSurface("Satin galvanized metal", "#ADB5BB", 0.88, 0.33, texture_kind="galvanized-steel"),
     "cast-concrete": PBRSurface("Cast architectural concrete", "#787B79", 0.0, 0.85, texture_kind="cast-concrete"),

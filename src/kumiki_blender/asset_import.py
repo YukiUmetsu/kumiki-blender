@@ -133,6 +133,12 @@ def inspect_source_glb(path: str | Path, provenance: AssetProvenance | None = No
         raise AssetImportError("Animated or rigged GLBs are not supported by the static asset importer")
     if not any(isinstance(node, dict) and type(node.get("mesh")) is int for node in doc.get("nodes", [])):
         raise AssetImportError("Input GLB has no instanced mesh nodes")
+    materials = doc.get("materials", [])
+    if (not isinstance(materials, list) or any(not isinstance(material, dict)
+                                                or not isinstance(material.get("name", ""), str)
+                                                for material in materials)):
+        raise AssetImportError("GLB material definitions must be objects with optional text names")
+    material_names = [material.get("name", "") for material in materials]
     digest = hashlib.sha256()
     with source.open("rb") as stream:
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
@@ -141,4 +147,5 @@ def inspect_source_glb(path: str | Path, provenance: AssetProvenance | None = No
     if provenance and provenance.expected_sha256 and provenance.expected_sha256 != sha256:
         raise AssetImportError("Input GLB SHA-256 differs from the provenance pin")
     return {"input_bytes": size, "input_sha256": sha256, "glb_audit": glb_report,
+            "material_names": material_names,
             "static_mesh_only": True}

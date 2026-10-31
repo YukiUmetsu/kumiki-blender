@@ -10,11 +10,13 @@ from kumiki_blender.asset_import import (
 )
 
 
-def fixture_glb(path, *, animations=False, meshes=True):
+def fixture_glb(path, *, animations=False, meshes=True, materials=None):
     data = {"asset": {"version": "2.0"}, "meshes": [{"primitives": [{}]}],
             "nodes": [{"mesh": 0, "name": "Stone"}] if meshes else [{"name": "Empty"}]}
     if animations:
         data["animations"] = [{"channels": [], "samplers": []}]
+    if materials is not None:
+        data["materials"] = [{"name": name} for name in materials]
     chunk = json.dumps(data).encode("utf-8")
     chunk += b" " * (-len(chunk) % 4)
     path.write_bytes(struct.pack("<4sII", b"glTF", 2, 20 + len(chunk))
@@ -40,7 +42,7 @@ class AssetImportTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             model = root / "model.glb"
-            fixture_glb(model)
+            fixture_glb(model, materials=["Limestone", "Copper"])
             sha = hashlib.sha256(model.read_bytes()).hexdigest()
             recipe = root / "asset.json"
             recipe.write_text(json.dumps(provenance_json(expected_sha256=sha)))
@@ -49,6 +51,7 @@ class AssetImportTests(unittest.TestCase):
             self.assertEqual(report["input_sha256"], sha)
             self.assertEqual(report["glb_audit"]["meshes"], 1)
             self.assertTrue(report["static_mesh_only"])
+            self.assertEqual(report["material_names"], ["Limestone", "Copper"])
             self.assertEqual(provenance.to_manifest(sha)["license"], "MIT")
 
     def test_missing_unexpected_or_malformed_provenance_fails_closed(self):
