@@ -98,7 +98,7 @@ blender --background --factory-startup --python-exit-code 1 \
   build-facade --bays 3 --output .review/facade/r01
 ```
 
-The detail kit also includes a **tileable weathered-stone PBR preset** with directional runoff/mineral deposits and deterministic per-block shade variation. Its Blender studio uses rectangular reflection softboxes to reveal glazing response; those lights are excluded from the GLB. A Three.js scene needs its own reflection environment for similar results.
+The detail kit also includes a **tileable weathered-stone PBR preset** with adjustable `weathering_strength` from 0–1, subtle directional runoff/mineral deposits and deterministic per-block shade variation. Its Blender studio uses specular-only rectangular reflection softboxes to reveal glazing response without flattening daylight shadows; those lights are excluded from the GLB. A Three.js scene needs its own reflection environment for similar results.
 
 The demonstration is **an original architectural detail study**, not a measured replica of an existing building. Future landmark work should substitute location-specific measured proportions, ornaments, roofs, glazing, weathering and material scans, with visual QA at production resolution. For component authoring conventions and examples, see [Architectural detail kit guide](docs/ARCHITECTURE_DETAILS.md).
 
@@ -133,7 +133,7 @@ KUMIKI_RENDER_PROFILE=smoke /Applications/Blender.app/Contents/MacOS/Blender \
   --output .review/my-import/r01
 ```
 
-To improve or recolor a specific imported material without editing Python, make a JSON mapping like [restyle-portico.json](examples/restyle-portico.json). Pass its path with `--material-overrides /path/to/overrides.json` to the same `import-asset` command. Each entry names an **exact material** reported by `inspect-asset`, a Kumiki preset (`natural-stone`, `cast-concrete`, `timber`, `painted-steel`, etc.), and optional hex `color`/`roughness`. Unrecognized, duplicate or ambiguous material names **fail before Blender creates a revision**; no heuristic keyword-based replacement is performed.
+To improve or recolor a specific imported material without editing Python, make a JSON mapping like [restyle-portico.json](examples/restyle-portico.json). Pass its path with `--material-overrides /path/to/overrides.json` to the same `import-asset` command. Each entry names an **exact material** reported by `inspect-asset`, a Kumiki preset (`natural-stone`, `weathered-stone`, `cast-concrete`, `timber`, `painted-steel`, etc.), and optional hex `color`/`roughness` (plus `weathering_strength` for weathered stone). Unrecognized, duplicate or ambiguous material names **fail before Blender creates a revision**; no heuristic keyword-based replacement is performed.
 
 The replacement material gets the same packed glTF-compatible albedo, roughness and normal maps used by the generated architecture. Existing UVs are respected; missing UVs receive metric planar projection. The revision manifest lists all substitutions. Leave the overrides flag out to preserve all original materials. This is **visual restyling**, not an authenticity claim or permission to redistribute an asset.
 

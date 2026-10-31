@@ -38,7 +38,7 @@ def _translated(instance: MeshInstance, *, offset: Vec3) -> MeshInstance:
 def _stone_variation(instance: MeshInstance) -> MeshInstance:
     """Stable, non-periodic masonry shade choice independent of build order."""
     key = hashlib.sha256(instance.name.encode("utf-8")).digest()[0]
-    if key % 13 in (0, 1):
+    if key % 13 == 0:
         return replace(instance, material="wall-stone-light")
     return instance
 

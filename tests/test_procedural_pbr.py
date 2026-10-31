@@ -65,6 +65,16 @@ class ProceduralPBRTests(unittest.TestCase):
         self.assertGreater(len(set(rough[::3])), 9)
         self.assertEqual(weathered, make_pbr_maps("weathered-stone", "#B7AD9D", 0.81, resolution=64))
         self.assertEqual(get_surface("weathered-stone").texture_kind, "weathered-stone")
+        clean_weathered = make_pbr_maps("weathered-stone", "#B7AD9D", 0.81,
+                                       resolution=64, weathering_strength=0)
+        strongly_weathered = make_pbr_maps("weathered-stone", "#B7AD9D", 0.81,
+                                           resolution=64, weathering_strength=1)
+        self.assertNotEqual(clean_weathered.base_color_png, strongly_weathered.base_color_png)
+        self.assertNotEqual(clean_weathered.roughness_png, strongly_weathered.roughness_png)
+        for spec in (-0.1, 1.1, True, float("nan")):
+            with self.subTest(weathering_strength=spec), self.assertRaises(ValueError):
+                make_pbr_maps("weathered-stone", "#B7AD9D", 0.81,
+                              resolution=32, weathering_strength=spec)
         for value in (0, 0.13, 0.59, 0.94):
             self.assertAlmostEqual(_stone_weathering(0, value, 81),
                                    _stone_weathering(1, value, 81))

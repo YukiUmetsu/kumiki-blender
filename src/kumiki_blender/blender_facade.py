@@ -44,7 +44,7 @@ def build_facade_scene(study: FacadeStudy, destination: Path, *, bpy_module: Any
 
     materials = {
         "wall-stone": get_surface("weathered-stone", color="#A9A296", roughness=0.83),
-        "wall-stone-light": get_surface("weathered-stone", color="#B9B1A4", roughness=0.78),
+        "wall-stone-light": get_surface("weathered-stone", color="#B4AC9E", roughness=0.78),
         "trim-stone": get_surface("natural-stone", color="#C9C0AF", roughness=0.73),
         "foundation": get_surface("weathered-stone", color="#77736D", roughness=0.89),
         "ornament-stone": get_surface("natural-stone", color="#C8BEAC", roughness=0.72),

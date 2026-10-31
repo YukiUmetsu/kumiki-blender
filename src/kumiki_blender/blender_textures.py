@@ -56,7 +56,8 @@ def attach_packed_pbr(bpy: Any, material: Any, spec: PBRSurface) -> None:
     """Wire color, roughness and tangent-space normal images into Principled."""
     if not spec.texture_kind:
         return
-    maps = make_pbr_maps(spec.texture_kind, spec.color, spec.roughness)
+    maps = make_pbr_maps(spec.texture_kind, spec.color, spec.roughness,
+                         weathering_strength=spec.weathering_strength)
     nodes = material.node_tree.nodes
     links = material.node_tree.links
     shader = next(node for node in nodes if node.type == "BSDF_PRINCIPLED")

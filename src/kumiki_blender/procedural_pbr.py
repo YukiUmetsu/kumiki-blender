@@ -82,7 +82,8 @@ def _clamp(value: float) -> int:
 
 
 @lru_cache(maxsize=32)
-def make_pbr_maps(kind: str, color: str, roughness: float, *, resolution: int = 256) -> TextureMaps:
+def make_pbr_maps(kind: str, color: str, roughness: float, *, resolution: int = 256,
+                  weathering_strength: float = 0.5) -> TextureMaps:
     """Generate subtle, seam-safe albedo, roughness and tangent-normal images.
 
     The maps are intentionally restrained. They add stone/concrete grain and
@@ -101,13 +102,16 @@ def make_pbr_maps(kind: str, color: str, roughness: float, *, resolution: int = 
         raise ValueError("Resolution must be a power of two between 16 and 512")
     if isinstance(roughness, bool) or not isinstance(roughness, (int, float)) or not math.isfinite(roughness) or not 0.02 <= roughness <= 1:
         raise ValueError("Roughness must be in [0.02, 1]")
+    if (isinstance(weathering_strength, bool) or not isinstance(weathering_strength, (int, float))
+            or not math.isfinite(weathering_strength) or not 0 <= weathering_strength <= 1):
+        raise ValueError("Weathering strength must be in [0, 1]")
     seed = int.from_bytes(hashlib.sha256(f"kumiki-pbr-v1:{kind}:{color}".encode()).digest()[:4], "big")
     height = [_surface_height((i % resolution) / resolution, (i // resolution) / resolution, seed)
               for i in range(resolution * resolution)]
     albedo, rough, normal = bytearray(), bytearray(), bytearray()
-    color_variance = {"natural-stone": 0.30, "weathered-stone": 0.43, "cast-concrete": 0.17,
+    color_variance = {"natural-stone": 0.30, "weathered-stone": 0.30, "cast-concrete": 0.17,
                       "painted-steel": 0.055, "galvanized-steel": 0.09, "timber": 0.24}[kind]
-    bump_strength = {"natural-stone": 3.0, "weathered-stone": 4.6, "cast-concrete": 2.4,
+    bump_strength = {"natural-stone": 3.0, "weathered-stone": 3.4, "cast-concrete": 2.4,
                      "painted-steel": 0.42, "galvanized-steel": 1.1, "timber": 1.7}[kind]
     for index, h in enumerate(height):
         x, y = index % resolution, index // resolution
@@ -115,11 +119,11 @@ def make_pbr_maps(kind: str, color: str, roughness: float, *, resolution: int = 
         weathering = 0.0
         if kind == "weathered-stone":
             weathering = _stone_weathering(x / resolution, y / resolution, seed)
-            variation -= weathering * 0.26
+            variation -= weathering * 0.20 * weathering_strength
         for channel in base:
             albedo.append(_clamp(channel * (1 + variation)))
         local_roughness = max(0.02, min(1, roughness + (h - 0.5) * color_variance * 0.75
-                                       + weathering * 0.18))
+                                       + weathering * 0.14 * weathering_strength))
         rough.extend([_clamp(local_roughness * 255)] * 3)
         left, right = height[y * resolution + (x - 1) % resolution], height[y * resolution + (x + 1) % resolution]
         below, above = height[((y - 1) % resolution) * resolution + x], height[((y + 1) % resolution) * resolution + x]

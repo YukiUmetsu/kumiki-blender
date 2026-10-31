@@ -67,15 +67,18 @@ output directory for every revision. Symmetric façade compositions accept 3,
 
 ## Surface realism and preview lighting
 
-- `get_surface("weathered-stone", color="#A9A296", roughness=0.83)` provides
-  deterministic embedded albedo, roughness and tangent-normal maps with
-  vertical mineral runoff and irregular discoloration.
+- `get_surface("weathered-stone", color="#A9A296", roughness=0.83,
+  weathering_strength=0.5)` provides deterministic embedded albedo, roughness
+  and tangent-normal maps with subtle vertical mineral runoff and irregular
+  discoloration. Increase strength toward `1.0` only when the preview needs
+  more pronounced aging; `0.0` removes the stain contribution.
 - Stone block color changes are generated from a **stable SHA-256 of each
   semantic part name**, avoiding Python's nondeterministic hash randomization
   and obvious diagonal stripes.
 - `plan_architectural_reflections()` specifies two rectangular sky softboxes;
   `add_architectural_reflections()` adds them to a Blender-only studio collection
-  to emphasize specular response from real transmissive glass.
+  to emphasize specular response from real transmissive glass. Their diffuse
+  contribution is zero so they do not wash out the building's daylight relief.
 - GLB keeps Principled glass transmission/IOR material values, **but not** the
   studio softboxes. A Three.js scene should provide an appropriate environment
   map, direct lighting and tested support for transmission extensions.

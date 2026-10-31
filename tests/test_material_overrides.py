@@ -60,6 +60,22 @@ class MaterialOverrideTests(unittest.TestCase):
                 with self.subTest(content=content), self.assertRaises(AssetImportError):
                     load_material_overrides(path)
 
+    def test_optional_weathering_strength_is_explicitly_validated(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "weathering.json"
+            path.write_text(json.dumps(overrides_json(overrides=[
+                {"material_name": "Stone", "preset": "weathered-stone",
+                 "weathering_strength": 0.7},
+            ])))
+            entries = load_material_overrides(path)
+            self.assertEqual(entries[0].to_manifest()["weathering_strength"], 0.7)
+            path.write_text(json.dumps(overrides_json(overrides=[
+                {"material_name": "Glass", "preset": "optical-glass",
+                 "weathering_strength": 0.6},
+            ])))
+            with self.assertRaises(AssetImportError):
+                load_material_overrides(path)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -57,7 +57,8 @@ def add_architectural_reflections(bpy: Any, collection: Any, *, center_x: float,
         light.size_y = spec.height
         light.energy = spec.energy
         light.color = spec.color
-        light.diffuse_factor = 0.18
+        # Dedicated glints must not flatten the façade's daylight shadows.
+        light.diffuse_factor = 0.0
         light.specular_factor = 1.0
         obj = bpy.data.objects.new(spec.name, light)
         collection.objects.link(obj)

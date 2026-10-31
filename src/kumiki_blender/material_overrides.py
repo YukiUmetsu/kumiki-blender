@@ -30,6 +30,8 @@ class MaterialOverride:
             "preset": self.preset,
             "color": self.surface.color,
             "roughness": self.surface.roughness,
+            **({"weathering_strength": self.surface.weathering_strength}
+               if self.preset == "weathered-stone" else {}),
         }
 
 
@@ -56,7 +58,7 @@ def load_material_overrides(path: str | Path) -> tuple[MaterialOverride, ...]:
     for index, entry in enumerate(entries):
         if (not isinstance(entry, dict)
                 or not {"material_name", "preset"} <= set(entry)
-                or set(entry) - {"material_name", "preset", "color", "roughness"}):
+                or set(entry) - {"material_name", "preset", "color", "roughness", "weathering_strength"}):
             raise AssetImportError(f"Material override #{index} has missing or unexpected fields")
         name, preset = entry["material_name"], entry["preset"]
         if (not isinstance(name, str) or not 1 <= len(name.strip()) <= 128
@@ -67,7 +69,8 @@ def load_material_overrides(path: str | Path) -> tuple[MaterialOverride, ...]:
         if not isinstance(preset, str):
             raise AssetImportError(f"Material override #{index} needs a preset name")
         try:
-            surface = get_surface(preset, color=entry.get("color"), roughness=entry.get("roughness"))
+            surface = get_surface(preset, color=entry.get("color"), roughness=entry.get("roughness"),
+                                  weathering_strength=entry.get("weathering_strength"))
         except SurfaceError as error:
             raise AssetImportError(f"Invalid override for {name}: {error}") from error
         names.add(name)
