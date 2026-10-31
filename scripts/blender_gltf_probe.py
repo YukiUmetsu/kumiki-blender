@@ -70,6 +70,21 @@ with bpy.context.temp_override(scene=scene, view_layer=scene.view_layers[0]):
     print("KUMIKI_PROBE: baking 64 modifier meshes", flush=True)
     bake_export_meshes(bpy, objects)
     bpy.ops.object.select_all(action="DESELECT")
+    objects[0].select_set(True, view_layer=scene.view_layers[0])
+    print("KUMIKI_PROBE: one staged mesh exporter starting", flush=True)
+    bpy.ops.export_scene.gltf(
+        filepath=str(target.parent / "staged-one.glb"),
+        export_format="GLB",
+        use_selection=True,
+        export_materials="EXPORT",
+        export_animations=False,
+        export_cameras=False,
+        export_lights=False,
+        export_extras=True,
+        export_apply=False,
+    )
+    print("KUMIKI_PROBE: one staged mesh exporter completed", flush=True)
+    bpy.ops.object.select_all(action="DESELECT")
     for obj in objects:
         obj.select_set(True, view_layer=scene.view_layers[0])
     print("KUMIKI_PROBE: staged scene exporter starting", flush=True)
