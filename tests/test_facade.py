@@ -13,6 +13,7 @@ class FacadeStudyTests(unittest.TestCase):
         self.assertGreater(counts['roof'], 400)
         self.assertGreater(counts['door'], 20)
         self.assertEqual(counts['gutter'], 12)
+        self.assertEqual(counts['ornament'], 52)
         self.assertEqual(counts['window'], 60)
         self.assertEqual(sum(counts.values()), len(study.instances))
         self.assertEqual(len({part.name for part in study.instances}), len(study.instances))

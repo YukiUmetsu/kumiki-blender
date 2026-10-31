@@ -7,11 +7,12 @@ individually addressable MeshInstances for Blender, GLB and future animation.
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass, replace
 
 from .architecture_details import (
     Opening, box_mesh, cornice_extrusion, coursed_wall, dentil_row,
-    door_assembly, gable_roof, rainwater_system, window_assembly,
+    door_assembly, gable_roof, rainwater_system, rosette_relief, window_assembly,
 )
 from .architecture_geometry import MeshInstance, Vec3, place_mesh, world_vertices
 
@@ -32,6 +33,14 @@ class FacadeStudy:
 
 def _translated(instance: MeshInstance, *, offset: Vec3) -> MeshInstance:
     return replace(instance, origin=tuple(instance.origin[i] + offset[i] for i in range(3)))
+
+
+def _stone_variation(instance: MeshInstance) -> MeshInstance:
+    """Stable, non-periodic masonry shade choice independent of build order."""
+    key = hashlib.sha256(instance.name.encode("utf-8")).digest()[0]
+    if key % 13 in (0, 1):
+        return replace(instance, material="wall-stone-light")
+    return instance
 
 
 def _oriented(instance: MeshInstance, *, offset: Vec3, axes: tuple[Vec3, Vec3, Vec3]) -> MeshInstance:
@@ -73,10 +82,8 @@ def make_facade_study(*, bays: int = 3) -> FacadeStudy:
     items: list[MeshInstance] = []
     front = coursed_wall(width=width, height=wall_height, thickness=0.49,
                          openings=tuple(openings), prefix="masonry-front")
-    for i, stone in enumerate(front):
-        if i % 9 == 0:
-            stone = replace(stone, material="wall-stone-light")
-        items.append(_translated(stone, offset=(0, front_y, 0)))
+    for stone in front:
+        items.append(_translated(_stone_variation(stone), offset=(0, front_y, 0)))
 
     # Enclose the volume with real side and back masonry, not an open backdrop.
     rotations = (
@@ -87,10 +94,8 @@ def make_facade_study(*, bays: int = 3) -> FacadeStudy:
     for side, span, offset, axes in rotations:
         wall = coursed_wall(width=span, height=wall_height, thickness=0.49,
                            prefix=f"masonry-{side}")
-        for i, stone in enumerate(wall):
-            if i % 11 == 0:
-                stone = replace(stone, material="wall-stone-light")
-            items.append(_oriented(stone, offset=offset, axes=axes))
+        for stone in wall:
+            items.append(_oriented(_stone_variation(stone), offset=offset, axes=axes))
 
     for bay, x, floor, z in window_centers:
         parts = window_assembly(prefix=f"window-{bay:02d}-{floor}", width=2.04,
@@ -116,6 +121,16 @@ def make_facade_study(*, bays: int = 3) -> FacadeStudy:
     items.extend(_translated(tooth, offset=(-0.15, front_y - 0.45, 8.01))
                  for tooth in dentil_row(prefix="dentil-eave", length=width + 0.3,
                                          count=teeth_count, tooth_width=0.22))
+
+    # Raised rosettes are placed in the wall piers between upper window bays.
+    # Their physical depth and separate leaves catch highlights at close range.
+    relief_axes = ((1, 0, 0), (0, 0, 1), (0, -1, 0))
+    for bay in range(bays - 1):
+        crest_x = 0.5 + (bay + 1) * pitch
+        items.extend(_oriented(part, offset=(crest_x, front_y - 0.27, 7.49),
+                               axes=relief_axes)
+                     for part in rosette_relief(prefix=f"ornament-rosette-{bay:02d}",
+                                                diameter=0.64, petals=12))
 
     items.extend(gable_roof(width=width, depth=depth, eave_z=8.63, rise=2.6,
                             overhang=0.55, tile_rows=8,

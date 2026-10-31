@@ -53,6 +53,15 @@ def _surface_height(u: float, v: float, seed: int) -> float:
             + 0.08 * _tile_noise(u, v, 67, seed + 71))
 
 
+def _stone_weathering(u: float, v: float, seed: int) -> float:
+    """Tileable mineral bloom and narrow vertical rain tracks in UV space."""
+    warped_u = u + 0.018 * math.sin(math.tau * v)
+    streak = _tile_noise(warped_u, 0.5 + 0.055 * math.sin(math.tau * v),
+                         17, seed + 101)
+    blotch = _tile_noise(u, v, 4, seed + 137)
+    return max(0.0, (streak - 0.55) * 2.1) + max(0.0, (blotch - 0.61) * 0.65)
+
+
 def _png_chunk(kind: bytes, data: bytes) -> bytes:
     return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data))
 
@@ -80,7 +89,7 @@ def make_pbr_maps(kind: str, color: str, roughness: float, *, resolution: int = 
     manufactured-surface microvariation without replacing measured reference
     textures when a specific building requires historically correct materials.
     """
-    if kind not in {"natural-stone", "cast-concrete", "painted-steel", "galvanized-steel", "timber"}:
+    if kind not in {"natural-stone", "weathered-stone", "cast-concrete", "painted-steel", "galvanized-steel", "timber"}:
         raise ValueError("Unsupported procedural PBR material kind")
     if not isinstance(color, str) or len(color) != 7 or color[0] != "#":
         raise ValueError("Expected six-digit hexadecimal sRGB")
@@ -96,16 +105,21 @@ def make_pbr_maps(kind: str, color: str, roughness: float, *, resolution: int = 
     height = [_surface_height((i % resolution) / resolution, (i // resolution) / resolution, seed)
               for i in range(resolution * resolution)]
     albedo, rough, normal = bytearray(), bytearray(), bytearray()
-    color_variance = {"natural-stone": 0.30, "cast-concrete": 0.17,
+    color_variance = {"natural-stone": 0.30, "weathered-stone": 0.43, "cast-concrete": 0.17,
                       "painted-steel": 0.055, "galvanized-steel": 0.09, "timber": 0.24}[kind]
-    bump_strength = {"natural-stone": 3.0, "cast-concrete": 2.4,
+    bump_strength = {"natural-stone": 3.0, "weathered-stone": 4.6, "cast-concrete": 2.4,
                      "painted-steel": 0.42, "galvanized-steel": 1.1, "timber": 1.7}[kind]
     for index, h in enumerate(height):
         x, y = index % resolution, index // resolution
         variation = (h - 0.5) * color_variance
+        weathering = 0.0
+        if kind == "weathered-stone":
+            weathering = _stone_weathering(x / resolution, y / resolution, seed)
+            variation -= weathering * 0.26
         for channel in base:
             albedo.append(_clamp(channel * (1 + variation)))
-        local_roughness = max(0.02, min(1, roughness + (h - 0.5) * color_variance * 0.75))
+        local_roughness = max(0.02, min(1, roughness + (h - 0.5) * color_variance * 0.75
+                                       + weathering * 0.18))
         rough.extend([_clamp(local_roughness * 255)] * 3)
         left, right = height[y * resolution + (x - 1) % resolution], height[y * resolution + (x + 1) % resolution]
         below, above = height[((y - 1) % resolution) * resolution + x], height[((y + 1) % resolution) * resolution + x]

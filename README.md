@@ -79,6 +79,7 @@ The Blender-independent `architecture_details.py` provides composable, **manifol
 | `cornice_extrusion()` / `dentil_row()` | Projecting cross-section moldings and repeated stone teeth, in real dimensions |
 | `gable_roof()` | Closed front/back pitched roof slabs, solid gable ends, a ridge cap and individually sloped/staggered tiles |
 | `gutter_channel()` / `rainwater_system()` | Real open half-round gutters, connected downspouts, and fastening collars along the eaves |
+| `rosette_relief()` | Parametric carved floral medallions with separate leaves, raised veins and central boss |
 | `box_mesh()` | Cached, closed mesh primitive for any rectangular architectural detail |
 
 Every piece returns a named `MeshInstance` with editable material role, transform and physical geometry. You can mix these functions in **new landmark recipes** without rewriting Blender object placement. `facade.py` demonstrates composition into a fully enclosed, 3/5/7-bay stone townhouse study with consistently named `masonry`, `window`, `door`, `roof`, `dentil` and `cornice` categories.
@@ -97,13 +98,15 @@ blender --background --factory-startup --python-exit-code 1 \
   build-facade --bays 3 --output .review/facade/r01
 ```
 
-The demonstration is **an original architectural detail study**, not a measured replica of an existing building. Future landmark work should substitute location-specific measured proportions, ornaments, roofs, glazing, weathering and material scans, with visual QA at production resolution.
+The detail kit also includes a **tileable weathered-stone PBR preset** with directional runoff/mineral deposits and deterministic per-block shade variation. Its Blender studio uses rectangular reflection softboxes to reveal glazing response; those lights are excluded from the GLB. A Three.js scene needs its own reflection environment for similar results.
+
+The demonstration is **an original architectural detail study**, not a measured replica of an existing building. Future landmark work should substitute location-specific measured proportions, ornaments, roofs, glazing, weathering and material scans, with visual QA at production resolution. For component authoring conventions and examples, see [Architectural detail kit guide](docs/ARCHITECTURE_DETAILS.md).
 
 ## Reusable PBR surfaces
 
 The pure Python material catalog defines physically distinct presets for painted structural steel, galvanized metal, concrete, stone, timber and optical glass. Recipes may override sRGB color and roughness without mutating shared presets. A plain, untextured `studio-matte` surface is available for presentation floors, keeping floor noise separate from the modeled object.
 
-The toolkit now **generates deterministic, seamless PBR maps locally**, with no asset-site downloads or runtime Python dependencies. For stone, concrete, timber and metal it creates subtle color grain, roughness variation and a tangent-space normal map, projects metric tile UVs onto generated mesh faces, and packs the PNGs into both the editable `.blend` and the GLB. The normal/roughness/color images use glTF-supported Principled BSDF links—not Blender-only shader nodes that would disappear on export.
+The toolkit now **generates deterministic, seamless PBR maps locally**, with no asset-site downloads or runtime Python dependencies. For stone, weathered stone, concrete, timber and metal it creates color grain, roughness variation and a tangent-space normal map, projects metric tile UVs onto generated mesh faces, and packs the PNGs into both the editable `.blend` and the GLB. Weathered stone adds vertically oriented runoff stains and irregular mineral deposits; the map remains tileable. The normal/roughness/color images use glTF-supported Principled BSDF links—not Blender-only shader nodes that would disappear on export.
 
 CI runs `audit --require-pbr-textures` and the official Khronos validator on each example, including a re-imported model, so missing UVs or dropped material maps fail the build. These are **generic procedural surfaces**, not yet the measured, weathered, historically specific textures required for a photorealistic landmark replica.
 

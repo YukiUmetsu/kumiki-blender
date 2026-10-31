@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from .blender_output import aim_at, create_model_scene, export_revision
+from .blender_lighting import add_architectural_reflections
 from .blender_scene import _create_box, _material
 from .blender_textures import ensure_metric_uvs
 from .facade import FacadeStudy
@@ -42,13 +43,15 @@ def build_facade_scene(study: FacadeStudy, destination: Path, *, bpy_module: Any
     scene.collection.children.link(stage)
 
     materials = {
-        "wall-stone": get_surface("natural-stone", color="#A9A296", roughness=0.83),
-        "wall-stone-light": get_surface("natural-stone", color="#B9B1A4", roughness=0.78),
+        "wall-stone": get_surface("weathered-stone", color="#A9A296", roughness=0.83),
+        "wall-stone-light": get_surface("weathered-stone", color="#B9B1A4", roughness=0.78),
         "trim-stone": get_surface("natural-stone", color="#C9C0AF", roughness=0.73),
-        "foundation": get_surface("natural-stone", color="#77736D", roughness=0.89),
+        "foundation": get_surface("weathered-stone", color="#77736D", roughness=0.89),
+        "ornament-stone": get_surface("natural-stone", color="#C8BEAC", roughness=0.72),
+        "ornament-highlight": get_surface("natural-stone", color="#D4CAB6", roughness=0.67),
         "window-metal": get_surface("painted-steel", color="#39454B", roughness=0.38),
         "window-glass": get_surface("optical-glass", color="#9BB7C4", roughness=0.07),
-        "recess-dark": get_surface("painted-steel", color="#1B2429", roughness=0.84),
+        "recess-dark": get_surface("painted-steel", color="#344753", roughness=0.84),
         "door-timber": get_surface("timber", color="#684936", roughness=0.59),
         "door-timber-light": get_surface("timber", color="#90694F", roughness=0.54),
         "bronze-metal": get_surface("galvanized-steel", color="#B4945D", roughness=0.31),
@@ -81,7 +84,7 @@ def build_facade_scene(study: FacadeStudy, destination: Path, *, bpy_module: Any
         obj["kumiki_part"] = part.name.split("-")[0]
         # Subtle bevels catch glancing light; the source .blend keeps them as
         # editable modifiers, while export_revision evaluates them for GLB.
-        if part.name.startswith(("masonry-", "cornice-", "foundation-", "door-", "window-")):
+        if part.name.startswith(("masonry-", "cornice-", "foundation-", "door-", "window-", "ornament-")):
             bevel = obj.modifiers.new("Architectural edge soften", "BEVEL")
             bevel.width = 0.008 if part.name.startswith("masonry-") else 0.004
             bevel.segments = 2
@@ -115,6 +118,8 @@ def build_facade_scene(study: FacadeStudy, destination: Path, *, bpy_module: Any
     stage.objects.link(area)
     area.location = (cx-5, miny-7, maxz+5)
     aim_at(area, (cx, miny, height*0.40))
+    add_architectural_reflections(bpy, stage, center_x=cx, facade_y=miny,
+                                 center_z=minz+height*0.49, span=width)
 
     camera_data = bpy.data.cameras.new("Camera / architectural detail review")
     camera_data.type = "ORTHO"

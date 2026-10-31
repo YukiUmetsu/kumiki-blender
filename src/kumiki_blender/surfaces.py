@@ -33,6 +33,7 @@ _SURFACES = {
     "galvanized-steel": PBRSurface("Satin galvanized metal", "#ADB5BB", 0.88, 0.33, texture_kind="galvanized-steel"),
     "cast-concrete": PBRSurface("Cast architectural concrete", "#787B79", 0.0, 0.85, texture_kind="cast-concrete"),
     "natural-stone": PBRSurface("Architectural stone", "#BBB3A5", 0.0, 0.7, texture_kind="natural-stone"),
+    "weathered-stone": PBRSurface("Weathered mineral masonry", "#A59F94", 0.0, 0.84, texture_kind="weathered-stone"),
     "timber": PBRSurface("Seasoned timber", "#714831", 0.0, 0.58, texture_kind="timber"),
     "optical-glass": PBRSurface("Optical glass", "#D6E0E5", 0.0, 0.06, 0.95, 1.48, texture_kind=""),
 }

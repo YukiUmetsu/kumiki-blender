@@ -3,6 +3,7 @@ import unittest
 from kumiki_blender.architecture_details import (
     Opening, box_mesh, cornice_extrusion, coursed_wall,
     dentil_row, door_assembly, gable_roof, gutter_channel, rainwater_system,
+    rosette_relief,
     window_assembly,
 )
 from kumiki_blender.architecture_geometry import GeometryError, audit_mesh, world_vertices
@@ -90,6 +91,19 @@ class ArchitecturalDetailTests(unittest.TestCase):
             self.assertGreater(audit_mesh(part.mesh).volume_m3, 0)
         with self.assertRaises(GeometryError):
             gutter_channel(10, radius=.05, wall=.03)
+
+    def test_carved_rosettes_have_separate_manifold_leaves_and_veins(self):
+        parts = rosette_relief(prefix='ornament-test', diameter=.64, petals=12)
+        self.assertEqual(len(parts), 26)
+        self.assertEqual(len({p.name for p in parts}), 26)
+        self.assertEqual(len([p for p in parts if '-leaf-' in p.name]), 12)
+        self.assertEqual(len([p for p in parts if '-vein-' in p.name]), 12)
+        for part in parts:
+            report = audit_mesh(part.mesh)
+            self.assertEqual((report.boundary_edges, report.nonmanifold_edges), (0, 0))
+            self.assertGreater(report.volume_m3, 0)
+        with self.assertRaises(GeometryError):
+            rosette_relief(prefix='ornament-invalid', petals=3)
 
 
 if __name__ == '__main__':

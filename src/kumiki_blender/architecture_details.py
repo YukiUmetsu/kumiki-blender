@@ -236,6 +236,51 @@ def dentil_row(*, prefix: str, length: float, count: int, tooth_width: float = 0
                  for i in range(count))
 
 
+def rosette_relief(*, prefix: str, diameter: float = 0.65,
+                   petals: int = 12, relief_depth: float = 0.075) -> tuple[MeshInstance, ...]:
+    """A modular carved stone rosette with radial leaves and raised veins.
+
+    The decoration lies in local XY and projects along +Z. Mount it on a
+    vertical facade using basis axes (world X, world Z, world -Y). Each leaf
+    is a real manifold relief mesh rather than a normal-map-only decal.
+    """
+    diameter = _finite_number(diameter, "rosette diameter", 0.15, 3)
+    relief_depth = _finite_number(relief_depth, "rosette relief", 0.01, 0.5)
+    if type(petals) is not int or not 6 <= petals <= 24:
+        raise GeometryError("A rosette needs 6–24 carved petals")
+    radius = diameter / 2
+    backing = revolve_profile(((radius * 0.92, 0),
+                               (radius, relief_depth * 0.28),
+                               (radius * 0.96, relief_depth * 0.58)), radial_segments=48)
+    boss = revolve_profile(((radius * 0.15, 0),
+                            (radius * 0.23, relief_depth * 0.62),
+                            (radius * 0.16, relief_depth * 1.4)), radial_segments=32)
+    leaf = extrude_profile(((radius*.20, 0), (radius*.38, -radius*.14),
+                            (radius*.59, -radius*.17), (radius*.86, 0),
+                            (radius*.59, radius*.17), (radius*.38, radius*.14)),
+                           relief_depth * 0.74)
+    vein = extrude_profile(((radius*.32, -radius*.027),
+                            (radius*.76, 0), (radius*.32, radius*.027)),
+                           relief_depth * 0.16)
+    result = [
+        place_mesh(backing, name=f"{prefix}-backing", material="ornament-stone"),
+        place_mesh(boss, name=f"{prefix}-boss", origin=(0, 0, relief_depth*0.5),
+                   material="ornament-highlight"),
+    ]
+    for index in range(petals):
+        angle = math.tau * index / petals
+        axes = {"axis_x": (math.cos(angle), math.sin(angle), 0),
+                "axis_y": (-math.sin(angle), math.cos(angle), 0),
+                "axis_z": (0, 0, 1)}
+        result.append(place_mesh(leaf, name=f"{prefix}-leaf-{index:02d}",
+                                 origin=(0, 0, relief_depth * 0.37),
+                                 material="ornament-stone", **axes))
+        result.append(place_mesh(vein, name=f"{prefix}-vein-{index:02d}",
+                                 origin=(0, 0, relief_depth * 1.11),
+                                 material="ornament-highlight", **axes))
+    return tuple(result)
+
+
 def gutter_channel(length: float, *, radius: float = 0.105,
                    wall: float = 0.018, segments: int = 14) -> Mesh:
     """Half-round metal rain gutter with a real open U-shaped channel.
