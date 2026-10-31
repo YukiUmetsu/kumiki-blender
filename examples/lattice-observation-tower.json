@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "asset_id": "lattice-observation-tower",
+  "generator": "lattice-tower",
+  "geometry": {
+    "height_m": 120,
+    "base_span_m": 42,
+    "top_span_m": 10,
+    "levels": 16,
+    "leg_radius_m": 0.8,
+    "brace_radius_m": 0.19
+  },
+  "material": {
+    "steel_color": "#C94B38",
+    "roughness": 0.42
+  },
+  "preview": {
+    "width": 960,
+    "height": 540,
+    "samples": 24
+  }
+}
