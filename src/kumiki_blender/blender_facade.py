@@ -118,8 +118,13 @@ def build_facade_scene(study: FacadeStudy, destination: Path, *, bpy_module: Any
     stage.objects.link(area)
     area.location = (cx-5, miny-7, maxz+5)
     aim_at(area, (cx, miny, height*0.40))
+    glass_objects = tuple(obj for obj in objects if obj["kumiki_part"] == "window"
+                          and obj.name.endswith("-glass"))
+    if not glass_objects:
+        raise RuntimeError("Facade expected real glazing meshes for the reflection rig")
     add_architectural_reflections(bpy, stage, center_x=cx, facade_y=miny,
-                                 center_z=minz+height*0.49, span=width)
+                                 center_z=minz+height*0.49, span=width,
+                                 glass_receivers=glass_objects)
 
     camera_data = bpy.data.cameras.new("Camera / architectural detail review")
     camera_data.type = "ORTHO"

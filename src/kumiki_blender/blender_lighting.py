@@ -46,8 +46,21 @@ def plan_architectural_reflections(*, center_x: float, facade_y: float,
 
 
 def add_architectural_reflections(bpy: Any, collection: Any, *, center_x: float,
-                                 facade_y: float, center_z: float, span: float) -> tuple[Any, ...]:
-    """Create specular-dominant Cycles softboxes in the studio-only collection."""
+                                 facade_y: float, center_z: float, span: float,
+                                 glass_receivers: tuple[Any, ...] = ()) -> tuple[Any, ...]:
+    """Create sky softboxes and optionally link their light to glazing only.
+
+    When supplied, the receiver collection is kept separate from the studio
+    collection and includes only the actual glass mesh objects. Blender light
+    linking avoids broad specular spill over rough stone and roof materials.
+    """
+    receiver_collection = None
+    if glass_receivers:
+        receiver_collection = bpy.data.collections.new("Light linking / glass receivers")
+        for receiver in glass_receivers:
+            if receiver.type != "MESH":
+                raise ValueError("Architectural reflection receivers must be glass mesh objects")
+            receiver_collection.objects.link(receiver)
     objects = []
     for spec in plan_architectural_reflections(center_x=center_x, facade_y=facade_y,
                                                center_z=center_z, span=span):
@@ -64,5 +77,7 @@ def add_architectural_reflections(bpy: Any, collection: Any, *, center_x: float,
         collection.objects.link(obj)
         obj.location = spec.location
         aim_at(obj, spec.target)
+        if receiver_collection is not None:
+            obj.light_linking.receiver_collection = receiver_collection
         objects.append(obj)
     return tuple(objects)

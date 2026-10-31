@@ -98,7 +98,7 @@ blender --background --factory-startup --python-exit-code 1 \
   build-facade --bays 3 --output .review/facade/r01
 ```
 
-The detail kit also includes a **tileable weathered-stone PBR preset** with adjustable `weathering_strength` from 0–1, subtle directional runoff/mineral deposits and deterministic per-block shade variation. Its Blender studio uses specular-only rectangular reflection softboxes to reveal glazing response without flattening daylight shadows; those lights are excluded from the GLB. A Three.js scene needs its own reflection environment for similar results.
+The detail kit also includes a **tileable weathered-stone PBR preset** with adjustable `weathering_strength` from 0–1, subtle directional runoff/mineral deposits and deterministic per-block shade variation. Its Blender studio uses **glass-only light-linked rectangular reflection softboxes** to reveal glazing response without brightening the stonework; those lights are excluded from the GLB. A Three.js scene needs its own reflection environment for similar results.
 
 The demonstration is **an original architectural detail study**, not a measured replica of an existing building. Future landmark work should substitute location-specific measured proportions, ornaments, roofs, glazing, weathering and material scans, with visual QA at production resolution. For component authoring conventions and examples, see [Architectural detail kit guide](docs/ARCHITECTURE_DETAILS.md).
 

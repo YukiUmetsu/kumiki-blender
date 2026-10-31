@@ -78,7 +78,8 @@ output directory for every revision. Symmetric façade compositions accept 3,
 - `plan_architectural_reflections()` specifies two rectangular sky softboxes;
   `add_architectural_reflections()` adds them to a Blender-only studio collection
   to emphasize specular response from real transmissive glass. Their diffuse
-  contribution is zero so they do not wash out the building's daylight relief.
+  contribution is zero, and Blender light linking includes only real glazing
+  meshes, so rough masonry does not pick up broad glossy spill.
 - GLB keeps Principled glass transmission/IOR material values, **but not** the
   studio softboxes. A Three.js scene should provide an appropriate environment
   map, direct lighting and tested support for transmission extensions.
