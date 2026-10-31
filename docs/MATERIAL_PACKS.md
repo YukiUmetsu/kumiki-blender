@@ -50,7 +50,7 @@ can use the same pack. To lock each map to its exact downloaded version, add
 an optional `sha256` object keyed by map name, with lowercase hex SHA-256 hashes.
 Hashes of every map are recorded in the revision manifest even without pins.
 
-Validate all files, hashes, targets and rights declarations **without Blender**:
+Validate all files, hashes, assignment syntax and rights declarations **without Blender**:
 
 ```bash
 PYTHONPATH=src python3 -m kumiki_blender inspect-texture-packs \
@@ -108,7 +108,7 @@ the same material; the CLI rejects that conflict.
 ## Supported formats and safeguards
 
 - Mandatory `base_color`, `roughness`, **OpenGL (+Y) tangent `normal`** map;
-  optional `metallic` map. PNG and JPEG only, up to 32 MiB per file. DirectX
+  optional `metallic` map. PNG and JPEG only, up to 128 MiB / 8192 pixels per axis. DirectX
   (-Y) normals must be converted before import. Color/normal/roughness maps
   must share the same UV layout and tile consistently.
 - glTF-compatible Principled BSDF image nodes; linear color for data maps,

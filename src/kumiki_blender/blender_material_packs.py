@@ -25,13 +25,17 @@ def _verified_image(bpy: Any, source: TextureMap, *, non_color: bool) -> Any:
     try:
         image = bpy.data.images.load(str(source.file_path), check_existing=False)
         image.name = name
-        if not image.has_data or not all(0 < dimension <= 8192 for dimension in image.size):
-            raise AssetImportError(f"Texture has invalid or oversized dimensions: {source.relative_path}")
         if non_color:
             image.colorspace_settings.name = "Non-Color"
         image.pack()
         if image.packed_file is None:
             raise AssetImportError(f"Texture could not be packed: {source.relative_path}")
+        # `image.has_data` can be false for an on-disk PNG that Blender has
+        # indexed but not decoded into an in-memory pixel buffer yet. The
+        # packed-file check confirms it was really read; dimensions are still
+        # bounded before loading by material_packs._validate_image.
+        if not all(0 < dimension <= 8192 for dimension in image.size):
+            raise AssetImportError(f"Texture has invalid or oversized dimensions: {source.relative_path}")
     except RuntimeError as error:
         raise AssetImportError(f"Blender cannot load texture {source.relative_path}: {error}") from error
     return image

@@ -1,5 +1,6 @@
 import hashlib
 import json
+import struct
 import tempfile
 import unittest
 from pathlib import Path
@@ -60,6 +61,27 @@ class MaterialPackTests(unittest.TestCase):
             path.write_text(json.dumps(data))
             (root / "textures/normal.png").unlink()
             with self.assertRaisesRegex(AssetImportError, "Cannot read"):
+                load_texture_packs(path)
+
+    def test_rejects_decompression_bombs_before_blender(self):
+        with tempfile.TemporaryDirectory() as dirname:
+            root = Path(dirname)
+            path, data = sample(root)
+            data["packs"][0].pop("sha256")
+            filename = root / "textures/base_color.png"
+            payload = filename.read_bytes()
+            # Rewrite only the advertised width; rejection must happen before
+            # any image decoder attempts to allocate the advertised pixels.
+            filename.write_bytes(payload[:16] + struct.pack(">I", 100_000) + payload[20:])
+            path.write_text(json.dumps(data))
+            with self.assertRaisesRegex(AssetImportError, "PNG header"):
+                load_texture_packs(path)
+
+            jpeg = b"\xff\xd8\xff\xe0\x00\x04JF\xff\xc0\x00\x0b\x08\x27\x10\x00\x10\x03\x01\x11\x00\xff\xd9"
+            (root / "textures/base_color.jpg").write_bytes(jpeg)
+            data["packs"][0]["maps"]["base_color"] = "textures/base_color.jpg"
+            path.write_text(json.dumps(data))
+            with self.assertRaisesRegex(AssetImportError, "JPEG dimensions"):
                 load_texture_packs(path)
 
     def test_rejects_unsafe_paths_and_symlinks(self):

@@ -19,7 +19,8 @@ from .asset_import import AssetImportError
 
 
 MAX_RECIPE_BYTES = 64 * 1024
-MAX_MAP_BYTES = 32 * 1024 * 1024
+MAX_MAP_BYTES = 128 * 1024 * 1024
+MAX_MAP_DIMENSION = 8192
 _MAP_NAMES = {"base_color", "roughness", "normal", "metallic"}
 _REQUIRED_MAPS = {"base_color", "roughness", "normal"}
 _ID = re.compile(r"[a-z][a-z0-9]*(?:-[a-z0-9]+)*\Z")
@@ -96,17 +97,47 @@ def _number(value: Any, name: str, minimum: float, maximum: float) -> float:
 def _validate_image(path: Path, name: str) -> tuple[str, int]:
     size = path.stat().st_size
     if size < 16 or size > MAX_MAP_BYTES:
-        raise AssetImportError(f"Texture {name} must be 16 bytes–32 MiB")
+        raise AssetImportError(f"Texture {name} must be 16 bytes–128 MiB")
     with path.open("rb") as stream:
         header = stream.read(32)
         if path.suffix.lower() == ".png":
             if (not header.startswith(b"\x89PNG\r\n\x1a\n") or header[12:16] != b"IHDR"
-                    or int.from_bytes(header[16:20], "big") == 0
-                    or int.from_bytes(header[20:24], "big") == 0):
+                    or not 0 < int.from_bytes(header[16:20], "big") <= MAX_MAP_DIMENSION
+                    or not 0 < int.from_bytes(header[20:24], "big") <= MAX_MAP_DIMENSION):
                 raise AssetImportError(f"Texture {name} is not a valid PNG header")
         elif path.suffix.lower() in (".jpg", ".jpeg"):
             if not header.startswith(b"\xff\xd8\xff"):
                 raise AssetImportError(f"Texture {name} is not a JPEG")
+            # Check JPEG dimensions *before* letting Blender decode potentially
+            # huge decompressed images; metadata segments can precede SOF.
+            stream.seek(2)
+            while True:
+                marker_start = stream.read(1)
+                if marker_start != b"\xff":
+                    raise AssetImportError(f"Texture {name} has malformed JPEG markers")
+                marker = stream.read(1)
+                while marker == b"\xff":
+                    marker = stream.read(1)
+                if marker in (b"", b"\x00", b"\xd9", b"\xda"):
+                    raise AssetImportError(f"Texture {name} lacks JPEG image dimensions")
+                if 0xD0 <= marker[0] <= 0xD7 or marker[0] == 0x01:
+                    continue
+                payload_size_bytes = stream.read(2)
+                if len(payload_size_bytes) != 2:
+                    raise AssetImportError(f"Texture {name} has truncated JPEG markers")
+                payload_size = int.from_bytes(payload_size_bytes, "big") - 2
+                if payload_size < 0 or stream.tell() + payload_size > size:
+                    raise AssetImportError(f"Texture {name} has invalid JPEG segment size")
+                if marker[0] in (0xC0, 0xC1, 0xC2, 0xC3, 0xC5, 0xC6, 0xC7,
+                                 0xC9, 0xCA, 0xCB, 0xCD, 0xCE, 0xCF):
+                    dimensions = stream.read(5)
+                    if (len(dimensions) != 5
+                            or not 0 < int.from_bytes(dimensions[1:3], "big") <= MAX_MAP_DIMENSION
+                            or not 0 < int.from_bytes(dimensions[3:5], "big") <= MAX_MAP_DIMENSION):
+                        raise AssetImportError(f"Texture {name} has invalid JPEG dimensions")
+                    break
+                stream.seek(payload_size, 1)
+            stream.seek(len(header))
         else:
             raise AssetImportError(f"Texture {name} must be PNG or JPEG for portable glTF")
         digest = hashlib.sha256()
