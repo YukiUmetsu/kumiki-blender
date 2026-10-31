@@ -7,7 +7,7 @@ import math
 from pathlib import Path
 from typing import Any
 
-from .blender_output import export_revision
+from .blender_output import create_model_scene, export_revision
 from .blender_scene import _create_box, _material
 from .portico import PorticoStudy
 from .render_profiles import select_render_profile
@@ -27,9 +27,7 @@ def build_portico_scene(study: PorticoStudy, destination: Path, *, bpy_module: A
         raise RuntimeError(f"Output revision already exists: {destination}")
 
     profile = select_render_profile(1440, 900, 48)
-    scene = bpy.data.scenes.new(f"Kumiki / {study.asset_id}")
-    if bpy.context.window is not None:
-        bpy.context.window.scene = scene
+    scene = create_model_scene(bpy, study.asset_id)
     scene.render.engine = "CYCLES"
     scene.cycles.samples = profile.samples
     scene.render.resolution_x = profile.width

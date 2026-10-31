@@ -7,11 +7,48 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from kumiki_blender.blender_output import export_revision
+from kumiki_blender.blender_output import create_model_scene, export_revision
 from kumiki_blender.shots import QualityShot
 
 
 class BlenderOutputTests(unittest.TestCase):
+    def test_background_uses_active_factory_scene_and_hides_startup_objects(self):
+        starter = SimpleNamespace(hide_render=False, hide_set=Mock())
+        scene = SimpleNamespace(name="Scene", objects=[starter])
+        bpy = SimpleNamespace(
+            app=SimpleNamespace(background=True),
+            data=SimpleNamespace(filepath="", scenes=SimpleNamespace(new=Mock())),
+            context=SimpleNamespace(scene=scene),
+        )
+        self.assertIs(create_model_scene(bpy, "study"), scene)
+        self.assertEqual(scene.name, "Kumiki / study")
+        self.assertTrue(starter.hide_render)
+        starter.hide_set.assert_called_once_with(True)
+        bpy.data.scenes.new.assert_not_called()
+
+    def test_background_rejects_loaded_user_file_before_mutating_scene(self):
+        scene = SimpleNamespace(name="User work", objects=[])
+        bpy = SimpleNamespace(
+            app=SimpleNamespace(background=True),
+            data=SimpleNamespace(filepath="user.blend"),
+            context=SimpleNamespace(scene=scene),
+        )
+        with self.assertRaisesRegex(RuntimeError, "factory-startup"):
+            create_model_scene(bpy, "study")
+        self.assertEqual(scene.name, "User work")
+
+    def test_interactive_mode_creates_separate_scene(self):
+        scene = object()
+        window = SimpleNamespace(scene=None)
+        bpy = SimpleNamespace(
+            app=SimpleNamespace(background=False),
+            data=SimpleNamespace(scenes=SimpleNamespace(new=Mock(return_value=scene))),
+            context=SimpleNamespace(window=window),
+        )
+        self.assertIs(create_model_scene(bpy, "study"), scene)
+        bpy.data.scenes.new.assert_called_once_with("Kumiki / study")
+        self.assertIs(window.scene, scene)
+
     def test_shared_exporter_preserves_native_source_and_embeds_modifiers_in_glb(self):
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / "r01"

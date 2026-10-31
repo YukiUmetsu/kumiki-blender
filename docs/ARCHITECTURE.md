@@ -24,7 +24,7 @@ Recipes never accept executable Python or arbitrary paths. A recipe cannot direc
 
 ## Scene and export
 
-- A new Blender scene is created without deleting the caller's existing scenes.
+- Headless builds require an empty factory-started process and reuse its **active** scene, hiding stock startup objects without deleting their datablocks. The Blender 4.5 glTF exporter has reproducibly segfaulted when exporting meshes from an inactive newly created scene via a temporary context override. In interactive Blender, a separate scene is created and activated without deleting pre-existing scenes.
 - Model meshes are grouped in `Model / portable GLB`; studio elements are separate.
 - Structural beams carry stable names and a `kumiki_part` custom property for future camera-target and semantic part bindings.
 - The preview uses Cycles, a neutral sky, daylight sun, a ground plane and an architecture-framing camera. Four deterministic camera poses cover hero, front, side and construction detail, with cheaper sampling on secondary views.
@@ -37,7 +37,7 @@ Recipes never accept executable Python or arbitrary paths. A recipe cannot direc
 
 ### Headless Blender CI
 
-The pull-request CI job installs a pinned official Blender 4.5 LTS Linux release and checks its SHA-256 against the Blender Foundation manifest before execution. It builds both the lattice and portico studies, audits GLB portability and uploads previews, editable source and manifests to GitHub workflow artifacts. Low-sample smoke renders are intended to catch broken geometry/export/camera setups; final cinematic acceptance still requires production-resolution renders and visual review.
+The pull-request CI job installs a pinned official Blender 4.5 LTS Linux release and checks its SHA-256 against the Blender Foundation manifest before execution. It builds both the lattice and portico studies, audits GLB portability with local semantic checks **and** the official Khronos validator via a pinned glTF-Transform CLI, and uploads previews, editable source and manifests to GitHub workflow artifacts. Low-sample smoke renders are intended to catch broken geometry/export/camera setups; final cinematic acceptance still requires production-resolution renders and visual review.
 
 ## Materials
 

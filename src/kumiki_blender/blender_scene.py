@@ -10,7 +10,7 @@ import math
 from pathlib import Path
 from typing import Any
 
-from .blender_output import export_revision
+from .blender_output import create_model_scene, export_revision
 from .lattice import Beam, GussetPlate, TowerPlan
 from .recipe import TowerRecipe
 from .render_profiles import select_render_profile
@@ -153,11 +153,7 @@ def build_scene(recipe: TowerRecipe, plan: TowerPlan, destination: Path, *, bpy_
         raise RuntimeError(f"Output revision already exists: {destination}")
 
     profile = select_render_profile(recipe.preview_width, recipe.preview_height, recipe.samples)
-    scene = bpy.data.scenes.new(f"Kumiki / {recipe.asset_id}")
-    # Background Blender builds may have no window; scene overrides work without
-    # relying on a visible UI. Never remove or replace an existing scene.
-    if bpy.context.window is not None:
-        bpy.context.window.scene = scene
+    scene = create_model_scene(bpy, recipe.asset_id)
     scene.render.engine = "CYCLES"
     scene.cycles.samples = profile.samples
     scene.render.resolution_x = profile.width

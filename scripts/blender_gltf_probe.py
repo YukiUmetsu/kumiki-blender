@@ -27,9 +27,9 @@ bpy.ops.export_scene.gltf(
 )
 print(f"KUMIKI_PROBE: exporter completed, {target.stat().st_size} bytes", flush=True)
 
-# A controlled second case exercises the same new-scene, modifier, material,
-# save-and-export sequence as the asset pipeline, with ordinary cube meshes.
-# This distinguishes an exporter/context defect from malformed input geometry.
+# Probe material, modifier baking and exporting from Blender's active scene.
+# The separate inactive-scene/temp_override diagnostic previously reproduced
+# a native crash even with one cube; production now avoids that path.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from kumiki_blender.blender_output import bake_export_meshes  # noqa: E402
 from kumiki_blender.blender_scene import _material  # noqa: E402
@@ -55,68 +55,3 @@ bpy.ops.export_scene.gltf(
     export_apply=False,
 )
 print("KUMIKI_PROBE: default scene baked exporter completed", flush=True)
-
-scene = bpy.data.scenes.new("Kumiki / isolated exporter probe")
-if bpy.context.window is not None:
-    bpy.context.window.scene = scene
-collection = bpy.data.collections.new("Probe / portable geometry")
-scene.collection.children.link(collection)
-material = _material(bpy, get_surface("natural-stone"))
-objects = []
-for index in range(64):
-    mesh = bpy.data.meshes.new(f"probe mesh {index}")
-    mesh.from_pydata(
-        [(-1, -1, -1), (1, -1, -1), (1, 1, -1), (-1, 1, -1),
-         (-1, -1, 1), (1, -1, 1), (1, 1, 1), (-1, 1, 1)],
-        [],
-        [(3, 2, 1, 0), (4, 5, 6, 7), (0, 1, 5, 4),
-         (1, 2, 6, 5), (2, 3, 7, 6), (3, 0, 4, 7)],
-    )
-    mesh.update()
-    mesh.materials.append(material)
-    obj = bpy.data.objects.new(f"probe cube {index}", mesh)
-    obj.location.x = index * 2.5
-    obj["kumiki_part"] = "probe"
-    collection.objects.link(obj)
-    bevel = obj.modifiers.new("Probe bevel", "BEVEL")
-    bevel.width = 0.02
-    bevel.segments = 2
-    obj.modifiers.new("Probe normals", "WEIGHTED_NORMAL")
-    objects.append(obj)
-
-with bpy.context.temp_override(scene=scene, view_layer=scene.view_layers[0]):
-    print("KUMIKI_PROBE: staged scene save starting", flush=True)
-    bpy.ops.wm.save_as_mainfile(filepath=str(target.parent / "probe.blend"))
-    print("KUMIKI_PROBE: baking 64 modifier meshes", flush=True)
-    bake_export_meshes(bpy, objects)
-    bpy.ops.object.select_all(action="DESELECT")
-    objects[0].select_set(True, view_layer=scene.view_layers[0])
-    print("KUMIKI_PROBE: one staged mesh exporter starting", flush=True)
-    bpy.ops.export_scene.gltf(
-        filepath=str(target.parent / "staged-one.glb"),
-        export_format="GLB",
-        use_selection=True,
-        export_materials="EXPORT",
-        export_animations=False,
-        export_cameras=False,
-        export_lights=False,
-        export_extras=True,
-        export_apply=False,
-    )
-    print("KUMIKI_PROBE: one staged mesh exporter completed", flush=True)
-    bpy.ops.object.select_all(action="DESELECT")
-    for obj in objects:
-        obj.select_set(True, view_layer=scene.view_layers[0])
-    print("KUMIKI_PROBE: staged scene exporter starting", flush=True)
-    bpy.ops.export_scene.gltf(
-        filepath=str(target.parent / "staged.glb"),
-        export_format="GLB",
-        use_selection=True,
-        export_materials="EXPORT",
-        export_animations=False,
-        export_cameras=False,
-        export_lights=False,
-        export_extras=True,
-        export_apply=False,
-    )
-    print("KUMIKI_PROBE: staged scene exporter completed", flush=True)
