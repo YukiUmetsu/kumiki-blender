@@ -62,6 +62,10 @@ jobs:
           echo "$RUNNER_TEMP/blender/blender-4.5.15-linux-x64" >> "$GITHUB_PATH"
       - name: Inspect Blender runtime
         run: blender --version
+      - name: Isolate stock Blender glTF exporter on one cube
+        run: |
+          blender --background --factory-startup --threads 1 --python-exit-code 1 \
+            --python scripts/blender_gltf_probe.py
       - name: Render modular portico in reduced-cost QA mode
         env:
           KUMIKI_RENDER_PROFILE: smoke
