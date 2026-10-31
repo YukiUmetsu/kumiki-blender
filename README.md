@@ -119,6 +119,8 @@ See [Architecture](docs/ARCHITECTURE.md), the [design spec](docs/superpowers/spe
 
 For photo-derived 2.5D parallax, see the [Depth Anything V2 integration decision](docs/IMAGE_TO_2_5D.md). It is an optional future pipeline, distinct from creating reference-accurate 3D landmark meshes.
 
+For third-party materials, Geometry Nodes, rigging, BIM and export-validation candidates, see the [GitHub Blender ecosystem research](docs/BLENDER_ECOSYSTEM.md), including commercial-use licenses and integration priorities.
+
 ## Project direction
 
 `kumiki-blender` owns high-fidelity creation, modeling recipes, baking, source files and exports. [Kumiki-UI](https://github.com/YukiUmetsu/kumiki-ui) owns interactive Three.js scene templates, motion and cameras. [ContentGen](https://github.com/YukiUmetsu/ai-content-generation) orchestrates media production. The repositories communicate through versioned assets and explicit manifests; no runtime Python dependency is imposed on Three.js.

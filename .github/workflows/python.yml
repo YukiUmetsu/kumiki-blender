@@ -62,7 +62,15 @@ jobs:
           echo "$RUNNER_TEMP/blender/blender-4.5.15-linux-x64" >> "$GITHUB_PATH"
       - name: Inspect Blender runtime
         run: blender --version
-      - name: Render lattice tower and portico in reduced-cost QA mode
+      - name: Render modular portico in reduced-cost QA mode
+        env:
+          KUMIKI_RENDER_PROFILE: smoke
+        run: |
+          blender --background --factory-startup --threads 1 --python-exit-code 1 \
+            --python scripts/blender_entry.py -- \
+            build-portico --bays 3 --output .review/ci/portico
+      - name: Render lattice tower in reduced-cost QA mode
+        if: always()
         env:
           KUMIKI_RENDER_PROFILE: smoke
         run: |
@@ -70,9 +78,6 @@ jobs:
             --python scripts/blender_entry.py -- \
             build --recipe examples/lattice-observation-tower.json \
             --output .review/ci/lattice-tower
-          blender --background --factory-startup --threads 1 --python-exit-code 1 \
-            --python scripts/blender_entry.py -- \
-            build-portico --bays 3 --output .review/ci/portico
       - name: Verify portable exports and required previews
         env:
           PYTHONPATH: src
