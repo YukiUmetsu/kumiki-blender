@@ -53,7 +53,8 @@ def build_facade_scene(study: FacadeStudy, destination: Path, *, bpy_module: Any
         "door-timber-light": get_surface("timber", color="#90694F", roughness=0.54),
         "bronze-metal": get_surface("galvanized-steel", color="#B4945D", roughness=0.31),
         "roof-slate": get_surface("natural-stone", color="#51565D", roughness=0.82),
-        "roof-slate-light": get_surface("natural-stone", color="#696E72", roughness=0.78),
+        "roof-slate-light": get_surface("natural-stone", color="#5E6267", roughness=0.78),
+        "rain-metal": get_surface("galvanized-steel", color="#525B60", roughness=0.44),
     }
     palette = {name: _material(bpy, spec) for name, spec in materials.items()}
     from mathutils import Matrix  # Blender-only dependency.

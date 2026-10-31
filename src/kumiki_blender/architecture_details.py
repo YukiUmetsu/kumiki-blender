@@ -236,6 +236,61 @@ def dentil_row(*, prefix: str, length: float, count: int, tooth_width: float = 0
                  for i in range(count))
 
 
+def gutter_channel(length: float, *, radius: float = 0.105,
+                   wall: float = 0.018, segments: int = 14) -> Mesh:
+    """Half-round metal rain gutter with a real open U-shaped channel.
+
+    The cross-section is annular, not a dark stripe texture. Place its local
+    axes (Y, Z, X) so the trough extends along a roof's horizontal eave.
+    """
+    length = _finite_number(length, "gutter length", 0.2, 150)
+    radius = _finite_number(radius, "gutter radius", 0.025, 0.5)
+    wall = _finite_number(wall, "gutter wall", 0.003, 0.08)
+    if wall >= radius / 2:
+        raise GeometryError("Gutter metal wall must be thinner than half its radius")
+    if type(segments) is not int or not 8 <= segments <= 64:
+        raise GeometryError("Gutter radial segments must be 8–64")
+    angles = [math.pi + math.pi * i / segments for i in range(segments + 1)]
+    outer = [(radius * math.cos(angle), radius * math.sin(angle)) for angle in angles]
+    inner = [((radius-wall) * math.cos(angle), (radius-wall) * math.sin(angle))
+             for angle in reversed(angles)]
+    return extrude_profile(tuple(outer + inner), length)
+
+
+def rainwater_system(*, width: float, depth: float, eave_z: float,
+                     overhang: float = 0.55) -> tuple[MeshInstance, ...]:
+    """Reusable half-round gutters, front downspouts and connection elbows."""
+    width = _finite_number(width, "building width", 2, 120)
+    depth = _finite_number(depth, "building depth", 2, 80)
+    eave_z = _finite_number(eave_z, "eave height", 1, 120)
+    overhang = _finite_number(overhang, "roof overhang", 0.1, 2)
+    axes = {"axis_x": (0, 1, 0), "axis_y": (0, 0, 1), "axis_z": (1, 0, 0)}
+    trough = gutter_channel(width + overhang*2)
+    parts = [
+        place_mesh(trough, name="gutter-front-channel",
+                   origin=(-overhang, -depth/2-overhang-0.015, eave_z+0.01),
+                   material="rain-metal", **axes),
+        place_mesh(trough, name="gutter-back-channel",
+                   origin=(-overhang, depth/2+overhang+0.015, eave_z+0.01),
+                   material="rain-metal", **axes),
+    ]
+    downspout = revolve_profile(((0.062, 0), (0.062, eave_z - 0.17)), radial_segments=16)
+    collar = revolve_profile(((0.080, 0), (0.080, 0.055)), radial_segments=16)
+    y = -depth/2 - 0.32
+    for i, x in enumerate((0.26, width-0.26)):
+        parts.append(place_mesh(downspout, name=f"gutter-downspout-{i:02d}",
+                                origin=(x, y, 0.06), material="rain-metal"))
+        # Elbow bridges the overhanging gutter and the wall-mounted pipe.
+        connection_y = (-depth/2 - overhang - 0.015 + y) / 2
+        connection_span = abs(-depth/2 - overhang - 0.015 - y) + 0.1
+        parts.append(_part(f"gutter-elbow-{i:02d}", (0.135, connection_span, 0.135),
+                           (x, connection_y, eave_z-0.045), "rain-metal"))
+        for j, z in enumerate((1.1, eave_z/2, eave_z-0.85)):
+            parts.append(place_mesh(collar, name=f"gutter-collar-{i:02d}-{j:02d}",
+                                    origin=(x, y, z), material="rain-metal"))
+    return tuple(parts)
+
+
 def gable_roof(*, width: float, depth: float, eave_z: float, rise: float,
                overhang: float = 0.5, panel_thickness: float = 0.12,
                tile_rows: int = 8, tile_columns: int = 24) -> tuple[MeshInstance, ...]:
@@ -297,10 +352,17 @@ def gable_roof(*, width: float, depth: float, eave_z: float, rise: float,
                 x = (left + right) / 2
                 tile = box_mesh(right - left - min(0.012, (right-left)*0.15),
                                 step_s * 0.97, 0.035)
+                # Stable integer mixing avoids unnaturally regular diagonal
+                # stripes caused by (row+col) % N material alternation.
+                shade = ((col * 73856093) ^ (row * 19349663)
+                         ^ (83492791 if side == "back" else 0)) & 0xFFFFFFFF
+                shade ^= shade >> 13
+                shade = (shade * 0x85EBCA6B) & 0xFFFFFFFF
+                shade ^= shade >> 16
                 parts.append(place_mesh(tile, name=f"roof-{side}-tile-{row:02d}-{col:02d}",
                     origin=(x, y + normal_axis[1]*0.025, z + normal_axis[2]*0.025),
                     axis_x=(1, 0, 0), axis_y=slope_axis, axis_z=normal_axis,
-                    material="roof-slate" if (row+col) % 5 else "roof-slate-light"))
+                    material="roof-slate-light" if shade % 13 == 0 else "roof-slate"))
     # Ridge cap hides the meeting seam between pitched panel edges.
     parts.append(_part("roof-ridge-cap", (roof_span, 0.20, 0.16),
                        (width/2, 0, ridge+0.035), "roof-slate-light"))

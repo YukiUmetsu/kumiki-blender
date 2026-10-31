@@ -11,7 +11,7 @@ from dataclasses import dataclass, replace
 
 from .architecture_details import (
     Opening, box_mesh, cornice_extrusion, coursed_wall, dentil_row,
-    door_assembly, gable_roof, window_assembly,
+    door_assembly, gable_roof, rainwater_system, window_assembly,
 )
 from .architecture_geometry import MeshInstance, Vec3, place_mesh, world_vertices
 
@@ -120,6 +120,8 @@ def make_facade_study(*, bays: int = 3) -> FacadeStudy:
     items.extend(gable_roof(width=width, depth=depth, eave_z=8.63, rise=2.6,
                             overhang=0.55, tile_rows=8,
                             tile_columns=round((width+1.1) / 0.52)))
+    items.extend(rainwater_system(width=width, depth=depth, eave_z=8.63,
+                                  overhang=0.55))
 
     mins = [float("inf")] * 3
     maxs = [float("-inf")] * 3

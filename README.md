@@ -78,6 +78,7 @@ The Blender-independent `architecture_details.py` provides composable, **manifol
 | `door_assembly()` | Raised timber panels, panel moldings, jambs, stone lintel, threshold and lathed metal knob |
 | `cornice_extrusion()` / `dentil_row()` | Projecting cross-section moldings and repeated stone teeth, in real dimensions |
 | `gable_roof()` | Closed front/back pitched roof slabs, solid gable ends, a ridge cap and individually sloped/staggered tiles |
+| `gutter_channel()` / `rainwater_system()` | Real open half-round gutters, connected downspouts, and fastening collars along the eaves |
 | `box_mesh()` | Cached, closed mesh primitive for any rectangular architectural detail |
 
 Every piece returns a named `MeshInstance` with editable material role, transform and physical geometry. You can mix these functions in **new landmark recipes** without rewriting Blender object placement. `facade.py` demonstrates composition into a fully enclosed, 3/5/7-bay stone townhouse study with consistently named `masonry`, `window`, `door`, `roof`, `dentil` and `cornice` categories.

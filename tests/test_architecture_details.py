@@ -2,7 +2,8 @@ import unittest
 
 from kumiki_blender.architecture_details import (
     Opening, box_mesh, cornice_extrusion, coursed_wall,
-    dentil_row, door_assembly, gable_roof, window_assembly,
+    dentil_row, door_assembly, gable_roof, gutter_channel, rainwater_system,
+    window_assembly,
 )
 from kumiki_blender.architecture_geometry import GeometryError, audit_mesh, world_vertices
 
@@ -75,6 +76,20 @@ class ArchitecturalDetailTests(unittest.TestCase):
             window_assembly(prefix='window-invalid', columns=7)
         with self.assertRaises(GeometryError):
             gable_roof(width=12, depth=7, eave_z=8, rise=2, tile_rows=30, tile_columns=100)
+
+    def test_gutters_are_open_channels_but_closed_metal_solids(self):
+        trough = gutter_channel(12)
+        report = audit_mesh(trough)
+        self.assertEqual((report.boundary_edges, report.nonmanifold_edges), (0, 0))
+        self.assertGreater(report.volume_m3, 0)
+        parts = rainwater_system(width=12, depth=7, eave_z=8)
+        self.assertEqual(len(parts), 12)
+        self.assertEqual(len(set(x.name for x in parts)), len(parts))
+        self.assertEqual({p.material for p in parts}, {'rain-metal'})
+        for part in parts:
+            self.assertGreater(audit_mesh(part.mesh).volume_m3, 0)
+        with self.assertRaises(GeometryError):
+            gutter_channel(10, radius=.05, wall=.03)
 
 
 if __name__ == '__main__':
