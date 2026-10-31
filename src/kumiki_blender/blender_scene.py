@@ -11,8 +11,12 @@ import math
 from pathlib import Path
 from typing import Any
 
-from .lattice import Beam, TowerPlan
+from .export_audit import audit_export_files
+from .glb_audit import audit_glb
+from .lattice import Beam, GussetPlate, TowerPlan
 from .recipe import TowerRecipe
+from .shots import plan_quality_shots
+from .surfaces import PBRSurface, get_surface
 
 
 def _srgb_channel_to_linear(value: int) -> float:
@@ -25,13 +29,16 @@ def _color(hex_color: str) -> tuple[float, float, float, float]:
     return (*(_srgb_channel_to_linear(channel) for channel in rgb), 1.0)
 
 
-def _material(bpy: Any, name: str, hex_color: str, roughness: float, metalness: float) -> Any:
-    material = bpy.data.materials.new(name)
+def _material(bpy: Any, spec: PBRSurface) -> Any:
+    material = bpy.data.materials.new(spec.name)
     material.use_nodes = True
     shader = next(node for node in material.node_tree.nodes if node.type == "BSDF_PRINCIPLED")
-    shader.inputs["Base Color"].default_value = _color(hex_color)
-    shader.inputs["Roughness"].default_value = roughness
-    shader.inputs["Metallic"].default_value = metalness
+    shader.inputs["Base Color"].default_value = _color(spec.color)
+    shader.inputs["Roughness"].default_value = spec.roughness
+    shader.inputs["Metallic"].default_value = spec.metallic
+    if spec.transmission:
+        shader.inputs["Transmission Weight"].default_value = spec.transmission
+        shader.inputs["IOR"].default_value = spec.ior
     return material
 
 
@@ -109,6 +116,28 @@ def _create_box(bpy: Any, collection: Any, name: str, dimensions: tuple[float, f
     return obj
 
 
+def _gusset_geometry(plate: GussetPlate) -> tuple[list[tuple[float, float, float]], list[tuple[int, ...]]]:
+    """Orient a physical gusset plate in the face plane of an arbitrary bay."""
+    local, faces = _box_geometry((plate.width, plate.height, plate.thickness), (0, 0, 0))
+    axes = (plate.axis_u, plate.axis_v, plate.normal)
+    vertices = [
+        tuple(plate.center[i] + sum(coords[axis] * axes[axis][i] for axis in range(3)) for i in range(3))
+        for coords in local
+    ]
+    return vertices, faces
+
+
+def _create_gusset(bpy: Any, collection: Any, plate: GussetPlate, material: Any) -> Any:
+    vertices, faces = _gusset_geometry(plate)
+    obj = _attach_mesh(bpy, collection, plate.name, vertices, faces, material)
+    obj["kumiki_part"] = "structural_gusset"
+    bevel = obj.modifiers.new("Steel plate deburr", "BEVEL")
+    bevel.width = min(plate.thickness * 0.3, 0.03)
+    bevel.segments = 2
+    obj.modifiers.new("Weighted plate normals", "WEIGHTED_NORMAL")
+    return obj
+
+
 def _aim_at(obj: Any, target: tuple[float, float, float]) -> None:
     from mathutils import Vector  # Blender-provided module, imported only when building.
 
@@ -149,15 +178,22 @@ def build_scene(recipe: TowerRecipe, plan: TowerPlan, destination: Path, *, bpy_
     stage_collection = bpy.data.collections.new("Studio / excluded from GLB")
     scene.collection.children.link(stage_collection)
 
-    steel = _material(bpy, "Architectural steel / painted", recipe.steel_color, recipe.roughness, 0.62)
-    trim = _material(bpy, "Railings / satin steel", "#9EA8AD", 0.35, 0.8)
-    platform = _material(bpy, "Deck / coated concrete", "#70767B", 0.78, 0.03)
-    ground_mat = _material(bpy, "Ground / neutral stone", "#77736A", 0.93, 0.02)
+    steel = _material(bpy, get_surface("painted-steel", color=recipe.steel_color, roughness=recipe.roughness))
+    gusset_steel = _material(bpy, get_surface("painted-steel", color=recipe.steel_color,
+                                            roughness=min(1.0, recipe.roughness + 0.13)))
+    fastener_steel = _material(bpy, get_surface("galvanized-steel"))
+    trim = _material(bpy, get_surface("galvanized-steel", color="#9EA8AD", roughness=0.35))
+    platform = _material(bpy, get_surface("cast-concrete", color="#70767B", roughness=0.78))
+    ground_mat = _material(bpy, get_surface("natural-stone", color="#77736A", roughness=0.93))
 
     objects = []
     for beam in plan.beams:
         material = trim if beam.group == "railing" else steel
         objects.append(_create_beam(bpy, model_collection, beam, material))
+    for plate in plan.gussets:
+        objects.append(_create_gusset(bpy, model_collection, plate, gusset_steel))
+    for fastener in plan.fasteners:
+        objects.append(_create_beam(bpy, model_collection, fastener, fastener_steel))
     for deck in plan.decks:
         obj = _create_box(bpy, model_collection, deck.name, (deck.span_m, deck.span_m, deck.thickness), (0, 0, deck.z - deck.thickness / 2), platform)
         obj["kumiki_part"] = "observation_deck"
@@ -182,11 +218,12 @@ def build_scene(recipe: TowerRecipe, plan: TowerPlan, destination: Path, *, bpy_
     camera_data = bpy.data.cameras.new("Camera / architecture hero")
     camera = bpy.data.objects.new(camera_data.name, camera_data)
     stage_collection.objects.link(camera)
-    height = recipe.height_m
-    camera.location = (height * 0.8, -height * 1.25, height * 0.73)
-    _aim_at(camera, (0, 0, height * 0.52))
+    shots = plan_quality_shots(recipe)
+    hero = shots[0]
+    camera.location = hero.position
+    _aim_at(camera, hero.target)
     camera_data.type = "ORTHO"
-    camera_data.ortho_scale = height * 1.72
+    camera_data.ortho_scale = hero.ortho_scale
     scene.camera = camera
 
     destination.mkdir(parents=True, exist_ok=False)
@@ -203,8 +240,20 @@ def build_scene(recipe: TowerRecipe, plan: TowerPlan, destination: Path, *, bpy_
             use_selection=True, export_materials="EXPORT", export_animations=False,
             export_cameras=False, export_lights=False, export_extras=True,
         )
+        glb_report = audit_glb(destination / "model.glb")
         bpy.ops.object.select_all(action="DESELECT")
-        bpy.ops.render.render(write_still=True, scene=scene.name)
+        preview_dir = destination / "previews"
+        preview_dir.mkdir(exist_ok=True)
+        for shot in shots:
+            camera.location = shot.position
+            _aim_at(camera, shot.target)
+            camera_data.ortho_scale = shot.ortho_scale
+            scene.cycles.samples = recipe.samples if shot.name == "hero" else max(8, recipe.samples // 2)
+            scene.render.filepath = str(destination / "preview.png" if shot.name == "hero" else preview_dir / f"{shot.name}.png")
+            bpy.ops.render.render(write_still=True, scene=scene.name)
+
+    views = ["preview.png", *[f"previews/{shot.name}.png" for shot in shots[1:]]]
+    exported_sizes = audit_export_files(destination, ["source.blend", *views])
 
     manifest = {
         "asset_id": recipe.asset_id,
@@ -216,9 +265,13 @@ def build_scene(recipe: TowerRecipe, plan: TowerPlan, destination: Path, *, bpy_
         "recipe_sha256": recipe.recipe_sha256,
         "units": "meters",
         "native_axes": "Blender Z-up; exported GLB has glTF-compatible axes",
-        "named_parts": {"beams": len(plan.beams), "decks": len(plan.decks)},
+        "glb_audit": glb_report,
+        "output_bytes": {**exported_sizes, "model.glb": glb_report["bytes"]},
+        "named_parts": {"beams": len(plan.beams), "decks": len(plan.decks),
+                        "gussets": len(plan.gussets), "fasteners": len(plan.fasteners)},
         "bounds_m": [plan.bounds_min, plan.bounds_max],
-        "files": {"source": "source.blend", "model": "model.glb", "preview": "preview.png"},
+        "files": {"source": "source.blend", "model": "model.glb", "preview": "preview.png",
+                  "quality_views": views},
     }
     (destination / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
     return manifest

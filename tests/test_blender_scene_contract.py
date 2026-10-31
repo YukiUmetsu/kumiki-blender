@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from kumiki_blender.blender_scene import _beam_geometry, _box_geometry, build_scene
+from kumiki_blender.blender_scene import _beam_geometry, _box_geometry, _gusset_geometry, build_scene
 from kumiki_blender.lattice import Beam, make_lattice_tower
 from kumiki_blender.recipe import load_recipe
 
@@ -14,6 +14,17 @@ FIXTURE = ROOT / "examples/lattice-observation-tower.json"
 
 
 class BlenderSceneContractTests(unittest.TestCase):
+    def test_gusset_mesh_is_oriented_toward_the_outside_of_the_tower(self):
+        recipe = load_recipe(FIXTURE)
+        gusset = make_lattice_tower(recipe).gussets[0]
+        vertices, faces = _gusset_geometry(gusset)
+        self.assertEqual(len(vertices), 8)
+        self.assertEqual(len(faces), 6)
+        a, b, c = [vertices[index] for index in faces[1][:3]]
+        ab, ac = [b[i] - a[i] for i in range(3)], [c[i] - a[i] for i in range(3)]
+        normal = (ab[1] * ac[2] - ab[2] * ac[1], ab[2] * ac[0] - ab[0] * ac[2], ab[0] * ac[1] - ab[1] * ac[0])
+        self.assertGreater(sum(normal[i] * gusset.normal[i] for i in range(3)), 0)
+
     def test_beam_is_closed_with_outward_side_normals(self):
         beam = Beam("sample", (0, 0, 0), (0, 0, 10), 1, "leg")
         vertices, faces = _beam_geometry(beam)
@@ -54,7 +65,8 @@ class BlenderSceneContractTests(unittest.TestCase):
                 "build", "--recipe", str(FIXTURE), "--output", str(output),
             ], capture_output=True, text=True, timeout=300, check=False)
             self.assertEqual(result.returncode, 0, result.stderr[-3000:])
-            for expected in ("source.blend", "model.glb", "preview.png", "manifest.json"):
+            for expected in ("source.blend", "model.glb", "preview.png", "manifest.json",
+                             "previews/front.png", "previews/side.png", "previews/detail.png"):
                 self.assertGreater((output / expected).stat().st_size, 0)
 
 

@@ -6,7 +6,7 @@
 
 ## Recipe version 1
 
-The initial generator is `lattice-tower`, a four-legged tapered structural scaffold. Strict JSON fields and numerical bounds are enforced; unknown fields and non-finite numbers are errors. World dimensions are in meters, with +Z up. Recipe output is deterministic given the same source and code version.
+The initial generator is `lattice-tower`, a four-legged tapered structural scaffold. Each crossing truss bay receives a physical outward-facing gusset and four fastener heads. Strict JSON fields and numerical bounds are enforced; unknown fields and non-finite numbers are errors. World dimensions are in meters, with +Z up. Recipe output is deterministic given the same source and code version, and conservative bounds include fastener and plate extents.
 
 Recipes never accept executable Python or arbitrary paths. A recipe cannot directly specify a filesystem destination; that is provided separately to the CLI.
 
@@ -15,9 +15,14 @@ Recipes never accept executable Python or arbitrary paths. A recipe cannot direc
 - A new Blender scene is created without deleting the caller's existing scenes.
 - Model meshes are grouped in `Model / portable GLB`; studio elements are separate.
 - Structural beams carry stable names and a `kumiki_part` custom property for future camera-target and semantic part bindings.
-- The preview uses Cycles, a neutral sky, daylight sun, a ground plane and an architecture-framing camera.
+- The preview uses Cycles, a neutral sky, daylight sun, a ground plane and an architecture-framing camera. Four deterministic camera poses cover hero, front, side and construction detail, with cheaper sampling on secondary views.
 - The GLB contains only selected model objects; shader compatibility and visual parity must be checked by a real glTF/Three.js import before release.
+- A GLB envelope audit detects malformed exports and external texture/buffer references. The build verifies native `.blend` and PNG file signatures, then includes the audit report and output file sizes in the manifest.
 - A source digest and Blender version are recorded to aid repeatability and provenance.
+
+## Materials
+
+`surfaces.py` defines immutable PBR presets for painted steel (dielectric coating), galvanized metal, concrete, stone, timber, and glass. `blender_scene.py` converts their sRGB colors to linear Blender shader inputs and maps metallic/roughness/transmission values to Principled BSDF. No shader-only procedural textures are silently assumed to transfer to GLB: a tested bake pipeline is required before texture-based fidelity claims.
 
 ## Artifact states
 

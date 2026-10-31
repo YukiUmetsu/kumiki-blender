@@ -2,7 +2,7 @@
 
 A standalone, code-first Blender toolkit for reusable, cinematic 3D authoring. Its first milestone is a **generic lattice observation tower**: a deterministic architectural scaffold, **not** a photorealistic or dimensionally verified replica of Tokyo Tower or another real landmark.
 
-The library separates testable Python geometry planning from Blender's `bpy` modeling and rendering. It can generate an editable `.blend`, a portable `.glb`, a preview PNG and a JSON manifest for future Kumiki-UI and ContentGen consumers.
+The library separates testable Python geometry planning from Blender's `bpy` modeling and rendering. It can generate an editable `.blend`, a portable `.glb`, four quality-inspection views and a JSON manifest for future Kumiki-UI and ContentGen consumers.
 
 ## Requirements
 
@@ -38,10 +38,23 @@ On Linux or a configured Mac shell, replace the full executable path with `blend
 |---|---|
 | `source.blend` | Editable native source with a separate model collection and studio scene |
 | `model.glb` | Selected named model parts, no studio floor or lights |
-| `preview.png` | One Cycles preview frame |
-| `manifest.json` | Dimensions, provenance, version and verification status |
+| `preview.png` | Cycles hero preview |
+| `previews/front.png`, `previews/side.png`, `previews/detail.png` | Additional silhouette and close-up QA views |
+| `manifest.json` | Dimensions, provenance, asset audit, file sizes and verification status |
 
-The current prototype uses tapered legs, structural X bracing, horizontal rings, two observation decks, railings and an antenna. It is deliberately illustrative. **Real landmark reproduction requires measured references, additional detail, better materials and actual multiview human acceptance.**
+The current prototype uses tapered legs, structural X bracing, **64 physical gusset plates and 256 bolt-head meshes**, horizontal rings, two observation decks, railings and an antenna. It is deliberately illustrative. **Real landmark reproduction requires measured references, additional detail, better materials and actual multiview human acceptance.**
+
+## Reusable PBR surfaces
+
+The pure Python material catalog defines physically distinct presets for painted structural steel, galvanized metal, concrete, stone, timber and optical glass. Recipes may override sRGB color and roughness without mutating shared presets. The Blender adapter applies these to Principled BSDF materials; procedural microtexture and reliable GLB texture baking are future work, not claimed capabilities.
+
+## Inspect a GLB without Blender
+
+```bash
+PYTHONPATH=src python3 -m kumiki_blender audit --model .review/lattice-observation-tower/r01/model.glb
+```
+
+The lightweight auditor checks the GLB 2.0 envelope, declared file length, mesh list, number of named semantic nodes and absence of external texture/buffer dependencies. It does **not** replace a full glTF validator, mesh manifold analysis or visual QA. Actual builds also check `.blend` and PNG signatures before writing their manifest.
 
 ## Test
 
@@ -66,7 +79,7 @@ See [Architecture](docs/ARCHITECTURE.md), the [design spec](docs/superpowers/spe
 2. Create a material and texture-baking pipeline with physically meaningful surface variation and no missing texture paths after GLB export.
 3. Add reusable geometry generators: profiles, extrusions, architectural arches, roofs, lattice joints and repeated ornament systems.
 4. Model a reference-verified landmark (proposed: Tokyo Tower), separately from the generic demonstration, and require human close-up review.
-5. Add Geometry Nodes asset-library tools, LOD generation, multi-angle QA, and optional asset catalog integration.
+5. Add Geometry Nodes asset-library tools, LOD generation, scene-template previews, and optional asset catalog integration.
 
 ## License and assets
 

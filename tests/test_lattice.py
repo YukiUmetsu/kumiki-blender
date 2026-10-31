@@ -54,6 +54,45 @@ class LatticeTests(unittest.TestCase):
             self.assertTrue(plan.bounds_min[2] <= deck.z - deck.thickness <= plan.bounds_max[2])
             self.assertLessEqual(deck.span_m / 2, plan.bounds_max[0])
 
+    def test_each_cross_brace_bay_has_a_real_plate_and_fasteners(self):
+        plan = make_lattice_tower(self.recipe)
+        self.assertEqual(len(plan.gussets), 4 * self.recipe.levels)
+        self.assertEqual(len(plan.fasteners), 4 * len(plan.gussets))
+        self.assertEqual(len(set(gusset.name for gusset in plan.gussets)), len(plan.gussets))
+        for gusset in plan.gussets:
+            self.assertGreater(gusset.width, 0)
+            self.assertGreater(gusset.height, 0)
+            self.assertGreater(gusset.thickness, 0)
+            u, v, n = gusset.axis_u, gusset.axis_v, gusset.normal
+            self.assertAlmostEqual(sum(u[i] * v[i] for i in range(3)), 0, places=8)
+            self.assertAlmostEqual(sum(u[i] * n[i] for i in range(3)), 0, places=8)
+            self.assertAlmostEqual(sum(n[i] * v[i] for i in range(3)), 0, places=8)
+
+    def test_gusset_fasteners_are_outside_the_plate_surface(self):
+        plan = make_lattice_tower(self.recipe)
+        for gusset in plan.gussets:
+            bolts = [bolt for bolt in plan.fasteners if bolt.name.startswith(gusset.name + "-bolt-")]
+            self.assertEqual(len(bolts), 4)
+            for bolt in bolts:
+                offset = tuple(bolt.start[i] - gusset.center[i] for i in range(3))
+                normal_depth = sum(offset[i] * gusset.normal[i] for i in range(3))
+                self.assertGreaterEqual(normal_depth, gusset.thickness / 2 - 0.001)
+
+    def test_bounds_include_connection_geometry_and_beam_thickness(self):
+        plan = make_lattice_tower(self.recipe)
+        for beam in (*plan.beams, *plan.fasteners):
+            for point in (beam.start, beam.end):
+                for axis in range(3):
+                    self.assertLessEqual(plan.bounds_min[axis], point[axis] - beam.radius + 1e-9)
+                    self.assertGreaterEqual(plan.bounds_max[axis], point[axis] + beam.radius - 1e-9)
+        for plate in plan.gussets:
+            for axis in range(3):
+                reach = sum(abs(direction[axis]) * half for direction, half in (
+                    (plate.axis_u, plate.width / 2), (plate.axis_v, plate.height / 2),
+                    (plate.normal, plate.thickness / 2)))
+                self.assertLessEqual(plan.bounds_min[axis], plate.center[axis] - reach + 1e-9)
+                self.assertGreaterEqual(plan.bounds_max[axis], plate.center[axis] + reach - 1e-9)
+
 
 if __name__ == "__main__":
     unittest.main()

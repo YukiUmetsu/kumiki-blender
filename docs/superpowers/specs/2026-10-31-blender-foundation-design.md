@@ -8,7 +8,7 @@ Build a standalone, reusable Blender Python authoring toolkit for cinematic 3D w
 
 - Versioned, strict JSON recipes validated without Blender.
 - Deterministic, reusable architectural construction independent of `bpy`.
-- A headless Blender adapter for physically constructed geometry, differentiated PBR surfaces, scene lighting, editable `.blend`, reusable `.glb`, a preview still and provenance manifest.
+- A headless Blender adapter for physically constructed geometry, differentiated PBR surfaces, scene lighting, editable `.blend`, reusable `.glb`, multiview preview stills and provenance manifest.
 - Safe, non-overwriting output directories and explicit actionable failures.
 - A Python-only CI suite and documented real-Blender smoke checks.
 

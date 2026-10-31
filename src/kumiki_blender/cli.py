@@ -7,8 +7,11 @@ import json
 import sys
 from pathlib import Path
 
+from .export_audit import ExportAuditError
+from .glb_audit import AuditError, audit_glb
 from .lattice import make_lattice_tower
 from .recipe import RecipeError, load_recipe
+from .surfaces import SurfaceError
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -19,9 +22,14 @@ def main(argv: list[str] | None = None) -> int:
         subcommand.add_argument("--recipe", type=Path, required=True)
         if command == "build":
             subcommand.add_argument("--output", type=Path, required=True)
+    audit_parser = subcommands.add_parser("audit")
+    audit_parser.add_argument("--model", type=Path, required=True)
     args = parser.parse_args(argv)
 
     try:
+        if args.command == "audit":
+            print(json.dumps(audit_glb(args.model), indent=2))
+            return 0
         recipe = load_recipe(args.recipe)
         plan = make_lattice_tower(recipe)
         if args.command == "validate":
@@ -30,6 +38,8 @@ def main(argv: list[str] | None = None) -> int:
                 "generator": "lattice-tower",
                 "beams": len(plan.beams),
                 "decks": len(plan.decks),
+                "gussets": len(plan.gussets),
+                "fasteners": len(plan.fasteners),
                 "bounds_m": [plan.bounds_min, plan.bounds_max],
                 "recipe_sha256": recipe.recipe_sha256,
             }, indent=2))
@@ -48,7 +58,7 @@ def main(argv: list[str] | None = None) -> int:
         manifest = build_scene(recipe, plan, output, bpy_module=bpy)
         print(json.dumps(manifest, indent=2))
         return 0
-    except (RecipeError, RuntimeError, OSError) as error:
+    except (RecipeError, AuditError, ExportAuditError, SurfaceError, RuntimeError, OSError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 2
 
