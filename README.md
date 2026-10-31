@@ -71,6 +71,31 @@ This writes editable geometry, GLB, a hero preview and front/detail views throug
 
 The pure Python material catalog defines physically distinct presets for painted structural steel, galvanized metal, concrete, stone, timber and optical glass. Recipes may override sRGB color and roughness without mutating shared presets. The Blender adapter applies these to Principled BSDF materials; procedural microtexture and reliable GLB texture baking are future work, not claimed capabilities.
 
+## Import a reviewed asset from any source
+
+The first source-independent intake path accepts a **local, static, self-contained `.glb`**. It can come from a licensed Sketchfab/Fab/CGTrader download, a scan, or your own work. It **does not search marketplaces, download assets, accept rigs or animations, or assume a model's source license permits redistribution**.
+
+First, examine the GLB without Blender:
+
+```bash
+PYTHONPATH=src python3 -m kumiki_blender inspect-asset --input /path/to/model.glb
+```
+
+Create a small provenance record like [first-party-import.json](examples/first-party-import.json) with the creator, original HTTPS permalink, license, attribution and a truthful `redistribution_allowed: true`. Optionally include `expected_sha256` to pin the exact input model. This consent field is an **explicit declaration by the operator**, not automatic legal verification. **Do not use this source-export command for licensed models that prohibit distributing their raw files**; such assets require a separate render-only workflow.
+
+Then import, preserve existing PBR materials/textures, render inspection shots and re-export a new versioned asset package:
+
+```bash
+KUMIKI_RENDER_PROFILE=smoke /Applications/Blender.app/Contents/MacOS/Blender \
+  --background --factory-startup --python-exit-code 1 \
+  --python scripts/blender_entry.py -- \
+  import-asset --input /path/to/model.glb \
+  --provenance /path/to/source.json \
+  --output .review/my-import/r01
+```
+
+The importer uses Blender's built-in glTF reader with image packing and semantic-node extras enabled. It checks imported mesh bounds/materials, rejects missing semantic part metadata, saves editable source, and uses the same Cycles multi-view/GLB/revision audits as the procedural models. The pull-request CI round-trips our own MIT-licensed portico through this path; no third-party artwork is copied into the repository.
+
 ## Inspect a GLB without Blender
 
 ```bash
@@ -134,7 +159,7 @@ For third-party materials, Geometry Nodes, rigging, BIM and export-validation ca
 
 1. Run the Blender integration test on macOS, inspect native `.blend` and imported GLB from several angles, and correct defects.
 2. Create a material and texture-baking pipeline with physically meaningful surface variation and no missing texture paths after GLB export.
-3. Extend the new profile, extrusion, arch and instancing kernel with roofs, window surrounds, lattice joints and repeated ornament systems.
+3. Extend the new profile, extrusion, arch and instancing kernel with roofs, window surrounds, lattice joints and repeated ornament systems; add a separate render-only mode for licensed reference assets that cannot be redistributed as GLB.
 4. Model a reference-verified landmark (proposed: Tokyo Tower), separately from the generic demonstration, and require human close-up review.
 5. Add Geometry Nodes asset-library tools, LOD generation, scene-template previews, and optional asset catalog integration.
 

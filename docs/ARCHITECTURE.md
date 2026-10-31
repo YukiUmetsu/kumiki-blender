@@ -16,6 +16,8 @@
 
 `portico.py` demonstrates composition into a reusable 1–20-bay arcade with repeated column flutes, alternate stone surfaces, projecting keystones, pedestals and a concave extruded cornice. The adapter caches Blender mesh datablocks by source geometry and material, while preserving individual object names and metadata. A passing geometry audit is **not** a substitute for real image/render QA.
 
+`asset_import.py` is the **external-model intake boundary**. It inspects static self-contained GLBs in ordinary Python, limits input size, rejects unsupported animation/skin content, optionally pins the source hash, and requires a provenance record with creator, HTTPS source permalink, license, attribution and explicitly asserted raw redistribution rights. It does not fetch source URLs. `blender_import.py` uses Blender's built-in GLB importer with packed images and node extras, validates imported mesh/material/semantic data and renders through the same shared revision exporter. This first iteration is GLB-only and intentionally refuses marketplace assets without raw redistribution rights; a separate render-only workflow is future work.
+
 ## Recipe version 1
 
 The initial generator is `lattice-tower`, a four-legged tapered structural scaffold. Each crossing truss bay receives a physical outward-facing gusset and four fastener heads. Strict JSON fields and numerical bounds are enforced; unknown fields and non-finite numbers are errors. World dimensions are in meters, with +Z up. Recipe output is deterministic given the same source and code version, and conservative bounds include fastener and plate extents.
@@ -37,7 +39,7 @@ Recipes never accept executable Python or arbitrary paths. A recipe cannot direc
 
 ### Headless Blender CI
 
-The pull-request CI job installs a pinned official Blender 4.5 LTS Linux release and checks its SHA-256 against the Blender Foundation manifest before execution. It builds both the lattice and portico studies, audits GLB portability with local semantic checks **and** the official Khronos validator via a pinned glTF-Transform CLI, and uploads previews, editable source and manifests to GitHub workflow artifacts. Low-sample smoke renders are intended to catch broken geometry/export/camera setups; final cinematic acceptance still requires production-resolution renders and visual review.
+The pull-request CI job installs a pinned official Blender 4.5 LTS Linux release and checks its SHA-256 against the Blender Foundation manifest before execution. It builds both the lattice and portico studies, **imports our own portico GLB into a third studio revision as a realistic round-trip fixture**, audits GLB portability with local semantic checks **and** the official Khronos validator via a pinned glTF-Transform CLI, and uploads previews, editable source and manifests to GitHub workflow artifacts. Low-sample smoke renders are intended to catch broken geometry/export/camera setups; final cinematic acceptance still requires production-resolution renders and visual review.
 
 ## Materials
 

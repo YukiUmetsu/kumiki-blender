@@ -7,6 +7,7 @@ import json
 import sys
 from pathlib import Path
 
+from .asset_import import AssetImportError, inspect_source_glb, load_asset_provenance
 from .export_audit import ExportAuditError
 from .glb_audit import AuditError, audit_glb
 from .lattice import make_lattice_tower
@@ -34,6 +35,12 @@ def main(argv: list[str] | None = None) -> int:
     audit_parser.add_argument("--model", type=Path, required=True)
     revision_parser = subcommands.add_parser("audit-revision")
     revision_parser.add_argument("--root", type=Path, required=True)
+    source_parser = subcommands.add_parser("inspect-asset")
+    source_parser.add_argument("--input", type=Path, required=True)
+    import_parser = subcommands.add_parser("import-asset")
+    import_parser.add_argument("--input", type=Path, required=True)
+    import_parser.add_argument("--provenance", type=Path, required=True)
+    import_parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args(argv)
 
     try:
@@ -42,6 +49,23 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.command == "audit-revision":
             print(json.dumps(audit_revision(args.root), indent=2))
+            return 0
+        if args.command == "inspect-asset":
+            print(json.dumps(inspect_source_glb(args.input), indent=2))
+            return 0
+        if args.command == "import-asset":
+            provenance = load_asset_provenance(args.provenance)
+            inspect_source_glb(args.input, provenance)
+            output = args.output.resolve()
+            if output.exists() or output.is_symlink():
+                raise AssetImportError(f"Output already exists: {output}. Choose a new revision directory.")
+            try:
+                import bpy  # type: ignore[import-not-found]
+            except ImportError as error:
+                raise RuntimeError("Importing a model requires Blender. Run via: blender --background --factory-startup --python-exit-code 1 --python scripts/blender_entry.py -- import-asset --input model.glb --provenance source.json --output <new-directory>") from error
+            from .blender_import import build_imported_scene
+
+            print(json.dumps(build_imported_scene(args.input, provenance, output, bpy_module=bpy), indent=2))
             return 0
         if args.command in ("plan-portico", "build-portico"):
             study = make_portico_study(bays=args.bays)
@@ -93,7 +117,7 @@ def main(argv: list[str] | None = None) -> int:
         manifest = build_scene(recipe, plan, output, bpy_module=bpy)
         print(json.dumps(manifest, indent=2))
         return 0
-    except (RecipeError, PorticoError, RenderProfileError, RevisionAuditError, AuditError, ExportAuditError,
+    except (RecipeError, PorticoError, AssetImportError, RenderProfileError, RevisionAuditError, AuditError, ExportAuditError,
             SurfaceError, RuntimeError, OSError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 2

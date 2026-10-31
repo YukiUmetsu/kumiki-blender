@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 from kumiki_blender.cli import main
 from kumiki_blender.export_audit import ExportAuditError
+from tests.test_asset_import import fixture_glb, provenance_json
 
 
 FIXTURE = Path(__file__).resolve().parents[1] / "examples/lattice-observation-tower.json"
@@ -35,6 +36,48 @@ class CLITests(unittest.TestCase):
             code = main(["audit-revision", "--root", "example/revision"])
         self.assertEqual(code, 0)
         self.assertTrue(json.loads(stream.getvalue())["verified"])
+
+    def test_inspect_asset_command_is_blender_independent(self):
+        with tempfile.TemporaryDirectory() as directory:
+            model = Path(directory) / "model.glb"
+            fixture_glb(model)
+            stream = io.StringIO()
+            with contextlib.redirect_stdout(stream):
+                code = main(["inspect-asset", "--input", str(model)])
+            self.assertEqual(code, 0)
+            self.assertTrue(json.loads(stream.getvalue())["static_mesh_only"])
+
+    def test_import_asset_refuses_rights_without_creating_output(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            model, record, destination = root / "model.glb", root / "source.json", root / "revision"
+            fixture_glb(model)
+            record.write_text(json.dumps(provenance_json(redistribution_allowed=False)))
+            stream = io.StringIO()
+            with contextlib.redirect_stderr(stream):
+                code = main(["import-asset", "--input", str(model), "--provenance",
+                             str(record), "--output", str(destination)])
+            self.assertEqual(code, 2)
+            self.assertIn("redistribution", stream.getvalue())
+            self.assertFalse(destination.exists())
+
+    def test_import_asset_hands_verified_source_to_blender_adapter(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            model, record, destination = root / "model.glb", root / "source.json", root / "revision"
+            fixture_glb(model)
+            record.write_text(json.dumps(provenance_json()))
+            manifest = {"asset_id": "sample-portico", "generator": "kumiki-blender/static-glb-import"}
+            stream = io.StringIO()
+            with patch.dict("sys.modules", {"bpy": object()}), \
+                    patch("kumiki_blender.blender_import.build_imported_scene", return_value=manifest) as adapter, \
+                    contextlib.redirect_stdout(stream):
+                code = main(["import-asset", "--input", str(model), "--provenance",
+                             str(record), "--output", str(destination)])
+            self.assertEqual(code, 0)
+            self.assertEqual(json.loads(stream.getvalue()), manifest)
+            self.assertEqual(adapter.call_args.args[0], model)
+            self.assertEqual(adapter.call_args.args[1].license, "MIT")
 
     def test_validate_prints_machine_readable_structure(self):
         stream = io.StringIO()
