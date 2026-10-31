@@ -66,11 +66,11 @@ jobs:
         env:
           KUMIKI_RENDER_PROFILE: smoke
         run: |
-          blender --background --factory-startup --python-exit-code 1 \
+          blender --background --factory-startup --threads 1 --python-exit-code 1 \
             --python scripts/blender_entry.py -- \
             build --recipe examples/lattice-observation-tower.json \
             --output .review/ci/lattice-tower
-          blender --background --factory-startup --python-exit-code 1 \
+          blender --background --factory-startup --threads 1 --python-exit-code 1 \
             --python scripts/blender_entry.py -- \
             build-portico --bays 3 --output .review/ci/portico
       - name: Verify portable exports and required previews
