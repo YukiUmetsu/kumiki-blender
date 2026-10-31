@@ -144,7 +144,8 @@ class CLITests(unittest.TestCase):
         report = json.loads(stream.getvalue())
         self.assertEqual(report["generator"], "modular-portico")
         self.assertEqual(report["named_parts"]["arch_stones"], 33)
-        self.assertEqual(report["named_parts"]["flutes"], 64)
+        self.assertEqual(report["named_parts"]["volutes"], 16)
+        self.assertEqual(report["named_parts"]["column_capitals"], 16)
 
     def test_plan_facade_reports_individually_editable_architectural_parts(self):
         stream = io.StringIO()
@@ -155,6 +156,18 @@ class CLITests(unittest.TestCase):
         self.assertEqual(report["generator"], "architectural-facade-detail-kit")
         self.assertGreater(report["named_parts"]["masonry"], 600)
         self.assertGreater(report["named_parts"]["roof"], 400)
+
+    def test_classical_column_can_be_planned_without_blender(self):
+        stream = io.StringIO()
+        with contextlib.redirect_stdout(stream):
+            code = main(["plan-classical-column", "--order", "ionic",
+                         "--height", "4.55", "--radius", "0.36"])
+        self.assertEqual(code, 0)
+        report = json.loads(stream.getvalue())
+        self.assertEqual(report["parts"], 11)
+        self.assertEqual(report["order"], "ionic")
+        self.assertEqual(sum("volute-front" in name for name in report["named_parts"]), 2)
+        self.assertAlmostEqual(report["bounds_m"][1][2], 4.55)
 
     def test_facade_build_requires_blender_without_creating_revision(self):
         with tempfile.TemporaryDirectory() as directory:

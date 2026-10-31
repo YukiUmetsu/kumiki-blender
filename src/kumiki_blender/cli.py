@@ -8,6 +8,8 @@ import sys
 from pathlib import Path
 
 from .asset_import import AssetImportError, inspect_source_glb, load_asset_provenance
+from .architecture_details import classical_column
+from .architecture_geometry import GeometryError, world_vertices
 from .export_audit import ExportAuditError
 from .facade import FacadeError, make_facade_study
 from .glb_audit import AuditError, audit_glb
@@ -32,6 +34,7 @@ def main(argv: list[str] | None = None) -> int:
     for command in ("plan-portico", "build-portico"):
         subcommand = subcommands.add_parser(command)
         subcommand.add_argument("--bays", type=int, default=3)
+        subcommand.add_argument("--order", choices=("tuscan", "doric", "ionic"), default="ionic")
         if command == "build-portico":
             subcommand.add_argument("--output", type=Path, required=True)
     for command in ("plan-facade", "build-facade"):
@@ -40,6 +43,10 @@ def main(argv: list[str] | None = None) -> int:
         if command == "build-facade":
             subcommand.add_argument("--output", type=Path, required=True)
             subcommand.add_argument("--texture-packs", type=Path)
+    column_parser = subcommands.add_parser("plan-classical-column")
+    column_parser.add_argument("--order", choices=("tuscan", "doric", "ionic"), default="ionic")
+    column_parser.add_argument("--height", type=float, default=4.55)
+    column_parser.add_argument("--radius", type=float, default=0.36)
     audit_parser = subcommands.add_parser("audit")
     audit_parser.add_argument("--model", type=Path, required=True)
     audit_parser.add_argument("--require-pbr-textures", action="store_true")
@@ -71,6 +78,18 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps({"assignments": [entry.to_manifest() for entry in
                                                load_texture_packs(args.input)]}, indent=2))
             return 0
+        if args.command == "plan-classical-column":
+            pieces = classical_column(prefix="column-study", height=args.height,
+                                      base_radius=args.radius, order=args.order)
+            coords = [vertex for piece in pieces for vertex in world_vertices(piece)]
+            print(json.dumps({
+                "order": args.order, "height_m": args.height, "base_radius_m": args.radius,
+                "parts": len(pieces), "named_parts": [part.name for part in pieces],
+                "vertices": sum(len(piece.mesh.vertices) for piece in pieces),
+                "bounds_m": [[min(p[axis] for p in coords) for axis in range(3)],
+                             [max(p[axis] for p in coords) for axis in range(3)]],
+            }, indent=2))
+            return 0
         if args.command == "import-asset":
             provenance = load_asset_provenance(args.provenance)
             report = inspect_source_glb(args.input, provenance)
@@ -94,11 +113,12 @@ def main(argv: list[str] | None = None) -> int:
                                                  texture_packs=texture_packs, bpy_module=bpy), indent=2))
             return 0
         if args.command in ("plan-portico", "build-portico"):
-            study = make_portico_study(bays=args.bays)
+            study = make_portico_study(bays=args.bays, order=args.order)
             if args.command == "plan-portico":
                 print(json.dumps({
                     "asset_id": study.asset_id,
                     "generator": "modular-portico",
+                    "order": study.order,
                     "named_parts": dict(study.part_counts),
                     "instances": len(study.instances),
                     "bounds_m": [study.bounds_min, study.bounds_max],
@@ -167,7 +187,7 @@ def main(argv: list[str] | None = None) -> int:
         manifest = build_scene(recipe, plan, output, bpy_module=bpy)
         print(json.dumps(manifest, indent=2))
         return 0
-    except (RecipeError, PorticoError, FacadeError, AssetImportError, RenderProfileError, RevisionAuditError, AuditError, ExportAuditError,
+    except (RecipeError, PorticoError, FacadeError, GeometryError, AssetImportError, RenderProfileError, RevisionAuditError, AuditError, ExportAuditError,
             SurfaceError, RuntimeError, OSError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 2

@@ -9,7 +9,7 @@ from typing import Any
 
 from .blender_output import create_model_scene, export_revision
 from .blender_scene import _create_box, _material
-from .blender_textures import ensure_metric_uvs
+from .blender_textures import ensure_cylindrical_uvs, ensure_metric_uvs
 from .portico import PorticoStudy
 from .render_profiles import select_render_profile
 from .shots import plan_portico_shots
@@ -60,7 +60,12 @@ def build_portico_scene(study: PorticoStudy, destination: Path, *, bpy_module: A
             mesh = bpy.data.meshes.new(f"Geometry / {instance.name}")
             mesh.from_pydata(instance.mesh.vertices, [], instance.mesh.faces)
             mesh.update()
-            ensure_metric_uvs(mesh)
+            wrapped_column = (instance.name.endswith("-shaft") or
+                              instance.name.endswith(("-base-torus", "-capital-necking", "-capital-echinus")))
+            if wrapped_column:
+                ensure_cylindrical_uvs(mesh)
+            else:
+                ensure_metric_uvs(mesh)
             mesh.materials.append(palette[instance.material])
             if instance.name.startswith(("column-", "arch-")):
                 for polygon in mesh.polygons:
@@ -76,10 +81,15 @@ def build_portico_scene(study: PorticoStudy, destination: Path, *, bpy_module: A
             (0, 0, 0, 1),
         ))
         obj["kumiki_part"] = instance.name.split("-")[0]
-        bevel = obj.modifiers.new("Light-catching masonry edges", "BEVEL")
-        bevel.width = 0.006 if instance.name.startswith("column-") and "-flute-" in instance.name else 0.018
-        bevel.segments = 2
-        obj.modifiers.new("Masonry weighted normals", "WEIGHTED_NORMAL")
+        # The flutes and spiral volutes are already sculpted into the mesh.
+        # A broad bevel would obliterate their 20 mm channels and thin turns.
+        actual_carving = (instance.name.endswith("-shaft") or
+                          "-volute-front-" in instance.name or "-volute-back-" in instance.name)
+        if not actual_carving:
+            bevel = obj.modifiers.new("Light-catching masonry edges", "BEVEL")
+            bevel.width = 0.012 if instance.name.startswith("column-") else 0.018
+            bevel.segments = 2
+            obj.modifiers.new("Masonry weighted normals", "WEIGHTED_NORMAL")
         objects.append(obj)
 
     floor_material = _material(bpy, get_surface("studio-matte", color="#737673", roughness=0.97))
@@ -120,10 +130,10 @@ def build_portico_scene(study: PorticoStudy, destination: Path, *, bpy_module: A
         "generator": "kumiki-blender/modular-portico",
         "status": "architectural-detail-study / visual-review-pending",
         "provenance": "Original illustrative architecture; no reference landmark claimed",
-        "recipe_sha256": hashlib.sha256(f"portico-study-v1:bays={study.bays}".encode()).hexdigest(),
+        "recipe_sha256": hashlib.sha256(f"portico-study-v2:bays={study.bays}:order={study.order}".encode()).hexdigest(),
         "render_profile": {"name": profile.name, "width": profile.width,
                            "height": profile.height, "samples": profile.samples},
-        "parameters": {"bays": study.bays, "bay_pitch_m": 4.2},
+        "parameters": {"bays": study.bays, "order": study.order, "bay_pitch_m": 4.2},
         "units": "meters",
         "native_axes": "Blender Z-up; GLB exported with glTF-compatible axes",
         "named_parts": dict(study.part_counts),

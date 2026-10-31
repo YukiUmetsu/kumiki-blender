@@ -73,6 +73,13 @@ jobs:
           blender --background --factory-startup --threads 1 --python-exit-code 1 \
             --python scripts/blender_entry.py -- \
             build-portico --bays 3 --output .review/ci/portico
+      - name: Render Doric-style carved column variant
+        env:
+          KUMIKI_RENDER_PROFILE: smoke
+        run: |
+          blender --background --factory-startup --threads 1 --python-exit-code 1 \
+            --python scripts/blender_entry.py -- \
+            build-portico --bays 2 --order doric --output .review/ci/doric-portico
       - name: Render reusable architectural facade detail kit
         env:
           KUMIKI_RENDER_PROFILE: smoke
@@ -142,6 +149,7 @@ jobs:
         run: |
           python -m kumiki_blender audit --model .review/ci/lattice-tower/model.glb --require-pbr-textures
           python -m kumiki_blender audit --model .review/ci/portico/model.glb --require-pbr-textures
+          python -m kumiki_blender audit --model .review/ci/doric-portico/model.glb --require-pbr-textures
           python -m kumiki_blender audit --model .review/ci/facade/model.glb --require-pbr-textures
           python -m kumiki_blender audit --model .review/ci/imported-portico/model.glb --require-pbr-textures
           python -m kumiki_blender audit --model .review/ci/restyled-portico/model.glb --require-pbr-textures
@@ -149,6 +157,7 @@ jobs:
           python -m kumiki_blender audit --model .review/ci/scanned-portico/model.glb --require-pbr-textures
           python -m kumiki_blender audit-revision --root .review/ci/lattice-tower
           python -m kumiki_blender audit-revision --root .review/ci/portico
+          python -m kumiki_blender audit-revision --root .review/ci/doric-portico
           python -m kumiki_blender audit-revision --root .review/ci/facade
           python -m kumiki_blender audit-revision --root .review/ci/imported-portico
           python -m kumiki_blender audit-revision --root .review/ci/restyled-portico
@@ -156,6 +165,7 @@ jobs:
           python -m kumiki_blender audit-revision --root .review/ci/scanned-portico
           gltf-transform validate .review/ci/lattice-tower/model.glb
           gltf-transform validate .review/ci/portico/model.glb
+          gltf-transform validate .review/ci/doric-portico/model.glb
           gltf-transform validate .review/ci/facade/model.glb
           gltf-transform validate .review/ci/imported-portico/model.glb
           gltf-transform validate .review/ci/restyled-portico/model.glb
@@ -167,6 +177,7 @@ jobs:
           python -m unittest tests.test_export_audit tests.test_glb_audit -v
           test -s .review/ci/lattice-tower/previews/detail.png
           test -s .review/ci/portico/previews/detail.png
+          test -s .review/ci/doric-portico/previews/detail.png
           test -s .review/ci/facade/previews/detail.png
           test -s .review/ci/imported-portico/previews/detail.png
           test -s .review/ci/restyled-portico/previews/detail.png

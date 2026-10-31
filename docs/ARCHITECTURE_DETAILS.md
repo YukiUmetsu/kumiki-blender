@@ -22,7 +22,7 @@ generated and are not claimed to reproduce a specific historic landmark.
 ```python
 from kumiki_blender.architecture_details import (
     Opening, coursed_wall, window_assembly, rosette_relief,
-    cornice_extrusion, gable_roof, rainwater_system,
+    cornice_extrusion, gable_roof, rainwater_system, classical_column,
 )
 from kumiki_blender.architecture_geometry import audit_mesh
 
@@ -39,6 +39,8 @@ crest = rosette_relief(prefix="ornament-medallion", diameter=0.6, petals=12)
 roof = gable_roof(width=6, depth=5, eave_z=5.5, rise=1.7,
                   tile_rows=6, tile_columns=12)
 drainage = rainwater_system(width=6, depth=5, eave_z=5.5)
+column = classical_column(prefix="entry-column", order="ionic", height=4.55,
+                          base_radius=0.36)
 
 assert audit_mesh(wall[0].mesh).boundary_edges == 0
 ```
@@ -49,6 +51,44 @@ rosettes lie in local XY and extend outward in local +Z. To place a rosette on
 a vertical front facade, orient its axes to world X, world Z, and world -Y.
 The ready-to-run composition in `facade.py` shows these placements and the
 front/side/back wall rotations.
+
+## Reusable classical columns and carved capitals
+
+The column kit is designed for detailed porticos, civic buildings, temples and
+landmark facades. `classical_column(prefix, height, base_radius, order)` returns
+individually named solids with consistent local origin at the shaft's base:
+
+| Order preset | Physical geometry |
+| --- | --- |
+| `tuscan` | Smooth tapered shaft, slight entasis, square plinth/torus and stepped capital |
+| `doric` | **20 concave shaft flutes**, slight entasis, necking, echinus and abacus, without an Ionic base |
+| `ionic` | **24 concave shaft flutes**, molded base and capital, face/back scroll volutes and an abacus |
+
+The shaft is one capped, manifold mesh with radius varying by angle and
+height. This is important: cutting real flute channels catches glancing light
+and prevents the rod-overlay look of the earlier demonstration. `volute_scroll()`
+creates a separate capped 3D scroll tube with a shrinking radius and visible
+turn spacing. Each column component can be restyled or placed independently.
+
+```bash
+PYTHONPATH=src python3 -m kumiki_blender plan-classical-column \
+  --order ionic --height 4.55 --radius 0.36
+PYTHONPATH=src python3 -m kumiki_blender plan-portico --bays 3
+```
+
+To render another order using the same vaulted structure:
+
+```bash
+blender --background --factory-startup --python-exit-code 1 \
+  --python scripts/blender_entry.py -- \
+  build-portico --bays 2 --order doric --output .review/doric/r01
+```
+
+These are original *classical-order-inspired* parametric modules, **not** exact
+Vitruvian ratios or archaeological copies. The Metropolitan Museum of Art's
+[Greek architecture guide](https://www.metmuseum.org/toah/hd/grarc/hd_grarc.htm)
+is useful for identifying the base/echinus/abacus/volute language, while a
+specific landmark will need surveyed proportions and verified ornament.
 
 ## Built-in reference study
 

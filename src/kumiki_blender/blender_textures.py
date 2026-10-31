@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import math
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -30,6 +31,41 @@ def ensure_metric_uvs(mesh: Any, *, tile_size_m: float = 1.5) -> None:
             coords = ((vertex[1], vertex[2]) if axis == 0 else
                       (vertex[0], vertex[2]) if axis == 1 else (vertex[0], vertex[1]))
             uv.data[index].uv = (coords[0] / tile_size_m, coords[1] / tile_size_m)
+
+
+def cylindrical_uv_ring(points: tuple[tuple[float, float, float], ...], *,
+                        radius: float, tile_size_m: float = 1.5) -> tuple[tuple[float, float], ...]:
+    """Seam-aware, meter-scaled UVs for the side of a fluted/lathed column.
+
+    The number of turns is an integer, preventing a visible albedo/normal seam
+    at the back of a cylindrical object even when circumference is not an exact
+    multiple of the requested texture scale.
+    """
+    if not all(math.isfinite(n) and n > 0 for n in (radius, tile_size_m)):
+        raise ValueError("Cylindrical UV radius and tile size must be positive and finite")
+    angles = [(math.atan2(y, x) % math.tau) for x, y, _ in points]
+    if angles and max(angles) - min(angles) > math.pi:
+        angles = [angle + math.tau if angle < math.pi else angle for angle in angles]
+    repeats = max(1, round(math.tau * radius / tile_size_m))
+    return tuple((angle * repeats / math.tau, z / tile_size_m)
+                 for angle, (_, _, z) in zip(angles, points))
+
+
+def ensure_cylindrical_uvs(mesh: Any, *, tile_size_m: float = 1.5) -> None:
+    """Assign seamless cylindrical side UVs, with planar UVs on end caps."""
+    if mesh.uv_layers:
+        return
+    outer_radius = max(math.hypot(v.co.x, v.co.y) for v in mesh.vertices)
+    uv = mesh.uv_layers.new(name="Kumiki / wrapped column")
+    for polygon in mesh.polygons:
+        indices = tuple(polygon.loop_indices)
+        points = tuple(tuple(mesh.vertices[mesh.loops[i].vertex_index].co) for i in indices)
+        if abs(polygon.normal.z) > 0.78:
+            coords = tuple((x / tile_size_m, y / tile_size_m) for x, y, _ in points)
+        else:
+            coords = cylindrical_uv_ring(points, radius=outer_radius, tile_size_m=tile_size_m)
+        for index, coord in zip(indices, coords):
+            uv.data[index].uv = coord
 
 
 def _packed_png(bpy: Any, label: str, payload: bytes, *, non_color: bool) -> Any:

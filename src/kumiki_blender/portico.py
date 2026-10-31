@@ -7,8 +7,9 @@ named instances with physically closed geometry.
 
 from __future__ import annotations
 
-import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+
+from .architecture_details import classical_column
 
 from .architecture_geometry import (
     MeshInstance,
@@ -16,7 +17,6 @@ from .architecture_geometry import (
     arch_voussoirs,
     extrude_profile,
     place_mesh,
-    revolve_profile,
     world_vertices,
 )
 
@@ -29,28 +29,25 @@ class PorticoError(ValueError):
 class PorticoStudy:
     asset_id: str
     bays: int
+    order: str
     instances: tuple[MeshInstance, ...]
     part_counts: tuple[tuple[str, int], ...]
     bounds_min: Vec3
     bounds_max: Vec3
 
 
-def make_portico_study(*, bays: int = 3) -> PorticoStudy:
+def make_portico_study(*, bays: int = 3, order: str = "ionic") -> PorticoStudy:
     """Three-dimensional, 4.2 m-pitch limestone arcade with fluted columns.
 
-    Each column and flute shares a mesh datablock, while every stone has
-    real planar mortar spacing for readable highlights and silhouettes.
+    Each shaft has real concave flutes, distinct moulded base/capital solids
+    and carved Ionic-style volutes. Arch stones have actual mortar spacing.
     """
     if type(bays) is not int or not 1 <= bays <= 20:
         raise PorticoError("bays must be an integer from 1 to 20")
+    if order not in ("tuscan", "doric", "ionic"):
+        raise PorticoError("order must be tuscan, doric or ionic")
     pitch = 4.2
     overall_span = pitch * bays
-    columns = revolve_profile((
-        (0.48, 0), (0.48, 0.13), (0.42, 0.23), (0.36, 0.35),
-        (0.32, 0.48), (0.32, 4.08), (0.36, 4.2),
-        (0.44, 4.34), (0.50, 4.43), (0.50, 4.55),
-    ), radial_segments=48)
-    flute = revolve_profile(((0.018, 0), (0.018, 3.52)), radial_segments=10)
     pedestal = extrude_profile(((-0.68, -0.65), (0.68, -0.65),
                                 (0.68, 0.65), (-0.68, 0.65)), 0.26)
     # Arcade spring line is level with the capital. The keystone projects
@@ -63,14 +60,11 @@ def make_portico_study(*, bays: int = 3) -> PorticoStudy:
         x = -overall_span / 2 + col * pitch
         instances.append(place_mesh(pedestal, name=f"pedestal-{col:02d}",
                                     origin=(x, 0.15, -0.10), material="stone-foundation"))
-        instances.append(place_mesh(columns, name=f"column-{col:02d}",
-                                    origin=(x, 0.15, 0), material="limestone"))
-        for index in range(16):
-            angle = math.tau * index / 16
-            instances.append(place_mesh(flute, name=f"column-{col:02d}-flute-{index:02d}",
-                                        origin=(x + 0.324 * math.cos(angle),
-                                                0.15 + 0.324 * math.sin(angle), 0.51),
-                                        material="limestone-light"))
+        for component in classical_column(prefix=f"column-{col:02d}", height=4.55,
+                                          base_radius=0.36, order=order):
+            instances.append(replace(component, origin=(component.origin[0] + x,
+                                                        component.origin[1] + 0.15,
+                                                        component.origin[2])))
 
     # Local mesh axes: X=horizontal, Y=height, Z=thickness. Rotate into
     # world X/Z, thickness pointing toward the camera along world -Y.
@@ -98,7 +92,7 @@ def make_portico_study(*, bays: int = 3) -> PorticoStudy:
                               (floor_span / 2, 1.15), (-floor_span / 2, 1.15)), 0.28)
     instances.append(place_mesh(plinth, name="plinth-main", origin=(0, 0, -0.28), material="stone-foundation"))
 
-    # Exact world bounds include the stone courses, flutes and cornice.
+    # Exact world bounds include grooved shafts, volutes and cornice.
     mins = [float("inf")] * 3
     maxs = [float("-inf")] * 3
     for instance in instances:
@@ -108,11 +102,15 @@ def make_portico_study(*, bays: int = 3) -> PorticoStudy:
                 maxs[axis] = max(maxs[axis], vertex[axis])
 
     return PorticoStudy(
-        asset_id="portico-detail-study",
+        asset_id="portico-detail-study" if order == "ionic" else f"portico-{order}-study",
         bays=bays,
+        order=order,
         instances=tuple(instances),
         part_counts=(("arch_stones", bays * 11), ("columns", bays + 1),
-                     ("flutes", (bays + 1) * 16), ("pedestals", bays + 1),
+                     ("column_bases", (bays + 1) * (0 if order == "doric" else 2)),
+                     ("column_capitals", (bays + 1) * (4 if order == "ionic" else 3)),
+                     ("volutes", (bays + 1) * (4 if order == "ionic" else 0)),
+                     ("pedestals", bays + 1),
                      ("cornices", 1), ("plinths", 1)),
         bounds_min=tuple(mins), bounds_max=tuple(maxs),
     )

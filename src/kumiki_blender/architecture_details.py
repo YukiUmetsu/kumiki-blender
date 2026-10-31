@@ -281,6 +281,164 @@ def rosette_relief(*, prefix: str, diameter: float = 0.65,
     return tuple(result)
 
 
+@lru_cache(maxsize=128)
+def fluted_column_shaft(*, height: float = 3.55, base_radius: float = 0.36,
+                        top_radius: float = 0.31, flutes: int = 24,
+                        flute_depth: float = 0.020, entasis: float = 0.012) -> Mesh:
+    """A single watertight shaft with physically concave flutes and entasis.
+
+    Flutes deform the actual cylindrical perimeter, never floating cylinder
+    strips. Set flutes=0 for a smooth Tuscan-inspired column. The shaft is
+    drawn from Z=0 to height with capped ends; column assembly adds the base
+    and capital as separately editable components.
+    """
+    height = _finite_number(height, "shaft height", 0.3, 40)
+    base_radius = _finite_number(base_radius, "shaft base radius", 0.08, 5)
+    top_radius = _finite_number(top_radius, "shaft top radius", 0.08, 5)
+    flute_depth = _finite_number(flute_depth, "flute depth", 0, 0.2)
+    entasis = _finite_number(entasis, "entasis", 0, 0.2)
+    if type(flutes) is not int or (flutes != 0 and not 8 <= flutes <= 32):
+        raise GeometryError("Flutes must be 0 or an integer in [8, 32]")
+    if flute_depth >= min(base_radius, top_radius) * 0.22:
+        raise GeometryError("Flute depth would cut too deeply into the shaft")
+    if entasis >= min(base_radius, top_radius) * 0.2:
+        raise GeometryError("Entasis exceeds the classical shaft radius budget")
+    sectors = max(48, flutes * 8)
+    levels = (0.0, 0.035, 0.11, 0.26, 0.45, 0.63, 0.8, 0.94, 1.0)
+    vertices: list[tuple[float, float, float]] = []
+    for t in levels:
+        outer = base_radius + (top_radius - base_radius) * t + entasis * math.sin(math.pi * t)
+        for sector in range(sectors):
+            angle = math.tau * sector / sectors
+            groove = (flute_depth * (0.5 + 0.5 * math.cos(flutes * angle)) ** 1.65
+                      if flutes else 0.0)
+            radius = outer - groove
+            vertices.append((radius * math.cos(angle), radius * math.sin(angle), height * t))
+    start_center, end_center = len(vertices), len(vertices) + 1
+    vertices.extend(((0.0, 0.0, 0.0), (0.0, 0.0, height)))
+    faces: list[tuple[int, ...]] = []
+    for ring in range(len(levels) - 1):
+        lower, upper = ring * sectors, (ring + 1) * sectors
+        for index in range(sectors):
+            following = (index + 1) % sectors
+            faces.append((lower + index, lower + following, upper + following, upper + index))
+    top = (len(levels) - 1) * sectors
+    for index in range(sectors):
+        following = (index + 1) % sectors
+        faces.append((start_center, following, index))
+        faces.append((end_center, top + index, top + following))
+    return Mesh(tuple(vertices), tuple(faces))
+
+
+@lru_cache(maxsize=128)
+def volute_scroll(*, radius: float = 0.18, tube_radius: float = 0.027,
+                  turns: float = 1.25, segments: int = 96) -> Mesh:
+    """Closed spiral relief tube in the X/Z plane, suitable for Ionic capitals.
+
+    The spiral decreases its radius to leave clear space between turns; a
+    circular cross-section creates real highlight/shadow volume in closeups.
+    """
+    radius = _finite_number(radius, "volute radius", 0.04, 3.0)
+    tube_radius = _finite_number(tube_radius, "volute tube radius", 0.004, 0.3)
+    turns = _finite_number(turns, "volute turns", 0.65, 1.75)
+    if type(segments) is not int or not 32 <= segments <= 192:
+        raise GeometryError("Volute segments must be 32–192")
+    if tube_radius * 2 >= radius * 0.74 / turns:
+        raise GeometryError("Volute tube is too thick for its spiral turn spacing")
+    around = 12
+    rings: list[tuple[float, float, float, float]] = []
+    for index in range(segments + 1):
+        t = index / segments
+        angle = math.tau * turns * t
+        r = radius * (1 - 0.74 * t)
+        dr = -radius * 0.74
+        dx = dr * math.cos(angle) - r * math.sin(angle) * math.tau * turns
+        dz = dr * math.sin(angle) + r * math.cos(angle) * math.tau * turns
+        length = math.hypot(dx, dz)
+        rings.append((r * math.cos(angle), r * math.sin(angle), dx / length, dz / length))
+    vertices: list[tuple[float, float, float]] = []
+    for x, z, tx, tz in rings:
+        for index in range(around):
+            angle = math.tau * index / around
+            vertices.append((x - tz * tube_radius * math.cos(angle),
+                             tube_radius * math.sin(angle),
+                             z + tx * tube_radius * math.cos(angle)))
+    start_cap, end_cap = len(vertices), len(vertices) + 1
+    vertices.extend(((rings[0][0], 0, rings[0][1]),
+                     (rings[-1][0], 0, rings[-1][1])))
+    faces: list[tuple[int, ...]] = []
+    for ring in range(segments):
+        lower, upper = ring * around, (ring + 1) * around
+        for index in range(around):
+            following = (index + 1) % around
+            faces.append((lower + index, upper + index, upper + following, lower + following))
+    for index in range(around):
+        following = (index + 1) % around
+        faces.append((start_cap, index, following))
+        faces.append((end_cap, segments * around + following, segments * around + index))
+    return Mesh(tuple(vertices), tuple(faces))
+
+
+def classical_column(*, prefix: str, height: float = 4.55,
+                     base_radius: float = 0.36,
+                     order: str = "ionic") -> tuple[MeshInstance, ...]:
+    """Composable Tuscan, Doric or Ionic-inspired column details in meters.
+
+    Uses actual fluted solids, subtle entasis, moulded bases/echinus/abacus,
+    and front/back spiral volutes on Ionic capitals. The orders are reusable
+    *studies*, not measured archaeological reconstructions.
+    """
+    height = _finite_number(height, "column height", 2.0, 24)
+    radius = _finite_number(base_radius, "column radius", 0.16, 2.5)
+    if order not in ("tuscan", "doric", "ionic"):
+        raise GeometryError("Column order must be tuscan, doric or ionic")
+    if height < radius * 7:
+        raise GeometryError("Column height must be at least seven shaft radii")
+    parts: list[MeshInstance] = []
+    shaft_start = 0.34 if order != "doric" else 0.045
+    shaft_end = height - 0.58
+    if order != "doric":
+        parts.append(_part(f"{prefix}-base-plinth", (radius*2.75, radius*2.75, 0.16),
+                           (0, 0, 0.08), "limestone-light"))
+        lower_base = revolve_profile(((radius*1.19, 0.16), (radius*1.29, 0.205),
+                                      (radius*1.31, 0.265), (radius*1.17, 0.325)),
+                                     radial_segments=64)
+        parts.append(place_mesh(lower_base, name=f"{prefix}-base-torus",
+                                material="limestone"))
+    flutes = 0 if order == "tuscan" else 20 if order == "doric" else 24
+    shaft = fluted_column_shaft(height=shaft_end-shaft_start, base_radius=radius,
+                                top_radius=radius*0.875, flutes=flutes,
+                                flute_depth=radius*0.055 if flutes else 0.0,
+                                entasis=radius*0.035)
+    parts.append(place_mesh(shaft, name=f"{prefix}-shaft", origin=(0, 0, shaft_start),
+                            material="limestone"))
+    neck = revolve_profile(((radius*0.87, shaft_end-0.01),
+                            (radius*0.94, shaft_end+0.055),
+                            (radius*0.94, shaft_end+0.095)), radial_segments=64)
+    parts.append(place_mesh(neck, name=f"{prefix}-capital-necking",
+                            material="limestone-light"))
+    bell = revolve_profile(((radius*0.91, height-0.50),
+                            (radius*0.98, height-0.40),
+                            (radius*1.23, height-0.27),
+                            (radius*1.33, height-0.20)), radial_segments=64)
+    parts.append(place_mesh(bell, name=f"{prefix}-capital-echinus",
+                            material="limestone"))
+    if order == "ionic":
+        band = box_mesh(radius*3.05, radius*1.67, 0.11)
+        parts.append(place_mesh(band, name=f"{prefix}-capital-volute-band",
+                                origin=(0, 0, height-0.30), material="limestone-light"))
+        scroll = volute_scroll(radius=radius*0.53, tube_radius=radius*0.067)
+        for side in ("front", "back"):
+            y = (-1 if side == "front" else 1) * radius*0.98
+            for index, x in enumerate((-radius*1.12, radius*1.12)):
+                parts.append(place_mesh(scroll, name=f"{prefix}-volute-{side}-{index}",
+                                        origin=(x, y, height-0.35), material="limestone-light"))
+    abacus = box_mesh(radius*3.15, radius*2.82, 0.16)
+    parts.append(place_mesh(abacus, name=f"{prefix}-capital-abacus",
+                            origin=(0, 0, height-0.08), material="limestone-light"))
+    return tuple(parts)
+
+
 def gutter_channel(length: float, *, radius: float = 0.105,
                    wall: float = 0.018, segments: int = 14) -> Mesh:
     """Half-round metal rain gutter with a real open U-shaped channel.
