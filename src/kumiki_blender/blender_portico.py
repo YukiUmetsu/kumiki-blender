@@ -11,7 +11,7 @@ from .blender_output import create_model_scene, export_revision
 from .blender_scene import _create_box, _material
 from .portico import PorticoStudy
 from .render_profiles import select_render_profile
-from .shots import QualityShot
+from .shots import plan_portico_shots
 from .surfaces import get_surface
 
 
@@ -112,12 +112,7 @@ def build_portico_scene(study: PorticoStudy, destination: Path, *, bpy_module: A
     camera_data.type = "ORTHO"
     camera = bpy.data.objects.new(camera_data.name, camera_data)
     stage.objects.link(camera)
-    span = study.bounds_max[0] - study.bounds_min[0]
-    shots = (
-        QualityShot("hero", (span * 0.65, -span * 1.55, 10.5), (0, 0, 3.7), max(11, span * 0.78)),
-        QualityShot("front", (0, -span * 1.5, 5.0), (0, 0, 3.6), max(10, span * 0.68)),
-        QualityShot("detail", (4.2, -9, 7.5), (0, 0, 5.1), 4.8),
-    )
+    shots = plan_portico_shots(study.bounds_min, study.bounds_max)
     metadata = {
         "asset_id": study.asset_id,
         "generator": "kumiki-blender/modular-portico",
