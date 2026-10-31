@@ -56,7 +56,7 @@ jobs:
             "https://download.blender.org/release/Blender4.5/blender-4.5.15.sha256" \
             --output "$RUNNER_TEMP/blender-4.5.15.sha256"
           checksum="$(sha256sum "$archive" | cut -d ' ' -f 1)"
-          rg -q "$checksum.*blender-4.5.15-linux-x64.tar.xz" "$RUNNER_TEMP/blender-4.5.15.sha256"
+          grep -q "$checksum.*blender-4.5.15-linux-x64.tar.xz" "$RUNNER_TEMP/blender-4.5.15.sha256"
           mkdir -p "$RUNNER_TEMP/blender"
           tar -xf "$archive" -C "$RUNNER_TEMP/blender"
           echo "$RUNNER_TEMP/blender/blender-4.5.15-linux-x64" >> "$GITHUB_PATH"
