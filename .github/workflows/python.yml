@@ -115,6 +115,27 @@ jobs:
             --provenance examples/first-party-import.json \
             --material-overrides examples/restyle-portico.json \
             --output .review/ci/restyled-portico
+      - name: Generate verified first-party PBR texture-pack fixture
+        run: python scripts/generate_first_party_texture_pack.py .review/ci/material-pack-fixture
+      - name: Build a facade with external-file PBR maps embedded
+        env:
+          KUMIKI_RENDER_PROFILE: smoke
+        run: |
+          blender --background --factory-startup --threads 1 --python-exit-code 1 \
+            --python scripts/blender_entry.py -- \
+            build-facade --bays 3 \
+            --texture-packs .review/ci/material-pack-fixture/facade.json \
+            --output .review/ci/scanned-facade
+      - name: Apply a verified PBR texture pack to an imported GLB
+        env:
+          KUMIKI_RENDER_PROFILE: smoke
+        run: |
+          blender --background --factory-startup --threads 1 --python-exit-code 1 \
+            --python scripts/blender_entry.py -- \
+            import-asset --input .review/ci/portico/model.glb \
+            --provenance examples/first-party-import.json \
+            --texture-packs .review/ci/material-pack-fixture/imported-portico.json \
+            --output .review/ci/scanned-portico
       - name: Verify portable exports and required previews
         env:
           PYTHONPATH: src
@@ -124,23 +145,33 @@ jobs:
           python -m kumiki_blender audit --model .review/ci/facade/model.glb --require-pbr-textures
           python -m kumiki_blender audit --model .review/ci/imported-portico/model.glb --require-pbr-textures
           python -m kumiki_blender audit --model .review/ci/restyled-portico/model.glb --require-pbr-textures
+          python -m kumiki_blender audit --model .review/ci/scanned-facade/model.glb --require-pbr-textures
+          python -m kumiki_blender audit --model .review/ci/scanned-portico/model.glb --require-pbr-textures
           python -m kumiki_blender audit-revision --root .review/ci/lattice-tower
           python -m kumiki_blender audit-revision --root .review/ci/portico
           python -m kumiki_blender audit-revision --root .review/ci/facade
           python -m kumiki_blender audit-revision --root .review/ci/imported-portico
           python -m kumiki_blender audit-revision --root .review/ci/restyled-portico
+          python -m kumiki_blender audit-revision --root .review/ci/scanned-facade
+          python -m kumiki_blender audit-revision --root .review/ci/scanned-portico
           gltf-transform validate .review/ci/lattice-tower/model.glb
           gltf-transform validate .review/ci/portico/model.glb
           gltf-transform validate .review/ci/facade/model.glb
           gltf-transform validate .review/ci/imported-portico/model.glb
           gltf-transform validate .review/ci/restyled-portico/model.glb
+          gltf-transform validate .review/ci/scanned-facade/model.glb
+          gltf-transform validate .review/ci/scanned-portico/model.glb
           python -c 'import json; m=json.load(open(".review/ci/restyled-portico/manifest.json")); assert len(m["material_overrides"]) == 1 and m["material_overrides"][0]["preset"] == "natural-stone"'
+          python -c 'import json; m=json.load(open(".review/ci/scanned-facade/manifest.json")); assert len(m["texture_packs"]) == 2 and all(v["pack"]["maps"]["normal"]["sha256"] for v in m["texture_packs"])'
+          python -c 'import json; m=json.load(open(".review/ci/scanned-portico/manifest.json")); assert len(m["texture_packs"]) == 1 and m["texture_packs"][0]["target"] == "Architectural stone.004"'
           python -m unittest tests.test_export_audit tests.test_glb_audit -v
           test -s .review/ci/lattice-tower/previews/detail.png
           test -s .review/ci/portico/previews/detail.png
           test -s .review/ci/facade/previews/detail.png
           test -s .review/ci/imported-portico/previews/detail.png
           test -s .review/ci/restyled-portico/previews/detail.png
+          test -s .review/ci/scanned-facade/previews/detail.png
+          test -s .review/ci/scanned-portico/previews/detail.png
       - name: Preserve Blender crash diagnostics
         if: failure()
         run: |

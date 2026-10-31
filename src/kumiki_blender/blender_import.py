@@ -8,9 +8,11 @@ from typing import Any
 
 from .asset_import import AssetImportError, AssetProvenance, inspect_source_glb
 from .blender_output import aim_at, create_model_scene, export_revision
+from .blender_material_packs import create_texture_pack_material
 from .blender_scene import _create_box, _material
 from .blender_textures import ensure_metric_uvs
 from .material_overrides import MaterialOverride, verify_material_overrides
+from .material_packs import TextureAssignment, verify_texture_targets
 from .render_profiles import select_render_profile
 from .shots import QualityShot
 from .surfaces import get_surface
@@ -33,6 +35,7 @@ def build_imported_scene(
     destination: str | Path,
     *,
     material_overrides: tuple[MaterialOverride, ...] = (),
+    texture_packs: tuple[TextureAssignment, ...] = (),
     bpy_module: Any = None,
 ) -> dict[str, Any]:
     """Import one reviewed GLB, preserve its materials and publish a QA revision."""
@@ -46,6 +49,9 @@ def build_imported_scene(
         raise AssetImportError(f"Output revision already exists: {destination}")
     report = inspect_source_glb(source, provenance)
     verify_material_overrides(report["material_names"], material_overrides)
+    verify_texture_targets(report["material_names"], texture_packs)
+    if {item.material_name for item in material_overrides} & {item.target for item in texture_packs}:
+        raise AssetImportError("One source material cannot have both a preset override and a texture pack")
     profile = select_render_profile(1440, 900, 48)
     scene = create_model_scene(bpy, provenance.asset_id)
     scene.render.engine = "CYCLES"
@@ -84,7 +90,7 @@ def build_imported_scene(
                           if slot.material is not None}
     if report["glb_audit"]["materials"] and not imported_materials:
         raise AssetImportError("Blender did not preserve any source GLB materials")
-    if material_overrides:
+    if material_overrides or texture_packs:
         # Bind replacements only to the imported meshes. Avoid Blender's global
         # material name lookup: unrelated scenes may contain similarly named IDs.
         material_lookup = {slot.material.name: slot.material for obj in objects
@@ -99,6 +105,18 @@ def build_imported_scene(
                 for slot in obj.material_slots:
                     if slot.material == original:
                         ensure_metric_uvs(obj.data)
+                        slot.material = replacement
+        for assignment in texture_packs:
+            original = material_lookup.get(assignment.target)
+            if original is None:
+                raise AssetImportError(f"Blender renamed or lost source material: {assignment.target}")
+            replacement = create_texture_pack_material(bpy, assignment.pack, assignment.target)
+            for obj in objects:
+                for slot in obj.material_slots:
+                    if slot.material == original:
+                        # Preserve existing artistic UVs; generate metric UVs
+                        # only for geometry that shipped without UV coordinates.
+                        ensure_metric_uvs(obj.data, tile_size_m=assignment.pack.tile_size_m)
                         slot.material = replacement
     # Packed images make both source.blend and exported GLB portable even if
     # the original GLB was downloaded to a short-lived local path.
@@ -166,6 +184,7 @@ def build_imported_scene(
         "source_glb_bytes": report["input_bytes"],
         "imported_materials": len(imported_materials),
         "material_overrides": [override.to_manifest() for override in material_overrides],
+        "texture_packs": [item.to_manifest() for item in texture_packs],
         "render_profile": {"name": profile.name, "width": profile.width,
                            "height": profile.height, "samples": profile.samples},
         "units": "meters",

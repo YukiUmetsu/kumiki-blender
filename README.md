@@ -110,6 +110,8 @@ The toolkit now **generates deterministic, seamless PBR maps locally**, with no 
 
 CI runs `audit --require-pbr-textures` and the official Khronos validator on each example, including a re-imported model, so missing UVs or dropped material maps fail the build. These are **generic procedural surfaces**, not yet the measured, weathered, historically specific textures required for a photorealistic landmark replica.
 
+For more believable landmark stone, metal and wood, **supply your own reviewed PBR scan maps** from any licensed provider. The optional `--texture-packs /path/to/material-packs.json` works with both `build-facade` (exact material roles) and `import-asset` (exact source material names). It loads local base-color/roughness/OpenGL-normal PNG/JPEG images, records their SHA-256 hashes and licensing declarations, preserves UVs or creates metric UVs, packs images into `.blend`, and embeds them in GLB. No particular marketplace is required. [Material-pack recipe and usage](docs/MATERIAL_PACKS.md).
+
 ## Import a reviewed asset from any source
 
 The first source-independent intake path accepts a **local, static, self-contained `.glb`**. It can come from a licensed Sketchfab/Fab/CGTrader download, a scan, or your own work. It **does not search marketplaces, download assets, accept rigs or animations, or assume a model's source license permits redistribution**.
@@ -203,7 +205,7 @@ For third-party materials, Geometry Nodes, rigging, BIM and export-validation ca
 ### Next milestones
 
 1. Conduct human review of higher-sample Blender renders and imported GLB from several angles; correct photographic and architectural defects.
-2. Expand the deterministic PBR pipeline with reference-based material scans, physically scaled weathering, and texture baking for landmark-specific surfaces.
+2. Apply the new source-independent PBR scan importer to measured, rights-cleared landmark-specific materials; add a height/displacement workflow and physically scaled weathering for production shots.
 3. Extend the roof/window/masonry/cornice kit with diverse roof types, historic facade styles, carved ornament, measured architectural references, and a separate render-only mode for licensed reference assets that cannot be redistributed as GLB.
 4. Model a reference-verified landmark (proposed: Tokyo Tower), separately from the generic demonstration, and require human close-up review.
 5. Add Geometry Nodes asset-library tools, LOD generation, scene-template previews, and optional asset catalog integration.

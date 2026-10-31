@@ -10,6 +10,7 @@ from unittest.mock import patch
 from kumiki_blender.cli import main
 from kumiki_blender.export_audit import ExportAuditError
 from tests.test_asset_import import fixture_glb, provenance_json
+from tests.test_material_packs import sample as texture_pack_sample
 
 
 FIXTURE = Path(__file__).resolve().parents[1] / "examples/lattice-observation-tower.json"
@@ -46,6 +47,32 @@ class CLITests(unittest.TestCase):
                 code = main(["inspect-asset", "--input", str(model)])
             self.assertEqual(code, 0)
             self.assertTrue(json.loads(stream.getvalue())["static_mesh_only"])
+
+    def test_inspect_texture_packs_reports_hashes_without_blender(self):
+        with tempfile.TemporaryDirectory() as directory:
+            pack, _ = texture_pack_sample(Path(directory))
+            stream = io.StringIO()
+            with contextlib.redirect_stdout(stream):
+                code = main(["inspect-texture-packs", "--input", str(pack)])
+            self.assertEqual(code, 0)
+            report = json.loads(stream.getvalue())
+            self.assertEqual(report["assignments"][0]["target"], "wall-stone")
+            self.assertEqual(len(report["assignments"][0]["pack"]["maps"]["normal"]["sha256"]), 64)
+
+    def test_import_preflights_texture_pack_material_name_without_blender(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            model, record, destination = root / "model.glb", root / "source.json", root / "revision"
+            fixture_glb(model, materials=["Original limestone"])
+            record.write_text(json.dumps(provenance_json()))
+            pack, _ = texture_pack_sample(root)
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr):
+                code = main(["import-asset", "--input", str(model), "--provenance", str(record),
+                             "--texture-packs", str(pack), "--output", str(destination)])
+            self.assertEqual(code, 2)
+            self.assertIn("matches 0", stderr.getvalue())
+            self.assertFalse(destination.exists())
 
     def test_import_asset_refuses_rights_without_creating_output(self):
         with tempfile.TemporaryDirectory() as directory:

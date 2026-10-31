@@ -9,15 +9,19 @@ from typing import Any
 
 from .blender_output import aim_at, create_model_scene, export_revision
 from .blender_lighting import add_architectural_reflections
+from .blender_material_packs import create_texture_pack_material
 from .blender_scene import _create_box, _material
 from .blender_textures import ensure_metric_uvs
 from .facade import FacadeStudy
+from .material_packs import TextureAssignment, verify_texture_targets
 from .render_profiles import select_render_profile
 from .shots import QualityShot
 from .surfaces import get_surface
 
 
-def build_facade_scene(study: FacadeStudy, destination: Path, *, bpy_module: Any = None) -> dict[str, Any]:
+def build_facade_scene(study: FacadeStudy, destination: Path, *,
+                       texture_packs: tuple[TextureAssignment, ...] = (),
+                       bpy_module: Any = None) -> dict[str, Any]:
     """Generate portable geometry, editable source and cinematic inspection views."""
     if bpy_module is None:
         raise RuntimeError("Blender bpy context is required for facade rendering")
@@ -59,7 +63,11 @@ def build_facade_scene(study: FacadeStudy, destination: Path, *, bpy_module: Any
         "roof-slate-light": get_surface("natural-stone", color="#5E6267", roughness=0.78),
         "rain-metal": get_surface("galvanized-steel", color="#525B60", roughness=0.44),
     }
-    palette = {name: _material(bpy, spec) for name, spec in materials.items()}
+    verify_texture_targets(list(materials), texture_packs)
+    assigned = {item.target: item.pack for item in texture_packs}
+    palette = {name: (create_texture_pack_material(bpy, assigned[name], name)
+                      if name in assigned else _material(bpy, spec))
+               for name, spec in materials.items()}
     from mathutils import Matrix  # Blender-only dependency.
 
     cache: dict[tuple[int, str], Any] = {}
@@ -70,7 +78,8 @@ def build_facade_scene(study: FacadeStudy, destination: Path, *, bpy_module: Any
             mesh = bpy.data.meshes.new(f"Geometry / {part.name}")
             mesh.from_pydata(part.mesh.vertices, [], part.mesh.faces)
             mesh.update()
-            ensure_metric_uvs(mesh)
+            ensure_metric_uvs(mesh, tile_size_m=assigned[part.material].tile_size_m
+                              if part.material in assigned else 1.5)
             mesh.materials.append(palette[part.material])
             cache[key] = mesh
         obj = bpy.data.objects.new(part.name, cache[key])
@@ -157,6 +166,7 @@ def build_facade_scene(study: FacadeStudy, destination: Path, *, bpy_module: Any
         "native_axes": "Blender Z-up; GLB exported with glTF-compatible axes",
         "named_parts": dict(study.part_counts),
         "mesh_data_blocks": len(cache),
+        "texture_packs": [item.to_manifest() for item in texture_packs],
         "instances": len(study.instances),
         "bounds_m": [study.bounds_min, study.bounds_max],
     }
