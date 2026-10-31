@@ -102,6 +102,11 @@ Every pull request now has a Blender 4.5 LTS headless job. It downloads the vers
 
 The CI job uses `KUMIKI_RENDER_PROFILE=smoke`, capping previews at 640 × 360 and 8 Cycles samples. It keeps the full geometry and material settings for meaningful export validation. The normal CLI uses `production` mode, preserving the sample and resolution settings in each asset recipe. A smoke preview is **not** a photorealistic acceptance render.
 
+CI also runs the official Khronos glTF specification validator through the
+version-pinned [glTF-Transform CLI](https://github.com/donmccurdy/glTF-Transform),
+alongside Kumiki's own semantic-node and revision-integrity checks. This is a
+CI-only development dependency, not a runtime dependency for model generation.
+
 To run a faster local validation before a full production render:
 
 ```bash

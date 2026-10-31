@@ -82,6 +82,12 @@ jobs:
             --python scripts/blender_entry.py -- \
             build --recipe examples/lattice-observation-tower.json \
             --output .review/ci/lattice-tower
+      - name: Set up Node for independent glTF specification validation
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install pinned glTF-Transform validation CLI
+        run: npm install --global @gltf-transform/cli@4.5.1
       - name: Verify portable exports and required previews
         env:
           PYTHONPATH: src
@@ -90,6 +96,8 @@ jobs:
           python -m kumiki_blender audit --model .review/ci/portico/model.glb
           python -m kumiki_blender audit-revision --root .review/ci/lattice-tower
           python -m kumiki_blender audit-revision --root .review/ci/portico
+          gltf-transform validate .review/ci/lattice-tower/model.glb
+          gltf-transform validate .review/ci/portico/model.glb
           python -m unittest tests.test_export_audit tests.test_glb_audit -v
           test -s .review/ci/lattice-tower/previews/detail.png
           test -s .review/ci/portico/previews/detail.png

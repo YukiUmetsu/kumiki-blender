@@ -23,8 +23,8 @@ Additional useful options: [Material Maker](https://github.com/RodZill4/material
 
 ## Adoption sequence
 
-1. **Export QA:** run a full glTF validator in the GitHub Blender job after our own manifest/semantic checks. Only optimize as a separate, explicitly requested step, never silently replace the source GLB.
-2. **Realistic materials and lighting:** implement a dependency-light Blender PBR adapter for licensed CC0 texture sets and HDRIs. Record original URL/creator/license/retrieval date/checksum/texture scale in the manifest. Avoid a runtime download during every render; use a cache plus offline fallback.
+1. **Export QA (integration underway):** run the official Khronos spec validator through glTF-Transform 4.5.1 in the GitHub Blender job after our own manifest/semantic checks. Only optimize as a separate, explicitly requested step, never silently replace the source GLB. The native Blender smoke render is still being debugged; validator adoption does not imply that CI is green.
+2. **Realistic materials and lighting:** favor self-contained Blender shader patterns (micro-bump, grime, mortar, subtle roughness variation) with deterministic parameters and GLB-safe baking. Optional licensed CC0 textures or HDRIs may be useful for specific shots, but no external asset catalog—including Poly Haven—should be required, and search results are not a substitute for asset suitability checks.
 3. **Authoring acceleration:** experiment with Geometry Nodes for façade details, cornices, windows, roofs and ornament. NodeToPython/nodebpy/Sverchok can be external creators while published recipes remain self-contained, testable Python.
 4. **Measured landmarks:** add IfcOpenShell or COLMAP as optional import/reference steps when high-quality reference geometry exists. Do not pretend a procedurally plausible tower is an authenticated landmark replica.
 5. **Character rigs:** use Blender's bundled Rigify where possible; consider Rokoko only if character motion is a requirement for the scene.

@@ -36,6 +36,26 @@ from kumiki_blender.blender_scene import _material  # noqa: E402
 from kumiki_blender.surfaces import get_surface  # noqa: E402
 
 
+cube.data.materials.append(_material(bpy, get_surface("natural-stone")))
+bevel = cube.modifiers.new("Default scene bevel", "BEVEL")
+bevel.width = 0.02
+bevel.segments = 2
+cube.modifiers.new("Default scene normals", "WEIGHTED_NORMAL")
+print("KUMIKI_PROBE: default scene save starting", flush=True)
+bpy.ops.wm.save_as_mainfile(filepath=str(target.parent / "default.blend"))
+bake_export_meshes(bpy, [cube])
+print("KUMIKI_PROBE: default scene baked exporter starting", flush=True)
+bpy.ops.export_scene.gltf(
+    filepath=str(target.parent / "default-baked.glb"),
+    export_format="GLB",
+    use_selection=True,
+    export_materials="EXPORT",
+    export_animations=False,
+    export_extras=True,
+    export_apply=False,
+)
+print("KUMIKI_PROBE: default scene baked exporter completed", flush=True)
+
 scene = bpy.data.scenes.new("Kumiki / isolated exporter probe")
 if bpy.context.window is not None:
     bpy.context.window.scene = scene
