@@ -109,7 +109,7 @@ def make_portico_study(*, bays: int = 3, order: str = "ionic") -> PorticoStudy:
         part_counts=(("arch_stones", bays * 11), ("columns", bays + 1),
                      ("column_bases", (bays + 1) * (0 if order == "doric" else 2)),
                      ("column_capitals", (bays + 1) * (4 if order == "ionic" else 3)),
-                     ("volutes", (bays + 1) * (4 if order == "ionic" else 0)),
+                     ("volutes", (bays + 1) * (8 if order == "ionic" else 0)),
                      ("pedestals", bays + 1),
                      ("cornices", 1), ("plinths", 1)),
         bounds_min=tuple(mins), bounds_max=tuple(maxs),

@@ -35,6 +35,7 @@ class ClassicalColumnTests(unittest.TestCase):
                 self.assertEqual(sum("-base-" in item.name for item in pieces), base_count)
                 self.assertEqual(sum("-volute-front-" in item.name or "-volute-back-" in item.name
                                      for item in pieces), volutes)
+                self.assertEqual(sum("-volute-backing-" in item.name for item in pieces), volutes)
                 self.assertEqual(sum(item.name.endswith("-shaft") for item in pieces), 1)
                 self.assertEqual(len({item.name for item in pieces}), len(pieces))
                 for item in pieces:
@@ -43,6 +44,8 @@ class ClassicalColumnTests(unittest.TestCase):
                     self.assertEqual(report.nonmanifold_edges, 0)
                     self.assertGreater(report.volume_m3, 0)
                     self.assertTrue(all(-1.5 < vertex[0] < 1.5 for vertex in world_vertices(item)))
+                xs = [vertex[0] for item in pieces for vertex in world_vertices(item)]
+                self.assertAlmostEqual(max(xs), -min(xs), places=7)
 
     def test_volute_is_closed_3d_and_thinner_than_its_turn_spacing(self):
         scroll = volute_scroll(radius=0.18, tube_radius=0.022)

@@ -62,13 +62,14 @@ individually named solids with consistent local origin at the shaft's base:
 | --- | --- |
 | `tuscan` | Smooth tapered shaft, slight entasis, square plinth/torus and stepped capital |
 | `doric` | **20 concave shaft flutes**, slight entasis, necking, echinus and abacus, without an Ionic base |
-| `ionic` | **24 concave shaft flutes**, molded base and capital, face/back scroll volutes and an abacus |
+| `ionic` | **24 concave shaft flutes**, molded base and capital, face/back raised spiral scrolls on curved stone cushions and an abacus |
 
 The shaft is one capped, manifold mesh with radius varying by angle and
 height. This is important: cutting real flute channels catches glancing light
 and prevents the rod-overlay look of the earlier demonstration. `volute_scroll()`
-creates a separate capped 3D scroll tube with a shrinking radius and visible
-turn spacing. Each column component can be restyled or placed independently.
+creates a separate capped 3D spiral ridge with a shrinking radius and visible
+turn spacing, mounted on a separately editable rounded stone relief backing.
+Each column component can be restyled or placed independently.
 
 ```bash
 PYTHONPATH=src python3 -m kumiki_blender plan-classical-column \

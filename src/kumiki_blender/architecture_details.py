@@ -379,6 +379,27 @@ def volute_scroll(*, radius: float = 0.18, tube_radius: float = 0.027,
     return Mesh(tuple(vertices), tuple(faces))
 
 
+@lru_cache(maxsize=128)
+def _classical_lathed_moldings(height: float, radius: float) -> tuple[Mesh, Mesh, Mesh, Mesh]:
+    """Share identical base/neck/echinus mesh data across repeated orders."""
+    lower_base = revolve_profile(((radius*1.19, 0.16), (radius*1.29, 0.205),
+                                  (radius*1.31, 0.265), (radius*1.17, 0.325)),
+                                 radial_segments=64)
+    shaft_end = height - 0.58
+    neck = revolve_profile(((radius*0.87, shaft_end-0.01),
+                            (radius*0.94, shaft_end+0.055),
+                            (radius*0.94, shaft_end+0.095)), radial_segments=64)
+    bell = revolve_profile(((radius*0.91, height-0.50),
+                            (radius*0.98, height-0.40),
+                            (radius*1.23, height-0.27),
+                            (radius*1.33, height-0.20)), radial_segments=64)
+    cushion = revolve_profile(((radius*0.55, 0),
+                               (radius*0.62, radius*0.06),
+                               (radius*0.62, radius*0.22),
+                               (radius*0.56, radius*0.30)), radial_segments=64)
+    return lower_base, neck, bell, cushion
+
+
 def classical_column(*, prefix: str, height: float = 4.55,
                      base_radius: float = 0.36,
                      order: str = "ionic") -> tuple[MeshInstance, ...]:
@@ -397,12 +418,10 @@ def classical_column(*, prefix: str, height: float = 4.55,
     parts: list[MeshInstance] = []
     shaft_start = 0.34 if order != "doric" else 0.045
     shaft_end = height - 0.58
+    lower_base, neck, bell, cushion = _classical_lathed_moldings(height, radius)
     if order != "doric":
         parts.append(_part(f"{prefix}-base-plinth", (radius*2.75, radius*2.75, 0.16),
                            (0, 0, 0.08), "limestone-light"))
-        lower_base = revolve_profile(((radius*1.19, 0.16), (radius*1.29, 0.205),
-                                      (radius*1.31, 0.265), (radius*1.17, 0.325)),
-                                     radial_segments=64)
         parts.append(place_mesh(lower_base, name=f"{prefix}-base-torus",
                                 material="limestone"))
     flutes = 0 if order == "tuscan" else 20 if order == "doric" else 24
@@ -412,15 +431,8 @@ def classical_column(*, prefix: str, height: float = 4.55,
                                 entasis=radius*0.035)
     parts.append(place_mesh(shaft, name=f"{prefix}-shaft", origin=(0, 0, shaft_start),
                             material="limestone"))
-    neck = revolve_profile(((radius*0.87, shaft_end-0.01),
-                            (radius*0.94, shaft_end+0.055),
-                            (radius*0.94, shaft_end+0.095)), radial_segments=64)
     parts.append(place_mesh(neck, name=f"{prefix}-capital-necking",
                             material="limestone-light"))
-    bell = revolve_profile(((radius*0.91, height-0.50),
-                            (radius*0.98, height-0.40),
-                            (radius*1.23, height-0.27),
-                            (radius*1.33, height-0.20)), radial_segments=64)
     parts.append(place_mesh(bell, name=f"{prefix}-capital-echinus",
                             material="limestone"))
     if order == "ionic":
@@ -429,10 +441,28 @@ def classical_column(*, prefix: str, height: float = 4.55,
                                 origin=(0, 0, height-0.30), material="limestone-light"))
         scroll = volute_scroll(radius=radius*0.53, tube_radius=radius*0.067)
         for side in ("front", "back"):
-            y = (-1 if side == "front" else 1) * radius*0.98
+            front = side == "front"
+            facing_axes = ({"axis_x": (1, 0, 0), "axis_y": (0, 0, 1),
+                            "axis_z": (0, -1, 0)} if front else
+                           {"axis_x": (1, 0, 0), "axis_y": (0, 0, -1),
+                            "axis_z": (0, 1, 0)})
             for index, x in enumerate((-radius*1.12, radius*1.12)):
+                # A curved stone cushion behind the spiral makes this read as
+                # a carved Ionic capital, rather than free-floating metal curls.
+                parts.append(place_mesh(cushion,
+                                        name=f"{prefix}-volute-backing-{side}-{index}",
+                                        origin=(x, (-1 if front else 1)*radius*0.89,
+                                                height-0.35),
+                                        material="limestone", **facing_axes))
+                # Mirror the outer scroll on each side of the capital while
+                # keeping a right-handed rigid frame. Otherwise both spirals
+                # curl in the same direction and the silhouette is lopsided.
+                axes = ({"axis_x": (-1, 0, 0), "axis_y": (0, -1, 0),
+                         "axis_z": (0, 0, 1)} if index == 0 else {})
                 parts.append(place_mesh(scroll, name=f"{prefix}-volute-{side}-{index}",
-                                        origin=(x, y, height-0.35), material="limestone-light"))
+                                        origin=(x, (-1 if front else 1)*radius*1.25,
+                                                height-0.35), material="limestone-light",
+                                        **axes))
     abacus = box_mesh(radius*3.15, radius*2.82, 0.16)
     parts.append(place_mesh(abacus, name=f"{prefix}-capital-abacus",
                             origin=(0, 0, height-0.08), material="limestone-light"))
