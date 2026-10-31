@@ -6,13 +6,11 @@ process to build an immutable output revision; no existing scene is deleted.
 
 from __future__ import annotations
 
-import json
 import math
 from pathlib import Path
 from typing import Any
 
-from .export_audit import audit_export_files
-from .glb_audit import audit_glb
+from .blender_output import export_revision
 from .lattice import Beam, GussetPlate, TowerPlan
 from .recipe import TowerRecipe
 from .shots import plan_quality_shots
@@ -138,12 +136,6 @@ def _create_gusset(bpy: Any, collection: Any, plate: GussetPlate, material: Any)
     return obj
 
 
-def _aim_at(obj: Any, target: tuple[float, float, float]) -> None:
-    from mathutils import Vector  # Blender-provided module, imported only when building.
-
-    obj.rotation_euler = (Vector(target) - obj.location).to_track_quat("-Z", "Y").to_euler()
-
-
 def build_scene(recipe: TowerRecipe, plan: TowerPlan, destination: Path, *, bpy_module: Any = None) -> dict[str, Any]:
     """Create a new scene, preserve pre-existing scenes and export a revision.
 
@@ -219,59 +211,20 @@ def build_scene(recipe: TowerRecipe, plan: TowerPlan, destination: Path, *, bpy_
     camera = bpy.data.objects.new(camera_data.name, camera_data)
     stage_collection.objects.link(camera)
     shots = plan_quality_shots(recipe)
-    hero = shots[0]
-    camera.location = hero.position
-    _aim_at(camera, hero.target)
     camera_data.type = "ORTHO"
-    camera_data.ortho_scale = hero.ortho_scale
     scene.camera = camera
 
-    destination.mkdir(parents=True, exist_ok=False)
-    scene.render.filepath = str(destination / "preview.png")
-    with bpy.context.temp_override(scene=scene, view_layer=scene.view_layers[0]):
-        bpy.ops.wm.save_as_mainfile(filepath=str(destination / "source.blend"))
-
-        # Model objects alone become the portable GLB. Never export lights/ground.
-        bpy.ops.object.select_all(action="DESELECT")
-        for obj in objects:
-            obj.select_set(True, view_layer=scene.view_layers[0])
-        bpy.ops.export_scene.gltf(
-            filepath=str(destination / "model.glb"), export_format="GLB",
-            use_selection=True, export_materials="EXPORT", export_animations=False,
-            export_cameras=False, export_lights=False, export_extras=True,
-        )
-        glb_report = audit_glb(destination / "model.glb")
-        bpy.ops.object.select_all(action="DESELECT")
-        preview_dir = destination / "previews"
-        preview_dir.mkdir(exist_ok=True)
-        for shot in shots:
-            camera.location = shot.position
-            _aim_at(camera, shot.target)
-            camera_data.ortho_scale = shot.ortho_scale
-            scene.cycles.samples = recipe.samples if shot.name == "hero" else max(8, recipe.samples // 2)
-            scene.render.filepath = str(destination / "preview.png" if shot.name == "hero" else preview_dir / f"{shot.name}.png")
-            bpy.ops.render.render(write_still=True, scene=scene.name)
-
-    views = ["preview.png", *[f"previews/{shot.name}.png" for shot in shots[1:]]]
-    exported_sizes = audit_export_files(destination, ["source.blend", *views])
-
-    manifest = {
+    metadata = {
         "asset_id": recipe.asset_id,
-        "schema_version": 1,
         "generator": "kumiki-blender/lattice-tower",
         "status": "structural-prototype / visual-review-pending",
         "provenance": "Original procedural demonstration; NOT a verified replica of a landmark",
-        "blender_version": bpy.app.version_string,
         "recipe_sha256": recipe.recipe_sha256,
         "units": "meters",
         "native_axes": "Blender Z-up; exported GLB has glTF-compatible axes",
-        "glb_audit": glb_report,
-        "output_bytes": {**exported_sizes, "model.glb": glb_report["bytes"]},
         "named_parts": {"beams": len(plan.beams), "decks": len(plan.decks),
                         "gussets": len(plan.gussets), "fasteners": len(plan.fasteners)},
         "bounds_m": [plan.bounds_min, plan.bounds_max],
-        "files": {"source": "source.blend", "model": "model.glb", "preview": "preview.png",
-                  "quality_views": views},
     }
-    (destination / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
-    return manifest
+    return export_revision(bpy, scene, camera, objects, shots, destination,
+                           samples=recipe.samples, metadata=metadata)

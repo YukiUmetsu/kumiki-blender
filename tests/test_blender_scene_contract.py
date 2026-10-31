@@ -5,7 +5,9 @@ import unittest
 from pathlib import Path
 
 from kumiki_blender.blender_scene import _beam_geometry, _box_geometry, _gusset_geometry, build_scene
+from kumiki_blender.blender_portico import build_portico_scene
 from kumiki_blender.lattice import Beam, make_lattice_tower
+from kumiki_blender.portico import make_portico_study
 from kumiki_blender.recipe import load_recipe
 
 
@@ -55,6 +57,13 @@ class BlenderSceneContractTests(unittest.TestCase):
                 build_scene(recipe, plan, output, bpy_module=None)
             self.assertFalse(output.exists())
 
+    def test_portico_requires_blender_without_creating_files(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "uncreated"
+            with self.assertRaisesRegex(RuntimeError, "Blender"):
+                build_portico_scene(make_portico_study(), output, bpy_module=None)
+            self.assertFalse(output.exists())
+
     @unittest.skipUnless(shutil.which("blender"), "Blender executable unavailable in this environment")
     def test_real_blender_writes_editable_source_glb_preview_and_manifest(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -68,6 +77,25 @@ class BlenderSceneContractTests(unittest.TestCase):
             for expected in ("source.blend", "model.glb", "preview.png", "manifest.json",
                              "previews/front.png", "previews/side.png", "previews/detail.png"):
                 self.assertGreater((output / expected).stat().st_size, 0)
+
+    @unittest.skipUnless(shutil.which("blender"), "Blender executable unavailable in this environment")
+    def test_real_blender_portico_exports_meshes_with_instanced_parts(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "portico-r01"
+            result = subprocess.run([
+                shutil.which("blender"), "--background", "--factory-startup", "--python-exit-code", "1",
+                "--python", str(ROOT / "scripts/blender_entry.py"), "--",
+                "build-portico", "--bays", "2", "--output", str(output),
+            ], capture_output=True, text=True, timeout=360, check=False)
+            self.assertEqual(result.returncode, 0, result.stderr[-3000:])
+            for expected in ("source.blend", "model.glb", "preview.png", "manifest.json",
+                             "previews/front.png", "previews/detail.png"):
+                self.assertGreater((output / expected).stat().st_size, 0)
+            import json
+
+            manifest = json.loads((output / "manifest.json").read_text())
+            self.assertEqual(manifest["named_parts"]["arch_stones"], 22)
+            self.assertEqual(manifest["named_parts"]["columns"], 3)
 
 
 if __name__ == "__main__":

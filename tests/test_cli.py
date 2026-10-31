@@ -39,6 +39,26 @@ class CLITests(unittest.TestCase):
         self.assertEqual(payload["gussets"], 64)
         self.assertEqual(payload["fasteners"], 256)
 
+    def test_plan_portico_reports_modular_study_without_blender(self):
+        stream = io.StringIO()
+        with contextlib.redirect_stdout(stream):
+            code = main(["plan-portico", "--bays", "3"])
+        self.assertEqual(code, 0)
+        report = json.loads(stream.getvalue())
+        self.assertEqual(report["generator"], "modular-portico")
+        self.assertEqual(report["named_parts"]["arch_stones"], 33)
+        self.assertEqual(report["named_parts"]["flutes"], 64)
+
+    def test_build_portico_requires_blender_and_does_not_write_partial_directory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            destination = Path(directory) / "new-study"
+            errors = io.StringIO()
+            with contextlib.redirect_stderr(errors):
+                code = main(["build-portico", "--bays", "3", "--output", str(destination)])
+            self.assertEqual(code, 2)
+            self.assertIn("Blender", errors.getvalue())
+            self.assertFalse(destination.exists())
+
     def test_existing_build_destination_is_never_overwritten(self):
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / "already-here"
