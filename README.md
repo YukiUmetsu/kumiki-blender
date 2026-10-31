@@ -2,7 +2,7 @@
 
 A standalone, code-first Blender toolkit for reusable, cinematic 3D authoring. Its first milestone is a **generic lattice observation tower**: a deterministic architectural scaffold, **not** a photorealistic or dimensionally verified replica of Tokyo Tower or another real landmark.
 
-The library separates testable Python geometry planning from Blender's `bpy` modeling and rendering. It includes two example generators: a tapered lattice observation tower and a **modular architectural portico** built from closed arch stones, concave extrusions and lathed columns. Both use a shared revision exporter for editable `.blend`, portable `.glb`, inspection views and a JSON manifest for Kumiki-UI and ContentGen consumers.
+The library separates testable Python geometry planning from Blender's `bpy` modeling and rendering. It includes three example generators: a tapered lattice observation tower, a **modular architectural portico** built from closed arch stones and lathed columns, and a **reusable stone building facade** with detailed windows, a panelled door, staggered masonry, classical cornices and a pitched tile roof. All use a shared revision exporter for editable `.blend`, portable `.glb`, inspection views and a JSON manifest for Kumiki-UI and ContentGen consumers.
 
 ## Requirements
 
@@ -66,6 +66,37 @@ On a Mac with Blender installed, render and export a new revision:
 ```
 
 This writes editable geometry, GLB, a hero preview and front/detail views through the **same export and audit pipeline** as the lattice tower. Headless Blender 4.5 has rendered both models successfully; smoke-quality previews still require artistic review before a claim of cinematic realism.
+
+## Reusable architectural-detail system
+
+The Blender-independent `architecture_details.py` provides composable, **manifold 3D solids** rather than texture-only facades:
+
+| API | Reusable building detail |
+|---|---|
+| `coursed_wall()` | Staggered stone courses, physical mortar gaps, and real rectangular voids for doors/windows; adjustable block and course sizes |
+| `window_assembly()` | Framed, recessed glazing with independent panes, stiles, mullions, transoms, sill, lintel and stone jambs |
+| `door_assembly()` | Raised timber panels, panel moldings, jambs, stone lintel, threshold and lathed metal knob |
+| `cornice_extrusion()` / `dentil_row()` | Projecting cross-section moldings and repeated stone teeth, in real dimensions |
+| `gable_roof()` | Closed front/back pitched roof slabs, solid gable ends, a ridge cap and individually sloped/staggered tiles |
+| `box_mesh()` | Cached, closed mesh primitive for any rectangular architectural detail |
+
+Every piece returns a named `MeshInstance` with editable material role, transform and physical geometry. You can mix these functions in **new landmark recipes** without rewriting Blender object placement. `facade.py` demonstrates composition into a fully enclosed, 3/5/7-bay stone townhouse study with consistently named `masonry`, `window`, `door`, `roof`, `dentil` and `cornice` categories.
+
+Inspect the object plan without Blender:
+
+```bash
+PYTHONPATH=src python3 -m kumiki_blender plan-facade --bays 3
+```
+
+Build a multi-view editable revision (use a new output directory per build):
+
+```bash
+blender --background --factory-startup --python-exit-code 1 \
+  --python scripts/blender_entry.py -- \
+  build-facade --bays 3 --output .review/facade/r01
+```
+
+The demonstration is **an original architectural detail study**, not a measured replica of an existing building. Future landmark work should substitute location-specific measured proportions, ornaments, roofs, glazing, weathering and material scans, with visual QA at production resolution.
 
 ## Reusable PBR surfaces
 
@@ -169,7 +200,7 @@ For third-party materials, Geometry Nodes, rigging, BIM and export-validation ca
 
 1. Conduct human review of higher-sample Blender renders and imported GLB from several angles; correct photographic and architectural defects.
 2. Expand the deterministic PBR pipeline with reference-based material scans, physically scaled weathering, and texture baking for landmark-specific surfaces.
-3. Extend the new profile, extrusion, arch and instancing kernel with roofs, window surrounds, lattice joints and repeated ornament systems; add a separate render-only mode for licensed reference assets that cannot be redistributed as GLB.
+3. Extend the roof/window/masonry/cornice kit with diverse roof types, historic facade styles, carved ornament, measured architectural references, and a separate render-only mode for licensed reference assets that cannot be redistributed as GLB.
 4. Model a reference-verified landmark (proposed: Tokyo Tower), separately from the generic demonstration, and require human close-up review.
 5. Add Geometry Nodes asset-library tools, LOD generation, scene-template previews, and optional asset catalog integration.
 

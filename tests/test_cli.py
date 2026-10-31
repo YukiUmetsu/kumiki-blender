@@ -119,6 +119,26 @@ class CLITests(unittest.TestCase):
         self.assertEqual(report["named_parts"]["arch_stones"], 33)
         self.assertEqual(report["named_parts"]["flutes"], 64)
 
+    def test_plan_facade_reports_individually_editable_architectural_parts(self):
+        stream = io.StringIO()
+        with contextlib.redirect_stdout(stream):
+            code = main(["plan-facade", "--bays", "3"])
+        self.assertEqual(code, 0)
+        report = json.loads(stream.getvalue())
+        self.assertEqual(report["generator"], "architectural-facade-detail-kit")
+        self.assertGreater(report["named_parts"]["masonry"], 600)
+        self.assertGreater(report["named_parts"]["roof"], 400)
+
+    def test_facade_build_requires_blender_without_creating_revision(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "facade"
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr):
+                code = main(["build-facade", "--output", str(output)])
+            self.assertEqual(code, 2)
+            self.assertIn("Blender", stderr.getvalue())
+            self.assertFalse(output.exists())
+
     def test_build_portico_requires_blender_and_does_not_write_partial_directory(self):
         with tempfile.TemporaryDirectory() as directory:
             destination = Path(directory) / "new-study"

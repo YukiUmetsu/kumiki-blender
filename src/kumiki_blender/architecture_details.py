@@ -1,0 +1,307 @@
+"""Composable, physically closed building details independent of Blender.
+
+All sizes are meters. X runs horizontally, Z vertically, and the facade faces
+-Y. Returned parts are separate named meshes with explicit material roles, so
+landmark recipes can replace any window, masonry block or molding independently.
+"""
+
+from __future__ import annotations
+
+import math
+from dataclasses import dataclass
+from functools import lru_cache
+
+from .architecture_geometry import (
+    GeometryError, Mesh, MeshInstance, _finite_number, extrude_profile,
+    place_mesh, revolve_profile,
+)
+
+
+@dataclass(frozen=True)
+class Opening:
+    left: float
+    right: float
+    bottom: float
+    top: float
+
+
+@lru_cache(maxsize=4096)
+def box_mesh(width: float, depth: float, height: float) -> Mesh:
+    """Watertight axis-aligned box centered at the origin, with outward faces."""
+    x = _finite_number(width, "width", 0.001, 1000) / 2
+    y = _finite_number(depth, "depth", 0.001, 1000) / 2
+    z = _finite_number(height, "height", 0.001, 1000) / 2
+    return Mesh(((-x, -y, -z), (x, -y, -z), (x, y, -z), (-x, y, -z),
+                 (-x, -y, z), (x, -y, z), (x, y, z), (-x, y, z)),
+                ((3, 2, 1, 0), (4, 5, 6, 7), (0, 1, 5, 4),
+                 (2, 3, 7, 6), (3, 0, 4, 7), (1, 2, 6, 5)))
+
+
+def _subtract(rect: Opening, hole: Opening) -> tuple[Opening, ...]:
+    """Subtract an axis-aligned opening; pieces are disjoint rectangles."""
+    lx, rx = max(rect.left, hole.left), min(rect.right, hole.right)
+    bz, tz = max(rect.bottom, hole.bottom), min(rect.top, hole.top)
+    if lx >= rx or bz >= tz:
+        return (rect,)
+    return tuple(piece for piece in (
+        Opening(rect.left, lx, rect.bottom, rect.top),
+        Opening(rx, rect.right, rect.bottom, rect.top),
+        Opening(lx, rx, rect.bottom, bz),
+        Opening(lx, rx, tz, rect.top),
+    ) if piece.right - piece.left > 1e-6 and piece.top - piece.bottom > 1e-6)
+
+
+def coursed_wall(*, width: float, height: float, thickness: float,
+                 openings: tuple[Opening, ...] = (), block_width: float = 1.02,
+                 course_height: float = 0.49, joint: float = 0.012,
+                 prefix: str = "masonry", material: str = "wall-stone") -> tuple[MeshInstance, ...]:
+    """Staggered real masonry blocks, with actual voids for doors and windows.
+
+    Openings can interrupt a course. Each resulting segment remains a distinct
+    manifold stone, including partial stones around lintels and jambs.
+    """
+    width = _finite_number(width, "wall width", 0.2, 120)
+    height = _finite_number(height, "wall height", 0.2, 80)
+    thickness = _finite_number(thickness, "wall thickness", 0.05, 5)
+    block_width = _finite_number(block_width, "block width", 0.2, 4)
+    course_height = _finite_number(course_height, "course height", 0.15, 2)
+    joint = _finite_number(joint, "mortar joint", 0, 0.05)
+    if joint >= min(block_width, course_height) / 4:
+        raise GeometryError("Mortar joint is too large for the coursing")
+    if not isinstance(openings, tuple) or len(openings) > 64:
+        raise GeometryError("Openings must be a tuple of at most 64 rectangles")
+    for index, hole in enumerate(openings):
+        if not isinstance(hole, Opening):
+            raise GeometryError("Openings must use Opening rectangles")
+        for value in (hole.left, hole.right, hole.bottom, hole.top):
+            _finite_number(value, f"opening {index}", 0, max(width, height))
+        if not (0 <= hole.left < hole.right <= width and 0 <= hole.bottom < hole.top <= height):
+            raise GeometryError("Opening must be inside the wall and have positive area")
+        if any(hole.left < other.right and hole.right > other.left
+               and hole.bottom < other.top and hole.top > other.bottom for other in openings[:index]):
+            raise GeometryError("Wall openings may not overlap")
+    count = math.ceil(height / course_height)
+    if count * math.ceil(width / block_width + 2) > 1800:
+        raise GeometryError("Wall course count exceeds the 1800-block budget")
+    result: list[MeshInstance] = []
+    for course in range(count):
+        bottom, top = course * course_height, min(height, (course + 1) * course_height)
+        offset = block_width / 2 if course % 2 else 0
+        col, start = 0, -offset
+        while start < width:
+            left, right = max(0.0, start), min(width, start + block_width)
+            if right > left:
+                sections = (Opening(left, right, bottom, top),)
+                for hole in openings:
+                    sections = tuple(piece for section in sections for piece in _subtract(section, hole))
+                for segment, section in enumerate(sections):
+                    sx = section.right - section.left - joint
+                    sz = section.top - section.bottom - joint
+                    if sx < 0.045 or sz < 0.045:
+                        continue
+                    result.append(place_mesh(box_mesh(sx, thickness, sz),
+                        name=f"{prefix}-{course:02d}-{col:02d}-{segment:02d}",
+                        origin=((section.left + section.right) / 2, 0,
+                                (section.bottom + section.top) / 2), material=material))
+            col += 1
+            start += block_width
+    return tuple(result)
+
+
+def _part(name: str, dimensions: tuple[float, float, float], origin: tuple[float, float, float],
+          material: str) -> MeshInstance:
+    return place_mesh(box_mesh(*dimensions), name=name, origin=origin, material=material)
+
+
+def window_assembly(*, prefix: str, width: float = 2.0, height: float = 2.5,
+                    columns: int = 2, rows: int = 2,
+                    frame: float = 0.12) -> tuple[MeshInstance, ...]:
+    """A recessed glazing unit, thin separate panes, mullions and stone surround.
+
+    Local origin is the center of the opening. The wall's front face is Y=-0.25.
+    The dark recess, real glazing and trim lie at different physical depths.
+    """
+    width = _finite_number(width, "window width", 0.5, 9)
+    height = _finite_number(height, "window height", 0.5, 9)
+    frame = _finite_number(frame, "window frame", 0.025, 0.4)
+    if type(columns) is not int or not 1 <= columns <= 6 or type(rows) is not int or not 1 <= rows <= 6:
+        raise GeometryError("Window panes require 1–6 rows and 1–6 columns")
+    if frame * 3 >= min(width / columns, height / rows):
+        raise GeometryError("Window frame would obscure the glazing")
+    w, h = width / 2, height / 2
+    parts = [
+        _part(f"{prefix}-recess", (width - frame, 0.035, height - frame),
+              (0, 0.14, 0), "recess-dark"),
+        _part(f"{prefix}-glass", (width - frame * 1.5, 0.012, height - frame * 1.5),
+              (0, -0.13, 0), "window-glass"),
+        _part(f"{prefix}-stile-left", (frame, 0.16, height), (-w + frame/2, -0.24, 0), "window-metal"),
+        _part(f"{prefix}-stile-right", (frame, 0.16, height), (w - frame/2, -0.24, 0), "window-metal"),
+        _part(f"{prefix}-rail-top", (width - 2*frame, 0.16, frame),
+              (0, -0.24, h - frame/2), "window-metal"),
+        _part(f"{prefix}-rail-bottom", (width - 2*frame, 0.16, frame),
+              (0, -0.24, -h + frame/2), "window-metal"),
+        _part(f"{prefix}-stone-sill", (width + 0.43, 0.44, 0.15),
+              (0, -0.36, -h - 0.055), "trim-stone"),
+        _part(f"{prefix}-stone-lintel", (width + 0.43, 0.40, 0.20),
+              (0, -0.32, h + 0.10), "trim-stone"),
+        _part(f"{prefix}-jamb-left", (0.17, 0.22, height + 0.22),
+              (-w - 0.12, -0.31, 0), "trim-stone"),
+        _part(f"{prefix}-jamb-right", (0.17, 0.22, height + 0.22),
+              (w + 0.12, -0.31, 0), "trim-stone"),
+    ]
+    for col in range(1, columns):
+        x = -w + col * width / columns
+        parts.append(_part(f"{prefix}-mullion-{col:02d}", (frame*0.72, 0.13, height - 2*frame),
+                           (x, -0.26, 0), "window-metal"))
+    for row in range(1, rows):
+        z = -h + row * height / rows
+        parts.append(_part(f"{prefix}-transom-{row:02d}",
+                           (width - 2*frame, 0.13, frame*0.72),
+                           (0, -0.26, z), "window-metal"))
+    return tuple(parts)
+
+
+def door_assembly(*, prefix: str, width: float = 2.2, height: float = 3.65) -> tuple[MeshInstance, ...]:
+    """Panelled timber entrance with stone jambs, raised moldings and hardware."""
+    width = _finite_number(width, "door width", 0.8, 6)
+    height = _finite_number(height, "door height", 1.6, 9)
+    w, h = width / 2, height / 2
+    parts = [
+        _part(f"{prefix}-slab", (width - 0.13, 0.15, height - 0.09),
+              (0, 0.035, 0), "door-timber"),
+        _part(f"{prefix}-stone-left", (0.25, 0.53, height + 0.30),
+              (-w - 0.12, -0.24, 0.06), "trim-stone"),
+        _part(f"{prefix}-stone-right", (0.25, 0.53, height + 0.30),
+              (w + 0.12, -0.24, 0.06), "trim-stone"),
+        _part(f"{prefix}-stone-lintel", (width + 0.70, 0.57, 0.26),
+              (0, -0.26, h + 0.19), "trim-stone"),
+        _part(f"{prefix}-threshold", (width + 0.48, 0.68, 0.13),
+              (0, -0.32, -h - 0.05), "foundation"),
+        _part(f"{prefix}-center-rail", (width - 0.30, 0.055, 0.13),
+              (0, -0.09, 0), "door-timber"),
+        _part(f"{prefix}-escutcheon", (0.10, 0.035, 0.27),
+              (w - 0.29, -0.115, 0.02), "bronze-metal"),
+    ]
+    for row in (-1, 1):
+        for col in (-1, 1):
+            x, z = col * width * 0.245, row * height * 0.245
+            pw, ph = width * 0.38, height * 0.38
+            parts.append(_part(f"{prefix}-panel-{row+1}-{col+1}", (pw, 0.045, ph),
+                               (x, -0.095, z), "door-timber-light"))
+            for side in (-1, 1):
+                parts.append(_part(f"{prefix}-panel-stile-{row+1}-{col+1}-{side+1}",
+                                   (0.045, 0.066, ph+0.045),
+                                   (x + side * (pw/2+0.025), -0.12, z), "door-timber"))
+                parts.append(_part(f"{prefix}-panel-rail-{row+1}-{col+1}-{side+1}",
+                                   (pw+0.09, 0.066, 0.045),
+                                   (x, -0.12, z + side * (ph/2+0.025)), "door-timber"))
+    knob = revolve_profile(((0.045, 0), (0.052, 0.028), (0.062, 0.07), (0.042, 0.10)),
+                           radial_segments=20)
+    parts.append(place_mesh(knob, name=f"{prefix}-round-knob", origin=(w - 0.29, -0.14, 0.02),
+                            axis_x=(1, 0, 0), axis_y=(0, 0, 1), axis_z=(0, -1, 0),
+                            material="bronze-metal"))
+    return tuple(parts)
+
+
+def cornice_extrusion(length: float, projection: float = 0.42, height: float = 0.42) -> Mesh:
+    """A non-flat molding profile, extruded along the building's +X axis.
+
+    Local profile X is exterior Y, profile Y is world Z. Place with the
+    canonical cornice axes (Y, Z, X) to align the part along a facade.
+    """
+    length = _finite_number(length, "cornice length", 0.2, 150)
+    projection = _finite_number(projection, "cornice projection", 0.06, 3)
+    height = _finite_number(height, "cornice height", 0.06, 3)
+    p, h = projection, height
+    return extrude_profile(((0, 0), (-p*0.72, 0), (-p*0.72, h*0.15),
+                            (-p, h*0.26), (-p, h*0.47), (-p*0.74, h*0.58),
+                            (-p*0.88, h*0.76), (-p*0.52, h), (0, h)), length)
+
+
+def dentil_row(*, prefix: str, length: float, count: int, tooth_width: float = 0.23,
+               tooth_depth: float = 0.27, tooth_height: float = 0.26) -> tuple[MeshInstance, ...]:
+    """Repeated stone teeth for the underside of a classical cornice."""
+    length = _finite_number(length, "dentil row length", 0.3, 150)
+    if type(count) is not int or not 1 <= count <= 200:
+        raise GeometryError("Dentil count must be an integer in [1, 200]")
+    for label, value in (("tooth width", tooth_width), ("tooth depth", tooth_depth),
+                         ("tooth height", tooth_height)):
+        _finite_number(value, label, 0.01, 2)
+    if count * tooth_width > length * 0.88:
+        raise GeometryError("Dentils must have a visible gap between teeth")
+    step = length / count
+    tooth = box_mesh(tooth_width, tooth_depth, tooth_height)
+    return tuple(place_mesh(tooth, name=f"{prefix}-{i:03d}",
+                            origin=((i + 0.5) * step, 0, 0), material="trim-stone")
+                 for i in range(count))
+
+
+def gable_roof(*, width: float, depth: float, eave_z: float, rise: float,
+               overhang: float = 0.5, panel_thickness: float = 0.12,
+               tile_rows: int = 8, tile_columns: int = 24) -> tuple[MeshInstance, ...]:
+    """Closed pitched slabs, triangular gables, individual overlapping tile rows.
+
+    Ridge runs in +X. Tiles follow the actual roof slope using orthonormal
+    bases, rather than being flattened onto a horizontal roof placeholder.
+    """
+    width = _finite_number(width, "roof width", 2, 120)
+    depth = _finite_number(depth, "roof depth", 2, 80)
+    eave_z = _finite_number(eave_z, "eave height", 1, 120)
+    rise = _finite_number(rise, "roof rise", 0.3, 30)
+    overhang = _finite_number(overhang, "roof overhang", 0.1, 2)
+    panel_thickness = _finite_number(panel_thickness, "roof panel thickness", 0.03, 1)
+    if (type(tile_rows) is not int or not 2 <= tile_rows <= 30
+            or type(tile_columns) is not int or not 2 <= tile_columns <= 100
+            or tile_rows * tile_columns * 2 > 2000):
+        raise GeometryError("Tile grid must be 2–30 rows, 2–100 columns and <= 2000 tiles")
+    half = depth / 2 + overhang
+    ridge = eave_z + rise
+    roof_span = width + 2 * overhang
+    axes = {"axis_x": (0, 1, 0), "axis_y": (0, 0, 1), "axis_z": (1, 0, 0)}
+    front = extrude_profile(((-half, eave_z), (0, ridge), (0, ridge-panel_thickness),
+                             (-half, eave_z-panel_thickness)), roof_span)
+    back = extrude_profile(((0, ridge), (half, eave_z),
+                            (half, eave_z-panel_thickness), (0, ridge-panel_thickness)), roof_span)
+    parts = [
+        place_mesh(front, name="roof-front-slab", origin=(-overhang, 0, 0),
+                   material="roof-slate", **axes),
+        place_mesh(back, name="roof-back-slab", origin=(-overhang, 0, 0),
+                   material="roof-slate", **axes),
+    ]
+    gable = extrude_profile(((-depth/2, eave_z-0.025),
+                            (depth/2, eave_z-0.025), (0, eave_z + rise - 0.13)), 0.27)
+    parts.extend((
+        place_mesh(gable, name="roof-gable-left", origin=(0, 0, 0),
+                   material="wall-stone", **axes),
+        place_mesh(gable, name="roof-gable-right", origin=(width - 0.27, 0, 0),
+                   material="wall-stone", **axes),
+    ))
+    slope_len = math.hypot(half, rise)
+    sin_theta, cos_theta = rise / slope_len, half / slope_len
+    step_x = roof_span / tile_columns
+    step_s = slope_len / tile_rows
+    for side in ("front", "back"):
+        sy = -1 if side == "front" else 1
+        slope_axis = (0, cos_theta, -sy * sin_theta)
+        normal_axis = (0, sy * sin_theta, cos_theta)
+        for row in range(tile_rows):
+            t = (row + 0.5) / tile_rows
+            y = (-half + t * half) if side == "front" else (t * half)
+            z = (eave_z + rise * t) if side == "front" else (ridge - rise * t)
+            for col in range(tile_columns):
+                left = -overhang + col * step_x - (step_x * 0.5 if row % 2 else 0)
+                right = left + step_x
+                left, right = max(-overhang, left), min(width + overhang, right)
+                if right - left < 0.035:
+                    continue
+                x = (left + right) / 2
+                tile = box_mesh(right - left - min(0.012, (right-left)*0.15),
+                                step_s * 0.97, 0.035)
+                parts.append(place_mesh(tile, name=f"roof-{side}-tile-{row:02d}-{col:02d}",
+                    origin=(x, y + normal_axis[1]*0.025, z + normal_axis[2]*0.025),
+                    axis_x=(1, 0, 0), axis_y=slope_axis, axis_z=normal_axis,
+                    material="roof-slate" if (row+col) % 5 else "roof-slate-light"))
+    # Ridge cap hides the meeting seam between pitched panel edges.
+    parts.append(_part("roof-ridge-cap", (roof_span, 0.20, 0.16),
+                       (width/2, 0, ridge+0.035), "roof-slate-light"))
+    return tuple(parts)

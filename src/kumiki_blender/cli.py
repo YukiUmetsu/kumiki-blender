@@ -9,6 +9,7 @@ from pathlib import Path
 
 from .asset_import import AssetImportError, inspect_source_glb, load_asset_provenance
 from .export_audit import ExportAuditError
+from .facade import FacadeError, make_facade_study
 from .glb_audit import AuditError, audit_glb
 from .lattice import make_lattice_tower
 from .material_overrides import load_material_overrides, verify_material_overrides
@@ -31,6 +32,11 @@ def main(argv: list[str] | None = None) -> int:
         subcommand = subcommands.add_parser(command)
         subcommand.add_argument("--bays", type=int, default=3)
         if command == "build-portico":
+            subcommand.add_argument("--output", type=Path, required=True)
+    for command in ("plan-facade", "build-facade"):
+        subcommand = subcommands.add_parser(command)
+        subcommand.add_argument("--bays", type=int, default=3)
+        if command == "build-facade":
             subcommand.add_argument("--output", type=Path, required=True)
     audit_parser = subcommands.add_parser("audit")
     audit_parser.add_argument("--model", type=Path, required=True)
@@ -95,6 +101,28 @@ def main(argv: list[str] | None = None) -> int:
 
             print(json.dumps(build_portico_scene(study, output, bpy_module=bpy), indent=2))
             return 0
+        if args.command in ("plan-facade", "build-facade"):
+            study = make_facade_study(bays=args.bays)
+            if args.command == "plan-facade":
+                print(json.dumps({
+                    "asset_id": study.asset_id,
+                    "generator": "architectural-facade-detail-kit",
+                    "named_parts": dict(study.part_counts),
+                    "instances": len(study.instances),
+                    "bounds_m": [study.bounds_min, study.bounds_max],
+                }, indent=2))
+                return 0
+            output = args.output.resolve()
+            if output.exists() or output.is_symlink():
+                raise FacadeError(f"Output already exists: {output}. Choose a new revision directory.")
+            try:
+                import bpy  # type: ignore[import-not-found]
+            except ImportError as error:
+                raise RuntimeError("Building a facade requires Blender. Run via: blender --background --factory-startup --python-exit-code 1 --python scripts/blender_entry.py -- build-facade --bays 3 --output <new-directory>") from error
+            from .blender_facade import build_facade_scene
+
+            print(json.dumps(build_facade_scene(study, output, bpy_module=bpy), indent=2))
+            return 0
         recipe = load_recipe(args.recipe)
         plan = make_lattice_tower(recipe)
         if args.command == "validate":
@@ -123,7 +151,7 @@ def main(argv: list[str] | None = None) -> int:
         manifest = build_scene(recipe, plan, output, bpy_module=bpy)
         print(json.dumps(manifest, indent=2))
         return 0
-    except (RecipeError, PorticoError, AssetImportError, RenderProfileError, RevisionAuditError, AuditError, ExportAuditError,
+    except (RecipeError, PorticoError, FacadeError, AssetImportError, RenderProfileError, RevisionAuditError, AuditError, ExportAuditError,
             SurfaceError, RuntimeError, OSError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 2
