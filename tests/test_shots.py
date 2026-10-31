@@ -3,7 +3,7 @@ from pathlib import Path
 
 from kumiki_blender.recipe import load_recipe
 from kumiki_blender.portico import make_portico_study
-from kumiki_blender.shots import plan_portico_shots, plan_quality_shots
+from kumiki_blender.shots import plan_capital_shot, plan_portico_shots, plan_quality_shots
 
 
 FIXTURE = Path(__file__).resolve().parents[1] / "examples/lattice-observation-tower.json"
@@ -39,6 +39,15 @@ class ShotTests(unittest.TestCase):
         for shot in shots[:2]:
             self.assertGreater(shot.ortho_scale, width * 1.2)
             self.assertGreater(shot.ortho_scale / (16 / 9), height * 1.2)
+
+    def test_capital_closeup_tracks_a_real_center_column_for_odd_and_even_bays(self):
+        for bays, expected_x in ((2, 0.0), (3, -2.1), (5, -2.1)):
+            shot = plan_capital_shot(bays)
+            self.assertEqual(shot.name, "capital")
+            self.assertAlmostEqual(shot.target[0], expected_x)
+            self.assertLess(shot.ortho_scale, 3.0)
+        with self.assertRaises(ValueError):
+            plan_capital_shot(0)
 
 
 if __name__ == "__main__":

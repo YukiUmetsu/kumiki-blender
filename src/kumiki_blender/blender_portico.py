@@ -12,7 +12,7 @@ from .blender_scene import _create_box, _material
 from .blender_textures import ensure_cylindrical_uvs, ensure_metric_uvs
 from .portico import PorticoStudy
 from .render_profiles import select_render_profile
-from .shots import plan_portico_shots
+from .shots import plan_capital_shot, plan_portico_shots
 from .surfaces import get_surface
 
 
@@ -124,7 +124,8 @@ def build_portico_scene(study: PorticoStudy, destination: Path, *, bpy_module: A
     camera_data.type = "ORTHO"
     camera = bpy.data.objects.new(camera_data.name, camera_data)
     stage.objects.link(camera)
-    shots = plan_portico_shots(study.bounds_min, study.bounds_max)
+    shots = (*plan_portico_shots(study.bounds_min, study.bounds_max),
+             plan_capital_shot(study.bays))
     metadata = {
         "asset_id": study.asset_id,
         "generator": "kumiki-blender/modular-portico",

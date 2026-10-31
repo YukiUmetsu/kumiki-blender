@@ -177,7 +177,9 @@ jobs:
           python -m unittest tests.test_export_audit tests.test_glb_audit -v
           test -s .review/ci/lattice-tower/previews/detail.png
           test -s .review/ci/portico/previews/detail.png
+          test -s .review/ci/portico/previews/capital.png
           test -s .review/ci/doric-portico/previews/detail.png
+          test -s .review/ci/doric-portico/previews/capital.png
           test -s .review/ci/facade/previews/detail.png
           test -s .review/ci/imported-portico/previews/detail.png
           test -s .review/ci/restyled-portico/previews/detail.png

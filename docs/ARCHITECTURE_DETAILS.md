@@ -85,6 +85,11 @@ blender --background --factory-startup --python-exit-code 1 \
   build-portico --bays 2 --order doric --output .review/doric/r01
 ```
 
+Portico revisions include a dedicated **capital close-up** in
+`previews/capital.png`, alongside the hero/front/arch-detail views. This is a
+visual check for real flute recesses, sculpted volutes, and rounded stone
+profiles at the scale where the geometry actually matters.
+
 These are original *classical-order-inspired* parametric modules, **not** exact
 Vitruvian ratios or archaeological copies. The Metropolitan Museum of Art's
 [Greek architecture guide](https://www.metmuseum.org/toah/hd/grarc/hd_grarc.htm)

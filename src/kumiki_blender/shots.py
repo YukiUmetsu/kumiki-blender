@@ -42,3 +42,12 @@ def plan_portico_shots(bounds_min: Vec3, bounds_max: Vec3) -> tuple[QualityShot,
                     (0, 0, 3.6), max(12, span * 1.32)),
         QualityShot("detail", (4.2, -9, 7.5), (0, 0, 5.1), 4.8),
     )
+
+
+def plan_capital_shot(bays: int, *, pitch: float = 4.2) -> QualityShot:
+    """Target an actual central column, not empty space between arcade bays."""
+    if type(bays) is not int or not 1 <= bays <= 20:
+        raise ValueError("Column closeup needs 1–20 bays")
+    column_x = -pitch * bays / 2 + (bays // 2) * pitch
+    return QualityShot("capital", (column_x + 0.8, -4.5, 5.2),
+                       (column_x, 0.15, 4.32), 2.9)
