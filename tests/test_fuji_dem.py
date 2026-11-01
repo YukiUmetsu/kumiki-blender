@@ -89,6 +89,7 @@ class FujiTerrainTests(unittest.TestCase):
         trees=terrain_color(1450,.2,2,3)
         other_trees=terrain_color(1450,.2,-5,3)
         basalt=terrain_color(2780,.25,-1,2)
+        summit_ash=terrain_color(3450,.14,-.3,.4,season="summer")
         hoei=terrain_color(2660,.31,1.61,-2.18)
         snow=terrain_color(3700,.12,0,0)
         self.assertGreater(trees[1],trees[0]*1.6)
@@ -96,6 +97,9 @@ class FujiTerrainTests(unittest.TestCase):
         self.assertGreater(abs(trees[1]-other_trees[1]),.015)
         self.assertLess(max(basalt[:3]),.16)  # Main cone is dark scoria.
         self.assertLess(max(basalt[:3])-min(basalt[:3]),.035)
+        # A lit mountain should read as warm/neutral ash, not mauve or violet.
+        self.assertGreaterEqual(summit_ash[1],summit_ash[2])
+        self.assertLess(summit_ash[0]-summit_ash[1],.035)
         self.assertGreater(hoei[0],basalt[0]*1.2)  # Localized rusty Hōei deposits.
         self.assertGreater(min(snow[:3]),.70)
 
@@ -121,8 +125,9 @@ class FujiTerrainTests(unittest.TestCase):
         shoulder=terrain_color(2660,.25,2.30,-1.84,season="summer")
         remote=terrain_color(2800,.25,3.8,-4.0,season="summer")
         self.assertGreater(shoulder[0],remote[0]*2)
-        self.assertGreater(shoulder[1],remote[1]*2)
+        self.assertGreater(shoulder[1],remote[1]*1.6)
         self.assertGreater(shoulder[0],shoulder[2]*1.6)
+        self.assertLess(shoulder[0]/shoulder[1],1.45)  # No saturated yellow-orange blob.
         # These locations are only 60 m apart: high-frequency crown pigment
         # must vary within one forest, not just between broad green regions.
         a=terrain_color(1800,.16,4.2,2.8,season="summer")

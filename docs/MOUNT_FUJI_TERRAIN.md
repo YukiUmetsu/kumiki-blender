@@ -12,6 +12,30 @@ The iconic model deliberately sacrifices realistic dimensions and geography.
 It is a miniature symbol rather than a topographic study. All landmarks and
 five-petal flowers are **actual exportable mesh**, not camera-facing sprites.
 
+## r18 — correct the realistic Mount Fuji's mauve volcanic cone
+
+The r16/r17 **actual Blender hero and north-profile renders** revealed a
+material error: the barren cone looked purple-pink, with a conspicuous yellow
+patch on Hōei's shoulder. These colors were caused by the earlier
+blue-magenta charcoal, burgundy ash and over-strong ochre pigment blend—not
+by the GSI elevation data or the GLB's texture packing.
+
+| Reference (visual evidence only) | What constrains the new palette |
+| --- | --- |
+| [NASA Earth Observatory, *Mount Fuji Bare Again After Fleeting Snow* (2024)](https://science.nasa.gov/image-detail/amf-245a0290-660f-4ed7-bccf-77e02871a4d2/) | Broad exposed cone is pale/warm brown-grey, with surrounding deep-green woods and darker volcanic sectors; top-down camera is not registered to the model |
+| [Japan National Parks, Fuji-Hakone-Izu](https://www.japan.travel/national-parks/parks/fuji-hakone-izu/explore/) | Dense woods, then upper conifer belt, then unvegetated volcanic desert around the summit |
+| [September 16, 2023 Kawaguchiko Fuji photograph](https://fujisanmeisyugura.com/blog/2023/09/89818/) | An oblique snow-free view has charcoal/earth-grey exposed slopes contrasting with green lower forest; time and illumination are particular to that photo |
+| [Japan Ministry of the Environment, volcanic color notes](https://kanto.env.go.jp/blog/2020/05/post-870.html) | Black scoria remains prominent in close-ups, while red oxidation appears locally rather than across the whole cone |
+
+Both realistic seasons now use **neutral charcoal basalt and warm-grey volcanic
+ash**, with restricted iron-brown scoria and less aggressive Hōei shoulder
+ochre; summer remains snow-free and winter retains its independent snow cover.
+The material changes are all original procedural colors, not republished photo
+textures. The GSI survey elevations, crater patches, UV topology and embedded
+GLB color encoding are unchanged. These diverse references are **unregistered
+visual comparisons**, not a claim of measured photometric reconstruction;
+forest remains a terrain material rather than modeled individual trees.
+
 ## Iconic spring diorama
 
 Builds without a DEM or network access. Use Blender 4.2+ (4.5 LTS recommended):

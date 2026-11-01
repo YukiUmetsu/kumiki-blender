@@ -103,11 +103,15 @@ def terrain_color(height_m: float, slope: float, x: float, y: float,
     exposed=_smoothstep(tree_line-140,tree_line+155,height_m)
     rock_pattern=_value_noise(x*.90-3.1,y*.90+8.4)
     iron_pattern=_value_noise(x*3.8+21.2,y*3.8-7.6)
-    charcoal=(.052,.043,.055)
-    gray_scoria=(.113,.081,.099)
-    iron_scoria=(.205,.064,.077)
-    rock=_mix(charcoal,gray_scoria,.16+.59*rock_pattern)
-    oxidation=clamp((iron_pattern-.43)*1.25)*(.25+.40*rock_pattern)
+    # Neutral basalt and weathered warm-grey ash dominate broad views. The
+    # previous blue-magenta charcoal + burgundy ash combination painted the
+    # entire cone mauve, unlike the NASA snow-free overview and photographs
+    # from Fujinomiya and Kawaguchiko. Red-brown oxidized scoria is local.
+    charcoal=(.062,.062,.059)
+    gray_scoria=(.142,.123,.102)
+    iron_scoria=(.185,.097,.057)
+    rock=_mix(charcoal,gray_scoria,.20+.55*rock_pattern)
+    oxidation=clamp((iron_pattern-.49)*1.3)*(.16+.32*rock_pattern)
     rock=_mix(rock,iron_scoria,oxidation)
     # The summit is a composite of black/grey basalt and narrower oxidized
     # radial scoria seams; high-altitude photos do not show a uniform tint.
@@ -130,12 +134,12 @@ def terrain_color(height_m: float, slope: float, x: float, y: float,
     hoei_distance=math.hypot(x-1.61,y+2.18)
     if hoei_distance<1.8 and height_m>2020:
         influence=_smoothstep(1.8,.35,hoei_distance)
-        warm_scree=(.214,.101,.103)
+        warm_scree=(.205,.117,.073)
         c=_mix(c,warm_scree,exposed*influence*(.37+.32*clamp(slope*1.8)))
         # The interior is dark glassy cinder, separate from the lighter outer
         # lapilli fan. Keep the mask broad enough to respect irregular rim.
         inner_bowl=math.exp(-.5*(hoei_distance/.53)**4)
-        c=_mix(c,(.066,.038,.052),.19*inner_bowl*exposed)
+        c=_mix(c,(.063,.050,.043),.19*inner_bowl*exposed)
     # A restricted ochre/ash shoulder on Hōei's southeastern ejecta apron.
     # This is an independently drawn geological color interpretation, not a
     # claim to classify every deposit from a soil survey.
@@ -145,7 +149,7 @@ def terrain_color(height_m: float, slope: float, x: float, y: float,
         golden_shoulder=math.exp(-1.65*(dx*dx+dy*dy))
         golden_shoulder*=(_smoothstep(2250,2500,height_m)
                           *(1-_smoothstep(3290,3460,height_m)))
-        c=_mix(c,(.274,.186,.093),.74*golden_shoulder)
+        c=_mix(c,(.216,.166,.105),.51*golden_shoulder)
 
     # Grain represents pigment variation only. It cannot create or erase any
     # measured erosion grooves, cliffs or other DEM geometry.
