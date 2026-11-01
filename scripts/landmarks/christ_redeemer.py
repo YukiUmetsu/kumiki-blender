@@ -443,9 +443,9 @@ def arms(side):
     measurements = [
         (2.65,30.75,1.50,1.00),(3.35,30.10,1.93,1.12),
         (4.45,29.40,2.28,1.18),(5.65,29.20,2.23,1.16),
-        (7.20,29.10,2.00,1.08),(8.30,29.14,1.70,.90),
-        (9.30,29.28,1.37,.75),(10.30,29.48,.98,.55),
-        (10.90,29.60,.68,.40),(11.13,29.70,.39,.34),
+        (7.20,29.10,2.00,1.08),(8.65,29.14,1.70,.90),
+        (10.03,29.28,1.37,.75),(11.10,29.48,.98,.55),
+        (11.82,29.60,.68,.40),(12.15,29.70,.39,.34),
     ]
     def sleeve_dimensions(x):
         for left,right in zip(measurements[:-1],measurements[1:]):
@@ -456,7 +456,7 @@ def arms(side):
 
     sections=[]
     for j in range(97):
-        x=2.65+(11.13-2.65)*j/96
+        x=2.65+(12.15-2.65)*j/96
         z,r,d=sleeve_dimensions(x)
         ring=[]
         for k in range(64):
@@ -464,7 +464,7 @@ def arms(side):
             lower=max(0,-math.cos(a))
             fluting=.18*math.cos(5*a+x*.42)+.10*math.cos(9*a-.23*x)
             front=max(0,-math.sin(a))**2
-            gather=math.sin(math.pi*(x-2.65)/(11.13-2.65))**.7
+            gather=math.sin(math.pi*(x-2.65)/(12.15-2.65))**.7
             large_fold=.15*math.cos(6.5*a+.41*x+.25*math.sin(.7*x))
             small_fold=.065*math.sin(12.5*a-.19*x)
             y=d*math.sin(a)-front*gather*(large_fold+small_fold)
@@ -473,29 +473,29 @@ def arms(side):
         sections.append(ring)
     loft("Sleeve | %s | physically closed carved volume"%side,sections,invert=side==1)
     sphere("Cuff | %s | carved fold joining wrist"%side,
-           (side*11.12,0,29.7),(.095,.31,.32))
+           (side*12.14,0,29.7),(.095,.31,.32))
     hands(side)
 
 
 def hands(side):
     existing=set(bpy.data.objects)
     z=29.68
-    sphere("Hand | %s | broad wrist"%side,(side*11.37,0,z),(.38,.245,.325))
+    sphere("Hand | %s | broad wrist"%side,(side*12.35,0,z),(.34,.245,.325))
     sphere("Hand | %s | convex palmar mass"%side,
-           (side*11.99,-.015,z+.025),(.77,.29,.46),segments=40,rings=24)
+           (side*12.90,-.015,z+.025),(.64,.29,.43),segments=40,rings=24)
     # Individual digits depart from the hand's continuous palm, but their
     # joint lines curve slightly and their distal ends are round, not prongs.
-    for k,tip in enumerate((13.73,13.934,13.87,13.46)):
-        finger_z=z+.315-.213*k
+    for k,tip in enumerate((13.79,13.972,13.90,13.70)):
+        finger_z=z+.27-.17*k
         points=[]
         widths=[]
         for j in range(15):
             t=j/14
-            x=12.35+(tip-12.35)*t
-            finger_curve=.043*math.sin(math.pi*t)+.045*t*t
+            x=13.15+(tip-13.15)*t
+            finger_curve=.032*math.sin(math.pi*t)+.025*t*t
             y=-.018-.045*math.sin(math.pi*t)+.036*t*t
             points.append((side*x,y,finger_z-finger_curve))
-            widths.append(.118*(1-t)**1.25+.058*t+.006*math.sin(math.pi*t))
+            widths.append(.145*(1-t)**1.25+.068*t+.006*math.sin(math.pi*t))
         shaped_path("Hand | %s | gently flexed digit %s"%(side,k),points,
                     widths,sides=14)
         sphere("Hand | %s | softly rounded fingertip %s"%(side,k),
@@ -504,9 +504,9 @@ def hands(side):
     widths=[]
     for j in range(17):
         t=j/16
-        x=11.69+1.21*t
+        x=12.63+.96*t
         y=-.13-.046*math.sin(math.pi*t)+.045*t*t
-        h=z-.25-.39*math.sin(.80*math.pi*t)-.040*t
+        h=z-.24-.34*math.sin(.80*math.pi*t)-.035*t
         thumb.append((side*x,y,h))
         widths.append(.17*(1-t)**.85+.062*t)
     shaped_path("Hand | %s | bent opposable thumb"%side,thumb,widths,sides=15)
@@ -540,7 +540,7 @@ def hands(side):
 
 HEAD = [
     (34.02,.25,.27,-.03),(34.23,.68,.59,-.05),(34.47,.98,.78,-.08),
-    (34.82,1.19,.96,-.10),(35.30,1.36,1.12,-.08),
+    (34.82,1.07,.96,-.10),(35.30,1.24,1.12,-.08),
     (35.85,1.47,1.22,0),(36.50,1.52,1.24,.05),
     (37.15,1.43,1.18,.10),(37.65,1.03,.91,.11),
     (37.95,.38,.40,.12),(38.0,.045,.07,.12),
@@ -584,16 +584,16 @@ def face():
                 upper_lid=.11*math.exp(-((abs(x)-.69)/.35)**2-((z-36.98)/.080)**2)
                 lower_lid=.063*math.exp(-((abs(x)-.68)/.35)**2-((z-36.77)/.08)**2)
                 eye_socket=.27*math.exp(-((abs(x)-.69)/.41)**2-((z-36.91)/.22)**2)
-                nose_bridge=.29*math.exp(-(x/.245)**2-((z-36.67)/.48)**2)
-                nose_tip=.47*math.exp(-(x/.31)**2-((z-36.13)/.22)**2)
-                nostril_wing=.21*math.exp(-((abs(x)-.32)/.19)**2-((z-36.09)/.15)**2)
-                nostril_cavity=.11*math.exp(-((abs(x)-.24)/.08)**2-((z-36.025)/.052)**2)
+                nose_bridge=.34*math.exp(-(x/.21)**2-((z-36.65)/.50)**2)
+                nose_tip=.39*math.exp(-(x/.235)**2-((z-36.16)/.165)**2)
+                nostril_wing=.13*math.exp(-((abs(x)-.245)/.135)**2-((z-36.07)/.12)**2)
+                nostril_cavity=.10*math.exp(-((abs(x)-.18)/.085)**2-((z-36.015)/.055)**2)
                 top_lip=.12*math.exp(-(x/.49)**2-((z-35.76)/.095)**2)
                 bottom_lip=.115*math.exp(-(x/.47)**2-((z-35.56)/.11)**2)
                 mouth_crease=.09*math.exp(-(x/.49)**2-((z-35.66)/.047)**2)
-                jaw_beard=.17*math.exp(-((z-35.13)/.43)**2)*math.exp(-(x/.95)**6)
-                side_beard=.20*math.exp(-((abs(x)-1.00)/.26)**2-((z-35.44)/.55)**2)
-                beard_tip=.20*math.exp(-(x/.44)**2-((z-34.54)/.26)**2)
+                jaw_beard=.080*math.exp(-((z-35.13)/.43)**2)*math.exp(-(x/.95)**6)
+                side_beard=.092*math.exp(-((abs(x)-1.00)/.26)**2-((z-35.44)/.55)**2)
+                beard_tip=.094*math.exp(-(x/.44)**2-((z-34.54)/.26)**2)
                 beard_mask=min(1.,(jaw_beard+side_beard+beard_tip)/.22)
                 carved_grain=.009*beard_mask*(.6*math.cos(33*x+8*z)+
                                                 .4*math.cos(21*x-12*z))
@@ -632,25 +632,10 @@ def face():
         sphere("Ear | %s | subtle helix"%side,(side*1.46,.08,36.26),(.092,.11,.28))
         sphere("Ear | %s | recessed concha"%side,
                (side*1.535,-.003,36.27),(.022,.035,.115),CARVING)
-    lip=[(-.52,35.60),(-.29,35.66),(0,35.68),(.29,35.66),(.52,35.60)]
+    lip=[(-.52,35.53),(-.29,35.64),(0,35.67),(.29,35.64),(.52,35.53)]
     shaped_path("Face | carved closed mouth",
                 [(x,face_y(x,z,-.003),z) for x,z in lip],
-                (.004,.012,.014,.012,.004),CARVING)
-    for side in (-1,1):
-        # Beard grain stays in the sculpt surface. High-contrast moustache
-        # strokes looked painted-on at close range, so leave those implicit.
-        for k in range(2):
-            # Follow the lower cheek down to a tapered central chin rather
-            # than applying an unstructured black beard material.
-            pts=[]
-            for j in range(13):
-                t=j/12
-                x=side*(.97+.045*k-(.21+.04*k)*t+.025*math.sin(math.pi*t))
-                z=35.67-.18*k-(.33+.04*k)*t
-                pts.append((x,face_y(x,z,-.006),z))
-            shaped_path("Beard | %s | etched curl %s"%(side,k),pts,
-                        [.003+.009*math.sin(math.pi*j/12) for j in range(13)],
-                        CARVING,sides=7)
+                (.003,.009,.012,.009,.003),CARVING)
     # The real monument has a nearly continuous, heavy hair mantle, not
     # individual dangling tubular strands. Construct an open-front shell
     # wrapping the crown and back of the skull, with variable length at the
@@ -705,15 +690,8 @@ def face():
             shaped_path("Hair | %s | engraved sweep %s"%(side,k),pts,
                         [.004+.012*math.sin(math.pi*j/26) for j in range(27)],
                         CARVING,sides=7)
-        pts=[]
-        for j in range(29):
-            t=j/28
-            x=side*(.11+.70*t)
-            z=37.84-.13*t+.022*math.sin(math.pi*t)
-            pts.append((x,face_y(x,z,.045),z))
-        shaped_path("Hair | %s | understated parted hairline"%side,pts,
-                    [.004+.018*math.sin(math.pi*j/28) for j in range(29)],
-                    STONE,sides=9)
+        # The shell itself establishes the hairline. Additional tubes placed
+        # on the forehead looked like disconnected pencil marks in close-ups.
 
 
 def pedestal():
@@ -829,6 +807,7 @@ def verify():
     open_edges={}
     hand_open_edges={}
     hand_vertex_counts={}
+    hand_reach_m={}
     for side in (-1,1):
         obj=next(ob for ob in objs if ob.name.startswith("Sleeve | %s | physically"%side))
         faces=[p for p in obj.data.polygons if len(p.vertices)==4]
@@ -850,6 +829,8 @@ def verify():
         hand=next(ob for ob in objs
                   if ob.name.startswith("Hand | %s | fused anatomical"%side))
         hand_vertex_counts[side]=len(hand.data.vertices)
+        tips=[(hand.matrix_world @ vertex.co).x for vertex in hand.data.vertices]
+        hand_reach_m[side]=round(max(tips)-min(tips),3)
         hand_edge_uses={}
         for polygon in hand.data.polygons:
             for edge in polygon.edge_keys:
@@ -860,6 +841,7 @@ def verify():
             "sleeve_nonmanifold_edges":open_edges,
             "hand_nonmanifold_edges":hand_open_edges,
             "fused_hand_vertices":hand_vertex_counts,
+            "hand_reach_m":hand_reach_m,
             "pedestal_sides":8,
             "mosaic_images":len([im for im in bpy.data.images if im.name.startswith("Soapstone |")]),
             "uv_mesh_count":sum(bool(ob.data.uv_layers) for ob in objs),
@@ -872,6 +854,8 @@ def verify():
     assert not any(open_edges.values()),"Sleeve meshes must be closed and manifold"
     assert not any(hand_open_edges.values()),"Fused hands must be closed and manifold"
     assert min(hand_vertex_counts.values())>1500,"Hands must have sculpted union detail"
+    assert all(1.8 < reach < 2.35 for reach in hand_reach_m.values()), (
+        "Hand projection should be a compact fraction of the surveyed 29.4 m span")
     assert len(head_ob.data.vertices)>5000,"Face needs a dense sculptable surface"
     assert result["mosaic_images"]==3 and result["uv_mesh_count"]>70, "PBR mosaic needs glTF UVs"
     return result
@@ -915,6 +899,7 @@ def views(path,size,samples,selected=None):
         ("profile",(70,0,19),(0,0,19),43),
         ("three_quarter",(47,-63,22),(0,0,19),43),
         ("head_front",(0,-19,36),(0,0,36),6.4),
+        ("head_low",(0,-18,32.5),(0,0,36),6.4),
         ("head_profile",(19,0,36),(0,0,36),6.4),
         ("hand_detail",(16,-13,30),(12.5,0,29.7),5.5),
     ]
@@ -953,7 +938,7 @@ def main():
     p.add_argument("--samples",type=int,default=16)
     p.add_argument("--size",type=int,default=720)
     p.add_argument("--shot",action="append",choices=("front","profile","three_quarter",
-                                                   "head_front","head_profile","hand_detail"),
+                                                   "head_front","head_low","head_profile","hand_detail"),
                    help="Render only selected camera(s); repeat for multiple shots")
     args=p.parse_args(argv)
     build()

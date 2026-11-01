@@ -54,6 +54,8 @@ class ChristRedeemerTests(unittest.TestCase):
             self.assertEqual(report["hand_nonmanifold_edges"], {"-1": 0, "1": 0})
             self.assertTrue(all(value > 1500
                                 for value in report["fused_hand_vertices"].values()))
+            self.assertTrue(all(1.8 < reach < 2.35
+                                for reach in report["hand_reach_m"].values()))
             self.assertGreater(report["mesh_count"], 60)
             self.assertGreater(report["head_surface_vertices"], 5000)
             self.assertGreater(report["vertex_count"], 15000)

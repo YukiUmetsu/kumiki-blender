@@ -48,12 +48,12 @@ tesserae color, subtle grout/stone normal relief, and high-roughness stone grain
 The chapel exterior uses an additional original staggered-ashlar granite texture.
 The GLB contains model meshes only, excluding QA lights and cameras. The live
 audit checks pedestal contact, measured dimensions, manifold/outward sleeve
-normals, closed hand unions with sufficient vertex detail, UV coverage, and
+normals, compact hand proportions and closed unions with sufficient vertex detail, UV coverage, and
 fully portable PBR texture embedding.
 
-For a fast close-up iteration, append `--shot head_front --shot head_profile`
+For a fast close-up iteration, append `--shot head_front --shot head_low`
 to render just those views. Other choices are `front`, `profile`,
-`three_quarter`, and `hand_detail`.
+`three_quarter`, `head_profile`, and `hand_detail`.
 
 Run the live integration test with:
 
@@ -71,8 +71,11 @@ hair, and neck forward toward the characteristic downward gaze. Eyelids, cheek,
 nose, chin, jaw, and beard volumes are displaced on the **same dense head
 surface**, with continuous upper eyelid contours and finer incised detailing.
 The torso's lower robe was widened against photo/mesh silhouettes, and the
-hands use high-resolution volumetric unions to avoid separate rod-like digits.
-The head and hands can be examined separately using the close-up QA cameras.
+hands use high-resolution volumetric unions and a shorter finger projection
+to avoid long, separate rod-like digits. The latest facial sculpt softens the
+chin/cheek beard masses, narrows the nose, and removes floating forehead and
+cheek incisions. The head and hands can be examined separately using the
+close-up QA cameras, including a low-angle face view matched to reference photos.
 
 This remains an original parametric reconstruction. Its stylized anatomical
 geometry is not a photogrammetric replica, and the script deliberately does not
