@@ -229,3 +229,27 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
           include-hidden-files: true
+
+  visual-qa:
+    name: Extract actual Blender renders for visual QA
+    if: github.event_name == 'pull_request'
+    needs: blender-smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: blender-qa-${{ github.sha }}
+          path: .review/ci/
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install preview-only JPEG encoder
+        run: python -m pip install --disable-pip-version-check Pillow==11.3.0
+      - name: Publish small image QA thumbnails in job log
+        run: |
+          python scripts/emit_qa_jpegs.py \
+            .review/ci/egyptian-monuments/preview.png \
+            .review/ci/egyptian-monuments/previews/sphinx.png \
+            .review/ci/egyptian-monuments/previews/masonry.png

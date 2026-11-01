@@ -185,7 +185,8 @@ def revolve_profile(points_rz: Sequence[Vec2], *, radial_segments: int = 32) -> 
 
 def loft_elliptical_sections(sections: Sequence[tuple[float, float, float, float, float]], *,
                              axis: str = "z", radial_segments: int = 48,
-                             subdivisions: int = 1) -> Mesh:
+                             subdivisions: int = 1,
+                             cross_section_exponent: float = 2.0) -> Mesh:
     """Skin capped elliptical rings along X, Y or Z into a watertight solid.
 
     Each section is ``(axis_position, center_a, center_b, radius_a, radius_b)``.
@@ -201,6 +202,7 @@ def loft_elliptical_sections(sections: Sequence[tuple[float, float, float, float
         raise GeometryError("Loft radial_segments must be an integer from 8 to 128")
     if type(subdivisions) is not int or not 1 <= subdivisions <= 8:
         raise GeometryError("Loft subdivisions must be an integer from 1 to 8")
+    exponent = _finite_number(cross_section_exponent, "cross_section_exponent", 1.2, 6.0)
     rings = tuple(_vector(section, 5, "elliptical section") for section in sections)
     for index, section in enumerate(rings):
         if min(section[3:]) < 0.001:
@@ -240,7 +242,12 @@ def loft_elliptical_sections(sections: Sequence[tuple[float, float, float, float
     for p, a, b, ra, rb in rings:
         for sector in range(radial_segments):
             angle = math.tau * sector / radial_segments
-            u, v = ra * math.cos(angle), rb * math.sin(angle)
+            # Exponent 2 is an ellipse. Higher exponents build flatter sides
+            # and squarer shoulders for carved monuments and bedrock masses,
+            # without introducing discontinuous edges or empty open shells.
+            c, s = math.cos(angle), math.sin(angle)
+            u = ra * math.copysign(abs(c)**(2/exponent), c)
+            v = rb * math.copysign(abs(s)**(2/exponent), s)
             vertices.append(((p, a+u, b+v) if axis == "x" else
                              (b+v, p, a+u) if axis == "y" else
                              (a+u, b+v, p)))

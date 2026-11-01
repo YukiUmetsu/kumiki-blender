@@ -11,11 +11,11 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, replace
 
-from .architecture_details import box_mesh
 from .architecture_geometry import (
     GeometryError, Mesh, MeshInstance, Vec3, _finite_number,
     loft_elliptical_sections, place_mesh, world_vertices,
 )
+from .rock_weathering import erode_loft, rock_height_field, rough_bedrock_slab
 
 
 class MonumentError(ValueError):
@@ -48,7 +48,9 @@ def pyramid_frustum(bottom_width: float, top_width: float, height: float) -> Mes
 
 def pyramid_casing_stone(bottom_width: float, top_width: float,
                          course_height: float, start: float, end: float, *,
-                         inset: float = 0.2, joint: float = 0.015) -> Mesh:
+                         inset: float = 0.2, joint: float = 0.015,
+                         face_grid: int = 1, erosion_strength: float = 0.0,
+                         seed: int = 0, height_offset: float = 0.0) -> Mesh:
     """One tapered, physically thick casing block for the pyramid's +Y face.
 
     ``start`` and ``end`` are fractions across a course's horizontal span.
@@ -68,6 +70,14 @@ def pyramid_casing_stone(bottom_width: float, top_width: float,
         raise GeometryError("Casing block would collapse after its mortar joint")
     if inset >= t/2:
         raise GeometryError("Casing stone inset cannot reach the pyramid center")
+    if type(face_grid) is not int or not 1 <= face_grid <= 12:
+        raise GeometryError("Casing face_grid must be an integer from 1 to 12")
+    erosion_strength = _finite_number(erosion_strength, "erosion_strength", 0, 0.5)
+    height_offset = _finite_number(height_offset, "height_offset", -10000, 10000)
+    if erosion_strength > min(inset*0.95, h*0.3):
+        raise GeometryError("Casing relief must fit behind its stone edges")
+    if type(seed) is not int or not 0 <= seed <= 100000:
+        raise GeometryError("Casing seed must be an integer from 0 to 100000")
     x0, x1 = -b/2 + b*u0 + joint/2, -b/2 + b*u1 - joint/2
     x2, x3 = -t/2 + t*u0 + joint/2, -t/2 + t*u1 - joint/2
     y0, y1 = b/2, t/2
@@ -77,7 +87,48 @@ def pyramid_casing_stone(bottom_width: float, top_width: float,
              (x3, y1-inset, h), (x2, y1-inset, h))
     faces = ((3, 2, 1, 0), (4, 5, 6, 7), (0, 1, 5, 4),
              (1, 2, 6, 5), (2, 3, 7, 6), (3, 0, 4, 7))
-    return Mesh(verts, faces)
+    if face_grid == 1:
+        return Mesh(verts, faces)
+
+    # A tessellated *physical* outside face provides silhouette-level chips
+    # and light-catching relief rather than shader-only normal variation.
+    # The inner surface stays planar against the solid tapered core.
+    grid_w, grid_h = face_grid*2, face_grid
+    row_width = grid_w+1
+    layer_count = (grid_w+1)*(grid_h+1)
+    points = []
+    for outside in (True, False):
+        for row in range(grid_h+1):
+            v = row/grid_h
+            left_x = x0*(1-v) + x2*v
+            right_x = x1*(1-v) + x3*v
+            yy = y0*(1-v) + y1*v
+            zz = h*v
+            for col in range(grid_w+1):
+                u = col/grid_w
+                xx = left_x*(1-u) + right_x*u
+                dent = 0.0
+                if outside:
+                    edge = .18 + .82*math.sin(math.pi*u)*math.sin(math.pi*v)
+                    dent = erosion_strength*edge*rock_height_field(
+                        xx, yy, zz+height_offset, seed=seed,
+                        strata_spacing=.31)
+                points.append((xx, yy+(dent if outside else -inset), zz))
+    all_faces: list[tuple[int, ...]] = []
+    for row in range(grid_h):
+        for col in range(grid_w):
+            a = row*row_width+col
+            b, c, d = a+1, a+row_width+1, a+row_width
+            all_faces.append((d, c, b, a))
+            all_faces.append((a+layer_count, b+layer_count,
+                              c+layer_count, d+layer_count))
+    perimeter = ([col for col in range(grid_w+1)] +
+                 [row*row_width+grid_w for row in range(1, grid_h+1)] +
+                 [grid_h*row_width+col for col in range(grid_w-1, -1, -1)] +
+                 [row*row_width for row in range(grid_h-1, 0, -1)])
+    for a, b in zip(perimeter, (*perimeter[1:], perimeter[0])):
+        all_faces.append((a, b, b+layer_count, a+layer_count))
+    return Mesh(tuple(points), tuple(all_faces))
 
 
 def pyramid_assembly(*, prefix: str, base_width: float = 36.0,
@@ -129,8 +180,11 @@ def pyramid_assembly(*, prefix: str, base_width: float = 36.0,
                 covered = (course+0.5)/courses <= casing_fraction
                 if not covered and (course*17+face*13+index*7) % 47 == 0:
                     continue
-                stone = pyramid_casing_stone(w0, w1, z1-z0, start, end,
-                                             inset=inset, joint=joint)
+                stone = pyramid_casing_stone(
+                    w0, w1, z1-z0, start, end, inset=inset, joint=joint,
+                    face_grid=1 if covered else 5,
+                    erosion_strength=0 if covered else min(.12, inset*.72),
+                    height_offset=z0, seed=(course*71+face*13+index*3) % 100000)
                 material = ("casing-limestone" if covered else
                             "weathered-limestone" if (course+face+index) % 3 else
                             "core-limestone")
@@ -141,6 +195,26 @@ def pyramid_assembly(*, prefix: str, base_width: float = 36.0,
     items.append(place_mesh(cap, name=f"{prefix}-capstone", origin=(0, 0, work_h),
                             material="casing-limestone"))
     return tuple(items)
+
+
+def _sculpt_face_relief(mesh: Mesh, *, scale_x: float, scale_y: float,
+                       scale_z: float) -> Mesh:
+    """Carve shallow eye sockets, cheekbones and a worn, nose-less face plane.
+
+    The original loft keeps its manifold faces. Local facial relief moves only
+    the front-facing X surface, so the head remains a continuous closed solid.
+    """
+    vertices = []
+    for px, py, pz in mesh.vertices:
+        xx, yy, zz = px/scale_x, py/scale_y, pz/scale_z
+        front = max(0.0, min(1.0, (-xx-4.00)/0.33))
+        eye = math.exp(-((abs(yy)-.29)/.17)**2 - ((zz-4.035)/.115)**2)
+        cheek = math.exp(-((abs(yy)-.35)/.19)**2 - ((zz-3.61)/.24)**2)
+        broken_nose = math.exp(-(yy/.16)**2 - ((zz-3.72)/.16)**2)
+        brow = math.exp(-((abs(yy)-.27)/.22)**2 - ((zz-4.20)/.10)**2)
+        relief = front*(.085*eye + .028*broken_nose - .045*cheek - .023*brow)
+        vertices.append((px+relief*scale_x, py, pz))
+    return Mesh(tuple(vertices), mesh.faces)
 
 
 def sphinx_assembly(*, prefix: str, length: float = 10.5,
@@ -159,15 +233,27 @@ def sphinx_assembly(*, prefix: str, length: float = 10.5,
         raise GeometryError("restored_nose must be boolean")
     x, y, z = length/10.5, width/3.4, height/4.6
 
-    def along_x(points: tuple[tuple[float, float, float, float, float], ...]) -> Mesh:
-        return loft_elliptical_sections(tuple((p*x, a*y, b*z, ra*y, rb*z)
+    def along_x(points: tuple[tuple[float, float, float, float, float], ...], *,
+                roughness: float = .045, seed: int = 17,
+                exponent: float = 3.0) -> Mesh:
+        mesh = loft_elliptical_sections(tuple((p*x, a*y, b*z, ra*y, rb*z)
                                               for p, a, b, ra, rb in points), axis="x",
-                                        radial_segments=64, subdivisions=3)
+                                        radial_segments=96, subdivisions=5,
+                                        cross_section_exponent=exponent)
+        return erode_loft(mesh, axis="x", radial_segments=96,
+                          strength=roughness*min(y, z), seed=seed,
+                          strata_spacing=.31*z)
 
-    def along_z(points: tuple[tuple[float, float, float, float, float], ...]) -> Mesh:
-        return loft_elliptical_sections(tuple((p*z, a*x, b*y, ra*x, rb*y)
+    def along_z(points: tuple[tuple[float, float, float, float, float], ...], *,
+                roughness: float = .025, seed: int = 19,
+                exponent: float = 2.6) -> Mesh:
+        mesh = loft_elliptical_sections(tuple((p*z, a*x, b*y, ra*x, rb*y)
                                               for p, a, b, ra, rb in points),
-                                        radial_segments=64, subdivisions=3)
+                                        radial_segments=96, subdivisions=5,
+                                        cross_section_exponent=exponent)
+        return erode_loft(mesh, axis="z", radial_segments=96,
+                          strength=roughness*min(x, y), seed=seed,
+                          strata_spacing=.29*z)
 
     def along_y(points: tuple[tuple[float, float, float, float, float], ...]) -> Mesh:
         return loft_elliptical_sections(tuple((p*y, a*z, b*x, ra*z, rb*x)
@@ -179,7 +265,9 @@ def sphinx_assembly(*, prefix: str, length: float = 10.5,
     def part(name: str, mesh: Mesh, material: str = "sphinx-limestone") -> None:
         items.append(place_mesh(mesh, name=f"{prefix}-{name}", material=material))
 
-    part("bedrock", box_mesh(length*1.06, width*1.35, height*0.13), "bedrock-limestone")
+    part("bedrock", rough_bedrock_slab(length*1.06, width*1.35, height*0.13,
+                                       roughness=.12*min(x, y, z), seed=271),
+         "bedrock-limestone")
     # Long recumbent lion back, tapering rump and forward shoulder masses.
     part("lion-torso", along_x(((-3.0, 0, 1.43, 0.73, 0.72),
                                 (-2.5, 0, 1.45, 1.02, 0.85),
@@ -188,12 +276,15 @@ def sphinx_assembly(*, prefix: str, length: float = 10.5,
                                 (1.75, 0, 1.22, 1.30, 0.95),
                                 (2.95, 0, 1.21, 1.14, 0.82),
                                 (3.75, 0, 1.10, 0.76, 0.60),
-                                (4.15, 0, 1.04, 0.20, 0.28))))
+                                (4.15, 0, 1.04, 0.20, 0.28)),
+                               roughness=.16, seed=211, exponent=3.9),
+         "sphinx-limestone")
     part("chest", along_z(((0.45, -2.95, 0, 0.68, 0.85),
                            (0.85, -2.96, 0, 0.87, 1.03),
                            (1.50, -2.95, 0, 0.85, 0.99),
                            (2.20, -2.85, 0, 0.72, 0.85),
-                           (2.72, -2.86, 0, 0.45, 0.61))))
+                           (2.72, -2.86, 0, 0.45, 0.61)),
+                          roughness=.095, seed=43, exponent=3.5))
     for side, sign in (("left", -1), ("right", 1)):
         side_y = sign*1.07
         part(f"{side}-forepaw", along_x(((-5.35, side_y, .35, .22, .21),
@@ -201,58 +292,71 @@ def sphinx_assembly(*, prefix: str, length: float = 10.5,
                                          (-4.70, side_y, .37, .41, .30),
                                          (-3.8, side_y, .42, .42, .34),
                                          (-2.6, side_y, .61, .46, .50),
-                                         (-1.85, side_y, 1.00, .38, .80))))
+                                         (-1.85, side_y, 1.00, .38, .80)),
+                                        roughness=.105, seed=61, exponent=4.0))
         for toe in range(3):
             toe_y = side_y + (toe-1)*.22
             part(f"{side}-toe-{toe}", along_x(((-5.49, toe_y, .24, .065, .095),
                                                 (-5.32, toe_y, .24, .12, .14),
-                                                (-4.94, toe_y, .25, .14, .15))),
+                                                (-4.94, toe_y, .25, .14, .15)),
+                                               roughness=.017, seed=73),
                  "weathered-limestone")
         part(f"{side}-haunch", along_x(((1.90, sign*1.03, 1.03, .37, .56),
                                        (2.40, sign*1.04, 1.07, .62, .81),
                                        (3.14, sign*1.02, 1.03, .67, .84),
                                        (3.75, sign*.98, .84, .50, .65),
-                                       (4.08, sign*.94, .60, .18, .31))))
+                                       (4.08, sign*.94, .60, .18, .31)),
+                                      roughness=.135, seed=151, exponent=3.6))
     part("curved-tail", along_x(((2.1, -1.06, .65, .16, .17),
                                 (2.8, -1.42, .60, .18, .18),
                                 (3.7, -1.50, .67, .17, .16),
                                 (4.4, -1.35, .82, .14, .12),
-                                (4.75, -1.12, .97, .12, .12))))
+                                (4.75, -1.12, .97, .12, .12)),
+                               roughness=.025, seed=156))
     # Broad rounded nemes headdress sits behind a separate sculpted face.
     part("nemes-hood", along_z(((2.70, -3.38, 0, .65, .80),
                                 (3.22, -3.48, 0, .74, 1.00),
                                 (3.76, -3.51, 0, .77, 1.08),
                                 (4.16, -3.46, 0, .74, 1.03),
                                 (4.47, -3.46, 0, .60, .84),
-                                (4.60, -3.50, 0, .40, .66))), "casing-limestone")
-    part("face", along_z(((2.92, -3.85, 0, .32, .28),
+                                (4.60, -3.50, 0, .40, .66)),
+                               roughness=.055, seed=89, exponent=3.8), "casing-limestone")
+    face = along_z(((2.92, -3.85, 0, .32, .28),
                           (3.17, -3.90, 0, .47, .44),
                           (3.58, -3.90, 0, .54, .52),
                           (3.95, -3.86, 0, .54, .54),
                           (4.31, -3.84, 0, .48, .52),
-                          (4.48, -3.85, 0, .35, .45))))
+                          (4.48, -3.85, 0, .35, .45)),
+                         roughness=.019, seed=97, exponent=2.7)
+    part("face", _sculpt_face_relief(face, scale_x=x, scale_y=y, scale_z=z))
     for side, sign in (("left", -1), ("right", 1)):
         part(f"nemes-{side}-lappet", along_z(((2.18, -3.42, sign*.83, .20, .24),
                                              (2.60, -3.46, sign*.85, .25, .29),
                                              (3.25, -3.51, sign*.89, .28, .29),
-                                             (3.88, -3.49, sign*.91, .30, .25))),
+                                             (3.88, -3.49, sign*.91, .30, .25)),
+                                            roughness=.040, seed=105, exponent=3.5),
              "casing-limestone")
         part(f"{side}-ear", along_z(((3.81, -3.83, sign*.58, .16, .10),
                                     (4.13, -3.80, sign*.62, .20, .18),
-                                    (4.42, -3.79, sign*.61, .12, .10))))
+                                    (4.42, -3.79, sign*.61, .12, .10)),
+                                   roughness=.023, seed=118))
         eye_y = sign*.28
         part(f"{side}-eye", along_y(((eye_y-.16, 4.015, -4.365, .016, .02),
                                     (eye_y, 4.02, -4.39, .075, .058),
                                     (eye_y+.16, 4.015, -4.365, .016, .02))),
-             "sphinx-shadow")
+             "weathered-limestone")
         part(f"{side}-brow", along_y(((eye_y-.20, 4.18, -4.35, .035, .025),
                                      (eye_y, 4.20, -4.40, .07, .065),
                                      (eye_y+.20, 4.18, -4.35, .035, .025))))
         for stripe in range(5):
-            items.append(place_mesh(box_mesh(.40*x, .41*y, .045*z),
-                                    name=f"{prefix}-{side}-hood-stripe-{stripe}",
-                                    origin=(-3.71*x, sign*.90*y, (2.42+stripe*.29)*z),
-                                    material="weathered-limestone"))
+            # Narrow relief collars follow the lappet's curved cross-section.
+            # Flat overlay boxes previously gave the headdress a toy look.
+            bottom = (2.43+stripe*.29)*z
+            collar = loft_elliptical_sections(
+                ((bottom, -3.48*x, sign*.87*y, .295*x, .302*y),
+                 (bottom+.042*z, -3.48*x, sign*.87*y, .295*x, .302*y)),
+                radial_segments=64, cross_section_exponent=3.5)
+            part(f"{side}-hood-stripe-{stripe}", collar, "weathered-limestone")
     part("mouth-relief", along_y(((-.27, 3.40, -4.390, .015, .014),
                                   (0, 3.37, -4.410, .025, .028),
                                   (.27, 3.40, -4.390, .015, .014))),
