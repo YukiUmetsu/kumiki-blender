@@ -72,6 +72,13 @@ class EgyptianMonumentTests(unittest.TestCase):
         self.assertLess(max(v[2] for v in world_vertices(low)),
                         min(v[2] for v in world_vertices(high)))
 
+    def test_default_pyramid_exposes_weathered_stone_instead_of_a_broad_white_band(self):
+        parts = pyramid_assembly(prefix="pyramid")
+        outer = [part for part in parts if "-course-" in part.name]
+        polished = [part for part in outer if part.material == "casing-limestone"]
+        self.assertLess(len(polished)/len(outer), .10)
+        self.assertGreater(len(outer)-len(polished), 300)
+
     def test_sphinx_is_organic_and_has_independent_anatomy(self):
         parts = sphinx_assembly(prefix="sphinx")
         self.assertGreater(len(parts), 20)
@@ -104,13 +111,27 @@ class EgyptianMonumentTests(unittest.TestCase):
         # tolerance rather than an exactly scaled vertex-for-vertex copy.
         self.assertAlmostEqual(width(large)/width(small), 2, delta=.03)
 
+    def test_rounded_lion_silhouette_and_head_are_not_cartoon_proportioned(self):
+        parts = {part.name: part.mesh for part in sphinx_assembly(prefix="sphinx")}
+        torso = parts["sphinx-lion-torso"]
+        ring = torso.vertices[20*96:21*96]
+        y_mid = sum(vertex[1] for vertex in ring)/len(ring)
+        radius_y = max(abs(vertex[1]-y_mid) for vertex in ring)
+        # A rectangular superellipse once had diagonal ratio >.83: its
+        # planar side read as a giant sandstone beam even after voxel union.
+        self.assertLess(abs(ring[12][1]-y_mid)/radius_y, .80)
+        total_x = [point[0] for part in parts.values() for point in part.vertices]
+        top_z = max(point[2] for part in parts.values() for point in part.vertices)
+        self.assertLess(top_z/(max(total_x)-min(total_x)), .34)
+        self.assertGreater(top_z/(max(total_x)-min(total_x)), .26)
+
     def test_studies_have_correct_counts_bounds_and_camera_views(self):
         for kind in ("pyramid", "sphinx", "giza-study"):
             study = make_monument_study(kind=kind)
             with self.subTest(kind=kind):
                 self.assertEqual(len(study.instances), sum(dict(study.part_counts).values()))
                 self.assertEqual(len({p.name for p in study.instances}), len(study.instances))
-                self.assertGreater(study.bounds_max[2], 4.0)
+                self.assertGreater(study.bounds_max[2], 3.4 if kind == "sphinx" else 4.0)
                 shots = plan_monument_shots(study)
                 self.assertEqual(shots[0].name, "hero")
                 self.assertEqual(len(shots), {"giza-study": 6, "sphinx": 5,

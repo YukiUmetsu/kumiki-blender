@@ -109,10 +109,29 @@ def pyramid_casing_stone(bottom_width: float, top_width: float,
                 xx = left_x*(1-u) + right_x*u
                 dent = 0.0
                 if outside:
-                    edge = .18 + .82*math.sin(math.pi*u)*math.sin(math.pi*v)
-                    dent = erosion_strength*edge*rock_height_field(
-                        xx, yy, zz+height_offset, seed=seed,
-                        strata_spacing=.31)
+                    mineral = rock_height_field(xx, yy, zz+height_offset,
+                                                seed=seed, strata_spacing=.31)
+                    # High-frequency, asymmetrically broken arrises survive
+                    # distant views better than a smooth sine-wave height map.
+                    chips = math.sin(xx*13.7 + seed*.31)*math.cos(
+                        (zz+height_offset)*17.9 - seed*.17)
+                    pit = max(0.0, mineral*.72 + chips*.48)**2
+                    interior = math.sin(math.pi*u)*math.sin(math.pi*v)
+                    dent = erosion_strength*((.40+.60*interior)*(
+                        mineral*.75 + chips*.34) - .66*pit)
+                    # Damage boundary vertices *inward* from each mortar
+                    # edge. The back face remains a solid, tapered wedge;
+                    # the outside face has genuinely irregular chip outlines.
+                    chip_depth = erosion_strength*.48*max(
+                        0.0, abs(mineral*.65 + chips*.65)-.12)
+                    if col == 0:
+                        xx += chip_depth
+                    elif col == grid_w:
+                        xx -= chip_depth
+                    if row == 0:
+                        zz += chip_depth*.48
+                    elif row == grid_h:
+                        zz -= chip_depth*.48
                 points.append((xx, yy+(dent if outside else -inset), zz))
     all_faces: list[tuple[int, ...]] = []
     for row in range(grid_h):
@@ -134,7 +153,7 @@ def pyramid_casing_stone(bottom_width: float, top_width: float,
 def pyramid_assembly(*, prefix: str, base_width: float = 36.0,
                      height: float = 23.0, courses: int = 18,
                      block_width: float = 4.5, joint: float = 0.025,
-                     casing_fraction: float = 0.18) -> tuple[MeshInstance, ...]:
+                     casing_fraction: float = 0.04) -> tuple[MeshInstance, ...]:
     """A hollow-free pyramid core with individually editable four-face courses.
 
     Lower, light-colored Tura-inspired casing and upper weathered exterior
@@ -154,7 +173,7 @@ def pyramid_assembly(*, prefix: str, base_width: float = 36.0,
     work_h = height - cap_h
     cap_base = base * cap_h / height
     # A consistent tapered inner mass supports every exposed/weathered stone.
-    inset = min(base*0.004, cap_base*0.25, 0.35)
+    inset = min(base*0.008, cap_base*0.30, 0.45)
     if joint > min(target/10, cap_base/12):
         raise GeometryError("Mortar joint is too wide for the upper courses")
     core = pyramid_frustum(base-2*inset, cap_base-2*inset, work_h)
@@ -182,8 +201,8 @@ def pyramid_assembly(*, prefix: str, base_width: float = 36.0,
                     continue
                 stone = pyramid_casing_stone(
                     w0, w1, z1-z0, start, end, inset=inset, joint=joint,
-                    face_grid=1 if covered else 5,
-                    erosion_strength=0 if covered else min(.12, inset*.72),
+                    face_grid=1 if covered else 8,
+                    erosion_strength=0 if covered else min(.215, inset*.78, (z1-z0)*.22),
                     height_offset=z0, seed=(course*71+face*13+index*3) % 100000)
                 material = ("casing-limestone" if covered else
                             "weathered-limestone" if (course+face+index) % 3 else
@@ -230,7 +249,7 @@ def _sculpt_face_relief(mesh: Mesh, *, scale_x: float, scale_y: float,
 
 
 def sphinx_assembly(*, prefix: str, length: float = 10.5,
-                    width: float = 3.4, height: float = 4.6,
+                    width: float | None = None, height: float | None = None,
                     restored_nose: bool = False) -> tuple[MeshInstance, ...]:
     """Lion-bodied royal figure, assembled from shaped closed stone solids.
 
@@ -239,8 +258,10 @@ def sphinx_assembly(*, prefix: str, length: float = 10.5,
     be toggled explicitly; it is absent on the default present-day study.
     """
     length = _finite_number(length, "sphinx length", 3, 150)
-    width = _finite_number(width, "sphinx width", 1.0, 50)
-    height = _finite_number(height, "sphinx height", 1.5, 50)
+    width = _finite_number(width if width is not None else length*3.4/10.5,
+                           "sphinx width", .9, 150)
+    height = _finite_number(height if height is not None else length*3.6/10.5,
+                            "sphinx height", 1.0, 150)
     if type(restored_nose) is not bool:
         raise GeometryError("restored_nose must be boolean")
     x, y, z = length/10.5, width/3.4, height/4.6
@@ -278,31 +299,34 @@ def sphinx_assembly(*, prefix: str, length: float = 10.5,
                                        roughness=.10*min(x, y, z), seed=271),
          "bedrock-limestone")
     # Long recumbent lion back, tapering rump and forward shoulder masses.
-    part("lion-torso", along_x(((-3.0, 0, 1.43, 0.73, 0.72),
-                                (-2.5, 0, 1.45, 1.02, 0.85),
-                                (-1.65, 0, 1.30, 1.19, 0.95),
-                                (0.0, 0, 1.22, 1.30, 1.01),
-                                (1.75, 0, 1.22, 1.30, 0.95),
-                                (2.95, 0, 1.21, 1.14, 0.82),
-                                (3.75, 0, 1.10, 0.76, 0.60),
-                                (4.15, 0, 1.04, 0.20, 0.28)),
-                               roughness=.16, seed=211, exponent=3.9),
+    part("lion-torso", along_x(((-3.30, 0, 1.50, .68, .76),
+                                (-2.86, 0, 1.55, 1.00, .88),
+                                (-2.28, 0, 1.45, 1.16, .96),
+                                (-1.20, 0, 1.33, 1.22, .96),
+                                (0.25, 0, 1.25, 1.29, .95),
+                                (1.65, 0, 1.24, 1.29, .90),
+                                (2.85, 0, 1.20, 1.13, .83),
+                                (3.67, 0, 1.08, .78, .66),
+                                (4.16, 0, .99, .22, .29)),
+                               roughness=.17, seed=211, exponent=2.35),
          "sphinx-limestone")
     # A forward shoulder mass merges with the lion torso; the narrower neck
     # connects it to the headdress. The old single upstanding spheroid made the
     # figure read like a bust standing on a pedestal.
-    part("chest", along_x(((-3.85, 0, 1.43, .48, .56),
-                            (-3.54, 0, 1.43, .67, .72),
-                            (-3.22, 0, 1.40, .83, .81),
-                            (-2.76, 0, 1.32, 1.02, .94),
-                            (-2.16, 0, 1.25, 1.17, .97)),
-                          roughness=.13, seed=43, exponent=3.9))
-    part("carved-neck", along_z(((1.77, -3.23, 0, .49, .70),
-                                  (2.09, -3.28, 0, .48, .68),
-                                  (2.44, -3.34, 0, .45, .60),
-                                  (2.79, -3.38, 0, .43, .58),
-                                  (3.07, -3.44, 0, .41, .60)),
-                                 roughness=.073, seed=49, exponent=3.4))
+    part("chest", along_x(((-3.91, 0, 1.49, .54, .64),
+                            (-3.60, 0, 1.49, .72, .82),
+                            (-3.25, 0, 1.45, .92, .94),
+                            (-2.80, 0, 1.36, 1.07, 1.02),
+                            (-2.14, 0, 1.30, 1.21, .99)),
+                          roughness=.14, seed=43, exponent=2.55))
+    # Broad, sloping royal breast/shoulder, not the former straight cylinder
+    # carrying a disproportionately oversized helmet above a toy-like body.
+    part("carved-neck", along_z(((1.68, -3.19, 0, .83, .94),
+                                  (2.03, -3.25, 0, .79, .87),
+                                  (2.43, -3.35, 0, .69, .78),
+                                  (2.78, -3.43, 0, .59, .71),
+                                  (3.13, -3.47, 0, .50, .64)),
+                                 roughness=.075, seed=49, exponent=2.55))
     for side, sign in (("left", -1), ("right", 1)):
         side_y = sign*1.07
         part(f"{side}-forepaw", along_x(((-5.43, side_y, .32, .22, .19),
@@ -313,7 +337,7 @@ def sphinx_assembly(*, prefix: str, length: float = 10.5,
                                          (-2.75, side_y, .53, .45, .46),
                                          (-2.20, side_y, .74, .42, .61),
                                          (-1.90, side_y, .87, .37, .63)),
-                                        roughness=.13, seed=61, exponent=4.1))
+                                        roughness=.145, seed=61, exponent=2.55))
         for toe in range(3):
             toe_y = side_y + (toe-1)*.22
             part(f"{side}-toe-{toe}", along_x(((-5.49, toe_y, .24, .065, .095),
@@ -326,7 +350,7 @@ def sphinx_assembly(*, prefix: str, length: float = 10.5,
                                        (3.14, sign*1.02, 1.03, .67, .84),
                                        (3.75, sign*.98, .84, .50, .65),
                                        (4.08, sign*.94, .60, .18, .31)),
-                                      roughness=.135, seed=151, exponent=3.6))
+                                      roughness=.155, seed=151, exponent=2.25))
     part("curved-tail", along_x(((2.1, -1.04, .61, .14, .15),
                                 (2.7, -1.26, .58, .16, .17),
                                 (3.4, -1.38, .65, .15, .15),
@@ -334,13 +358,13 @@ def sphinx_assembly(*, prefix: str, length: float = 10.5,
                                 (4.13, -1.12, .82, .09, .09)),
                                roughness=.025, seed=156))
     # Broad rounded nemes headdress sits behind a separate sculpted face.
-    part("nemes-hood", along_z(((2.70, -3.38, 0, .65, .80),
-                                (3.22, -3.48, 0, .74, 1.00),
-                                (3.76, -3.51, 0, .77, 1.08),
-                                (4.16, -3.46, 0, .74, 1.03),
-                                (4.47, -3.46, 0, .60, .84),
-                                (4.60, -3.50, 0, .40, .66)),
-                               roughness=.037, seed=89, exponent=3.8), "casing-limestone")
+    part("nemes-hood", along_z(((2.70, -3.40, 0, .60, .79),
+                                (3.20, -3.49, 0, .70, .93),
+                                (3.74, -3.51, 0, .73, 1.04),
+                                (4.14, -3.47, 0, .69, .99),
+                                (4.43, -3.48, 0, .57, .79),
+                                (4.60, -3.50, 0, .43, .57)),
+                               roughness=.040, seed=89, exponent=3.15), "casing-limestone")
     face = along_z(((2.93, -3.86, 0, .23, .23),
                     (3.14, -3.93, 0, .34, .34),
                     (3.43, -3.95, 0, .46, .41),
@@ -351,11 +375,11 @@ def sphinx_assembly(*, prefix: str, length: float = 10.5,
                    roughness=.012, seed=97, exponent=2.45)
     part("face", _sculpt_face_relief(face, scale_x=x, scale_y=y, scale_z=z))
     for side, sign in (("left", -1), ("right", 1)):
-        part(f"nemes-{side}-lappet", along_z(((2.18, -3.42, sign*.83, .20, .24),
-                                             (2.60, -3.46, sign*.85, .25, .29),
-                                             (3.25, -3.51, sign*.89, .28, .29),
-                                             (3.88, -3.49, sign*.91, .30, .25)),
-                                            roughness=.040, seed=105, exponent=3.5),
+        part(f"nemes-{side}-lappet", along_z(((2.18, -3.43, sign*.83, .15, .24),
+                                             (2.60, -3.49, sign*.85, .17, .27),
+                                             (3.25, -3.53, sign*.87, .19, .28),
+                                             (3.88, -3.49, sign*.90, .21, .25)),
+                                            roughness=.025, seed=105, exponent=2.8),
              "casing-limestone")
         part(f"{side}-ear", along_z(((3.81, -3.83, sign*.58, .16, .10),
                                     (4.13, -3.80, sign*.62, .20, .18),
@@ -373,7 +397,7 @@ def sphinx_assembly(*, prefix: str, length: float = 10.5,
 
 def make_monument_study(*, kind: str = "giza-study",
                         pyramid_base: float = 36.0, pyramid_height: float = 23.0,
-                        pyramid_courses: int = 18, casing_fraction: float = 0.18,
+                        pyramid_courses: int = 18, casing_fraction: float = 0.04,
                         sphinx_length: float = 10.5, restored_nose: bool = False) -> MonumentStudy:
     """Compose a pyramid, a lion-bodied royal figure or a staged pair."""
     if kind not in ("pyramid", "sphinx", "giza-study"):

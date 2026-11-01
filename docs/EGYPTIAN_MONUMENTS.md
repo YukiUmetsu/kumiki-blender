@@ -55,6 +55,25 @@ the default 379-part combined source study. The manifest records each union's
 voxel size, source count and vertex count. This remains an original
 illustrative sculpt, not photogrammetry.
 
+The default procedural sculpt now uses a lower head-to-total-length ratio,
+rounded rather than rectangular lion torso/foreleg sections, a broader
+shoulder-to-neck transition, and narrower headdress lappets. It is still an
+artistic approximation: these changes improve the *silhouette*, but do not
+replace a surveyed statue mesh or guarantee authentic facial anatomy.
+
+### Chipped pyramid stone (geometry, not just bump maps)
+
+Exposed courses now have an 8-by-16 front grid per block with stochastic
+quarry pits, inward-broken vertical and horizontal arrises, stratified mineral
+relief and independently varied limestone color/PBR textures. Outer stone
+faces are displaced while the back remains a full watertight wedge. The
+default casing fraction has been reduced from 18% to **4%**, producing a
+mostly eroded contemporary-style pyramid instead of a broad smooth white
+band. `--casing-fraction` can still create a restored or selectively cased
+study. AERA's [Sphinx geology overview](https://aeraweb.org/geology-of-the-sphinx/)
+motivates the layered bedrock treatment; our individual chips and fracture
+locations are procedural, **not mapped damage from an archaeological survey**.
+
 ## Examples
 
 ```bash
@@ -132,7 +151,7 @@ or photorealistic**; geometry fidelity, source rights and historical quality
 still require human review.
 
 All dimensions are meters. Default combined plan uses a **36 m by 23 m
-illustrative pyramid**, a **10.5 m Sphinx-shaped study**, 18 stone courses,
+illustrative pyramid**, a **10.5 m-long, roughly 3.6 m-tall Sphinx-shaped study**, 18 stone courses,
 and 379 named components. It does **not** imply that the real landmarks have
 those measurements. `--restored-nose` is an explicitly optional sculptural
 interpretation, not archaeological evidence. Material color and stone erosion

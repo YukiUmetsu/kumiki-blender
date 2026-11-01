@@ -54,7 +54,7 @@ def main(argv: list[str] | None = None) -> int:
         subcommand.add_argument("--pyramid-base", type=float, default=36.0)
         subcommand.add_argument("--pyramid-height", type=float, default=23.0)
         subcommand.add_argument("--pyramid-courses", type=int, default=18)
-        subcommand.add_argument("--casing-fraction", type=float, default=0.18)
+        subcommand.add_argument("--casing-fraction", type=float, default=0.04)
         subcommand.add_argument("--sphinx-length", type=float, default=10.5)
         subcommand.add_argument("--restored-nose", action="store_true")
         if command == "build-monument":

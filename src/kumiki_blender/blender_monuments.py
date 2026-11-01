@@ -43,14 +43,15 @@ def plan_monument_shots(study: MonumentStudy) -> tuple[QualityShot, ...]:
     if study.kind in ("sphinx", "giza-study"):
         sy = -(dict(study.parameters)["pyramid_base_m"]/2+8) if study.kind == "giza-study" else 0
         length = dict(study.parameters)["sphinx_length_m"]
+        sphinx_height = 3.6 * length/10.5
         # A side-biased three-quarter view keeps the whole recumbent lion and
         # front paws in frame; the former head-centered framing cropped its rump.
-        shots.append(QualityShot("sphinx", (-length*.63, sy-length*.97, 5.5),
-                                 (-length*.025, sy, 2.08), length*1.48))
-        shots.append(QualityShot("sphinx-profile", (length*.15, sy-length*1.6, 4.25),
-                                 (-length*.005, sy, 1.9), length*1.33))
-        shots.append(QualityShot("sphinx-face", (-length*.81, sy-length*.42, 5.10),
-                                 (-length*.34, sy, 3.63), length*.46))
+        shots.append(QualityShot("sphinx", (-length*.63, sy-length*.97, sphinx_height*1.28),
+                                 (-length*.025, sy, sphinx_height*.51), length*1.48))
+        shots.append(QualityShot("sphinx-profile", (length*.15, sy-length*1.6, sphinx_height*1.04),
+                                 (-length*.005, sy, sphinx_height*.45), length*1.33))
+        shots.append(QualityShot("sphinx-face", (-length*.81, sy-length*.42, sphinx_height*1.11),
+                                 (-length*.34, sy, sphinx_height*.79), length*.46))
     return tuple(shots)
 
 
@@ -240,26 +241,38 @@ def build_monument_scene(study: MonumentStudy, destination: Path, *,
         "bedrock-limestone": get_surface("weathered-stone", color="#A89576", roughness=0.91,
                                          weathering_strength=0.78),
     }
+    # Staggered courses should not all have precisely the same quarry colour
+    # and pitting pattern. Stable per-block variants avoid arbitrary RNG state.
+    for index, color in enumerate(("#A9987B", "#B9A789", "#C0AD8D", "#A38F75")):
+        materials[f"quarried-limestone-{index}"] = get_surface(
+            "weathered-stone", color=color, roughness=.93,
+            weathering_strength=.85)
     palette = {name: _material(bpy, spec) for name, spec in materials.items()}
     # The packed maps remain portable glTF normal textures. Their shallow
     # relief needs stronger raking-light response on the weathered statue than
     # on generic polished architectural stone.
-    for name in ("sphinx-limestone", "bedrock-limestone", "weathered-limestone"):
+    for name in ("sphinx-limestone", "bedrock-limestone", "weathered-limestone",
+                 *(f"quarried-limestone-{i}" for i in range(4))):
         for node in palette[name].node_tree.nodes:
             if node.type == "NORMAL_MAP":
-                node.inputs["Strength"].default_value = 0.82
+                node.inputs["Strength"].default_value = (1.12 if name.startswith("quarried-") else .82)
     from mathutils import Matrix
 
     cache: dict[tuple[int, str], Any] = {}
     objects: list[Any] = []
     for part in study.instances:
-        key = (id(part.mesh), part.material)
+        palette_key = part.material
+        if (part.name.startswith("pyramid-course-") and
+                part.material in ("weathered-limestone", "core-limestone")):
+            variant = int.from_bytes(hashlib.sha256(part.name.encode()).digest()[:2], "big") % 4
+            palette_key = f"quarried-limestone-{variant}"
+        key = (id(part.mesh), palette_key)
         if key not in cache:
             mesh = bpy.data.meshes.new(f"Geometry / {part.name}")
             mesh.from_pydata(part.mesh.vertices, [], part.mesh.faces)
             mesh.update()
             ensure_metric_uvs(mesh, tile_size_m=1.2)
-            mesh.materials.append(palette[part.material])
+            mesh.materials.append(palette[palette_key])
             if part.name.startswith("sphinx-"):
                 for poly in mesh.polygons:
                     # Preserve rock's low-frequency chipped facets on the
@@ -308,10 +321,10 @@ def build_monument_scene(study: MonumentStudy, destination: Path, *,
         sculpt_report = {
             "body": _integrate_sphinx_group(
                 bpy, scene, model, body_sources, objects, palette["sphinx-limestone"],
-                label="body", voxel=max(.04, min(.095, .065*sculpt_scale))),
+                label="body", voxel=max(.034, min(.08, .052*sculpt_scale))),
             "head": _integrate_sphinx_group(
                 bpy, scene, model, head_sources, objects, palette["sphinx-head-limestone"],
-                label="head", voxel=max(.018, min(.04, .024*sculpt_scale))),
+                label="head", voxel=max(.016, min(.035, .019*sculpt_scale))),
         }
 
     span = study.bounds_max[0] - study.bounds_min[0]
