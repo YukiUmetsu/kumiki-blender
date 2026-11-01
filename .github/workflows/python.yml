@@ -35,6 +35,7 @@ jobs:
             tests.test_rock_weathering.RockWeatheringTests.test_sphinx_has_rough_anatomical_surfaces_not_smooth_loft \
             tests.test_landmark_scan \
             tests.test_sphinx_scan_review \
+            tests.test_sphinx_landmarks \
             tests.test_sphinx_sculpt \
             tests.test_cli.CLITests.test_sphinx_scan_build_preflights_rights_and_pairs_without_blender \
             tests.test_cli.CLITests.test_sphinx_scan_build_passes_prepared_record_to_blender

@@ -23,6 +23,7 @@ from .recipe import RecipeError, load_recipe
 from .render_profiles import RenderProfileError
 from .revision_audit import RevisionAuditError, audit_revision
 from .sphinx_scan_review import prepare_sphinx_review
+from .sphinx_landmarks import LandmarkError, compare_landmark_views, load_landmark_view
 from .surfaces import SurfaceError
 
 
@@ -81,6 +82,9 @@ def main(argv: list[str] | None = None) -> int:
     scan_review_parser.add_argument("--output", type=Path, required=True)
     scan_review_parser.add_argument("--front-axis", choices=("-X", "+X", "-Y", "+Y"),
                                     default="-X")
+    landmark_parser = subcommands.add_parser("compare-sphinx-landmarks")
+    landmark_parser.add_argument("--reference", type=Path, required=True)
+    landmark_parser.add_argument("--candidate", type=Path, required=True)
     texture_parser = subcommands.add_parser("inspect-texture-packs")
     texture_parser.add_argument("--input", type=Path, required=True)
     import_parser = subcommands.add_parser("import-asset")
@@ -116,6 +120,11 @@ def main(argv: list[str] | None = None) -> int:
             from .sphinx_scan_review import render_sphinx_source_review
 
             print(json.dumps(render_sphinx_source_review(review, bpy_module=bpy), indent=2))
+            return 0
+        if args.command == "compare-sphinx-landmarks":
+            reference = load_landmark_view(args.reference)
+            candidate = load_landmark_view(args.candidate)
+            print(json.dumps(compare_landmark_views(reference, candidate), indent=2))
             return 0
         if args.command == "inspect-texture-packs":
             print(json.dumps({"assignments": [entry.to_manifest() for entry in
@@ -268,7 +277,7 @@ def main(argv: list[str] | None = None) -> int:
         manifest = build_scene(recipe, plan, output, bpy_module=bpy)
         print(json.dumps(manifest, indent=2))
         return 0
-    except (RecipeError, PorticoError, FacadeError, MonumentError, GeometryError, AssetImportError, RenderProfileError, RevisionAuditError, AuditError, ExportAuditError,
+    except (RecipeError, PorticoError, FacadeError, MonumentError, GeometryError, AssetImportError, RenderProfileError, RevisionAuditError, AuditError, ExportAuditError, LandmarkError,
             SurfaceError, RuntimeError, OSError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 2

@@ -124,6 +124,13 @@ This procedural interpretation emphasizes those differences; it is still an
 artistic approximation: these changes improve the *silhouette*, but do not
 replace a surveyed statue mesh or guarantee authentic facial anatomy.
 
+For the next, **survey-constrained rather than purely parametric** facial
+revision, see [Sphinx Reference-Driven Geometry Fidelity](SPHINX_REFERENCE_FIDELITY.md).
+The reference-only image landmark comparison can quantify eyes, chin, nose,
+ears and jaw differences without distributing source photos or third-party
+meshes. Until the photogrammetric contour elevations are digitized and the
+face is actually refitted, the procedural head should be considered a proxy.
+
 ### Chipped pyramid stone (geometry, not just bump maps)
 
 Exposed courses now have an 8-by-16 front grid per block with stochastic
