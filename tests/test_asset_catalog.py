@@ -23,11 +23,13 @@ class CatalogTests(unittest.TestCase):
     def test_existing_model_families_are_registered_once_and_have_real_sources(self):
         ids = {entry.asset_id for entry in self.entries}
         self.assertEqual(len(ids), len(self.entries))
-        self.assertEqual(len(self.entries), 8)
+        # The discovery registry is intentionally open-ended: adding a new
+        # categorized model must not break tests for existing families.
+        self.assertGreaterEqual(len(self.entries), 9)
         self.assertTrue({"red-vintage-biplane", "lattice-observation-tower",
                          "stone-facade", "classical-column", "modular-portico",
                          "giza-pyramid-study", "giza-sphinx-study",
-                         "giza-ensemble-study"} <= ids)
+                         "giza-ensemble-study", "egypt-relief-atlas"} <= ids)
         validate_sources(self.entries, Path(__file__).resolve().parents[1])
         for entry in self.entries:
             self.assertTrue(entry.manifest.startswith("src/kumiki_blender/assets/"))
@@ -38,6 +40,8 @@ class CatalogTests(unittest.TestCase):
         planes = search_assets(self.entries, "OLD red PLANE")
         self.assertEqual([p.asset_id for p in planes], ["red-vintage-biplane"])
         self.assertEqual(len(search_assets(self.entries, "giza")), 3)
+        self.assertEqual([entry.asset_id for entry in search_assets(
+            self.entries, "Egypt terrain")], ["egypt-relief-atlas"])
         self.assertEqual(len(search_assets(self.entries, category="landmarks")), 3)
         self.assertEqual(len(search_assets(self.entries, rigged=True)), 1)
         self.assertEqual([entry.asset_id for entry in search_assets(

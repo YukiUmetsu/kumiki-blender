@@ -18,9 +18,9 @@ CATALOG_ROOT = Path(__file__).resolve().parent / "assets"
 _SLUG = re.compile(r"[a-z][a-z0-9]*(?:-[a-z0-9]+)*\Z")
 _REVISION = re.compile(r"r[0-9]{2,6}\Z")
 _PLAN_COMMANDS = {"validate", "plan-portico", "plan-facade", "plan-monument",
-                  "plan-biplane", "plan-classical-column"}
+                  "plan-biplane", "plan-classical-column", "plan-egypt-map"}
 _BUILD_COMMANDS = {"build", "build-portico", "build-facade",
-                   "build-monument", "build-biplane"}
+                   "build-monument", "build-biplane", "build-egypt-map"}
 
 
 class CatalogError(ValueError):

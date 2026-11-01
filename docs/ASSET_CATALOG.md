@@ -25,6 +25,7 @@ src/kumiki_blender/assets/
 │   ├── buildings/stone-facade/asset.json
 │   └── components/{classical-column,modular-portico}/asset.json
 ├── infrastructure/towers/lattice-observation-tower/asset.json
+├── geography/maps/egypt-relief-atlas/asset.json
 ├── landmarks/monuments/
 │   ├── giza-pyramid-study/asset.json
 │   ├── giza-sphinx-study/asset.json
@@ -67,6 +68,7 @@ PYTHONPATH=src python3 -m kumiki_blender catalog search old plane
 PYTHONPATH=src python3 -m kumiki_blender catalog list --tag stone
 PYTHONPATH=src python3 -m kumiki_blender catalog list --rigged
 PYTHONPATH=src python3 -m kumiki_blender catalog show red-vintage-biplane
+PYTHONPATH=src python3 -m kumiki_blender catalog show egypt-relief-atlas
 PYTHONPATH=src python3 -m kumiki_blender catalog path red-vintage-biplane --revision r02
 PYTHONPATH=src python3 -m kumiki_blender catalog validate
 ```
@@ -88,7 +90,7 @@ blender --background --factory-startup --python-exit-code 1 \
   --root /path/to/permanent-model-library
 ```
 
-The catalog delegates to the **existing** `build-biplane`, `build-monument`,
+The catalog delegates to the **existing** `build-biplane`, `build-egypt-map`, `build-monument`,
 `build-facade`, `build-portico`, or recipe-based `build` pipeline. It will not
 overwrite an existing revision, and adding a category does not change the
 geometry engine. A component without a standalone build command is marked

@@ -15,6 +15,7 @@ from .architecture_geometry import GeometryError, world_vertices
 from .export_audit import ExportAuditError
 from .facade import FacadeError, make_facade_study
 from .egyptian_monuments import MonumentError, make_monument_study
+from .egypt_map import CITY_MARKERS, LABELS, RIVER_CHANNELS, EgyptMapSpec
 from .glb_audit import AuditError, audit_glb
 from .lattice import make_lattice_tower
 from .landmark_scan import prepare_sphinx_scan
@@ -87,6 +88,11 @@ def main(argv: list[str] | None = None) -> int:
             item.add_argument("--revision", default="r01")
             item.add_argument("--root", type=Path, default=Path(".review"))
     catalog_actions.add_parser("validate")
+    for command in ("plan-egypt-map", "build-egypt-map"):
+        subcommand = subcommands.add_parser(command)
+        subcommand.add_argument("--detail", choices=("standard", "high"), default="standard")
+        if command == "build-egypt-map":
+            subcommand.add_argument("--output", type=Path, required=True)
     column_parser = subcommands.add_parser("plan-classical-column")
     column_parser.add_argument("--order", choices=("tuscan", "doric", "ionic"), default="ionic")
     column_parser.add_argument("--height", type=float, default=4.55)
@@ -211,6 +217,33 @@ def main(argv: list[str] | None = None) -> int:
                 "bounds_m": [[min(p[axis] for p in coords) for axis in range(3)],
                              [max(p[axis] for p in coords) for axis in range(3)]],
             }, indent=2))
+            return 0
+        if args.command in ("plan-egypt-map", "build-egypt-map"):
+            spec = (EgyptMapSpec(columns=700, rows=420) if args.detail == "high"
+                    else EgyptMapSpec())
+            if args.command == "plan-egypt-map":
+                print(json.dumps({
+                    "asset_id": "egypt-relief-atlas", "generator": "egypt-relief-map",
+                    "detail": args.detail,
+                    "terrain_grid": [spec.columns, spec.rows],
+                    "terrain_vertices": (spec.columns+1)*(spec.rows+1),
+                    "waterways": len(RIVER_CHANNELS),
+                    "city_markers": len(CITY_MARKERS),
+                    "geography_labels": len(LABELS),
+                    "dimensions_m": [16.0, 11.4],
+                    "geographic_fidelity": "illustrated, not survey-grade",
+                }, indent=2))
+                return 0
+            output = args.output.resolve()
+            if output.exists() or output.is_symlink():
+                raise RecipeError(f"Output already exists: {output}. Choose a new revision directory.")
+            try:
+                import bpy  # type: ignore[import-not-found]
+            except ImportError as error:
+                raise RuntimeError("Building the Egypt map requires Blender. Run via: blender --background --factory-startup --python-exit-code 1 --python scripts/blender_entry.py -- build-egypt-map --output <new-directory>") from error
+            from .blender_egypt_map import build_egypt_map_scene
+
+            print(json.dumps(build_egypt_map_scene(output, spec=spec, bpy_module=bpy), indent=2))
             return 0
         if args.command == "import-asset":
             provenance = load_asset_provenance(args.provenance)

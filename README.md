@@ -27,6 +27,10 @@ KUMIKI_RENDER_PROFILE=smoke blender --background --factory-startup \
 
 The result is `.review/vehicles/aircraft/red-vintage-biplane/r01/` containing the usual `.blend`, GLB, previews and manifest. Pass `--root /your/permanent/asset-library` for a durable asset store outside the gitignored QA directory. [Catalog design, categories and conventions](docs/ASSET_CATALOG.md).
 
+The **Egypt cinematic relief atlas** adds a fifth illustration generator: a sculpted geographic table map with deliberately heightened Sinai/Eastern Desert relief, Mediterranean and Red Seas, Nile valley/delta and waterways, Qattara Depression, Lake Nasser, **physical irrigated parcels**, and handcrafted Giza/Luxor/Cairo/Alexandria/Aswan miniature landmarks. Distinct city districts have tiny buildings, roofs and windows; twelve inspection cameras include city-level and terrain macro views. It recreates the layout of a supplied visual reference procedurally rather than placing the image on a plane. Preview it with `PYTHONPATH=src python3 -m kumiki_blender plan-egypt-map` or build with `blender --background --factory-startup --python-exit-code 1 --python scripts/blender_entry.py -- build-egypt-map --output .review/egypt-map/r01`. [See the detailed Egypt atlas guide](docs/EGYPT_RELIEF_MAP.md). The geographic representation is illustrative, not surveyed.
+
+The Egypt generator is now organized under `src/kumiki_blender/geography/egypt/` (terrain, geometry, Blender support, landmarks and scene), with a categorized manifest at `assets/geography/maps/egypt-relief-atlas/asset.json`. Discover or build it with `catalog show egypt-relief-atlas` and `catalog build egypt-relief-atlas --revision r01`. The original Python import paths remain valid.
+
 ## Requirements
 
 - Python 3.11+ for recipe validation and unit tests (no runtime pip dependencies)
