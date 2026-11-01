@@ -358,12 +358,12 @@ def _sculpt_face_relief(mesh: Mesh, *, scale_x: float, scale_y: float,
         # X points toward the rear: negative means a projected cheek/nasal
         # bridge, positive means recesses. The bridge ends in an uneven,
         # visibly broken nasal scar rather than an intact spheroidal nose.
-        relief = front*(.020*eye - .043*upper_lid - .025*lower_lid
+        relief = front*(.013*eye - .039*upper_lid - .023*lower_lid
                         - .047*brow - .035*cheekbone + .015*hollow
-                        - .021*nose_root - .112*bridge + .027*nose_flanks
-                        + (.011 + .009*wear)*broken_tip
-                        - .029*upper_lip + .030*mouth_cut
-                        - .025*lower_lip - .025*philtrum
+                        - .021*nose_root - .112*bridge + .010*nose_flanks
+                        + (.007 + .007*wear)*broken_tip
+                        - .024*upper_lip + .018*mouth_cut
+                        - .020*lower_lip - .019*philtrum
                         - .058*chin - .035*jaw
                         + .041*forehead*fold + .013*wear*(1-.45*eye)
                         + (.035+.009*wear)*eye_chip
@@ -392,13 +392,19 @@ def _sculpt_ear_relief(mesh: Mesh, *, side: int, scale_x: float,
         outward = abs(yy)
         anterior = max(0., min(1., (-xx-4.015)/.125))
         anterior = anterior*anterior*(3.-2.*anterior)
-        concha = math.exp(-((zz-4.015)/.091)**2
-                          - ((outward-.752)/.066)**2)
-        helix = math.exp(-((abs(zz-4.043)-.127)/.053)**2
-                         - ((outward-.745)/.081)**2)
-        curved_rim = math.exp(-((zz-4.092)/.139)**2
-                              - ((outward-.812)/.041)**2)
-        displacement = anterior*(.094*concha-.046*helix-.023*curved_rim)
+        # A symmetric circular ring became a hollow doughnut after voxel
+        # union. Real ears have an offset inner bowl and an upper curved rim,
+        # with softer lower cartilage: avoid using |z-z_center| for the helix.
+        concha = math.exp(-((zz-3.995)/.070)**2
+                          - ((outward-.735)/.052)**2)
+        upper_helix = math.exp(-((zz-4.155)/.052)**2
+                               - ((outward-.749)/.081)**2)
+        lower_cartilage = math.exp(-((zz-3.919)/.060)**2
+                                   - ((outward-.746)/.064)**2)
+        curved_rim = math.exp(-((zz-4.074)/.115)**2
+                              - ((outward-.816)/.043)**2)
+        displacement = anterior*(.064*concha-.038*upper_helix
+                                 -.014*lower_cartilage-.014*curved_rim)
         vertices.append((px+displacement*scale_x, py, pz))
     return Mesh(tuple(vertices), mesh.faces)
 

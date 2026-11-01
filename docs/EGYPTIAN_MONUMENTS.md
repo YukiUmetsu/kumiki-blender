@@ -87,7 +87,10 @@ Cycles render exposed sub-voxel mouth and eyelid relief. Upper/lower
 eyelid ridges, a narrow bowed lip separation, the surviving nasal ridge and
 the ear's inner recess were strengthened so they remain readable after the
 0.019 m head remesh; irregular brow/cheek chips interrupt the overly even
-face. This is deliberately geometric carving rather than extra eye or lip
+face. Follow-up Cycles QA required softening the lip cut and shaping the
+inner ear bowl asymmetrically with an upper helix instead of a circular
+donut-like groove. This is deliberately geometric carving rather than extra
+eye or lip
 objects glued over the head. The geometry-level weathering pass adds
 irregular undercut bedding planes and
 small concave mineral pockets to the lion's body and haunches, with much
