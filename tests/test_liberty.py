@@ -95,7 +95,7 @@ class LibertyTests(unittest.TestCase):
             make_liberty_study(detailed_tablet="yes")
 
     def test_detailed_crown_has_real_openings_and_blade_rays(self):
-        from kumiki_blender.liberty_crown import crown_band, crown_ray
+        from kumiki_blender.liberty_crown import crown_band, crown_ray, crown_fasteners
 
         # The perforated band is one connected closed surface, not dark tubes
         # painted into an opaque helmet. Each missing window cell is an opening.
@@ -115,6 +115,15 @@ class LibertyTests(unittest.TestCase):
         pieces = {part.name: part for part in make_liberty_study(detailed_crown=True).instances}
         self.assertNotIn("liberty-crown-window-dark-00", pieces)
         self.assertIn("liberty-crown-diadem-perforated", pieces)
+        self.assertIn("liberty-crown-fasteners", pieces)
+        hardware = crown_fasteners()
+        # 50 mullion heads and 14 ray-socket heads, all closed rather than
+        # open cylinders or texture-only circles.
+        self.assertEqual(len(hardware.vertices), 64*62)
+        self.assertEqual(len(hardware.faces), 64*72)
+        self.assertGreater(max(p[2] for p in hardware.vertices), 29.40)
+        self.assertEqual(audit_mesh(hardware).boundary_edges, 0)
+        self.assertGreater(audit_mesh(hardware).volume_m3, 0.)
         self.assertIn("liberty-hair-forelock-sculpt", pieces)
         self.assertNotIn("liberty-hair-strand-00", pieces)
         self.assertNotIn("liberty-hair-left-temple-wave-00", pieces)

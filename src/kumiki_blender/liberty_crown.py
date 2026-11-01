@@ -14,6 +14,7 @@ from .architecture_geometry import Mesh
 
 WINDOW_COUNT = 25
 RAY_COUNT = 7
+MULLION_COUNT = WINDOW_COUNT
 LOWER_RAIL = 28.62
 UPPER_RAIL = 29.28
 
@@ -128,11 +129,92 @@ def crown_ray(index: int) -> Mesh:
     return Mesh(tuple(rings), tuple(faces))
 
 
+def crown_fasteners() -> Mesh:
+    """Closed, low-relief copper heads at the crown joins and ray sockets.
+
+    The 25-window architecture and count of rays are documented by NPS;
+    the fastener locations are an *illustrative* repoussé construction study,
+    not surveyed positions. One named part holds 64 watertight ellipsoids.
+    """
+    vertices: list[tuple[float, float, float]] = []
+    faces: list[tuple[int, ...]] = []
+
+    def add_head(center, normal, tangent, vertical, *, radius=.019, height=.012):
+        """A proper closed elliptical bump with its back embedded in copper."""
+        start = len(vertices)
+
+        def point(radial, azimuth, along):
+            return tuple(center[axis] + normal[axis]*along
+                         + radius*radial*(tangent[axis]*math.cos(azimuth)
+                                          + vertical[axis]*math.sin(azimuth))
+                         for axis in range(3))
+
+        sections, rows = 12, 6
+        vertices.append(point(0., 0., -height))
+        for row in range(1, rows):
+            angle = -math.pi/2 + math.pi*row/rows
+            for j in range(sections):
+                vertices.append(point(math.cos(angle), math.tau*j/sections,
+                                      height*math.sin(angle)))
+        end = len(vertices)
+        vertices.append(point(0., 0., height))
+        for j in range(sections):
+            a = start+1+j
+            b = start+1+(j+1)%sections
+            faces.append((start, b, a))
+        for row in range(rows-2):
+            lower = start+1+row*sections
+            upper = lower+sections
+            for j in range(sections):
+                nxt = (j+1)%sections
+                faces.append((lower+j, lower+nxt, upper+nxt, upper+j))
+        for j in range(sections):
+            a = start+1+(rows-2)*sections+j
+            b = start+1+(rows-2)*sections+(j+1)%sections
+            faces.append((end, a, b))
+
+    for index in range(MULLION_COUNT):
+        theta = math.tau*index/WINDOW_COUNT+.036
+        outward = (math.cos(theta)/1.50, math.sin(theta)/.985)
+        length = math.hypot(*outward)
+        nx, ny = outward[0]/length, outward[1]/length
+        normal = (nx, ny, 0.)
+        tangent = (-ny, nx, 0.)
+        for z in (28.82, 29.055):
+            add_head((1.502*math.cos(theta), .22+.987*math.sin(theta), z),
+                     normal, tangent, (0., 0., 1.))
+
+    # Tiny paired bosses on each broad sheet ray near its lower mounting
+    # shoulder: do not mistake these illustrative fittings for a survey.
+    for index in range(RAY_COUNT):
+        degrees = (9, 36, 63, 90, 117, 144, 171)[index]
+        theta = math.radians(degrees)
+        base_x = 1.25*math.cos(theta)
+        base_z = 29.20+.18*math.sin(theta)
+        dx = 3.48*math.cos(theta)-base_x
+        dz = 29.08+3.55*math.sin(theta)-base_z
+        length = math.hypot(dx, dz)
+        side = (-dz/length, dx/length)
+        t = .12
+        width, thickness = .54, .137
+        for lateral in (-.45, .45):
+            x = base_x+dx*t+side[0]*width*lateral/2
+            z = base_z+dz*t+side[1]*width*lateral/2
+            # Interpolate the two planar front facets on either side of the
+            # ray's raised central fold (which sits at depth=-.79).
+            facet_depth = -.79+.65*abs(lateral)
+            y = .16+thickness*facet_depth-.005
+            add_head((x, y, z), (0., -1., 0.), (1., 0., 0.),
+                     (0., 0., 1.), radius=.022, height=.014)
+    return Mesh(tuple(vertices), tuple(faces))
+
+
 def crown_detail_parts() -> tuple[tuple[str, Mesh, str], ...]:
     parts: list[tuple[str, Mesh, str]] = [
         ("crown-diadem-perforated", crown_band(), "patina-shadow"),
         ("crown-rim-lower", crown_rim(upper=False), "patina"),
         ("crown-rim-upper", crown_rim(upper=True), "patina-light"),
+        ("crown-fasteners", crown_fasteners(), "patina"),
     ]
     parts.extend((f"crown-ray-{i}", crown_ray(i), "patina-light")
                  for i in range(RAY_COUNT))

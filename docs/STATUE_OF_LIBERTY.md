@@ -1,5 +1,50 @@
 # Statue of Liberty — scan-assisted detail rebuild
 
+## r48 — restrained crown copper joinery (opt-in, **ongoing**)
+
+The detailed 25-window diadem and seven folded sheet rays now include one
+separately editable closed-mesh hardware part: **50 tiny dome-head fasteners**
+on the copper window mullions and **14 near the ray mounting shoulders**.
+All 64 are volumetric, watertight bosses embedded into the adjacent copper,
+not dark texture dots or flat decal geometry. The initial large-boss render
+was rejected because it looked like polka dots; the accepted model uses
+smaller, shallow heads with restrained material contrast.
+
+These are **illustrative** fasteners. The National Park Service confirms
+the statue's 25 crown windows, seven rays and riveted copper construction,
+but their precise sizes and locations here are **not survey measurements**:
+[NPS statistics](https://www.nps.gov/stli/learn/historyculture/statue-statistics.htm),
+[NPS chronology](https://www.nps.gov/stli/learn/historyculture/liberty-island-a-chronology.htm).
+
+```bash
+KUMIKI_RENDER_PROFILE=smoke blender --background --factory-startup \
+  --python-exit-code 1 --python scripts/blender_entry.py -- \
+  build-liberty --detailed-torch --detailed-tablet --detailed-crown \
+  --output .review/landmarks/statues/statue-of-liberty/r48-subtle-fasteners
+PYTHONPATH=src python3 -m kumiki_blender audit-revision \
+  --root .review/landmarks/statues/statue-of-liberty/r48-subtle-fasteners
+```
+
+The procedural figure is still **not** a photographic likeness: the head,
+eye/mouth anatomy and neck remain the largest unresolved defects. Hardware
+detail is kept behind the pre-existing `--detailed-crown` opt-in flag.
+
+### Rejected face reconstruction paths (r42–r46)
+
+- Local subdivide-and-raycast deformation of the miniature scan toward the
+  CC0 donor produced eye/mouth folds and extreme facial roughness from
+  sampling discontinuities. It was rejected after front/three-quarter QA.
+- The 29.2 MB [Metron E candidate](https://zenodo.org/records/10307962)
+  matched its published MD5 `10635d07bf02d176bae177db634c3371`, but 12
+  orthographic inspection renders revealed a small decorative figure mounted
+  on a base, **not** a survey of the monument's head. No geometry was reused.
+- Extending the rear donor crop did not improve the visible temple boundary.
+  That approach and the continuous-morph attempts were discarded without
+  modifying the production asset or retaining failed face modes.
+
+Until a licensable actual-head scan or manually retopologized reference-based
+sculpt is available, photo-faithful facial acceptance is still blocked.
+
 ## r41 — temple/neck anatomical wrap (**experimental, not approved**)
 
 The front-only donor patch from r23 had a vertical cheek incision and a hard
