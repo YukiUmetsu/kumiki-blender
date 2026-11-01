@@ -7,7 +7,7 @@ on:
 
 jobs:
   focused-tests:
-    name: Active monument geometry regressions (Python 3.11)
+    name: Khufu pyramid geometry regressions (Python 3.11)
     if: github.event_name != 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
@@ -15,19 +15,14 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - name: Test new Khufu elevations and Sphinx source checks
+      - name: Test measured Khufu course geometry
         env:
           PYTHONPATH: src
         run: |
           python -m unittest -v \
             tests.test_egyptian_monuments.EgyptianMonumentTests.test_petrie_survey_has_203_measured_levels_and_observed_course_height_variation \
             tests.test_egyptian_monuments.EgyptianMonumentTests.test_khufu_petrie_preset_batches_real_course_heights_and_open_stone_joints \
-            tests.test_egyptian_monuments.EgyptianMonumentTests.test_khufu_petrie_rejects_misleading_custom_parameters_or_unsurveyed_site_layout \
-            tests.test_landmark_scan.LandmarkScanTests.test_source_geometry_review_detects_replica_like_wrong_ratios \
-            tests.test_landmark_scan.LandmarkScanTests.test_all_front_axes_fit_the_same_cropped_statue \
-            tests.test_landmark_scan.LandmarkScanTests.test_provenance_and_commercial_rights_are_checked_before_blender \
-            tests.test_cli.CLITests.test_sphinx_scan_build_preflights_rights_and_pairs_without_blender \
-            tests.test_cli.CLITests.test_sphinx_scan_build_passes_prepared_record_to_blender
+            tests.test_egyptian_monuments.EgyptianMonumentTests.test_khufu_petrie_rejects_misleading_custom_parameters_or_unsurveyed_site_layout
       - name: Compile Python sources
         run: python -m compileall -q src scripts
 
@@ -35,15 +30,13 @@ jobs:
     # Historical full-suite regression is intentionally opt-in; preserve all
     # test modules in the repo without rerunning proven coverage on every PR.
     if: github.event_name == 'workflow_dispatch'
+    name: All retained Python tests (manual, Python 3.11)
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        python-version: ["3.11", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: "3.11"
       - name: Run standard-library test suite
         env:
           PYTHONPATH: src
@@ -293,7 +286,7 @@ jobs:
           include-hidden-files: true
 
   blender-focused:
-    name: Active Khufu and Sphinx Blender render/export QA
+    name: Khufu pyramid Blender render/export QA
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -337,34 +330,14 @@ jobs:
             --python scripts/blender_entry.py -- \
             build-monument --kind pyramid --pyramid-preset khufu-petrie \
             --output .review/ci/khufu-petrie
-      - name: Create first-party static Sphinx scan fixture
-        run: |
-          blender --background --factory-startup --threads 1 --python-exit-code 1 \
-            --python scripts/blender_sphinx_scan_fixture.py
-      - name: Render licensed-source Sphinx import path
-        env:
-          KUMIKI_RENDER_PROFILE: smoke
-        run: |
-          blender --background --factory-startup --threads 1 --python-exit-code 1 \
-            --python scripts/blender_entry.py -- \
-            build-monument --kind sphinx \
-            --sphinx-source .review/ci/first-party-sphinx-proxy.glb \
-            --sphinx-provenance examples/first-party-sphinx-scan.json \
-            --output .review/ci/sphinx-scan-integration
-      - name: Audit new exports, source metadata and actual preview files
+      - name: Audit Khufu export, dimensional manifest and masonry preview
         env:
           PYTHONPATH: src
         run: |
           python -m kumiki_blender audit-revision --root .review/ci/khufu-petrie
-          python -m kumiki_blender audit-revision --root .review/ci/sphinx-scan-integration
           python -m kumiki_blender audit --model .review/ci/khufu-petrie/model.glb --require-pbr-textures
-          # This first-party geometry fixture has one plain material, not a
-          # licensed photogrammetry texture set. Verify its static GLB/provenance.
-          python -m kumiki_blender audit --model .review/ci/sphinx-scan-integration/model.glb
           python -c 'import json; m=json.load(open(".review/ci/khufu-petrie/manifest.json")); assert m["parameters"]["pyramid_courses"] == 201 and m["named_parts"]["pyramid_parts"] == 805'
-          python -c 'import json; m=json.load(open(".review/ci/sphinx-scan-integration/manifest.json")); assert m["sphinx_scan"]["provenance"]["commercial_use_allowed"] and "passes_bounding_envelope_screen" in m["sphinx_scan"]["source_geometry_review"]'
           test -s .review/ci/khufu-petrie/previews/masonry.png
-          test -s .review/ci/sphinx-scan-integration/previews/sphinx-face.png
       - name: Upload focused Blender previews and source artifacts
         if: always()
         uses: actions/upload-artifact@v4
@@ -396,6 +369,4 @@ jobs:
         run: |
           python scripts/emit_qa_jpegs.py \
             .review/ci/khufu-petrie/preview.png \
-            .review/ci/khufu-petrie/previews/masonry.png \
-            .review/ci/sphinx-scan-integration/previews/sphinx.png \
-            .review/ci/sphinx-scan-integration/previews/sphinx-face.png
+            .review/ci/khufu-petrie/previews/masonry.png

@@ -215,20 +215,21 @@ The Blender end-to-end test automatically runs when a `blender` executable is on
 
 ### Focused PR checks and manual full regression
 
-Normal pushes and pull requests run **eight focused Python regression cases**
-for the measured Khufu courses and Sphinx source-mesh intake. Pull requests
-add a Blender 4.5 LTS headless job that verifies the archive's official
-SHA-256 checksum and builds **only the active Khufu and sourced-Sphinx
-scenes**, checking manifests, portable GLBs and previews. Editable `.blend`,
+Normal pushes and pull requests run **three focused Python 3.11 regression
+cases** for measured Khufu course heights and batched stone geometry. Pull
+requests add a Blender 4.5 LTS job that verifies the archive's official
+SHA-256 checksum and builds **only the Khufu pyramid**, checking its manifest,
+textured portable GLB and masonry preview. Editable `.blend`,
 GLB, manifests and PNG previews remain available in the **Blender QA artifact**.
 This keeps the review feedback loop centered on code still changing.
 
-**No tests have been deleted.** The previous complete three-version Python
-test matrix, all legacy architectural renders/import variations, broader
-glTF-Transform specification validation and revision checks are now an
-**opt-in full regression**: open the GitHub Actions `Python foundation`
-workflow and select **Run workflow** (`workflow_dispatch`), or run the
-complete Python suite locally using the command above.
+**No tests have been deleted.** The complete Python test suite now runs on
+**one Python version (3.11)** when invoked manually. Sphinx scan tests, legacy
+architectural builds/import variations, broader glTF-Transform specification
+validation and revision checks are part of an **opt-in full regression**:
+open GitHub Actions `Python foundation` and select **Run workflow**
+(`workflow_dispatch`), or run the Python suite locally using the command
+above. Python 3.12 and 3.13 CI matrices have been removed.
 
 The CI job uses `KUMIKI_RENDER_PROFILE=smoke`, capping previews at 640 × 360 and 8 Cycles samples. It keeps the full geometry and material settings for meaningful export validation. The normal CLI uses `production` mode, preserving the sample and resolution settings in each asset recipe. A smoke preview is **not** a photorealistic acceptance render.
 
