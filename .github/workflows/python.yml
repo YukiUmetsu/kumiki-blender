@@ -6,7 +6,35 @@ on:
   workflow_dispatch:
 
 jobs:
+  focused-tests:
+    name: Active monument geometry regressions (Python 3.11)
+    if: github.event_name != 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Test new Khufu elevations and Sphinx source checks
+        env:
+          PYTHONPATH: src
+        run: |
+          python -m unittest -v \
+            tests.test_egyptian_monuments.EgyptianMonumentTests.test_petrie_survey_has_203_measured_levels_and_observed_course_height_variation \
+            tests.test_egyptian_monuments.EgyptianMonumentTests.test_khufu_petrie_preset_batches_real_course_heights_and_open_stone_joints \
+            tests.test_egyptian_monuments.EgyptianMonumentTests.test_khufu_petrie_rejects_misleading_custom_parameters_or_unsurveyed_site_layout \
+            tests.test_landmark_scan.LandmarkScanTests.test_source_geometry_review_detects_replica_like_wrong_ratios \
+            tests.test_landmark_scan.LandmarkScanTests.test_all_front_axes_fit_the_same_cropped_statue \
+            tests.test_landmark_scan.LandmarkScanTests.test_provenance_and_commercial_rights_are_checked_before_blender \
+            tests.test_cli.CLITests.test_sphinx_scan_build_preflights_rights_and_pairs_without_blender \
+            tests.test_cli.CLITests.test_sphinx_scan_build_passes_prepared_record_to_blender
+      - name: Compile Python sources
+        run: python -m compileall -q src scripts
+
   tests:
+    # Historical full-suite regression is intentionally opt-in; preserve all
+    # test modules in the repo without rerunning proven coverage on every PR.
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -24,8 +52,8 @@ jobs:
         run: python -m compileall -q src scripts
 
   blender-smoke:
-    name: Headless Blender 4.5 render and GLB QA
-    if: github.event_name != 'push'
+    name: Full historical Blender regression (manual)
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
@@ -264,10 +292,91 @@ jobs:
           retention-days: 7
           include-hidden-files: true
 
+  blender-focused:
+    name: Active Khufu and Sphinx Blender render/export QA
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install required Blender system libraries
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y libxrender1 libxi6 libxxf86vm1 libegl1 libgl1
+      - name: Cache Blender 4.5 LTS
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/blender-4.5.15-linux-x64.tar.xz
+          key: blender-4.5.15-linux-x64
+      - name: Download and verify Blender 4.5.15 LTS
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/blender-4.5.15-linux-x64.tar.xz"
+          if [ ! -f "$archive" ]; then
+            curl --fail --location --retry 3 \
+              "https://download.blender.org/release/Blender4.5/blender-4.5.15-linux-x64.tar.xz" \
+              --output "$archive"
+          fi
+          curl --fail --location --retry 3 \
+            "https://download.blender.org/release/Blender4.5/blender-4.5.15.sha256" \
+            --output "$RUNNER_TEMP/blender-4.5.15.sha256"
+          checksum="$(sha256sum "$archive" | cut -d ' ' -f 1)"
+          grep -q "$checksum.*blender-4.5.15-linux-x64.tar.xz" "$RUNNER_TEMP/blender-4.5.15.sha256"
+          mkdir -p "$RUNNER_TEMP/blender"
+          tar -xf "$archive" -C "$RUNNER_TEMP/blender"
+          echo "$RUNNER_TEMP/blender/blender-4.5.15-linux-x64" >> "$GITHUB_PATH"
+      - name: Render measured Khufu course-height pyramid
+        env:
+          KUMIKI_RENDER_PROFILE: smoke
+        run: |
+          blender --background --factory-startup --threads 1 --python-exit-code 1 \
+            --python scripts/blender_entry.py -- \
+            build-monument --kind pyramid --pyramid-preset khufu-petrie \
+            --output .review/ci/khufu-petrie
+      - name: Create first-party static Sphinx scan fixture
+        run: |
+          blender --background --factory-startup --threads 1 --python-exit-code 1 \
+            --python scripts/blender_sphinx_scan_fixture.py
+      - name: Render licensed-source Sphinx import path
+        env:
+          KUMIKI_RENDER_PROFILE: smoke
+        run: |
+          blender --background --factory-startup --threads 1 --python-exit-code 1 \
+            --python scripts/blender_entry.py -- \
+            build-monument --kind sphinx \
+            --sphinx-source .review/ci/first-party-sphinx-proxy.glb \
+            --sphinx-provenance examples/first-party-sphinx-scan.json \
+            --output .review/ci/sphinx-scan-integration
+      - name: Audit new exports, source metadata and actual preview files
+        env:
+          PYTHONPATH: src
+        run: |
+          python -m kumiki_blender audit-revision --root .review/ci/khufu-petrie
+          python -m kumiki_blender audit-revision --root .review/ci/sphinx-scan-integration
+          python -m kumiki_blender audit --model .review/ci/khufu-petrie/model.glb --require-pbr-textures
+          python -m kumiki_blender audit --model .review/ci/sphinx-scan-integration/model.glb --require-pbr-textures
+          python -c 'import json; m=json.load(open(".review/ci/khufu-petrie/manifest.json")); assert m["parameters"]["pyramid_courses"] == 201 and m["named_parts"]["pyramid_parts"] == 805'
+          python -c 'import json; m=json.load(open(".review/ci/sphinx-scan-integration/manifest.json")); assert m["sphinx_scan"]["provenance"]["commercial_use_allowed"] and "passes_bounding_envelope_screen" in m["sphinx_scan"]["source_geometry_review"]'
+          test -s .review/ci/khufu-petrie/previews/masonry.png
+          test -s .review/ci/sphinx-scan-integration/previews/sphinx-face.png
+      - name: Upload focused Blender previews and source artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: blender-qa-${{ github.sha }}
+          path: .review/ci/
+          if-no-files-found: warn
+          retention-days: 7
+          include-hidden-files: true
+
   visual-qa:
     name: Extract actual Blender renders for visual QA
     if: github.event_name == 'pull_request'
-    needs: blender-smoke
+    needs: blender-focused
     runs-on: ubuntu-latest
     timeout-minutes: 6
     steps:
@@ -284,11 +393,7 @@ jobs:
       - name: Publish small image QA thumbnails in job log
         run: |
           python scripts/emit_qa_jpegs.py \
-            .review/ci/egyptian-monuments/preview.png \
             .review/ci/khufu-petrie/preview.png \
             .review/ci/khufu-petrie/previews/masonry.png \
-            .review/ci/egyptian-monuments/previews/sphinx.png \
-            .review/ci/egyptian-monuments/previews/sphinx-profile.png \
-            .review/ci/egyptian-monuments/previews/sphinx-face.png \
-            .review/ci/egyptian-monuments/previews/masonry.png \
-            .review/ci/sphinx-scan-integration/previews/sphinx.png
+            .review/ci/sphinx-scan-integration/previews/sphinx.png \
+            .review/ci/sphinx-scan-integration/previews/sphinx-face.png

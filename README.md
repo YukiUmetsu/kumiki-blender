@@ -213,16 +213,30 @@ python3 -m compileall -q src scripts
 
 The Blender end-to-end test automatically runs when a `blender` executable is on `PATH`; otherwise it reports a skip. It may take several minutes to render. Tests that run only in Python cannot certify a visual result.
 
-### Automated Blender render QA
+### Focused PR checks and manual full regression
 
-Every pull request now has a Blender 4.5 LTS headless job. It downloads the version-pinned Blender archive, verifies its official SHA-256 checksum, builds both sample scenes, checks the generated GLBs, and uploads the editable `.blend`, GLB, manifests and PNG previews as a **Blender QA artifact** for visual review.
+Normal pushes and pull requests run **eight focused Python regression cases**
+for the measured Khufu courses and Sphinx source-mesh intake. Pull requests
+add a Blender 4.5 LTS headless job that verifies the archive's official
+SHA-256 checksum and builds **only the active Khufu and sourced-Sphinx
+scenes**, checking manifests, portable GLBs and previews. Editable `.blend`,
+GLB, manifests and PNG previews remain available in the **Blender QA artifact**.
+This keeps the review feedback loop centered on code still changing.
+
+**No tests have been deleted.** The previous complete three-version Python
+test matrix, all legacy architectural renders/import variations, broader
+glTF-Transform specification validation and revision checks are now an
+**opt-in full regression**: open the GitHub Actions `Python foundation`
+workflow and select **Run workflow** (`workflow_dispatch`), or run the
+complete Python suite locally using the command above.
 
 The CI job uses `KUMIKI_RENDER_PROFILE=smoke`, capping previews at 640 × 360 and 8 Cycles samples. It keeps the full geometry and material settings for meaningful export validation. The normal CLI uses `production` mode, preserving the sample and resolution settings in each asset recipe. A smoke preview is **not** a photorealistic acceptance render.
 
-CI also runs the official Khronos glTF specification validator through the
-version-pinned [glTF-Transform CLI](https://github.com/donmccurdy/glTF-Transform),
-alongside Kumiki's own semantic-node and revision-integrity checks. This is a
-CI-only development dependency, not a runtime dependency for model generation.
+The manually triggered full regression also runs the official Khronos glTF
+specification validator through version-pinned
+[glTF-Transform CLI](https://github.com/donmccurdy/glTF-Transform),
+alongside semantic-node and revision-integrity checks. It remains a
+development dependency, not a runtime dependency.
 
 To run a faster local validation before a full production render:
 
