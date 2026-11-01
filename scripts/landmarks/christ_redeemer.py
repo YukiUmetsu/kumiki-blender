@@ -1,6 +1,7 @@
 """Christ the Redeemer: original procedural, dimensioned Art Deco sculpture.
 
-30 m figure / 28 m arm span / 8 m pedestal. No external scan or mesh is used.
+30 m figure / 29.4 m surveyed arm span / 8 m pedestal.
+Original geometry only; no external scan or mesh is incorporated.
 Run: blender -b --python-exit-code 1 --python scripts/landmarks/christ_redeemer.py --
      --output .review/christ.glb --views .review/christ --verify
 """
@@ -13,7 +14,7 @@ import sys
 from pathlib import Path
 
 import bpy
-from mathutils import Vector
+from mathutils import Matrix, Vector
 
 TAU = math.tau
 STONE = None
@@ -23,14 +24,17 @@ MOSAIC_PITCH = .72 / 24  # 3 cm squares split into ~4.2 cm triangular tesserae.
 
 
 def soapstone_mosaic():
-    """Create an original tileable mosaic color map embedded in the GLB."""
+    """Three original, tileable, metric albedo/roughness/normal soapstone maps.
+
+    The 3 cm tesserae are substantially larger than the subtle height variation:
+    the seams are depressions of less than a millimetre, not heavy black gridwork.
+    """
     size = 768
     cells = 24
     tile_size = size // cells
-    image = bpy.data.images.new("Soapstone | triangular mosaic, 3 cm pitch",
-                                width=size, height=size, alpha=False)
-    image.file_format = "PNG"
-    pixels = array("f")
+    albedo = array("f")
+    roughness = array("f")
+    heights = array("f")
 
     def hash01(a, b, c):
         n = math.sin(a * 127.1 + b * 311.7 + c * 74.7) * 43758.5453
@@ -48,13 +52,44 @@ def soapstone_mosaic():
                         tile_size - 1 - fy, abs(fx + fy - tile_size) / 1.414)
             grout = -.014 * max(0, 1 - joint / 1.3)
             shade = variation + fine + grout
-            pixels.extend((.665 + shade, .673 + shade, .650 + shade, 1))
-    image.pixels.foreach_set(pixels)
-    image.pack()
-    return image
+            albedo.extend((.665 + shade, .673 + shade, .650 + shade, 1))
+            rough = min(.985, .895 + .075*hash01(cx, cy, upper) +
+                        .022*(hash01(x//4, y//4, 19)-.5) - 1.6*grout)
+            roughness.extend((rough, rough, rough, 1))
+            heights.append(-.00040*max(0,1-joint/1.5) +
+                           .000035*(hash01(x//3,y//3,23)-.5))
+
+    # Finite differences use the physical UV repeat distance, rather than the
+    # image pixel count, to keep grout depth realistic at any render size.
+    normals = array("f")
+    pixel_metres = .72 / size
+    for y in range(size):
+        for x in range(size):
+            i=y*size+x
+            left=heights[y*size+(x-1)%size]
+            right=heights[y*size+(x+1)%size]
+            below=heights[((y-1)%size)*size+x]
+            above=heights[((y+1)%size)*size+x]
+            dx=(right-left)/(2*pixel_metres)
+            dy=(above-below)/(2*pixel_metres)
+            inv=1/math.sqrt(dx*dx+dy*dy+1)
+            normals.extend((.5-.5*dx*inv,.5-.5*dy*inv,.5+.5*inv,1))
+
+    maps=[]
+    for name,pixels in (("Soapstone | diffuse triangular tesserae",albedo),
+                        ("Soapstone | high-roughness grain",roughness),
+                        ("Soapstone | micron relief and grout",normals)):
+        image=bpy.data.images.new(name,width=size,height=size,alpha=False)
+        image.file_format="PNG"
+        if name != "Soapstone | diffuse triangular tesserae":
+            image.colorspace_settings.name="Non-Color"
+        image.pixels.foreach_set(pixels)
+        image.pack()
+        maps.append(image)
+    return tuple(maps)
 
 
-def mat(name, rgb, image=None):
+def mat(name, rgb, image=None, roughness_image=None, normal_image=None):
     m = bpy.data.materials.new(name)
     m.diffuse_color = (*rgb, 1.0)
     m.use_nodes = True
@@ -67,6 +102,19 @@ def mat(name, rgb, image=None):
         tex.interpolation = "Linear"
         tex.extension = "REPEAT"
         m.node_tree.links.new(tex.outputs["Color"], node.inputs["Base Color"])
+    if roughness_image:
+        texture=m.node_tree.nodes.new("ShaderNodeTexImage")
+        texture.image=roughness_image
+        texture.extension="REPEAT"
+        m.node_tree.links.new(texture.outputs["Color"],node.inputs["Roughness"])
+    if normal_image:
+        texture=m.node_tree.nodes.new("ShaderNodeTexImage")
+        texture.image=normal_image
+        texture.extension="REPEAT"
+        bump=m.node_tree.nodes.new("ShaderNodeNormalMap")
+        bump.inputs["Strength"].default_value=.65
+        m.node_tree.links.new(texture.outputs["Color"],bump.inputs["Color"])
+        m.node_tree.links.new(bump.outputs["Normal"],node.inputs["Normal"])
     return m
 
 
@@ -193,7 +241,11 @@ def draped_panel(name, z0, z1, center, halfwidth, relief):
             s = k/(nx-1)
             x = mid+(2*s-1)*half
             shape = .08*math.cos(5*math.pi*s+.6*t)*math.sin(math.pi*t)
-            y = cloth_front(x,z)-relief-.04*math.sin(math.pi*s)-shape
+            # The upper edge sinks into the underlying sculpted cloth; otherwise
+            # the panel reads as an upright rectangle glued onto the chest.
+            blend=1-t**5
+            y = (cloth_front(x,z)-relief*blend+.09*t**5
+                 -(.04*math.sin(math.pi*s)+shape)*blend)
             vertices.append((x,y,z))
     polygons = [(j*nx+k,j*nx+k+1,(j+1)*nx+k+1,(j+1)*nx+k)
                 for j in range(nz-1) for k in range(nx-1)]
@@ -219,10 +271,99 @@ def draped_panel(name, z0, z1, center, halfwidth, relief):
             t = j/34
             z = z0+(z1-z0)*t
             x = center(t)+edge*halfwidth(t)
-            pts.append((x,cloth_front(x,z)-relief-.055,z))
+            blend=1-t**5
+            pts.append((x,cloth_front(x,z)-relief*blend+.09*t**5-.017,z))
         shaped_path(name+" | carved selvedge %s"%edge,pts,
                     [.026+.027*math.sin(math.pi*j/34) for j in range(35)])
     return obj
+
+
+def shoulder_shawl():
+    """A folded U-shaped, weighted upper edge, rather than a planar bib."""
+    ns,nt=84,48
+
+    def position(s,t):
+        x=-3.07+6.14*s
+        lower=30.08-2.50*math.sin(math.pi*s)**.36-.54*(s-.5)
+        upper=lower+.64+.43*math.sin(math.pi*s)
+        z=lower+(upper-lower)*t
+        belly=.065*math.sin(math.pi*t)*math.sin(math.pi*s)
+        fold=.045*math.cos(7.5*math.pi*s-1.8*t)*math.sin(math.pi*t)
+        # This layer needs clearance over the inner mantle; intersecting
+        # displacement surfaces created false round lobes across the chest.
+        y=cloth_front(x,z)-.37-belly-fold
+        return (x,y,z)
+
+    vertices=[position(k/(ns-1),j/(nt-1))
+              for j in range(nt) for k in range(ns)]
+    faces=[(j*ns+k,j*ns+k+1,(j+1)*ns+k+1,(j+1)*ns+k)
+           for j in range(nt-1) for k in range(ns-1)]
+    mesh=bpy.data.meshes.new("Mantle | deep shoulder shawl")
+    mesh.from_pydata(vertices,[],faces)
+    mesh.update()
+    obj=bpy.data.objects.new("Mantle | continuous hanging shoulder shawl",mesh)
+    bpy.context.collection.objects.link(obj)
+    mesh.materials.append(STONE)
+    uv=mesh.uv_layers.new(name="Shawl metric UV")
+    for poly in mesh.polygons:
+        poly.use_smooth=True
+        for li in poly.loop_indices:
+            co=mesh.vertices[mesh.loops[li].vertex_index].co
+            uv.data[li].uv=(co.x/.72,co.z/.72)
+    solid=obj.modifiers.new("Weight of carved shawl","SOLIDIFY")
+    solid.thickness=.13
+    solid.offset=1
+    solid.use_rim=True
+    hem=[position(j/72,0) for j in range(73)]
+    shaped_path("Mantle | gently rolled hanging shawl hem",hem,
+                [.012+.023*math.sin(math.pi*j/72) for j in range(73)],sides=11)
+
+
+def mantle_overcloth():
+    """Broad asymmetric hanging fabric crossing the front of the actual statue.
+
+    Unequal hem lengths and long, slanting carved folds make this read as a
+    weighted cloth sheet, not a geometric panel pasted on the chest.
+    """
+    ns,nt=61,89
+
+    def position(s,t):
+        x=-2.17+4.52*s+.10*math.sin(math.pi*t)*math.sin(2*math.pi*s)
+        low=18.8-3.28*s+.62*math.sin(2.5*math.pi*s+.34)
+        high=29.40+.45*s
+        z=low+(high-low)*t
+        # Diagonal folds run out from the shoulder and grow near the loose hem.
+        sweep=6*math.pi*s+2.7*t+1.9*math.sin(2*math.pi*s)
+        edge=math.sin(math.pi*s)**.48
+        fold=(.10+.17*(1-t))*math.cos(sweep)*edge*(1-t**3)
+        seam=.09*math.sin(3*math.pi*s-.4)*math.sin(math.pi*t)
+        relief=(.045+.18*edge)*(1-t**5)
+        y=cloth_front(x,z)-relief+.085*t**5-fold-seam
+        return (x,y,z)
+
+    vertices=[position(k/(ns-1),j/(nt-1))
+              for j in range(nt) for k in range(ns)]
+    polygons=[(j*ns+k,j*ns+k+1,(j+1)*ns+k+1,(j+1)*ns+k)
+              for j in range(nt-1) for k in range(ns-1)]
+    mesh=bpy.data.meshes.new("Mantle | asymmetric flowing forecloth")
+    mesh.from_pydata(vertices,[],polygons)
+    mesh.update()
+    obj=bpy.data.objects.new("Mantle | weighted flowing overcloth",mesh)
+    bpy.context.collection.objects.link(obj)
+    mesh.materials.append(STONE)
+    uv=mesh.uv_layers.new(name="Overcloth metric UV")
+    for polygon in mesh.polygons:
+        polygon.use_smooth=True
+        for li in polygon.loop_indices:
+            co=mesh.vertices[mesh.loops[li].vertex_index].co
+            uv.data[li].uv=(co.x/.72,co.z/.72)
+    solid=obj.modifiers.new("Overcloth edge thickness","SOLIDIFY")
+    solid.thickness=.080
+    solid.offset=0
+    solid.use_rim=True
+    hem=[position(j/72,0) for j in range(73)]
+    shaped_path("Mantle | irregular weighted lower hem",hem,
+                [.019+.047*math.sin(math.pi*j/72) for j in range(73)],sides=9)
 
 
 def robe():
@@ -241,26 +382,12 @@ def robe():
         sections.append(row)
     loft("Statue | single continuous robe volume", sections)
 
-    # The asymmetrically overlapping cloak flows off one shoulder, crosses the
-    # breast, then drops as a weighted mantle; geometry, not painted lines.
-    draped_panel("Mantle | oblique shoulder fold",27.3,32.0,
-                 lambda t: .68-2.76*t,
-                 lambda t: .34+.60*math.sin(math.pi*t)+.43*t,.20)
-    draped_panel("Mantle | descending left drape",10.1,27.5,
-                 lambda t: -.90+1.58*t+.13*math.sin(math.pi*t),
-                 lambda t: .025+.325*t+.27*math.sin(math.pi*t),.17)
-
-    # Curved secondary drapery follows the curved body; end widths taper to zero.
-    for side in (-1,1):
-        for strand in range(3):
-            pts = []
-            for j in range(18):
-                t=j/17
-                z=15.8+14.2*t
-                x=side*(.45+strand*.31 + (.34-.05*strand)*math.sin(t*math.pi))
-                pts.append((x,cloth_front(x,z)-.11,z))
-            shaped_path("Cloth | sweeping chest panel %s %s"%(side,strand),pts,
-                        [.015+.09*math.sin(math.pi*j/17) for j in range(18)])
+    # The broad forecloth has an angled hem; a long narrow stole crosses it.
+    mantle_overcloth()
+    draped_panel("Mantle | long chest stole",17.7,31.0,
+                 lambda t: .85+.34*t+.08*math.sin(math.pi*t),
+                 lambda t: .28+.45*(1-t)+.09*math.sin(math.pi*t),.26)
+    shoulder_shawl()
     for k in range(15):
         x0=-1.93+k*.273
         pts=[]
@@ -271,118 +398,147 @@ def robe():
             pts.append((x,cloth_front(x,z)-.065,z))
         shaped_path("Cloth | lower pleat %02d"%k, pts,
                     [.009+.075*math.sin(math.pi*j/17) for j in range(18)])
-    for k in range(6):
-        pts=[]
-        for j in range(14):
-            t=j/13
-            x=-1.38+t*(2.37-.13*k)
-            z=27.15+.55*k+.19*math.sin(t*math.pi)
-            pts.append((x,cloth_front(x,z)-.07,z))
-        shaped_path("Cloth | diagonal chest fold %02d"%k,pts,
-                    [.008+.067*math.sin(math.pi*j/13) for j in range(14)])
     sphere("Collar | shoulder transition",(0,0,32.95),(1.23,1.01,.50))
 
 
 def arms(side):
-    # Long tapering mass, upper surface nearly horizontal, weighted lower hem.
+    # A hanging sleeve instead of a featureless tapering tube: the lower hem
+    # drops several metres below the shoulder line before gathering at cuffs.
     measurements = [
-        (2.65,31.28,1.26,1.05),(3.35,31.13,1.30,1.07),
-        (4.45,30.85,1.25,1.03),(5.65,30.59,1.15,.96),
-        (7.20,30.34,1.00,.83),(8.30,30.12,.87,.74),
-        (9.30,29.93,.76,.64),(10.30,29.78,.62,.49),
-        (10.90,29.72,.46,.38),(11.13,29.70,.38,.34),
+        (2.65,30.75,1.50,1.00),(3.35,30.10,1.93,1.12),
+        (4.45,29.40,2.28,1.18),(5.65,29.20,2.23,1.16),
+        (7.20,29.10,2.00,1.08),(8.30,29.14,1.70,.90),
+        (9.30,29.28,1.37,.75),(10.30,29.48,.98,.55),
+        (10.90,29.60,.68,.40),(11.13,29.70,.39,.34),
     ]
+    def sleeve_dimensions(x):
+        for left,right in zip(measurements[:-1],measurements[1:]):
+            if left[0]<=x<=right[0]:
+                t=(x-left[0])/(right[0]-left[0])
+                return tuple(left[i]*(1-t)+right[i]*t for i in (1,2,3))
+        raise ValueError(x)
+
     sections=[]
-    for x,z,r,d in measurements:
+    for j in range(97):
+        x=2.65+(11.13-2.65)*j/96
+        z,r,d=sleeve_dimensions(x)
         ring=[]
         for k in range(64):
             a=TAU*k/64
             lower=max(0,-math.cos(a))
-            fluting=.065*math.cos(5*a+x*.4)+.03*math.cos(9*a)
-            ring.append((side*x, d*math.sin(a), z+r*math.cos(a)-lower*(.12+fluting)))
+            fluting=.18*math.cos(5*a+x*.42)+.10*math.cos(9*a-.23*x)
+            front=max(0,-math.sin(a))**2
+            gather=math.sin(math.pi*(x-2.65)/(11.13-2.65))**.7
+            large_fold=.15*math.cos(6.5*a+.41*x+.25*math.sin(.7*x))
+            small_fold=.065*math.sin(12.5*a-.19*x)
+            y=d*math.sin(a)-front*gather*(large_fold+small_fold)
+            dz=z+r*math.cos(a)-lower*(.12+fluting)
+            ring.append((side*x,y,dz))
         sections.append(ring)
     loft("Sleeve | %s | physically closed carved volume"%side,sections,invert=side==1)
-    for k in range(2):
-        pts=[]
-        for x,z,r,d in measurements[1:7]:
-            angle=1.2+.36*k+.38*math.sin((x-3.3)*.39)
-            pts.append((side*x,-d*math.sin(angle)-.018,z-r*abs(math.cos(angle))-.04))
-        shaped_path("Sleeve | %s | flow groove %s"%(side,k),pts,
-                    [.009+.037*math.sin(math.pi*j/(len(pts)-1)) for j in range(len(pts))])
-    sphere("Cuff | %s | recessed thickness"%side,(side*11.14,0,29.7),(.075,.32,.34),CARVING)
+    sphere("Cuff | %s | carved fold joining wrist"%side,
+           (side*11.12,0,29.7),(.095,.31,.32))
     hands(side)
 
 
 def hands(side):
     z=29.68
-    sphere("Hand | %s | wrist"%side,(side*11.36,0,z),(.31,.22,.30))
-    sphere("Hand | %s | broad sculpted palm"%side,(side*11.86,0,z),(.73,.21,.43))
-    for k,tip in enumerate((13.57,13.96,14.0,13.56)):
-        finger_z=z+.31-.205*k
-        pts=[(side*12.22,-.015,finger_z),
-             (side*12.65,-.028,finger_z-.018),
-             (side*(12.65+.52*(tip-12.65)),-.042,finger_z-.032),
-             (side*tip,-.055,finger_z-.055)]
-        shaped_path("Hand | %s | articulated finger %s"%(side,k),pts,
-                    (.115,.12,.096,.032),sides=12)
-    shaped_path("Hand | %s | thumb"%side,
-                [(side*11.58,-.12,z-.28),(side*11.99,-.16,z-.51),
-                 (side*12.65,-.16,z-.63),(side*12.82,-.10,z-.55)],
-                (.155,.14,.105,.038),sides=12)
+    sphere("Hand | %s | broad wrist"%side,(side*11.37,0,z),(.38,.245,.325))
+    sphere("Hand | %s | convex palmar mass"%side,
+           (side*11.99,-.015,z+.025),(.77,.29,.46),segments=40,rings=24)
+    # Individual digits depart from the hand's continuous palm, but their
+    # joint lines curve slightly and their distal ends are round, not prongs.
+    for k,tip in enumerate((13.73,13.934,13.87,13.46)):
+        finger_z=z+.315-.213*k
+        points=[]
+        widths=[]
+        for j in range(15):
+            t=j/14
+            x=12.35+(tip-12.35)*t
+            finger_curve=.043*math.sin(math.pi*t)+.045*t*t
+            y=-.018-.045*math.sin(math.pi*t)+.036*t*t
+            points.append((side*x,y,finger_z-finger_curve))
+            widths.append(.142*(1-t)**.75+.067*t+.012*math.sin(math.pi*t))
+        shaped_path("Hand | %s | gently flexed digit %s"%(side,k),points,
+                    widths,sides=14)
+        sphere("Hand | %s | softly rounded fingertip %s"%(side,k),
+               points[-1],(.067,.074,.068),segments=18,rings=10)
+    thumb=[]
+    widths=[]
+    for j in range(17):
+        t=j/16
+        x=11.69+1.21*t
+        y=-.13-.046*math.sin(math.pi*t)+.045*t*t
+        h=z-.25-.39*math.sin(.80*math.pi*t)-.040*t
+        thumb.append((side*x,y,h))
+        widths.append(.17*(1-t)**.85+.062*t)
+    shaped_path("Hand | %s | bent opposable thumb"%side,thumb,widths,sides=15)
+    sphere("Hand | %s | thumb pad"%side,
+           thumb[-1],(.062,.071,.069),segments=18,rings=10)
 
 
 HEAD = [
-    (34.02,.18,.27,-.03),(34.23,.54,.56,-.05),(34.47,.81,.75,-.08),
-    (34.82,1.04,.92,-.10),(35.30,1.28,1.10,-.08),
+    (34.02,.25,.27,-.03),(34.23,.68,.59,-.05),(34.47,.98,.78,-.08),
+    (34.82,1.19,.96,-.10),(35.30,1.36,1.12,-.08),
     (35.85,1.47,1.22,0),(36.50,1.52,1.24,.05),
     (37.15,1.43,1.18,.10),(37.65,1.03,.91,.11),
     (37.95,.38,.40,.12),(38.0,.045,.07,.12),
 ]
 
 
+def head_profile(z):
+    for low,high in zip(HEAD[:-1],HEAD[1:]):
+        if low[0]<=z<=high[0]:
+            t=(z-low[0])/(high[0]-low[0])
+            return tuple(low[k]*(1-t)+high[k]*t for k in (1,2,3))
+    raise ValueError(z)
+
+
 def face():
-    sphere("Head | strong neck",(0,.18,33.75),(.54,.57,.94))
+    sphere("Head | broad tendinous neck",(0,.20,33.52),(.93,.79,1.34))
     # Densify the face loft to sculpt cheekbones, chin and jaw as one surface.
     # Surface folds are smooth Gaussian volumes, not glued-on primitive cheeks.
     sampled=[]
     for low,high in zip(HEAD[:-1],HEAD[1:]):
-        for j in range(6):
-            t=j/6
+        for j in range(12):
+            t=j/12
             sampled.append(tuple(low[k]*(1-t)+high[k]*t for k in range(4)))
     sampled.append(HEAD[-1])
     rings=[]
     for z,rx,ry,cy in sampled:
         ring=[]
-        for i in range(96):
-            a=TAU*i/96
+        for i in range(160):
+            a=TAU*i/160
             x=rx*math.cos(a)
             y=cy+ry*math.sin(a)
             if math.sin(a)<0:
                 # Integrate the full facial relief into the head surface.
                 # Features are smooth local displacements of the same manifold,
                 # eliminating the stacked cylinder/ball appearance in profile.
-                cheek=.17*math.exp(-((abs(x)-.82)/.33)**2-((z-35.43)/.46)**2)
-                jaw=.07*math.exp(-((abs(x)-.66)/.42)**2-((z-34.90)/.35)**2)
-                chin=.18*math.exp(-(x/.57)**2-((z-34.46)/.32)**2)
-                brow=.07*math.exp(-((abs(x)-.65)/.37)**2-((z-36.77)/.115)**2)
-                upper_lid=.052*math.exp(-((abs(x)-.66)/.32)**2-((z-36.55)/.052)**2)
-                lower_lid=.029*math.exp(-((abs(x)-.67)/.32)**2-((z-36.37)/.067)**2)
-                eye_socket=.08*math.exp(-((abs(x)-.67)/.36)**2-((z-36.46)/.13)**2)
-                nose_bridge=.13*math.exp(-(x/.18)**2-((z-36.18)/.48)**2)
-                nose_tip=.31*math.exp(-(x/.22)**2-((z-35.74)/.19)**2)
-                nostril_wing=.12*math.exp(-((abs(x)-.23)/.16)**2-((z-35.64)/.13)**2)
-                top_lip=.057*math.exp(-(x/.40)**2-((z-35.20)/.072)**2)
-                bottom_lip=.049*math.exp(-(x/.37)**2-((z-35.075)/.068)**2)
-                mouth_crease=.045*math.exp(-(x/.38)**2-((z-35.13)/.030)**2)
-                jaw_beard=.13*math.exp(-((z-34.77)/.37)**2)*math.exp(-(x/1.12)**6)
-                side_beard=.15*math.exp(-((abs(x)-.98)/.28)**2-((z-35.23)/.56)**2)
-                beard_mask=min(1.,(jaw_beard+side_beard)/.16)
-                carved_grain=.026*beard_mask*(.6*math.cos(33*x+8*z)+
+                cheek=.24*math.exp(-((abs(x)-.83)/.43)**2-((z-35.97)/.54)**2)
+                jaw=.19*math.exp(-((abs(x)-.82)/.42)**2-((z-35.24)/.52)**2)
+                chin=.31*math.exp(-(x/.77)**4-((z-34.73)/.36)**2)
+                brow=.20*math.exp(-((abs(x)-.67)/.44)**2-((z-37.17)/.12)**2)
+                upper_lid=.065*math.exp(-((abs(x)-.69)/.35)**2-((z-36.98)/.071)**2)
+                lower_lid=.042*math.exp(-((abs(x)-.68)/.35)**2-((z-36.78)/.07)**2)
+                eye_socket=.19*math.exp(-((abs(x)-.69)/.40)**2-((z-36.91)/.20)**2)
+                nose_bridge=.25*math.exp(-(x/.21)**2-((z-36.68)/.47)**2)
+                nose_tip=.45*math.exp(-(x/.25)**2-((z-36.13)/.21)**2)
+                nostril_wing=.16*math.exp(-((abs(x)-.28)/.17)**2-((z-36.08)/.14)**2)
+                nostril_cavity=.085*math.exp(-((abs(x)-.24)/.08)**2-((z-36.025)/.052)**2)
+                top_lip=.12*math.exp(-(x/.49)**2-((z-35.76)/.095)**2)
+                bottom_lip=.115*math.exp(-(x/.47)**2-((z-35.56)/.11)**2)
+                mouth_crease=.09*math.exp(-(x/.49)**2-((z-35.66)/.047)**2)
+                jaw_beard=.17*math.exp(-((z-35.13)/.43)**2)*math.exp(-(x/.95)**6)
+                side_beard=.20*math.exp(-((abs(x)-1.00)/.26)**2-((z-35.44)/.55)**2)
+                beard_tip=.20*math.exp(-(x/.44)**2-((z-34.54)/.26)**2)
+                beard_mask=min(1.,(jaw_beard+side_beard+beard_tip)/.22)
+                carved_grain=.009*beard_mask*(.6*math.cos(33*x+8*z)+
                                                 .4*math.cos(21*x-12*z))
                 y-= (cheek+jaw+chin+brow+upper_lid+lower_lid+
                      nose_bridge+nose_tip+nostril_wing+top_lip+bottom_lip+
-                     jaw_beard+side_beard+carved_grain)
-                y+=eye_socket+mouth_crease
+                     jaw_beard+side_beard+beard_tip+carved_grain)
+                y+=eye_socket+mouth_crease+nostril_cavity
             ring.append((x,y,z))
         rings.append(ring)
     head_surface=loft("Head | integrated cheekbone jaw and cranium",rings)
@@ -397,128 +553,186 @@ def face():
 
     for side in (-1,1):
         # Almond eyelid lines conform to the sculpted surface, even in profile.
-        top=[(side*.32,36.48),(side*.53,36.50),(side*.78,36.485),
-             (side*1.04,36.46)]
-        bottom=[(side*.32,36.44),(side*.58,36.395),(side*.84,36.415),
-                (side*1.04,36.46)]
+        top=[(side*.32,36.89),(side*.48,36.91),(side*.67,36.91),
+             (side*.84,36.87),(side*1.05,36.81)]
         shaped_path("Face | %s | upper eyelid incision"%side,
                     [(x,face_y(x,z),z) for x,z in top],
-                    (.008,.022,.019,.006),CARVING,sides=8)
-        shaped_path("Face | %s | lower eyelid incision"%side,
-                    [(x,face_y(x,z,.009),z) for x,z in bottom],
-                    (.007,.012,.011,.004),CARVING,sides=8)
-        sphere("Ear | %s | helix"%side,(side*1.41,-.035,36.08),(.11,.15,.36))
-        sphere("Ear | %s | concha shadow"%side,(side*1.50,-.16,36.06),(.027,.066,.17),CARVING)
-        sphere("Ear | %s | lobule"%side,(side*1.41,-.07,35.78),(.08,.10,.11))
-    for side in (-1,1):
-        x=side*.16
-        sphere("Face | %s | carved nostril"%side,
-               (x,face_y(x,35.61,.008),35.61),(.032,.020,.014),CARVING)
-    lip=[(-.38,35.14),(-.17,35.13),(0,35.13),(.17,35.13),(.38,35.14)]
+                    (.005,.021,.025,.016,.003),CARVING,sides=9)
+        sphere("Ear | %s | helix"%side,(side*1.49,-.035,36.29),(.11,.15,.36))
+        sphere("Ear | %s | concha shadow"%side,(side*1.57,-.16,36.28),(.027,.066,.17),CARVING)
+        sphere("Ear | %s | lobule"%side,(side*1.49,-.07,35.98),(.08,.10,.11))
+    lip=[(-.52,35.60),(-.29,35.66),(0,35.68),(.29,35.66),(.52,35.60)]
     shaped_path("Face | carved closed mouth",
                 [(x,face_y(x,z,.009),z) for x,z in lip],
-                (.006,.011,.012,.011,.006),CARVING)
+                (.004,.012,.014,.012,.004),CARVING)
     for side in (-1,1):
-        # Soft moustache falls away from the philtrum, framing the closed lips.
-        pts=[]
-        for j in range(10):
-            t=j/9
-            x=side*(.08+.52*t)
-            z=35.34-.095*t+.027*math.sin(math.pi*t)
-            pts.append((x,face_y(x,z,.024),z))
-        shaped_path("Beard | %s | carved moustache"%side,pts,
-                    [.012+.032*math.sin(math.pi*j/9) for j in range(10)])
-        for k in range(4):
+        # Beard grain stays in the sculpt surface. High-contrast moustache
+        # strokes looked painted-on at close range, so leave those implicit.
+        for k in range(2):
             # Follow the lower cheek down to a tapered central chin rather
             # than applying an unstructured black beard material.
             pts=[]
             for j in range(13):
                 t=j/12
-                x=side*(.84+.045*k-(.19+.04*k)*t+.025*math.sin(math.pi*t))
-                z=35.35-.145*k-(.32+.04*k)*t
+                x=side*(.97+.045*k-(.21+.04*k)*t+.025*math.sin(math.pi*t))
+                z=35.67-.18*k-(.33+.04*k)*t
                 pts.append((x,face_y(x,z,.012),z))
             shaped_path("Beard | %s | etched curl %s"%(side,k),pts,
                         [.003+.009*math.sin(math.pi*j/12) for j in range(13)],
                         CARVING,sides=7)
-    # Center-parted, gravity-led waves; lengths descend behind the cheeks.
+    # The real monument has a nearly continuous, heavy hair mantle, not
+    # individual dangling tubular strands. Construct an open-front shell
+    # wrapping the crown and back of the skull, with variable length at the
+    # nape and carved shallow flowing channels.
+    def hair_position(a,t):
+        base=33.16+.30*max(0,math.sin(a))**2
+        z=base+(37.98-base)*t
+        rx,ry,cy=head_profile(max(34.02,z))
+        extent=max(rx+.13,1.46*(1-t))
+        wave=.050*math.cos(11*a+2.3*t)+.028*math.sin(17*a-1.2*t)
+        return (extent*math.cos(a),cy+(ry-.025+.49*(1-t)+wave)*math.sin(a),z)
+
+    nz,na=120,128
+    vertices=[]
+    for j in range(nz):
+        t=j/(nz-1)
+        for k in range(na):
+            a=-.23+(math.pi+.46)*k/(na-1)
+            vertices.append(hair_position(a,t))
+    quads=[(j*na+k,j*na+k+1,(j+1)*na+k+1,(j+1)*na+k)
+           for j in range(nz-1) for k in range(na-1)]
+    mesh=bpy.data.meshes.new("Hair | continuous draped stone mantle")
+    mesh.from_pydata(vertices,[],quads)
+    mesh.update()
+    hood=bpy.data.objects.new("Hair | continuous parted mantle",mesh)
+    bpy.context.collection.objects.link(hood)
+    hood.data.materials.append(STONE)
+    uv=mesh.uv_layers.new(name="Hair metric UV")
+    for poly in mesh.polygons:
+        poly.use_smooth=True
+        for li in poly.loop_indices:
+            co=mesh.vertices[mesh.loops[li].vertex_index].co
+            uv.data[li].uv=(co.x/.72,co.z/.72)
+    thickness=hood.modifiers.new("Carved hair mantle thickness","SOLIDIFY")
+    thickness.thickness=.045
+    thickness.offset=1
+    thickness.use_rim=True
+
     for side in (-1,1):
-        for k in range(2):
-            # Forehead locks sweep from the center part to the temples. The
-            # starts sit on the scalp, not as exposed spike tips above it.
+        # Incised parallel channels flow around the temple, ending naturally
+        # at the draped lower edge; no free-floating rod or exposed spike tips.
+        for k in range(7):
             pts=[]
-            for j in range(18):
-                t=j/17
-                x=side*(.12+1.08*t+.055*k)
-                z=37.69-.61*t-.045*k+.035*math.sin(math.pi*t)
-                y=face_y(x,z,.07)
-                pts.append((x,y,z))
-            shaped_path("Hair | %s | swept forehead wave %s"%(side,k),pts,
-                        [.009+.044*math.sin(math.pi*j/17) for j in range(18)],sides=13)
-        for k in range(2):
-            pts=[]
-            for j in range(24):
-                t=j/23
-                pts.append((side*(1.25+.16*k+.18*math.sin(2.5*t)),
-                            -.18-.23*math.sin(math.pi*t)+.2*k,
-                            37.42-(2.75+.28*k)*t))
-            shaped_path("Hair | %s | temple curtain %s"%(side,k),pts,
-                        [.055+.18*math.sin(math.pi*j/23) for j in range(24)],sides=13)
-        for k in range(3):
-            pts=[]
-            radius=[]
-            for j in range(19):
-                t=j/18
-                z=37.82-(3.42+.17*k)*t
-                x=side*(.21+.43*math.sin(t*math.pi/2)+.25*k+.10*math.sin(4*t+.6*k))
-                y=.31+.27*k-.18*math.sin(t*math.pi)
-                pts.append((x,y,z))
-                radius.append(.075+(.22-.018*k)*math.sin(math.pi*t))
-            shaped_path("Hair | %s | flowing lock %s"%(side,k),pts,radius,sides=13)
-            sphere("Hair | %s | rounded lock end %s"%(side,k),pts[-1],(.076,.078,.085))
-            if k<3:
-                groove=[(x+side*.115,y-.1,z) for x,y,z in pts[2:-1]]
-                shaped_path("Hair | %s | recessed strand %s"%(side,k),groove,
-                            [.012+.021*math.sin(math.pi*j/(len(groove)-1)) for j in range(len(groove))],
-                            CARVING,sides=7)
-        sphere("Hair | %s | crown"%side,(side*.55,.39,37.49),(.66,.62,.32))
+            for j in range(27):
+                t=.075+.85*j/26
+                a=(-.20+.105*k) if side==1 else (math.pi+.20-.105*k)
+                a+=side*.023*math.sin(5*t+k*.4)
+                p=Vector(hair_position(a,t))
+                normal=Vector((math.cos(a),math.sin(a),0))
+                pts.append(tuple(p+normal*.035))
+            shaped_path("Hair | %s | engraved sweep %s"%(side,k),pts,
+                        [.004+.012*math.sin(math.pi*j/26) for j in range(27)],
+                        CARVING,sides=7)
+        pts=[]
+        for j in range(29):
+            t=j/28
+            x=side*(.11+.70*t)
+            z=37.84-.13*t+.022*math.sin(math.pi*t)
+            pts.append((x,face_y(x,z,.045),z))
+        shaped_path("Hair | %s | understated parted hairline"%side,pts,
+                    [.004+.018*math.sin(math.pi*j/28) for j in range(29)],
+                    STONE,sides=9)
 
 
 def pedestal():
-    bpy.ops.mesh.primitive_cylinder_add(vertices=6,radius=3.2,depth=8.0,
-                                        location=(0,0,4),rotation=(0,0,math.pi/6))
-    obj=bpy.context.object
-    obj.name="Pedestal | hexagonal granite"
-    obj.data.materials.append(GRANITE)
-    bevel=obj.modifiers.new("Cut stone edges","BEVEL")
-    bevel.width=.085
-    bevel.segments=3
-    obj.modifiers.new("Weighted pedestal normals","WEIGHTED_NORMAL")
-    for title,z,depth,radius in (("ground course",.24,.48,3.36),
-                                 ("upper cornice",7.83,.34,3.30)):
-        bpy.ops.mesh.primitive_cylinder_add(vertices=6,radius=radius,depth=depth,
-                                            location=(0,0,z),rotation=(0,0,math.pi/6))
-        course=bpy.context.object
-        course.name="Granite | hexagonal "+title
-        course.data.materials.append(GRANITE)
-        mod=course.modifiers.new("Chiselled stone arris","BEVEL")
-        mod.width=.04
-        mod.segments=2
-        course.modifiers.new("Weighted cornice normals","WEIGHTED_NORMAL")
+    # Survey/OSM geometry shows a chamfered square chapel footprint, roughly
+    # 8 m across, with clipped corners (eight edges), not a regular hexagon.
+    def ring(extent,cut,z):
+        e=extent
+        c=cut
+        return [(-e+c,-e,z),(e-c,-e,z),(e,-e+c,z),(e,e-c,z),
+                (e-c,e,z),(-e+c,e,z),(-e,e-c,z),(-e,-e+c,z)]
+
+    loft("Pedestal | chamfered square granite shaft",
+         [ring(4.26,1.06,0),ring(4.16,1.04,.5),
+          ring(3.80,1.0,7.35),ring(3.72,.98,8.0)],GRANITE)
+    loft("Granite | lower projecting stone course",
+         [ring(4.38,1.08,0),ring(4.38,1.08,.24)],GRANITE)
+    loft("Granite | chapel cornice band",
+         [ring(3.97,1.0,7.34),ring(3.97,1.0,7.73)],GRANITE)
+    loft("Granite | upper chamfered coping",
+         [ring(3.83,.98,7.74),ring(3.83,.98,8.0)],GRANITE)
+
+    # The lower pedestal houses the chapel of Nossa Senhora Aparecida.
+    # Its iron entry grille is small in relation to the eight-metre plinth.
+    def face_front(z,offset=.04):
+        return -4.26+.0675*z-offset
+
+    z0,z1=.69,3.48
+    vertices=[(-.81,face_front(z0),z0),(.81,face_front(z0),z0),
+              (.81,face_front(z1),z1),(-.81,face_front(z1),z1)]
+    mesh=bpy.data.meshes.new("Chapel | inset dark entry plane")
+    mesh.from_pydata(vertices,[],[(0,1,2,3)])
+    mesh.update()
+    obj=bpy.data.objects.new("Chapel | recessed entry",mesh)
+    bpy.context.collection.objects.link(obj)
+    mesh.materials.append(mat("Chapel | unlit doorway",(.105,.112,.108)))
+    uv=mesh.uv_layers.new(name="Portal metric UV")
+    for poly in mesh.polygons:
+        for li in poly.loop_indices:
+            co=mesh.vertices[mesh.loops[li].vertex_index].co
+            uv.data[li].uv=(co.x/.72,co.z/.72)
+
+    framing=[(-.90,face_front(z0,.10),z0),
+             (-.90,face_front(z1+.14,.10),z1+.14),
+             (.90,face_front(z1+.14,.10),z1+.14),
+             (.90,face_front(z0,.10),z0)]
+    shaped_path("Chapel | granite door jamb and lintel",framing,
+                (.10,.12,.12,.10),GRANITE,sides=11)
+    gate=mat("Chapel | black iron lattice",(.19,.205,.20))
+    for k in range(9):
+        x=-.72+.18*k
+        shaped_path("Chapel | wrought-iron vertical %02d"%k,
+                    [(x,face_front(z,.095),z) for z in (z0+.09,z1-.05)],
+                    (.022,.022),gate,sides=8)
+    for k,z in enumerate((1.15,1.91,2.63,3.31)):
+        shaped_path("Chapel | forged crossbar %02d"%k,
+                    [(x,face_front(z,.108),z) for x in (-.72,.72)],
+                    (.022,.022),gate,sides=8)
 
 
 def build():
     global STONE,CARVING,GRANITE
     bpy.ops.object.select_all(action="SELECT")
     bpy.ops.object.delete(use_global=False)
-    STONE=mat("Warm light grey soapstone | tesserae",(.665,.67,.635),
-              soapstone_mosaic())
-    CARVING=mat("Soft shadow in carved recesses",(.43,.45,.42))
+    mosaic_color,mosaic_roughness,mosaic_normal=soapstone_mosaic()
+    STONE=mat("Warm light grey soapstone | 3 cm tesserae",(.665,.67,.635),
+              mosaic_color,mosaic_roughness,mosaic_normal)
+    CARVING=mat("Subtle tonal shifts in carved stone recesses",(.56,.57,.55))
     GRANITE=mat("Pedestal | grey granite",(.33,.34,.33))
     pedestal()
     robe()
+    existing=set(bpy.data.objects)
     for side in (-1,1):
         arms(side)
+    # A measured photogrammetric survey reports 29.4 m fingertip span,
+    # compared with the widely repeated rounded 28 m figure.
+    for obj in set(bpy.data.objects)-existing:
+        obj.matrix_world=Matrix.Scale(1.05,4,Vector((1,0,0))) @ obj.matrix_world
+    existing=set(bpy.data.objects)
     face()
+    # Side photographs show the gaze tilted downward. Apply one rigid
+    # anatomical transform to face, neck, and the complete hair mantle.
+    pivot=Matrix.Translation((0,0,34.20))
+    tilt=pivot @ Matrix.Rotation(math.radians(22),4,'X') @ pivot.inverted()
+    head_objects=set(bpy.data.objects)-existing
+    for obj in head_objects:
+        obj.matrix_world=tilt @ obj.matrix_world
+    peak=max((obj.matrix_world@v.co).z
+             for obj in head_objects for v in obj.data.vertices)
+    height_correction=Matrix.Translation((0,0,38.0-peak))
+    for obj in head_objects:
+        obj.matrix_world=height_correction @ obj.matrix_world
 
 
 def verify():
@@ -536,8 +750,15 @@ def verify():
     for side in (-1,1):
         obj=next(ob for ob in objs if ob.name.startswith("Sleeve | %s | physically"%side))
         faces=[p for p in obj.data.polygons if len(p.vertices)==4]
-        checks=[p.normal.dot(Vector((0,p.center.y,p.center.z-30.0)).normalized()) > 0
-                for p in faces if abs(p.center.z-30)>0.05]
+        centers=[sum(obj.data.vertices[j*64+k].co.z for k in range(64))/64
+                 for j in range(len(obj.data.vertices)//64)]
+        checks=[]
+        for p in faces:
+            j=p.index//64
+            center_z=(centers[j]+centers[j+1])/2
+            radial=Vector((0,p.center.y,p.center.z-center_z))
+            if radial.length>.08:
+                checks.append(p.normal.dot(radial.normalized())>0)
         winding[side]=round(sum(checks)/len(checks),3)
         edge_uses={}
         for polygon in obj.data.polygons:
@@ -547,18 +768,18 @@ def verify():
     result={"bounds_min":minimum,"bounds_max":maximum,"pedestal_top":ptop,
             "robe_bottom":rbot,"sleeve_outward_fraction":winding,
             "sleeve_nonmanifold_edges":open_edges,
-            "pedestal_sides":6,
+            "pedestal_sides":8,
             "mosaic_images":len([im for im in bpy.data.images if im.name.startswith("Soapstone |")]),
             "uv_mesh_count":sum(bool(ob.data.uv_layers) for ob in objs),
             "head_surface_vertices":len(head_ob.data.vertices),
             "mesh_count":len(objs),"vertex_count":sum(len(ob.data.vertices) for ob in objs)}
     assert abs(ptop-rbot)<.001,"Statue must meet pedestal without floating"
-    assert maximum[0]-minimum[0]>27.6,"Hands should span 28 m"
+    assert 29.1<maximum[0]-minimum[0]<29.8,"Survey fingertip span should be 29.4 m"
     assert maximum[2]>37.9 and minimum[2]<.01,"Scale should be 38 m including pedestal"
     assert min(winding.values())>.60,"Both sleeve normals must face outward"
     assert not any(open_edges.values()),"Sleeve meshes must be closed and manifold"
     assert len(head_ob.data.vertices)>5000,"Face needs a dense sculptable surface"
-    assert result["mosaic_images"]==1 and result["uv_mesh_count"]>70, "Mosaic needs glTF UVs"
+    assert result["mosaic_images"]==3 and result["uv_mesh_count"]>70, "PBR mosaic needs glTF UVs"
     return result
 
 

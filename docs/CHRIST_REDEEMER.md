@@ -9,9 +9,9 @@ of another 3D model, or a certified museum-quality likeness.
 | Real-world reference | Generator target |
 | --- | --- |
 | Statue height excluding pedestal: **30 m** | Statue from z=8 to z=38 |
-| Outstretched arms: **28 m** | Approx. 28 m across sculpted hands |
-| Pedestal height: **8 m** | Hexagonal stepped granite pedestal, z=0 to 8 |
-| Cladding: pale soapstone mosaic | Embedded, original triangular tesserae color map with metric UVs |
+| Surveyed outstretched fingertips: **29.4 m** | Approx. 29.4 m across sculpted hands |
+| Pedestal height: **8 m** | Chamfered-square stepped granite pedestal, z=0 to 8 |
+| Cladding: pale soapstone mosaic | Embedded original triangular albedo, normal, and roughness maps with metric UVs |
 
 Sources for measurements and surface treatment:
 
@@ -21,6 +21,7 @@ Sources for measurements and surface treatment:
 - [Sanctuary of Christ the Redeemer](https://santuariocristoredentor.com.br/) — soapstone triangle dimensions and conservation.
 - [Pontifical Catholic University Rio, Redentor project](https://next.dad.puc-rio.br/projeto/projeto-redentor/) — side elevation study.
 - [Wikimedia Commons close-up photograph](https://commons.wikimedia.org/wiki/File:Detail,_Christ_the_Redeemer_statue.JPG) — facial reference.
+- [Pix4D photogrammetric survey](https://www.pix4d.com/blog/mapping-christ/) — a 29.40 m span in the original drawings (29.42 m measured), rather than the frequently rounded 28 m figure.
 
 References are for visual inspection only; no external images or third-party
 model assets are embedded into the export.
@@ -38,11 +39,14 @@ blender --background --factory-startup --python-exit-code 1 \
   --views .review/christ/views --size 900 --samples 48
 ```
 
-The script generates named, editable component meshes for the robe, sleeves,
-face, hair locks, fingers, and pedestal. The GLB embeds a procedurally generated
-3 cm-scale triangular soapstone tesserae color texture. It contains model meshes
-only, excluding QA lights/cameras. The accompanying audit checks pedestal contact,
-dimensions, outward sleeve normals, UV coverage, and portable texture embedding.
+The script generates named, editable component meshes for the robe, weighted
+asymmetric mantle, closed draped sleeves, sculpted face, continuous hair mantle,
+separated hands/fingers, chamfered granite pedestal, and chapel entrance. The GLB
+embeds **three original, tileable soapstone textures**: 3 cm-scale triangular
+tesserae color, subtle grout/stone normal relief, and high-roughness stone grain.
+It contains model meshes only, excluding QA lights and cameras. The live audit
+checks pedestal contact, measured dimensions, manifold/outward sleeve normals,
+UV coverage, and fully portable PBR texture embedding.
 
 For a fast close-up iteration, append `--shot head_front --shot head_profile`
 to render just those views. Other choices are `front`, `profile`,
@@ -57,17 +61,16 @@ KUMIKI_BLENDER_BINARY=/path/to/blender PYTHONPATH=src \
 
 ## Craft status
 
-The original PR used large primitive spheres for facial features, featureless
-torso cylinders, and oversized straight sleeves. The current revision fixes
-the floating base and sleeve normals; separates broad sculpted palms and fingers
-from the sleeve cuff; adds a modeled asymmetric overlapping mantle with cloth
-thickness; and carves beard, moustache and forehead hair. Brow, eye sockets,
-nose, cheeks, lips, chin and beard relief form **continuous displacement of a
-dense head mesh**. The soapstone mosaic is an embedded texture rather than an
-external dependency. Front/profile/head/hand cameras expose unresolved gaps.
+This revision replaces rigid tubular sleeves with more continuous hanging
+folds; adds a broad, asymmetrically hemmed forecloth, weighted U-shaped
+shoulder shawl, and independently draped stole; and tips the integrated head,
+hair, and neck forward toward the characteristic downward gaze. Eyelids, cheek,
+nose, chin, jaw, and beard volumes are displaced on the **same dense head
+surface**, with finer incised detailing. The head and hands can be examined
+separately using the close-up QA cameras.
 
-**Still needed before a photo-faithful landmark claim:** high-resolution
-anatomical sculpting of the eyelids, mouth, nose and jaw; more natural hair and
-shoulder drapery; spatially detailed mosaic relief with roughness/normal maps;
-reference-aligned human approval from all camera angles.
-The current work is a more complete study, not final craftsmanship.
+This remains an original parametric reconstruction. Its stylized anatomical
+geometry is not a photogrammetric replica, and the script deliberately does not
+redistribute a third-party scan. Photo-fidelity at macro face, hair, fingers,
+and textile creases would still require a dedicated sculpting and multi-angle
+reference-matching pass with human approval.

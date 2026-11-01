@@ -47,17 +47,17 @@ class ChristRedeemerTests(unittest.TestCase):
             self.assertAlmostEqual(report["bounds_max"][2] - report["bounds_min"][2],
                                    38.0, delta=.05)
             self.assertAlmostEqual(report["bounds_max"][0] - report["bounds_min"][0],
-                                   28.0, delta=.7)
+                                   29.4, delta=.35)
             self.assertTrue(all(value >= .90
                                 for value in report["sleeve_outward_fraction"].values()))
             self.assertEqual(report["sleeve_nonmanifold_edges"], {"-1": 0, "1": 0})
             self.assertGreater(report["mesh_count"], 60)
             self.assertGreater(report["head_surface_vertices"], 5000)
             self.assertGreater(report["vertex_count"], 15000)
-            self.assertEqual(report["pedestal_sides"], 6)
-            self.assertEqual(report["mosaic_images"], 1)
+            self.assertEqual(report["pedestal_sides"], 8)
+            self.assertEqual(report["mosaic_images"], 3)
             self.assertGreater(report["uv_mesh_count"], 70)
-            portable = audit_glb(output)
+            portable = audit_glb(output, require_pbr_textures=True)
             self.assertEqual(portable["external_references"], 0)
             self.assertGreater(portable["meshes"], 60)
             with output.open("rb") as glb:
@@ -65,10 +65,13 @@ class ChristRedeemerTests(unittest.TestCase):
                 json_size, kind = struct.unpack("<I4s", glb.read(8))
                 self.assertEqual(kind, b"JSON")
                 document = json.loads(glb.read(json_size).decode("utf-8"))
-            self.assertGreaterEqual(len(document.get("images", [])), 1)
-            self.assertGreaterEqual(len(document.get("textures", [])), 1)
+            self.assertGreaterEqual(len(document.get("images", [])), 3)
+            self.assertGreaterEqual(len(document.get("textures", [])), 3)
             self.assertTrue(any("baseColorTexture" in mat.get("pbrMetallicRoughness", {})
                                 for mat in document.get("materials", [])))
+            self.assertTrue(any("metallicRoughnessTexture" in mat.get("pbrMetallicRoughness", {})
+                                for mat in document.get("materials", [])))
+            self.assertTrue(any("normalTexture" in mat for mat in document.get("materials", [])))
             self.assertTrue(any("TEXCOORD_0" in primitive.get("attributes", {})
                                 for mesh in document["meshes"]
                                 for primitive in mesh["primitives"]))
