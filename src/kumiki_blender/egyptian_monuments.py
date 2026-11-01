@@ -20,6 +20,7 @@ from .pyramid_survey import (
     KHUFU_ORIGINAL_BASE_M, KHUFU_ORIGINAL_HEIGHT_M,
     PETRIE_LAST_PRESERVED_COURSE, petrie_course_tops_m,
 )
+from .sphinx_reference_shape import SphinxFaceFit, deform_sphinx_face
 
 
 class MonumentError(ValueError):
@@ -670,7 +671,8 @@ def _carve_nemes_crown(mesh: Mesh, *, scale_x: float, scale_y: float,
 
 def sphinx_assembly(*, prefix: str, length: float = 10.5,
                     width: float | None = None, height: float | None = None,
-                    restored_nose: bool = False) -> tuple[MeshInstance, ...]:
+                    restored_nose: bool = False,
+                    face_fit: SphinxFaceFit | None = None) -> tuple[MeshInstance, ...]:
     """Lion-bodied royal figure, assembled from shaped closed stone solids.
 
     -X is the front of its face and forepaws. This is an interpretive
@@ -684,6 +686,8 @@ def sphinx_assembly(*, prefix: str, length: float = 10.5,
                             "sphinx height", 1.0, 150)
     if type(restored_nose) is not bool:
         raise GeometryError("restored_nose must be boolean")
+    if face_fit is not None and not isinstance(face_fit, SphinxFaceFit):
+        raise GeometryError("face_fit must be a prepared SphinxFaceFit")
     x, y, z = length/10.5, width/3.4, height/4.6
 
     def along_x(points: tuple[tuple[float, float, float, float, float], ...], *,
@@ -826,7 +830,10 @@ def sphinx_assembly(*, prefix: str, length: float = 10.5,
                    subdivisions=8, bedding=.006, pitting=.012)
     # Keep the original loft sculpt helper for backward compatibility and
     # geometry tests, but production uses the landmark-shaped closed patch.
-    part("face", _anatomical_sphinx_face(scale_x=x, scale_y=y, scale_z=z))
+    face_surface = _anatomical_sphinx_face(scale_x=x, scale_y=y, scale_z=z)
+    if face_fit is not None:
+        face_surface = deform_sphinx_face(face_surface, face_fit, scale_y=y, scale_z=z)
+    part("face", face_surface)
     for side, sign in (("left", -1), ("right", 1)):
         part(f"nemes-{side}-lappet", _nemes_drapery_wing(
              side=sign, scale_x=x, scale_y=y, scale_z=z),
@@ -852,7 +859,8 @@ def make_monument_study(*, kind: str = "giza-study",
                         pyramid_base: float = 36.0, pyramid_height: float = 23.0,
                         pyramid_courses: int = 18, casing_fraction: float = 0.04,
                         sphinx_length: float = 10.5, restored_nose: bool = False,
-                        pyramid_preset: str = "illustrative") -> MonumentStudy:
+                        pyramid_preset: str = "illustrative",
+                        sphinx_face_fit: SphinxFaceFit | None = None) -> MonumentStudy:
     """Compose a pyramid, a lion-bodied royal figure or a staged pair."""
     if kind not in ("pyramid", "sphinx", "giza-study"):
         raise MonumentError("kind must be pyramid, sphinx or giza-study")
@@ -875,6 +883,10 @@ def make_monument_study(*, kind: str = "giza-study",
         raise MonumentError("pyramid_courses must be an integer from 6 to 128")
     if type(restored_nose) is not bool:
         raise MonumentError("restored_nose must be boolean")
+    if sphinx_face_fit is not None and not isinstance(sphinx_face_fit, SphinxFaceFit):
+        raise MonumentError("sphinx_face_fit must be a prepared SphinxFaceFit")
+    if sphinx_face_fit is not None and kind == "pyramid":
+        raise MonumentError("Sphinx face fitting requires sphinx or giza-study")
     parts: list[MeshInstance] = []
     if kind in ("pyramid", "giza-study"):
         shift_y = 8.0 if kind == "giza-study" else 0.0
@@ -895,7 +907,8 @@ def make_monument_study(*, kind: str = "giza-study",
     if kind in ("sphinx", "giza-study"):
         shift_y = -(pyramid_base/2+8.0) if kind == "giza-study" else 0.0
         for part in sphinx_assembly(prefix="sphinx", length=sphinx_length,
-                                    restored_nose=restored_nose):
+                                    restored_nose=restored_nose,
+                                    face_fit=sphinx_face_fit):
             parts.append(replace(part, origin=(part.origin[0], part.origin[1]+shift_y,
                                                part.origin[2]+0.02)))
     mins = [float("inf")]*3
@@ -915,5 +928,7 @@ def make_monument_study(*, kind: str = "giza-study",
         parameters=(("pyramid_base_m", pyramid_base), ("pyramid_height_m", pyramid_height),
                     ("pyramid_courses", pyramid_courses), ("casing_fraction", casing_fraction),
                     ("sphinx_length_m", sphinx_length), ("restored_nose", restored_nose),
-                    ("pyramid_preset", pyramid_preset)),
+                    ("pyramid_preset", pyramid_preset)) +
+                   ((("sphinx_face_fit_sha256", sphinx_face_fit.reference_sha256),)
+                    if sphinx_face_fit is not None else ()),
     )

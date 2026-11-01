@@ -36,6 +36,7 @@ jobs:
             tests.test_landmark_scan \
             tests.test_sphinx_scan_review \
             tests.test_sphinx_landmarks \
+            tests.test_sphinx_reference_shape \
             tests.test_sphinx_sculpt \
             tests.test_cli.CLITests.test_sphinx_scan_build_preflights_rights_and_pairs_without_blender \
             tests.test_cli.CLITests.test_sphinx_scan_build_passes_prepared_record_to_blender
@@ -354,6 +355,16 @@ jobs:
             --python scripts/blender_entry.py -- \
             build-monument --kind sphinx \
             --output .review/ci/sphinx-procedural
+      - name: Render Sphinx face refitted to photographed feature landmarks
+        env:
+          KUMIKI_RENDER_PROFILE: smoke
+        run: |
+          blender --background --factory-startup --threads 1 --python-exit-code 1 \
+            --python scripts/blender_entry.py -- \
+            build-monument --kind sphinx \
+            --sphinx-face-reference examples/sphinx-frontal-photo-landmarks.json \
+            --sphinx-face-candidate examples/sphinx-frontal-procedural-landmarks.json \
+            --output .review/ci/sphinx-reference-fitted
       - name: Create first-party Sphinx scan integration fixture
         run: |
           blender --background --factory-startup --threads 1 --python-exit-code 1 \
@@ -384,21 +395,26 @@ jobs:
         run: |
           python -m kumiki_blender audit-revision --root .review/ci/khufu-petrie
           python -m kumiki_blender audit-revision --root .review/ci/sphinx-procedural
+          python -m kumiki_blender audit-revision --root .review/ci/sphinx-reference-fitted
           python -m kumiki_blender audit-revision --root .review/ci/sphinx-scan-integration
           python -m kumiki_blender audit --model .review/ci/khufu-petrie/model.glb --require-pbr-textures
           python -m kumiki_blender audit --model .review/ci/sphinx-procedural/model.glb --require-pbr-textures
+          python -m kumiki_blender audit --model .review/ci/sphinx-reference-fitted/model.glb --require-pbr-textures
           # The deliberately small first-party Sphinx proxy has no PBR maps;
           # preserve a static-mesh/attribution gate without treating it as a
           # production-quality scan.
           python -m kumiki_blender audit --model .review/ci/sphinx-scan-integration/model.glb
           python -c 'import json; m=json.load(open(".review/ci/khufu-petrie/manifest.json")); assert m["parameters"]["pyramid_courses"] == 201 and m["named_parts"]["pyramid_parts"] == 805'
           python -c 'import json; m=json.load(open(".review/ci/sphinx-procedural/manifest.json")); assert m["sphinx_sculpt_union"]["body"]["sources"] == 8 and m["sphinx_sculpt_union"]["head"]["sources"] == 6 and m["named_parts"]["sphinx_parts"] == 23'
+          python -c 'import json; m=json.load(open(".review/ci/sphinx-reference-fitted/manifest.json")); assert len(m["parameters"]["sphinx_face_fit_sha256"]) == 64 and m["sphinx_sculpt_union"]["head"]["sources"] == 6'
           python -c 'import json; m=json.load(open(".review/ci/sphinx-scan-integration/manifest.json")); s=m["sphinx_scan"]; assert s["provenance"]["commercial_use_allowed"] and s["mesh_objects"] >= 1 and "passes_bounding_envelope_screen" in s["source_geometry_review"] and not s["source_readiness_review"]["technical_screen_passed"] and not s["source_readiness_review"]["monument_source_authenticated"]'
           test -s .review/ci/khufu-petrie/previews/masonry.png
           test -s .review/ci/sphinx-procedural/previews/sphinx.png
           test -s .review/ci/sphinx-procedural/previews/sphinx-profile.png
           test -s .review/ci/sphinx-procedural/previews/sphinx-face.png
           test -s .review/ci/sphinx-procedural/previews/sphinx-frontal.png
+          test -s .review/ci/sphinx-reference-fitted/previews/sphinx-face.png
+          test -s .review/ci/sphinx-reference-fitted/previews/sphinx-frontal.png
           test -s .review/ci/sphinx-scan-integration/previews/sphinx.png
           test -s .review/ci/sphinx-scan-integration/previews/sphinx-profile.png
           test -s .review/ci/sphinx-scan-integration/previews/sphinx-face.png
@@ -444,6 +460,8 @@ jobs:
             .review/ci/sphinx-procedural/previews/sphinx-profile.png \
             .review/ci/sphinx-procedural/previews/sphinx-face.png \
             .review/ci/sphinx-procedural/previews/sphinx-frontal.png \
+            .review/ci/sphinx-reference-fitted/previews/sphinx-face.png \
+            .review/ci/sphinx-reference-fitted/previews/sphinx-frontal.png \
             .review/ci/sphinx-scan-integration/previews/sphinx.png \
             .review/ci/sphinx-scan-integration/previews/sphinx-profile.png \
             .review/ci/sphinx-scan-integration/previews/sphinx-face.png \

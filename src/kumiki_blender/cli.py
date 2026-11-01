@@ -24,6 +24,7 @@ from .render_profiles import RenderProfileError
 from .revision_audit import RevisionAuditError, audit_revision
 from .sphinx_scan_review import prepare_sphinx_review
 from .sphinx_landmarks import LandmarkError, compare_landmark_views, load_landmark_view
+from .sphinx_reference_shape import prepare_sphinx_face_fit
 from .surfaces import SurfaceError
 
 
@@ -61,6 +62,8 @@ def main(argv: list[str] | None = None) -> int:
         subcommand.add_argument("--casing-fraction", type=float, default=0.04)
         subcommand.add_argument("--sphinx-length", type=float, default=10.5)
         subcommand.add_argument("--restored-nose", action="store_true")
+        subcommand.add_argument("--sphinx-face-reference", type=Path)
+        subcommand.add_argument("--sphinx-face-candidate", type=Path)
         if command == "build-monument":
             subcommand.add_argument("--output", type=Path, required=True)
             subcommand.add_argument("--sphinx-source", type=Path)
@@ -215,11 +218,23 @@ def main(argv: list[str] | None = None) -> int:
                                                bpy_module=bpy), indent=2))
             return 0
         if args.command in ("plan-monument", "build-monument"):
+            if bool(args.sphinx_face_reference) != bool(args.sphinx_face_candidate):
+                raise MonumentError(
+                    "--sphinx-face-reference and --sphinx-face-candidate must be supplied together")
+            if args.sphinx_face_reference and args.kind == "pyramid":
+                raise MonumentError("Face fitting requires sphinx or giza-study")
+            fit = (prepare_sphinx_face_fit(
+                load_landmark_view(args.sphinx_face_reference),
+                load_landmark_view(args.sphinx_face_candidate),
+                scale_y=args.sphinx_length/10.5,
+                scale_z=(args.sphinx_length*3.6/10.5)/4.6)
+                   if args.sphinx_face_reference else None)
             study = make_monument_study(
                 kind=args.kind, pyramid_base=args.pyramid_base,
                 pyramid_height=args.pyramid_height, pyramid_courses=args.pyramid_courses,
                 casing_fraction=args.casing_fraction, sphinx_length=args.sphinx_length,
-                restored_nose=args.restored_nose, pyramid_preset=args.pyramid_preset)
+                restored_nose=args.restored_nose, pyramid_preset=args.pyramid_preset,
+                sphinx_face_fit=fit)
             if args.command == "plan-monument":
                 print(json.dumps({
                     "asset_id": study.asset_id,

@@ -55,3 +55,45 @@ those constraints, then sculpt missing small-scale damage under photo review.
 Until the historical coordinates are recovered, use this tool to **reject
 bad face shapes**; do not declare a new sculpt realistic because it merely
 passes manifold checks or has a large vertex count.
+
+## Experimental front-image-constrained geometry
+
+An **opt-in** sculpt pass now takes exactly the two annotated frontal JSON
+records above and refits seven named areas of the *original* continuous face
+mesh. The camera alignment is isotropic (same scaling in X and Y). The
+procedural headcloth wing-tip separation establishes the image-to-model
+scale; it does **not** assert the original Sphinx is 3.14 meters wide.
+
+The deformer interpolates eye height, cheek contour, damaged nasal bridge,
+mouth height and chin placement with a regularized radial-basis field.
+Peripheral anchor points stay fixed near the hood and neck, and the mesh's
+rear surface and polygon topology are preserved. Unlike changing individual
+Gaussian feature coefficients, the correction is explicitly tied to
+the *difference between two annotated observations*.
+
+```bash
+PYTHONPATH=src python3 -m kumiki_blender plan-monument --kind sphinx \
+  --sphinx-face-reference examples/sphinx-frontal-photo-landmarks.json \
+  --sphinx-face-candidate examples/sphinx-frontal-procedural-landmarks.json
+
+blender --background --factory-startup --python-exit-code 1 \
+  --python scripts/blender_entry.py -- \
+  build-monument --kind sphinx \
+  --sphinx-face-reference examples/sphinx-frontal-photo-landmarks.json \
+  --sphinx-face-candidate examples/sphinx-frontal-procedural-landmarks.json \
+  --output .review/sphinx-photo-fit
+```
+
+The same inputs reproduce the same face and their SHA-256 appears in the
+scene manifest. The CLI rejects missing records, viewpoint mismatch, or
+landmark shifts larger than 29 cm at the default study scale. Without these
+flags the original illustrative generator is unchanged. The focused Blender
+CI now builds and renders both versions to evaluate whether the correction
+actually improves the result.
+
+**Still missing:** true side-profile fitting, 3D survey point coordinates,
+an anatomically sculpted eye/ear/lip surface, calibrated camera perspective,
+and accurate rock damage. A frontal view cannot determine nose projection,
+temple depth or chin undercut. This **experimental fit is not yet a
+survey-accurate or photorealistic Sphinx**; do not substitute it for scan
+reconstruction.
