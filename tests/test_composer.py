@@ -40,6 +40,11 @@ class ComposerTests(unittest.TestCase):
             self.assertEqual(report.boundary_edges, 0, part.name)
             self.assertEqual(report.nonmanifold_edges, 0, part.name)
 
+    def test_semantically_identical_material_key_order_has_same_digest(self):
+        first = plan_assembly(validated(self.raw)).recipe_sha256
+        self.raw["materials"] = dict(reversed(tuple(self.raw["materials"].items())))
+        self.assertEqual(plan_assembly(validated(self.raw)).recipe_sha256, first)
+
     def test_schema_has_discriminated_component_types(self):
         schema = asset_json_schema()
         self.assertEqual(schema["properties"]["schema_version"]["const"], 2)

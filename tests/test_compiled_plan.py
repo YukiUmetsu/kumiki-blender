@@ -1,6 +1,7 @@
 """Pure-Python interchange is safe to load in Blender without Pydantic."""
 
 import json
+import hashlib
 import tempfile
 import unittest
 from pathlib import Path
@@ -41,6 +42,20 @@ class CompiledPlanTests(unittest.TestCase):
             payload["plan"]["instances"][0]["origin"] = [99, 0, 0]
             file.write_text(json.dumps(payload))
             with self.assertRaisesRegex(CompiledPlanError, "digest mismatch"):
+                load_compiled_plan(file)
+
+    def test_forged_component_count_is_rejected_even_with_matching_digest(self):
+        with tempfile.TemporaryDirectory() as directory:
+            file = Path(directory) / "plan.json"
+            write_compiled_plan(self.spec, self.plan, file)
+            payload = json.loads(file.read_text())
+            payload["plan"]["named_parts"][0][1] += 1
+            unsigned = {k: v for k, v in payload.items() if k != "sha256"}
+            payload["sha256"] = hashlib.sha256(json.dumps(
+                unsigned, sort_keys=True, separators=(",", ":"),
+                ensure_ascii=True, allow_nan=False).encode()).hexdigest()
+            file.write_text(json.dumps(payload))
+            with self.assertRaisesRegex(CompiledPlanError, "instance counts"):
                 load_compiled_plan(file)
 
     def test_compiler_refuses_to_overwrite(self):

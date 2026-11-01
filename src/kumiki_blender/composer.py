@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import math
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Callable
@@ -147,7 +148,8 @@ def plan_assembly(spec: AssetSpec) -> AssemblyPlan:
             for axis in range(3):
                 mins[axis] = min(mins[axis], vertex[axis])
                 maxs[axis] = max(maxs[axis], vertex[axis])
-    canonical = spec.model_dump_json(exclude_none=True)
+    canonical = json.dumps(spec.model_dump(mode="json", exclude_none=True),
+                           sort_keys=True, separators=(",", ":"), allow_nan=False)
     return AssemblyPlan(spec.asset_id, tuple(result), tuple(mins), tuple(maxs),
                         tuple(sorted(groups.items())),
                         hashlib.sha256(canonical.encode("utf-8")).hexdigest())

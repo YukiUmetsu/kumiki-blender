@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING
 
 from .architecture_geometry import (Mesh, MeshInstance, audit_mesh, place_mesh,
                                     world_vertices)
-from .composer import AssemblyPlan
+from .composer import COMPONENT_REGISTRY, AssemblyPlan
 from .surfaces import get_surface
 
 if TYPE_CHECKING:
@@ -27,7 +27,7 @@ _SLUG = re.compile(r"[a-z][a-z0-9]*(?:-[a-z0-9]+)*\Z")
 _DIGEST = re.compile(r"[0-9a-f]{64}\Z")
 _PRESETS = {"painted-steel", "galvanized-steel", "cast-concrete", "natural-stone",
             "weathered-stone", "timber", "optical-glass"}
-_KINDS = {"solid.box", "solid.lathe", "solid.hollow-lathe", "mechanical.rod", "detail.radial-studs"}
+_KINDS = frozenset(COMPONENT_REGISTRY)
 
 
 class CompiledPlanError(ValueError):
@@ -221,6 +221,7 @@ def load_compiled_plan(source: str | Path) -> tuple[CompiledSpec, AssemblyPlan]:
             raise CompiledPlanError("Expected 1–4096 placed instances")
         by_id = {component.id: component for component in spec.components}
         instances: list[MeshInstance] = []
+        counted_types: dict[str, int] = {}
         for raw_instance in raw_instances:
             item = _exact(raw_instance, {"name", "mesh", "component_id", "material", "origin",
                                          "axis_x", "axis_y", "axis_z"}, "instance")
@@ -228,6 +229,7 @@ def load_compiled_plan(source: str | Path) -> tuple[CompiledSpec, AssemblyPlan]:
             component = by_id.get(cid)
             if component is None:
                 raise CompiledPlanError("Instance references missing component")
+            counted_types[component.type] = counted_types.get(component.type, 0) + 1
             if item["name"] != cid and not (component.type == "detail.radial-studs" and
                                                isinstance(item["name"], str) and
                                                re.fullmatch(re.escape(cid)+r"-[0-9]{3}", item["name"])):
@@ -260,7 +262,8 @@ def load_compiled_plan(source: str | Path) -> tuple[CompiledSpec, AssemblyPlan]:
         named = data["named_parts"]
         if (not isinstance(named, list) or any(not isinstance(item, list) or len(item) != 2 or
                 item[0] not in _KINDS or type(item[1]) is not int or item[1] < 1 for item in named) or
-                sum(item[1] for item in named) != len(instances)):
+                dict((item[0], item[1]) for item in named) != counted_types or
+                len({item[0] for item in named}) != len(named)):
             raise CompiledPlanError("Invalid component instance counts")
         recipe_digest = data["recipe_sha256"]
         if not isinstance(recipe_digest, str) or not _DIGEST.fullmatch(recipe_digest):
