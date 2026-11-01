@@ -446,6 +446,24 @@ def make_biplane() -> BiplaneModel:
             "deep-red", "wheel", f"{name}-wheel")
         rod(f"{name}-hub-fastener", (side*1.17, -2.15, .43),
             (side*1.19, -2.15, .43), .038, "brass", "fastener", f"{name}-wheel")
+        # Pressed metal hub detailing is parented to the wheel pivot, so
+        # rotation is perceptible even though the period-correct tire is smooth.
+        add(f"{name}-hub-trim-ring", _torus((side*1.17, -2.15, .43),
+            .238, .010), "brass", "wheel-trim", f"{name}-wheel")
+        for rivet in range(8):
+            theta = math.tau*rivet/8
+            y = -2.15+.18*math.cos(theta)
+            z = .43+.18*math.sin(theta)
+            rod(f"{name}-hub-rivet-{rivet:02d}",
+                (side*1.16, y, z), (side*1.192, y, z),
+                .012, "brass", "fastener", f"{name}-wheel")
+        # One asymmetric brass balance clip gives the rolling tire a readable
+        # reference point; unlike a fake rotating texture, it is physical mesh.
+        theta = math.pi/5
+        rod(f"{name}-wheel-balance-weight",
+            (side*1.184, -2.15+.216*math.cos(theta), .43+.216*math.sin(theta)),
+            (side*1.184, -2.15+.267*math.cos(theta), .43+.267*math.sin(theta)),
+            .018, "brass", "wheel-trim", f"{name}-wheel")
     rod("landing-axle-crossbar", (-1.09, -2.15, .43), (1.09, -2.15, .43),
         .047, "varnished-wood", "landing-gear")
     for side in (-1, 1):
