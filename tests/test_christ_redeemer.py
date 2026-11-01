@@ -8,6 +8,7 @@ import ast
 import json
 import os
 from pathlib import Path
+import struct
 import subprocess
 import tempfile
 import unittest
@@ -53,9 +54,24 @@ class ChristRedeemerTests(unittest.TestCase):
             self.assertGreater(report["mesh_count"], 60)
             self.assertGreater(report["head_surface_vertices"], 5000)
             self.assertGreater(report["vertex_count"], 15000)
+            self.assertEqual(report["pedestal_sides"], 6)
+            self.assertEqual(report["mosaic_images"], 1)
+            self.assertGreater(report["uv_mesh_count"], 70)
             portable = audit_glb(output)
             self.assertEqual(portable["external_references"], 0)
             self.assertGreater(portable["meshes"], 60)
+            with output.open("rb") as glb:
+                glb.seek(12)
+                json_size, kind = struct.unpack("<I4s", glb.read(8))
+                self.assertEqual(kind, b"JSON")
+                document = json.loads(glb.read(json_size).decode("utf-8"))
+            self.assertGreaterEqual(len(document.get("images", [])), 1)
+            self.assertGreaterEqual(len(document.get("textures", [])), 1)
+            self.assertTrue(any("baseColorTexture" in mat.get("pbrMetallicRoughness", {})
+                                for mat in document.get("materials", [])))
+            self.assertTrue(any("TEXCOORD_0" in primitive.get("attributes", {})
+                                for mesh in document["meshes"]
+                                for primitive in mesh["primitives"]))
 
 
 if __name__ == "__main__":
