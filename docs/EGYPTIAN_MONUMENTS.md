@@ -72,6 +72,17 @@ second facial pass: the surviving nose now ends in a shallow damaged stub
 instead of a triangular dark cavity; eye depressions are reduced, visible
 forehead folds extend into the face, and the headdress's horizontal ridges
 are more irregular and quieter under raking light. A second
+reference-based anatomy revision addresses the remaining compressed mask:
+the modeled forehead-to-chin face ratio is now at least **1.22:1** in the
+unscaled sculpt coordinates, with a downward-tapering, undercut chin rather
+than a constant-width face slab. Separate upper and lower eyelid ridges
+surround tapered eye depressions, the surviving nasal bridge has flanking
+planes, and the mouth and lips sit above a protruding lower jaw. Both ears
+use editable closed meshes with physically recessed inner conchae and raised
+outer rims rather than undifferentiated blocks. These are inferred
+proportions and sculptural details from frontal/profile photographs, not
+archaeologically measured control points. The additional manifold, proportion
+and ear-relief tests are exercised in focused Python CI. The original
 geometry-level weathering pass adds irregular undercut bedding planes and
 small concave mineral pockets to the lion's body and haunches, with much
 weaker wear on the harder head. The facial silhouette now includes a surviving

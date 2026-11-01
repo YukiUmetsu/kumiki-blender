@@ -255,6 +255,37 @@ class EgyptianMonumentTests(unittest.TestCase):
         self.assertEqual((audit_mesh(sculpted).boundary_edges,
                           audit_mesh(sculpted).nonmanifold_edges), (0, 0))
 
+    def test_reference_face_proportions_and_carved_human_ears(self):
+        """The elongated face and cup-shaped ears must survive regeneration."""
+        from kumiki_blender.egyptian_monuments import _sculpt_ear_relief
+        parts = {part.name: part.mesh for part in sphinx_assembly(prefix="sphinx")}
+        face = parts["sphinx-face"]
+        normalized_height = ((max(v[2] for v in face.vertices) -
+                              min(v[2] for v in face.vertices))/(3.6/4.6))
+        width = max(v[1] for v in face.vertices)-min(v[1] for v in face.vertices)
+        # Earlier face was only ~1.04 high/width and rendered like a squat
+        # helmet. The royal forehead-to-chin contour now needs a long profile.
+        self.assertGreater(normalized_height/width, 1.22)
+        for side, sign in (("left", -1), ("right", 1)):
+            ear = parts[f"sphinx-{side}-ear"]
+            report = audit_mesh(ear)
+            self.assertEqual((report.boundary_edges, report.nonmanifold_edges), (0, 0))
+            raw = loft_elliptical_sections(
+                ((3.81, -4.00, sign*.66, .052, .057),
+                 (3.89, -4.02, sign*.706, .096, .086),
+                 (4.02, -4.03, sign*.729, .120, .109),
+                 (4.13, -4.012, sign*.714, .101, .094),
+                 (4.22, -3.99, sign*.680, .059, .058)),
+                radial_segments=96, subdivisions=8)
+            carved = _sculpt_ear_relief(raw, side=sign,
+                                        scale_x=1., scale_y=1., scale_z=1.)
+            deltas = [new[0]-old[0]
+                      for new, old in zip(carved.vertices, raw.vertices)]
+            self.assertGreater(max(deltas), .025)  # Recessed inner concha.
+            self.assertLess(min(deltas), -.008)    # Raised helical rim.
+            self.assertEqual((audit_mesh(carved).boundary_edges,
+                              audit_mesh(carved).nonmanifold_edges), (0, 0))
+
     def test_sphinx_scaling_is_parametric(self):
         small = sphinx_assembly(prefix="small", length=10.5)
         large = sphinx_assembly(prefix="large", length=21)

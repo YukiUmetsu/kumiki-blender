@@ -311,22 +311,31 @@ def _sculpt_face_relief(mesh: Mesh, *, scale_x: float, scale_y: float,
         # sockets. Cycles frontal QA also exposed the triangular dark hole
         # made by the previous "broken tip" displacement: the broken nose
         # should end in a scarred *stub*, not look punched through.
-        # Actual brow/eye spacing is wider than the toy mask's close-set
-        # circular holes. The super-Gaussian width creates long almond eyes;
-        # separate upper lids and brows catch grazing light.
-        eye = math.exp(-((lateral-.307)/.145)**4 - ((zz-4.048)/.054)**2)
-        upper_lid = math.exp(-((lateral-.310)/.172)**4 - ((zz-4.124)/.046)**2)
-        brow = math.exp(-((lateral-.33)/.193)**4 - ((zz-4.193)/.061)**2)
-        cheekbone = math.exp(-((lateral-.390)/.183)**2 - ((zz-3.779)/.175)**2)
-        hollow = math.exp(-((lateral-.53)/.130)**2 - ((zz-3.95)/.175)**2)
-        nose_root = math.exp(-(yy/.124)**2 - ((zz-4.062)/.140)**2)
-        bridge = math.exp(-(yy/.099)**2 - ((zz-3.940)/.172)**2)
-        broken_tip = math.exp(-(yy/.111)**4 - ((zz-3.734)/.093)**2)
-        upper_lip = math.exp(-(yy/.208)**4 - ((zz-3.493)/.048)**2)
-        mouth_cut = math.exp(-(yy/.255)**6 - ((zz-3.433)/.019)**2)
-        lower_lip = math.exp(-(yy/.218)**4 - ((zz-3.382)/.044)**2)
-        chin = math.exp(-(yy/.256)**4 - ((zz-3.237)/.111)**2)
-        jaw = math.exp(-((lateral-.390)/.170)**2 - ((zz-3.360)/.210)**2)
+        # Landmark spacing follows the reference's long, almost trapezoidal
+        # face: convex brows, individually bounded almond eyes, surviving
+        # nasal bridge, small lips and a distinct projecting chin. An older
+        # super-Gaussian eye mask had a wide flat center, hence the two
+        # featureless dark rectangular slots seen in the first Cycles QA.
+        eye = math.exp(-((lateral-.302)/.151)**2*1.6
+                       - ((zz-4.073)/.058)**2*1.6)
+        upper_lid = math.exp(-((lateral-.305)/.154)**2*1.6
+                             - ((zz-4.132)/.031)**2)
+        lower_lid = math.exp(-((lateral-.305)/.153)**2*1.5
+                             - ((zz-4.015)/.030)**2)
+        brow = math.exp(-((lateral-.320)/.180)**2*1.4
+                        - ((zz-4.209)/.057)**2)
+        cheekbone = math.exp(-((lateral-.385)/.170)**2 - ((zz-3.800)/.170)**2)
+        hollow = math.exp(-((lateral-.505)/.118)**2 - ((zz-3.963)/.174)**2)
+        nose_root = math.exp(-(yy/.120)**2 - ((zz-4.056)/.156)**2)
+        bridge = math.exp(-(yy/.103)**2 - ((zz-3.923)/.202)**2)
+        nose_flanks = math.exp(-((lateral-.128)/.067)**2
+                               - ((zz-3.816)/.130)**2)
+        broken_tip = math.exp(-(yy/.123)**4 - ((zz-3.727)/.082)**2)
+        upper_lip = math.exp(-(yy/.204)**4 - ((zz-3.431)/.042)**2)
+        mouth_cut = math.exp(-(yy/.216)**6 - ((zz-3.379)/.020)**2)
+        lower_lip = math.exp(-(yy/.202)**4 - ((zz-3.321)/.040)**2)
+        chin = math.exp(-(yy/.262)**4 - ((zz-3.115)/.110)**2)
+        jaw = math.exp(-((lateral-.347)/.158)**2 - ((zz-3.255)/.206)**2)
         # Subtle surviving vertical folds cross the exposed upper forehead.
         # Crown-only incisions were mostly buried behind the lofted face in
         # the voxel union, leaving a visually blank helmet-like brow.
@@ -338,18 +347,45 @@ def _sculpt_face_relief(mesh: Mesh, *, scale_x: float, scale_y: float,
         # X points toward the rear: negative means a projected cheek/nasal
         # bridge, positive means recesses. The bridge ends in an uneven,
         # visibly broken nasal scar rather than an intact spheroidal nose.
-        relief = front*(.041*eye - .017*upper_lid - .036*brow
-                        - .026*cheekbone + .016*hollow
-                        - .020*nose_root - .086*bridge
-                        + (.023 + .008*wear)*broken_tip
-                        - .012*upper_lip + .010*mouth_cut
-                        - .008*lower_lip - .027*chin - .020*jaw
+        relief = front*(.031*eye - .026*upper_lid - .012*lower_lid
+                        - .042*brow - .035*cheekbone + .015*hollow
+                        - .021*nose_root - .094*bridge + .021*nose_flanks
+                        + (.011 + .009*wear)*broken_tip
+                        - .014*upper_lip + .010*mouth_cut
+                        - .014*lower_lip - .054*chin - .032*jaw
                         + .024*forehead*fold + .013*wear*(1-.45*eye))
         # Angular jaw and temporal narrowing break the toy-like oval facial
         # silhouette, while the back half of the head stays untouched.
         jaw_width = .022*jaw - .015*hollow
         vertices.append((px+relief*scale_x,
                          py + math.copysign(jaw_width*scale_y*front, yy), pz))
+    return Mesh(tuple(vertices), mesh.faces)
+
+
+def _sculpt_ear_relief(mesh: Mesh, *, side: int, scale_x: float,
+                      scale_y: float, scale_z: float) -> Mesh:
+    """Carve a raised outer helix and recessed concha in each embedded ear.
+
+    The ears in the reference photographs are recognizably human, with a
+    cupped interior and rounded rim, not smooth teardrop blocks dangling in
+    front of the nemes. Preserve the source mesh's closed manifold topology.
+    """
+    if side not in (-1, 1) or type(side) is not int:
+        raise GeometryError("Ear side must be -1 or 1")
+    vertices = []
+    for px, py, pz in mesh.vertices:
+        xx, yy, zz = px/scale_x, py/scale_y, pz/scale_z
+        outward = abs(yy)
+        anterior = max(0., min(1., (-xx-4.015)/.125))
+        anterior = anterior*anterior*(3.-2.*anterior)
+        concha = math.exp(-((zz-4.015)/.091)**2
+                          - ((outward-.752)/.066)**2)
+        helix = math.exp(-((abs(zz-4.043)-.127)/.053)**2
+                         - ((outward-.745)/.081)**2)
+        curved_rim = math.exp(-((zz-4.092)/.139)**2
+                              - ((outward-.812)/.041)**2)
+        displacement = anterior*(.055*concha-.028*helix-.014*curved_rim)
+        vertices.append((px+displacement*scale_x, py, pz))
     return Mesh(tuple(vertices), mesh.faces)
 
 
@@ -594,26 +630,36 @@ def sphinx_assembly(*, prefix: str, length: float = 10.5,
                    roughness=.026, seed=89, exponent=3.65)
     part("nemes-hood", _carve_nemes_crown(hood, scale_x=x, scale_y=y, scale_z=z),
          "casing-limestone")
-    # A broad forehead and cheek plane tapers to a squared chin; photographs
-    # show a strong jaw shelf, not an upside-down teardrop/egg face.
-    face = along_z(((3.06, -3.89, 0, .32, .45),
-                    (3.18, -3.93, 0, .36, .48),
-                    (3.43, -3.95, 0, .42, .53),
-                    (3.73, -3.94, 0, .46, .61),
-                    (4.00, -3.91, 0, .48, .64),
-                    (4.23, -3.90, 0, .44, .61),
-                    (4.39, -3.88, 0, .35, .52)),
-                   roughness=.022, seed=97, exponent=4.15,
-                   subdivisions=8, bedding=.009, pitting=.012)
+    # Face landmarks must span a much longer vertical elevation than the
+    # previous squashed block. The new lower-chin profile is undercut from
+    # the jaw, while cheek width grows gradually to the brow and then tapers
+    # into the narrower royal crown. This is source-geometry anatomy, not
+    # shader-only contouring or scaling the whole head (which also squashes
+    # the neck and headdress).
+    face = along_z(((2.96, -3.87, 0, .25, .35),
+                    (3.07, -3.94, 0, .33, .41),
+                    (3.22, -3.96, 0, .39, .46),
+                    (3.43, -3.97, 0, .43, .51),
+                    (3.70, -3.94, 0, .45, .57),
+                    (3.90, -3.92, 0, .47, .605),
+                    (4.14, -3.90, 0, .465, .60),
+                    (4.31, -3.89, 0, .425, .555),
+                    (4.49, -3.87, 0, .35, .48)),
+                   roughness=.025, seed=97, exponent=4.35,
+                   subdivisions=8, bedding=.006, pitting=.012)
     part("face", _sculpt_face_relief(face, scale_x=x, scale_y=y, scale_z=z))
     for side, sign in (("left", -1), ("right", 1)):
         part(f"nemes-{side}-lappet", _nemes_drapery_wing(
              side=sign, scale_x=x, scale_y=y, scale_z=z),
              "casing-limestone")
-        part(f"{side}-ear", along_z(((3.83, -3.98, sign*.64, .08, .10),
-                                    (4.01, -4.02, sign*.72, .13, .12),
-                                    (4.16, -3.97, sign*.69, .08, .08)),
-                                   roughness=.023, seed=118))
+        ear = along_z(((3.81, -4.00, sign*.66, .052, .057),
+                       (3.89, -4.02, sign*.706, .096, .086),
+                       (4.02, -4.03, sign*.729, .120, .109),
+                       (4.13, -4.012, sign*.714, .101, .094),
+                       (4.22, -3.99, sign*.680, .059, .058)),
+                      roughness=.018, seed=118, subdivisions=8)
+        part(f"{side}-ear", _sculpt_ear_relief(
+             ear, side=sign, scale_x=x, scale_y=y, scale_z=z))
         # Ear relief is a small face-side feature; wing and crown grooves are
         # directly carved in the same limestone before the Blender union.
     if restored_nose:
