@@ -1,5 +1,43 @@
 # Statue of Liberty — scan-assisted detail rebuild
 
+## r23 — donor-face edge fitting and classical-eye study (**not approved**)
+
+Comparison of the r22 front, three-quarter and profile renders found the
+rectangular forehead slab and independent long donor neck unacceptable.
+`--conform` is a separate, opt-in and reproducible experiment. It:
+
+- Preserves the CC0 donor's real eyelid, nose and lip polygons instead of the
+  ray-generated `--patch` heightfield, which caused striped eye/mouth holes.
+- Crops rear head, slab forehead and most of the donor neck under a curved
+  jawline, while feather-fitting outer facial depth toward the bronze scan.
+- Narrows oversized eye openings, adds a restrained brow ridge, and deforms
+  the paired eyeballs consistently with their lid openings.
+- Leaves a smaller opening in the bronze face so the exposed scan-edge
+  triangles around the temples are less conspicuous.
+
+After fetching the two checksum-verified sources as shown below, build:
+
+```bash
+blender -b -t 6 --python-exit-code 1 \
+  --python scripts/blender_liberty_anatomy_review.py -- \
+  .review/_sources/liberty-bronze.glb \
+  .review/_sources/human-base-meshes.blend \
+  .review/landmarks/statues/statue-of-liberty/r23-conformed \
+  --conform --export
+```
+
+This exports six neutral-clay comparison views, an editable `.blend`, a GLB,
+and JSON provenance/measurement metadata. The forehead now approaches the
+captured hairline and the eyes are less doll-like. **The visual gate still
+fails**: the jaw/neck connection remains two distinct, non-watertight
+surfaces, jagged miniature-scan fragments remain at side angles, and the
+sculpt is not a faithful photomatch for the historical mouth, crown or hair.
+It must not silently replace the final statue asset.
+
+**Next gate:** continuous manual face/head retopology, with reference-registered
+eye, mouth, nose and jaw landmarks and a true seam hidden by scanned hair.
+Only then should fine patina, garment and tablet detailing proceed.
+
 ## Blender Studio CC0 anatomical face checkpoint (r22, **visual gate failed**)
 
 The newest experiment takes a **different geometric foundation** after repeated

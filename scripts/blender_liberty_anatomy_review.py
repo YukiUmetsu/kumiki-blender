@@ -25,6 +25,10 @@ from mathutils.bvhtree import BVHTree
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from kumiki_blender.liberty_anatomy_source import verify_anatomy_source
 from kumiki_blender.liberty_scan import verify_scan_source
+from kumiki_blender.liberty_face_region import (
+    conform_depth, face_jawline_z, face_radius, keep_face_vertex,
+    sculpt_classical_face,
+)
 
 
 HEAD_NAMES = (
@@ -53,7 +57,7 @@ def _smoothstep(value):
 
 
 def load_head(donor_blend: Path, *, target_origin=(-.30, .0, 7.42), scale=4.8,
-              patch=False):
+              patch=False, conform=False):
     """Transform anatomically based CC0 head to scan-aligned coordinates."""
     with bpy.data.libraries.load(str(donor_blend), link=False) as (source, destination):
         missing = set(HEAD_NAMES) - set(source.objects)
@@ -99,8 +103,10 @@ def load_head(donor_blend: Path, *, target_origin=(-.30, .0, 7.42), scale=4.8,
                     sides = _smoothstep((.58 - abs(point.x + .30)) / .20)
                     front = _smoothstep((.13 - point.y) / .28)
                     keep = top * bottom * sides * front
-                    if not patch:
+                    if not patch and not conform:
                         point.y += (1.0 - keep) * .87
+                    if conform:
+                        point = Vector(sculpt_classical_face(*point))
                     vertex.co = world_to_local @ point
                 obj.data.update()
             for polygon in obj.data.polygons:
@@ -112,7 +118,77 @@ def load_head(donor_blend: Path, *, target_origin=(-.30, .0, 7.42), scale=4.8,
         elif obj.name.endswith((".sclera.L", ".sclera.R", ".iris.L", ".iris.R")):
             # Eye surfaces follow the downward-moving socket and lid rings.
             obj.location.z -= .087
+            if conform:
+                inverse = obj.matrix_world.inverted()
+                for vertex in obj.data.vertices:
+                    point = obj.matrix_world @ vertex.co
+                    vertex.co = inverse @ Vector(sculpt_classical_face(*point))
+                obj.data.update()
     return objects
+
+
+def conform_anatomical_face(source_meshes, donor_head):
+    """Remove the CC0 donor's slab-like scalp/neck and register its border.
+
+    Unlike the radial heightfield experiment, the original anatomical mesh's
+    eyelids and philtrum stay intact. The outer 30% is eased toward the actual
+    scan front, at matching image-space X/Z coordinates. Only the front facial
+    surface is retained; the source scan provides the temples, hair and neck.
+    This is a non-destructive *review* of two separate meshes, not a welded
+    production retopology.
+    """
+    import bmesh
+
+    depsgraph = bpy.context.evaluated_depsgraph_get()
+    targets = []
+    for obj in source_meshes:
+        evaluated = obj.evaluated_get(depsgraph)
+        targets.append((BVHTree.FromObject(evaluated, depsgraph),
+                        obj.matrix_world.inverted(), obj.matrix_world.copy()))
+
+    def sampled_depth(x, z, original_y):
+        origin = Vector((x, -2.2, z))
+        direction = Vector((0, 1, 0))
+        candidates = []
+        for tree, inverse, world in targets:
+            hit, _, _, _ = tree.ray_cast(
+                inverse @ origin, (inverse.to_3x3() @ direction).normalized(), 5.0)
+            if hit is not None:
+                value = (world @ hit).y
+                if -1.2 < value < .10:
+                    candidates.append(value)
+        return min(candidates, key=lambda y: abs(y-original_y)) if candidates else None
+
+    world = donor_head.matrix_world
+    inverse = world.inverted()
+    bm = bmesh.new()
+    try:
+        bm.from_mesh(donor_head.data)
+        keep = set()
+        fitted = 0
+        for vertex in bm.verts:
+            point = world @ vertex.co
+            if keep_face_vertex(point.x, point.y, point.z):
+                keep.add(vertex)
+                radius = face_radius(point.x, point.z)
+                if radius > .70:
+                    scanned = sampled_depth(point.x, point.z, point.y)
+                    if scanned is not None:
+                        point.y = conform_depth(point.y, scanned, radius)
+                        vertex.co = inverse @ point
+                        fitted += 1
+        outside = [face for face in bm.faces if any(v not in keep for v in face.verts)]
+        bmesh.ops.delete(bm, geom=outside, context="FACES")
+        orphaned = [vertex for vertex in bm.verts if not vertex.link_faces]
+        bmesh.ops.delete(bm, geom=orphaned, context="VERTS")
+        bm.to_mesh(donor_head.data)
+        donor_head.data.update()
+        donor_head["facial_border_registration"] = "image-aligned sampled scan depth, smooth outer feather"
+        donor_head["source_registration_samples"] = fitted
+        return {"deleted_faces": len(outside), "conformed_vertices": fitted,
+                "remaining_vertices": len(donor_head.data.vertices)}
+    finally:
+        bm.free()
 
 
 def graft_clay_face(scan_meshes, head_meshes, *, rings=150, segments=320):
@@ -196,7 +272,7 @@ def graft_clay_face(scan_meshes, head_meshes, *, rings=150, segments=320):
     return graft
 
 
-def carve_blurred_scan_face(meshes):
+def carve_blurred_scan_face(meshes, *, conform=False):
     """Remove the miniature's featureless skin, preserving crown/robe/hair.
 
     This separate review approach replaces anatomical topology instead of
@@ -213,9 +289,14 @@ def carve_blurred_scan_face(meshes):
             reject = []
             for face in bm.faces:
                 point = transform @ face.calc_center_median()
-                radius = (((point.x + .30) / .42) ** 2
-                          + ((point.z - 8.56) / .50) ** 2)
-                if radius < .68 and -.95 < point.y < -.12:
+                if conform:
+                    radius = face_radius(point.x, point.z)
+                    remove = radius < .69 and point.z > face_jawline_z(point.x) - .015
+                else:
+                    radius = (((point.x + .30) / .42) ** 2
+                              + ((point.z - 8.56) / .50) ** 2)
+                    remove = radius < .68
+                if remove and -.95 < point.y < -.12:
                     reject.append(face)
             if reject:
                 bmesh.ops.delete(bm, geom=reject, context="FACES")
@@ -250,13 +331,20 @@ def build(source: Path, donor: Path, directory: Path):
         obj["source_creator"] = scan_record["author"]
     patch_mode = "--patch" in sys.argv
     carve_mode = "--carve" in sys.argv
-    donors = load_head(donor, patch=patch_mode)
+    conform_mode = "--conform" in sys.argv
+    donors = load_head(donor, patch=patch_mode, conform=conform_mode)
+    if conform_mode and (patch_mode or carve_mode):
+        raise ValueError("--conform is a separate candidate; omit --patch and --carve")
+    fitted = None
+    if conform_mode:
+        fitted = conform_anatomical_face(source_meshes, donors[0])
+        print("LIBERTY_FITTED_FACE", fitted)
     if patch_mode:
         graft = graft_clay_face(source_meshes, donors)
         for obj in donors:
             obj.hide_render = True
-    if carve_mode:
-        print("LIBERTY_CARVED_SCAN_FACES", carve_blurred_scan_face(source_meshes))
+    if carve_mode or conform_mode:
+        print("LIBERTY_CARVED_SCAN_FACES", carve_blurred_scan_face(source_meshes, conform=conform_mode))
 
     # The mesh's normal glTF skin material is intentionally hidden: single-
     # color cavity shading makes undercuts and silhouette defects apparent.
@@ -331,7 +419,9 @@ def build(source: Path, donor: Path, directory: Path):
         "donor_objects": [(obj.name, len(obj.data.vertices)) for obj in donors],
         "acceptance": "Unapproved anatomy prototype: compare all three angles with original photos",
         "quality_gate": "FAIL / distinct eyes and lips, but facial likeness and seams are not approved",
-        "method": ("surface-registered facial graft" if patch_mode else
+        "fitted_face": fitted,
+        "method": ("source-registered anatomically retained face" if conform_mode else
+                   "surface-registered facial graft" if patch_mode else
                    "source face excavation and anatomical insertion" if carve_mode else
                    "transitional head overlap"),
     }

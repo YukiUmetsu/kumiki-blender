@@ -226,6 +226,20 @@ the profile connection, brow/forehead integration and historic likeness are
 not finished. The main statue generator remains unchanged. See the
 [face graft review and source ledger](docs/STATUE_OF_LIBERTY.md).
 
+The opt-in `--conform` variant keeps the donor's sculpted eye, nose and lip
+topology while removing the rectangular forehead/neck slab, fitting its outer
+face to the bronze depth, and forming a narrower classical gaze. It is a
+separate **unapproved** face checkpoint, not the full-body asset:
+
+```bash
+blender -b -t 6 --python-exit-code 1 \
+  --python scripts/blender_liberty_anatomy_review.py -- \
+  .review/_sources/liberty-bronze.glb \
+  .review/_sources/human-base-meshes.blend \
+  .review/landmarks/statues/statue-of-liberty/r23-conformed \
+  --conform --export
+```
+
 ### Earlier procedural prototype
 
 `liberty.py` creates a reference-guided, full 360° Statue of Liberty sculpture
