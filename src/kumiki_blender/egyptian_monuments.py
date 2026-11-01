@@ -450,13 +450,16 @@ def _anatomical_sphinx_face(*, scale_x: float, scale_y: float,
             if abs(aperture_u) < 1.:
                 half_open = .040*(max(0., 1.-aperture_u**2))**.72
                 eye_center = 3.965+.013*aperture_u*sign
-                xx += .040*blob(y, z, cy, eye_center,
+                # Preserve a convex, weathered ocular plane *inside* the
+                # almond-shaped lids. Without it the remeshed eye reads as
+                # a black punched-through slot, not carved human anatomy.
+                xx += .022*blob(y, z, cy, eye_center,
                                  .154, max(.017, half_open), exponent=2.5)
-                xx -= .055*blob(y, z, cy, eye_center+half_open+.022,
+                xx -= .044*blob(y, z, cy, eye_center+half_open+.022,
                                  .167, .027, exponent=2.)
-                xx -= .030*blob(y, z, cy, eye_center-half_open-.022,
+                xx -= .023*blob(y, z, cy, eye_center-half_open-.022,
                                  .158, .030, exponent=2.)
-            xx -= .071*blob(y, z, sign*.305, 4.088,
+            xx -= .061*blob(y, z, sign*.305, 4.088,
                              .191, .065, exponent=2.)
             xx -= .063*blob(y, z, sign*.397, 3.725,
                              .169, .203, exponent=2.)
@@ -473,9 +476,9 @@ def _anatomical_sphinx_face(*, scale_x: float, scale_y: float,
         mouth_z = 3.275+.020*(y/.24)**2+.005*y
         xx -= .035*(blob(y, z, -.062, 3.450, .033, .097) +
                     blob(y, z, .068, 3.449, .033, .097))
-        xx -= .039*blob(y, z, 0., 3.339, .240, .063, exponent=4.)
-        xx += .024*blob(y, z, 0., mouth_z, .233, .019, exponent=4.)
-        xx -= .031*blob(y, z, 0., 3.223, .216, .051, exponent=4.)
+        xx -= .028*blob(y, z, 0., 3.339, .240, .047, exponent=4.)
+        xx += .020*blob(y, z, 0., mouth_z, .233, .018, exponent=4.)
+        xx -= .023*blob(y, z, 0., 3.223, .216, .041, exponent=4.)
         xx -= .087*blob(y, z, 0., 2.934, .302, .145, exponent=3.)
         xx += .036*blob(y, z, 0., 2.725, .272, .069, exponent=2.)
         # Physically incised crown pleats and differential mineral wear.
