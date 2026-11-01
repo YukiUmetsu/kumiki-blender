@@ -1,20 +1,9 @@
 import tempfile
 import unittest
 from pathlib import Path
-import struct
-import zlib
 
 from kumiki_blender.export_audit import ExportAuditError, audit_export_files
-
-
-def _one_pixel_png() -> bytes:
-    def chunk(tag: bytes, content: bytes) -> bytes:
-        return (struct.pack(">I",len(content))+tag+content+
-                struct.pack(">I",zlib.crc32(tag+content)))
-    return (b"\x89PNG\r\n\x1a\n"+
-            chunk(b"IHDR",struct.pack(">IIBBBBB",1,1,8,2,0,0,0))+
-            chunk(b"IDAT",zlib.compress(b"\x00\xff\x00\x00"))+
-            chunk(b"IEND",b""))
+from png_fixtures import one_pixel_png
 
 
 class ExportAuditTests(unittest.TestCase):
@@ -23,7 +12,7 @@ class ExportAuditTests(unittest.TestCase):
         self.addCleanup(temp.cleanup)
         self.root = Path(temp.name)
         (self.root / "source.blend").write_bytes(b"BLENDER-v300")
-        (self.root / "preview.png").write_bytes(_one_pixel_png())
+        (self.root / "preview.png").write_bytes(one_pixel_png())
 
     def test_readable_editable_source_and_preview_are_reported(self):
         report = audit_export_files(self.root, ["source.blend", "preview.png"])

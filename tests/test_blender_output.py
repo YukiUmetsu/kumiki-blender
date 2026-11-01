@@ -9,6 +9,7 @@ from unittest.mock import Mock, patch
 
 from kumiki_blender.blender_output import create_model_scene, export_revision
 from kumiki_blender.shots import QualityShot
+from png_fixtures import one_pixel_png
 
 
 class BlenderOutputTests(unittest.TestCase):
@@ -73,7 +74,7 @@ class BlenderOutputTests(unittest.TestCase):
                     struct.pack("<I4s", len(chunk), b"JSON") + chunk)
 
             def write_render(**_):
-                Path(render.filepath).write_bytes(b"\x89PNG\r\n\x1a\n" + b"FAKE-IMAGE")
+                Path(render.filepath).write_bytes(one_pixel_png())
 
             bpy = SimpleNamespace(
                 app=SimpleNamespace(version_string="4.2-test"),
