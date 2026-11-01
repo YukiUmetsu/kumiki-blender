@@ -12,6 +12,7 @@ of another 3D model, or a certified museum-quality likeness.
 | Surveyed outstretched fingertips: **29.4 m** | Approx. 29.4 m across sculpted hands |
 | Pedestal height: **8 m** | Chamfered-square stepped granite pedestal, z=0 to 8 |
 | Cladding: pale soapstone mosaic | Embedded original triangular albedo, normal, and roughness maps with metric UVs |
+| Pedestal exterior: dark stone ashlar | Original repeating, staggered granite-block albedo map |
 
 Sources for measurements and surface treatment:
 
@@ -41,12 +42,14 @@ blender --background --factory-startup --python-exit-code 1 \
 
 The script generates named, editable component meshes for the robe, weighted
 asymmetric mantle, closed draped sleeves, sculpted face, continuous hair mantle,
-separated hands/fingers, chamfered granite pedestal, and chapel entrance. The GLB
+two voxel-fused anatomical hands, chamfered granite pedestal, and chapel entrance. The GLB
 embeds **three original, tileable soapstone textures**: 3 cm-scale triangular
 tesserae color, subtle grout/stone normal relief, and high-roughness stone grain.
-It contains model meshes only, excluding QA lights and cameras. The live audit
-checks pedestal contact, measured dimensions, manifold/outward sleeve normals,
-UV coverage, and fully portable PBR texture embedding.
+The chapel exterior uses an additional original staggered-ashlar granite texture.
+The GLB contains model meshes only, excluding QA lights and cameras. The live
+audit checks pedestal contact, measured dimensions, manifold/outward sleeve
+normals, closed hand unions with sufficient vertex detail, UV coverage, and
+fully portable PBR texture embedding.
 
 For a fast close-up iteration, append `--shot head_front --shot head_profile`
 to render just those views. Other choices are `front`, `profile`,
@@ -66,8 +69,10 @@ folds; adds a broad, asymmetrically hemmed forecloth, weighted U-shaped
 shoulder shawl, and independently draped stole; and tips the integrated head,
 hair, and neck forward toward the characteristic downward gaze. Eyelids, cheek,
 nose, chin, jaw, and beard volumes are displaced on the **same dense head
-surface**, with finer incised detailing. The head and hands can be examined
-separately using the close-up QA cameras.
+surface**, with continuous upper eyelid contours and finer incised detailing.
+The torso's lower robe was widened against photo/mesh silhouettes, and the
+hands use high-resolution volumetric unions to avoid separate rod-like digits.
+The head and hands can be examined separately using the close-up QA cameras.
 
 This remains an original parametric reconstruction. Its stylized anatomical
 geometry is not a photogrammetric replica, and the script deliberately does not

@@ -6,8 +6,8 @@ The library separates testable Python geometry planning from Blender's `bpy` mod
 
 The experimental [Christ the Redeemer procedural sculpture](docs/CHRIST_REDEEMER.md)
 adds a separately authored Art Deco landmark study: surveyed 29.4 m outstretched
-span, layered draped garment, integrated facial relief, softened hands, a
-chamfered-square chapel pedestal, and embedded soapstone PBR textures. Its
+span, layered draped garment, integrated facial relief, fused stone-sculpted
+hands, a chamfered-square chapel pedestal, and embedded soapstone PBR textures. Its
 standalone Blender script exports GLB/`.blend` and
 six front/profile/detail QA views with dimensional and mesh winding checks.
 It remains a sculptural study, not a photo-accurate model.
