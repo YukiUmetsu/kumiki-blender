@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "id": "modular-portico",
+  "title": "Classical Portico and Arcade",
+  "description": "Modular arcade with Ionic, Doric, or Tuscan columns and optional pointed arches.",
+  "kind": "procedural",
+  "tags": ["classical", "portico", "arcade", "columns", "stone", "architecture"],
+  "aliases": ["temple columns", "classical arcade", "stone arches"],
+  "rigged": false,
+  "animated": false,
+  "sources": ["src/kumiki_blender/portico.py", "src/kumiki_blender/blender_portico.py"],
+  "plan": ["plan-portico"],
+  "build": ["build-portico"]
+}

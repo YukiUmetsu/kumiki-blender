@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "id": "giza-pyramid-study",
+  "title": "Egyptian Pyramid Study",
+  "description": "Coursed limestone pyramid with optional Khufu/Petrie-informed proportions.",
+  "kind": "procedural",
+  "tags": ["pyramid", "egypt", "giza", "khufu", "stone", "ancient"],
+  "aliases": ["great pyramid", "pyramid of khufu", "egyptian pyramid"],
+  "rigged": false,
+  "animated": false,
+  "sources": ["src/kumiki_blender/egyptian_monuments.py", "src/kumiki_blender/pyramid_survey.py", "docs/EGYPTIAN_MONUMENTS.md"],
+  "plan": ["plan-monument", "--kind", "pyramid"],
+  "build": ["build-monument", "--kind", "pyramid"]
+}

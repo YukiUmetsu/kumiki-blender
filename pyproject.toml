@@ -17,3 +17,6 @@ kumiki-blender = "kumiki_blender.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+kumiki_blender = ["assets/*/*/*/asset.json"]

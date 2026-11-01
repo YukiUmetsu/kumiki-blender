@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "id": "giza-sphinx-study",
+  "title": "Great Sphinx Study",
+  "description": "Procedural lion-bodied Sphinx study with named anatomical and weathered stone parts.",
+  "kind": "procedural",
+  "tags": ["sphinx", "egypt", "giza", "sculpture", "stone", "ancient"],
+  "aliases": ["great sphinx of giza", "egyptian sphinx", "lion statue"],
+  "rigged": false,
+  "animated": false,
+  "sources": ["src/kumiki_blender/egyptian_monuments.py", "src/kumiki_blender/sphinx_sculpt.py", "docs/EGYPTIAN_MONUMENTS.md"],
+  "plan": ["plan-monument", "--kind", "sphinx"],
+  "build": ["build-monument", "--kind", "sphinx"]
+}

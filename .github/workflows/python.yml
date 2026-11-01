@@ -33,7 +33,12 @@ jobs:
             tests.test_sphinx_sculpt \
             tests.test_cli.CLITests.test_sphinx_scan_build_preflights_rights_and_pairs_without_blender \
             tests.test_cli.CLITests.test_sphinx_scan_build_passes_prepared_record_to_blender \
+            tests.test_asset_catalog \
             tests.test_vintage_biplane
+      - name: Verify categorized 3D asset catalog and source links
+        env:
+          PYTHONPATH: src
+        run: python -m kumiki_blender catalog validate
       - name: Compile Python sources
         run: python -m compileall -q src scripts
 
