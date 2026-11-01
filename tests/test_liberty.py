@@ -52,6 +52,48 @@ class LibertyTests(unittest.TestCase):
             self.assertLess(min(ys), -.34)
             self.assertGreater(max(ys), 0.0)
 
+    def test_opt_in_tablet_keystone_and_hand_contact(self):
+        from kumiki_blender.liberty_tablet import tablet_front_y, tablet_right_edge
+
+        original = {part.name for part in make_liberty_study().instances}
+        self.assertIn("liberty-tablet-top-bead", original)
+        self.assertNotIn("liberty-tablet-hand-palm", original)
+        pieces = {part.name: part for part in make_liberty_study(detailed_tablet=True).instances}
+        self.assertNotIn("liberty-tablet-top-bead", pieces)
+        self.assertIn("liberty-tablet-hand-palm", pieces)
+        slab = pieces["liberty-tablet-slab"].mesh
+        zs = [p[2] for p in slab.vertices]
+        self.assertGreater(max(zs)-min(zs), 4.0)
+        # A keystone widens toward the top; this study also adds thick chamfers.
+        upper = [p[0] for p in slab.vertices if p[2] > 24.2]
+        lower = [p[0] for p in slab.vertices if p[2] < 20.5]
+        self.assertGreater(max(upper)-min(upper), max(lower)-min(lower)+.35)
+        self.assertGreater(len(slab.vertices), 8)
+        self.assertGreater(tablet_right_edge(22.3), 4.2)
+        self.assertLess(tablet_front_y(22.3), -1.)
+        for i in range(4):
+            finger = pieces[f"liberty-tablet-grip-finger-{i}"].mesh
+            self.assertGreater(len(finger.vertices), 100)
+            self.assertLess(min(p[0] for p in finger.vertices), tablet_right_edge(22.3))
+            self.assertLess(min(p[1] for p in finger.vertices), tablet_front_y(22.3))
+
+    def test_detailed_tablet_respects_scaled_grounded_scene(self):
+        full = make_liberty_study(scale=.5, include_pedestal=False, detailed_tablet=True)
+        pieces = {part.name: part for part in full.instances}
+        tablet = pieces["liberty-tablet-slab"].mesh
+        self.assertAlmostEqual(max(p[2] for p in tablet.vertices), (24.4-9.30)*.5,
+                               delta=.08)
+        self.assertTrue(dict(full.parameters)["detailed_tablet"])
+        for part in full.instances:
+            if "tablet-" in part.name:
+                with self.subTest(part=part.name):
+                    report = audit_mesh(part.mesh)
+                    self.assertEqual(report.boundary_edges, 0)
+                    self.assertEqual(report.nonmanifold_edges, 0)
+                    self.assertGreater(report.volume_m3, 0)
+        with self.assertRaises(LibertyError):
+            make_liberty_study(detailed_tablet="yes")
+
     def test_export_parts_are_closed_meshes_and_have_unique_semantic_names(self):
         study = make_liberty_study()
         self.assertLess(len(study.instances), 700)

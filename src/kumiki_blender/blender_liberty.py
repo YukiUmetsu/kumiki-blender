@@ -10,6 +10,7 @@ from .blender_output import create_model_scene, export_revision
 from .blender_scene import _create_box, _material
 from .blender_textures import ensure_metric_uvs
 from .liberty import LibertyStudy
+from .liberty_tablet import tablet_center_x, tablet_front_y
 from .liberty_torch_placement import (detailed_torch_placement,
                                       detailed_torch_shots,
                                       replace_legacy_torch_part)
@@ -38,23 +39,44 @@ def plan_liberty_shots(study: LibertyStudy) -> tuple[QualityShot, ...]:
 
 
 def _tablet_lettering(bpy: Any, collection: Any, material: Any, scale: float,
-                      base_offset: float) -> list[Any]:
+                      base_offset: float, detailed: bool = False) -> list[Any]:
     """Emboss the Roman-date inscription as genuine editable 3D text meshes."""
     objects = []
-    for index, (label, z, size) in enumerate((("JULY IV", 23.42, .31),
-                                               ("MDCCLXXVI", 22.66, .27))):
+    font = None
+    if detailed:
+        # Converted into editable meshes before export: no external font is
+        # needed to open the GLB or source .blend on another computer.
+        for candidate in (
+            "/usr/share/fonts/opentype/urw-base35/NimbusRoman-Regular.otf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSerif.ttf",
+            "/usr/share/fonts/truetype/liberation2/LiberationSerif-Regular.ttf",
+        ):
+            if Path(candidate).exists():
+                font = bpy.data.fonts.load(candidate)
+                break
+    lines = (("JULY IV", 23.49, .41), ("MDCCLXXVI", 22.78, .325)) if detailed else (
+        ("JULY IV", 23.42, .31), ("MDCCLXXVI", 22.66, .27))
+    for index, (label, z, size) in enumerate(lines):
         glyph = bpy.data.curves.new(f"Tablet engraving / {label}", "FONT")
         glyph.body = label
+        if font is not None:
+            glyph.font = font
         glyph.align_x = "CENTER"
         glyph.align_y = "CENTER"
         glyph.size = size*scale
-        glyph.extrude = .012*scale
-        glyph.bevel_depth = .0025*scale
+        glyph.extrude = (.006 if detailed else .012)*scale
+        glyph.bevel_depth = (.001 if detailed else .0025)*scale
         glyph.bevel_resolution = 1
         font_obj = bpy.data.objects.new(f"liberty-tablet-inscription-{index}", glyph)
         collection.objects.link(font_obj)
-        font_obj.location = (3.32*scale, -.993*scale, (z+base_offset)*scale)
-        font_obj.rotation_euler = (math.pi/2, 0, -.09)
+        if detailed:
+            font_obj.location = (tablet_center_x(z)*scale,
+                                 (tablet_front_y(z)-.017)*scale,
+                                 (z+base_offset)*scale)
+            font_obj.rotation_euler = (math.pi/2-.035, 0, 0)
+        else:
+            font_obj.location = (3.32*scale, -.993*scale, (z+base_offset)*scale)
+            font_obj.rotation_euler = (math.pi/2, 0, -.09)
         bpy.context.view_layer.update()
         depsgraph = bpy.context.evaluated_depsgraph_get()
         evaluated = font_obj.evaluated_get(depsgraph)
@@ -147,7 +169,8 @@ def build_liberty_scene(study: LibertyStudy, destination: Path, *,
     parameters = dict(study.parameters)
     offset = 0 if parameters["include_pedestal"] else -9.30
     objects.extend(_tablet_lettering(bpy, model, palette["patina-shadow"],
-                                     parameters["scale"], offset))
+                                     parameters["scale"], offset,
+                                     parameters.get("detailed_tablet", False)))
     torch_fit = None
     if detailed_torch:
         from .blender_liberty_torch_detail import build_torch_detail
@@ -213,6 +236,18 @@ def build_liberty_scene(study: LibertyStudy, destination: Path, *,
     shots = plan_liberty_shots(study)
     if detailed_torch:
         shots += detailed_torch_shots(study)
+    if parameters.get("detailed_tablet"):
+        def tablet_pos(x: float, y: float, z: float) -> tuple[float, float, float]:
+            return (x*parameters["scale"], y*parameters["scale"],
+                    (z+offset)*parameters["scale"])
+        shots += (
+            QualityShot("tablet-detail-front", tablet_pos(3.22, -9, 22.5),
+                        tablet_pos(3.27, -.9, 22.4), 7.1*parameters["scale"]),
+            QualityShot("tablet-detail-profile", tablet_pos(9, -.1, 22.4),
+                        tablet_pos(4.06, -.85, 22.4), 5.1*parameters["scale"]),
+            QualityShot("tablet-grip-detail", tablet_pos(5.8, -5.8, 22.3),
+                        tablet_pos(4.27, -.9, 22.35), 2.35*parameters["scale"]),
+        )
     metadata = {
         "asset_id": study.asset_id,
         "generator": "kumiki-blender/procedural-statue-of-liberty",
@@ -226,6 +261,7 @@ def build_liberty_scene(study: LibertyStudy, destination: Path, *,
         "bounds_m": [study.bounds_min, study.bounds_max],
         "parameters": parameters,
         "detailed_torch": detailed_torch,
+        "detailed_tablet": bool(parameters.get("detailed_tablet")),
         "detailed_torch_fit": ({"origin": torch_fit.origin,
                                "radial_scale": torch_fit.radial_scale,
                                "height_scale": torch_fit.height_scale}

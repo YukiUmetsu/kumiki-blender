@@ -260,6 +260,26 @@ The output includes editable `.blend`, portable GLB, manifest and dedicated
 flame/grip QA renders. This is a better detailed illustration, **not yet a
 measured photomatch** of the original torch or a finished hand sculpt.
 
+### Keystone tablet and supporting left hand (opt-in)
+
+`--detailed-tablet` replaces the original rectangular slab and detached
+finger-pegs with a tapered, chamfered tablet and a continuous wrist, palm,
+four curling fingers and thumb. The serif `JULY IV / MDCCLXXVI` date is a
+separate editable shallow copper-dark relief mesh, aligned to the new face.
+The dimensions are proportioned against the National Park Service's published
+tablet measurements but **not surveyed**; the lettering is not Boolean-carved.
+
+```bash
+KUMIKI_RENDER_PROFILE=smoke blender --background --factory-startup \
+  --python-exit-code 1 --python scripts/blender_entry.py -- \
+  build-liberty --detailed-torch --detailed-tablet \
+  --output .review/landmarks/statues/statue-of-liberty/r31-tablet-grip
+```
+
+This includes three new close-up inspections of the tablet face, wedge profile
+and hand contact. Both detail flags are optional and independent; the legacy
+`build-liberty` geometry remains reproducible.
+
 ### Earlier procedural prototype
 
 `liberty.py` creates a reference-guided, full 360° Statue of Liberty sculpture

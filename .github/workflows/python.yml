@@ -445,7 +445,7 @@ jobs:
         run: |
           blender --background --factory-startup --threads 1 --python-exit-code 1 \
             --python scripts/blender_entry.py -- \
-            build-liberty --detailed-torch --output .review/ci/liberty
+            build-liberty --detailed-torch --detailed-tablet --output .review/ci/liberty
       - name: Audit Khufu export, Sphinx sculpt union and previews
         env:
           PYTHONPATH: src
@@ -480,6 +480,9 @@ jobs:
           test -s .review/ci/liberty/previews/torch-flame-front.png
           test -s .review/ci/liberty/previews/torch-grip-front.png
           test -s .review/ci/liberty/previews/torch-grip-profile.png
+          test -s .review/ci/liberty/previews/tablet-detail-front.png
+          test -s .review/ci/liberty/previews/tablet-detail-profile.png
+          test -s .review/ci/liberty/previews/tablet-grip-detail.png
       - name: Upload focused Blender previews and source artifacts
         if: always()
         uses: actions/upload-artifact@v4

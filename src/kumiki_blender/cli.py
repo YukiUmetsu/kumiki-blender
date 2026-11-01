@@ -103,6 +103,8 @@ def main(argv: list[str] | None = None) -> int:
             subcommand.add_argument("--output", type=Path, required=True)
             subcommand.add_argument("--detailed-torch", action="store_true",
                                     help="Replace legacy flame/gallery with editable cast-detail torch")
+            subcommand.add_argument("--detailed-tablet", action="store_true",
+                                    help="Use the keystone tablet, serif date and curled supporting hand")
     scan_face_parser = subcommands.add_parser(
         "build-liberty-scan-face", help="Licensed photogrammetry face-detail QA checkpoint")
     scan_face_parser.add_argument("--source", type=Path, required=True)
@@ -208,7 +210,9 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(build_biplane_scene(model, output, bpy_module=bpy), indent=2))
             return 0
         if args.command in ("plan-liberty", "build-liberty"):
-            study = make_liberty_study(scale=args.scale, include_pedestal=not args.no_pedestal)
+            study = make_liberty_study(scale=args.scale,
+                                       include_pedestal=not args.no_pedestal,
+                                       detailed_tablet=(args.command == "build-liberty" and args.detailed_tablet))
             if args.command == "plan-liberty":
                 print(json.dumps({
                     "asset_id": study.asset_id, "generator": "procedural-statue-of-liberty",

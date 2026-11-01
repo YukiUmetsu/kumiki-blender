@@ -1,5 +1,36 @@
 # Statue of Liberty — scan-assisted detail rebuild
 
+## Keystone tablet and cradling left hand (opt-in, **ongoing**)
+
+The `--detailed-tablet` mode replaces the undersized rectangular slab and
+free-standing grip pegs with a tapered keystone silhouette, modeled shallow
+edge chamfers, attached wrist and sculpted palm, four fingers curling from the
+edge onto the front plane, and a thumb returning onto the visible face.
+The Roman-date lines now use serif glyphs aligned with the tablet's tilt and
+are converted to real GLB geometry. They remain **dark shallow relief**, not
+yet physically incised Boolean lettering.
+
+The National Park Service lists the original tablet at **7.19 m tall, 4.14 m
+wide and 0.61 m thick** and describes the keystone symbolism. This procedural
+sculpt uses an illustrative, uniformly smaller proportion, approximately
+4.14 m x 2.36 m x 0.38 m, to match the existing underscale body and head;
+it does **not** claim absolute monument dimensions. References:
+[NPS statistics](https://www.nps.gov/stli/learn/historyculture/statue-statistics.htm),
+[NPS teaching resource](https://www.nps.gov/common/uploads/teachers/lessonplans/Celebrating-a-symbol-FINAL.pdf).
+
+```bash
+KUMIKI_RENDER_PROFILE=smoke blender --background --factory-startup \
+  --python-exit-code 1 --python scripts/blender_entry.py -- \
+  build-liberty --detailed-torch --detailed-tablet \
+  --output .review/landmarks/statues/statue-of-liberty/r31-tablet-grip
+PYTHONPATH=src python3 -m kumiki_blender audit-revision \
+  --root .review/landmarks/statues/statue-of-liberty/r31-tablet-grip
+```
+
+The full statue and three new tablet-only cameras are checked frontally and
+in profile. This is an *improved sculptural approximation*, not photographic
+acceptance of the fingers, calligraphy, copper seams or face.
+
 ## Detailed torch and hand review (opt-in, **ongoing**)
 
 The procedural figure's old gallery/flame could not adequately convey the

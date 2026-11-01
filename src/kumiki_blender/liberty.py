@@ -166,13 +166,16 @@ def _gown() -> Mesh:
     return Mesh(tuple(vertices), tuple(faces))
 
 
-def make_liberty_study(*, scale: float = 1., include_pedestal: bool = True) -> LibertyStudy:
+def make_liberty_study(*, scale: float = 1., include_pedestal: bool = True,
+                       detailed_tablet: bool = False) -> LibertyStudy:
     """Make the original, reference-guided statue and optional 8.9m pedestal."""
     if (isinstance(scale, bool) or not isinstance(scale, (int, float)) or
             not math.isfinite(scale) or not .05 <= scale <= 20):
         raise LibertyError("scale must be a finite value between 0.05 and 20")
     if type(include_pedestal) is not bool:
         raise LibertyError("include_pedestal must be a boolean")
+    if type(detailed_tablet) is not bool:
+        raise LibertyError("detailed_tablet must be a boolean")
     result: list[MeshInstance] = []
 
     def put(name: str, mesh: Mesh, material: str = "patina") -> None:
@@ -317,16 +320,21 @@ def make_liberty_study(*, scale: float = 1., include_pedestal: bool = True) -> L
         (19.9, 2.02, 3.24, -.46, .18), (21.1, 1.78, 3.38, -.53, .24),
         (22.4, 1.62, 2.99, -.46, .31), (23.7, 1.50, 2.58, -.24, .10),
     ], folds=5), "patina-shadow")
-    # Thick, beveled-style tablet slab, tilted in the figure's left arm.
-    source = box_mesh(1.64, .30, 3.13)
-    put("tablet-slab", Mesh(tuple((x+3.15+.15*z, y-.81, z+22.37+.10*x)
-                                  for x, y, z in source.vertices), source.faces), "patina-light")
-    box("tablet-top-bead", (1.72, .37, .115), (3.37, -.83, 23.96), "patina-shadow")
-    for i in range(4):
-        put(f"tablet-grip-finger-{i}", _tube([
-            (3.87, -1.10, 21.60+i*.29), (4.00, -1.19, 21.78+i*.29),
-            (3.95, -.97, 21.97+i*.29),
-        ], [.115, .105, .082]), "patina")
+    if detailed_tablet:
+        from .liberty_tablet import tablet_detail_parts
+        for name, mesh, material in tablet_detail_parts():
+            put(name, mesh, material)
+    else:
+        # Legacy tablet is retained for backwards-compatible baseline studies.
+        source = box_mesh(1.64, .30, 3.13)
+        put("tablet-slab", Mesh(tuple((x+3.15+.15*z, y-.81, z+22.37+.10*x)
+                                      for x, y, z in source.vertices), source.faces), "patina-light")
+        box("tablet-top-bead", (1.72, .37, .115), (3.37, -.83, 23.96), "patina-shadow")
+        for i in range(4):
+            put(f"tablet-grip-finger-{i}", _tube([
+                (3.87, -1.10, 21.60+i*.29), (4.00, -1.19, 21.78+i*.29),
+                (3.95, -.97, 21.97+i*.29),
+            ], [.115, .105, .082]), "patina")
 
     # Neck, long classical face and rounded crown of hair.
     put("neck", _loft(((23.83, 0, .15, .67, .57), (24.66, 0, .20, .61, .52),
@@ -496,4 +504,5 @@ def make_liberty_study(*, scale: float = 1., include_pedestal: bool = True) -> L
                    for family in families)
     return LibertyStudy("statue-of-liberty-procedural", tuple(scaled), bounds_min,
                         bounds_max, counts, (("scale", float(scale)),
-                                             ("include_pedestal", include_pedestal)))
+                                             ("include_pedestal", include_pedestal),
+                                             ("detailed_tablet", detailed_tablet)))
