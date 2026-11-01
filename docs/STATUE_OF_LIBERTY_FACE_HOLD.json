@@ -6,6 +6,8 @@
     "target_verified": false,
     "sources": [
       "NPS Statue Statistics: https://www.nps.gov/stli/learn/historyculture/statue-statistics.htm",
+      "HAER NY-138-236 installed-head oblique, Jet Lowe, 1984, LOC color 570005c",
+      "HAER NY-138-237 installed-head right profile, Jet Lowe, 1984, LOC color 570006c",
       "HAER NY-138-241 installed-head left profile, 1984",
       "HAER NY-138-227 coppersmith face display, reference-only",
       "NPS Heritage Documentation 2019 survey exists but no authorized mesh obtained"
@@ -30,14 +32,14 @@
       "id": "profile",
       "status": "hold",
       "registration": "unregistered",
-      "camera_evidence": "Installed-head 1984 HAER oblique profile has unknown lens/camera pose",
+      "camera_evidence": "Installed-head 1984 HAER right and left profiles 237/241 have unknown lens/camera poses; neither is registered to Blender orthographic camera",
       "notes": "Nose-to-lip profile, cheek mass and jaw-to-neck transition fail"
     },
     {
       "id": "three-quarter",
       "status": "hold",
       "registration": "unregistered",
-      "camera_evidence": "No solved overlapping three-quarter camera or dense 3D correspondence",
+      "camera_evidence": "HAER 236 is an actual installed-head oblique, but no solved lens/camera pose or dense 3D correspondence",
       "notes": "No comparable real-head 3D evidence for the current generator"
     }
   ],
