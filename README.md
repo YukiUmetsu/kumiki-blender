@@ -19,7 +19,7 @@ quality still requires a human review. See [the visual QA guide](docs/ASSET_SPEC
 The composer also includes true rounded-edge solids, four-part mitered panel
 trim and instanced oriented fastener rows. The
 [precision-control-enclosure recipe](examples/precision-control-enclosure-v2.json)
-demonstrates 23 real hard-surface parts from eight short declarations, without
+demonstrates 62 real hard-surface parts from fourteen short declarations, without
 writing any per-model Python or Blender code.
 
 A standalone, code-first Blender toolkit for reusable, cinematic 3D authoring. Its first milestone is a **generic lattice observation tower**: a deterministic architectural scaffold, **not** a photorealistic or dimensionally verified replica of Tokyo Tower or another real landmark.

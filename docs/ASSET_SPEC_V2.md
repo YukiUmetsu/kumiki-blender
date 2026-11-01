@@ -87,11 +87,19 @@ and other hard-surface assets:
   Head spacing is validated before Blender runs.
 
 The [precision-control-enclosure example](../examples/precision-control-enclosure-v2.json)
-combines eight high-level declarations into 23 real, named parts. All reusable
+combines fourteen high-level declarations into 62 real, named parts. All reusable
 parts are validated and compiled by the same generic `build-asset` command;
 no new command or Blender script is needed per product. This is a **detail
 library**, not a substitute for survey-based shape reconstruction or physical
 reference matching.
+
+For any `solid.lathe`, `solid.hollow-lathe` or `detail.radial-studs`, the optional
+`normal_axis` also selects the physical outward direction (`+x`, `-x`, `+y`,
+`-y`, `+z`, `-z`; default `+z`). A front-facing dial therefore needs no custom
+rotation matrix: its turned knob, hollow bezel and circular calibration marks
+can all share the same `-y` normal. The control-enclosure example uses this
+to produce three layered dials, each with a sculpted knob, metal bezel and
+twelve raised scale markers.
 
 Materials are named roles backed by the existing PBR catalog (`preset`, with
 optional `color` and `roughness`). Component IDs are unique slugs. Unknown

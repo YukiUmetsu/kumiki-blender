@@ -56,7 +56,9 @@ def _rounded_box(component: RoundedBoxComponent) -> tuple[MeshInstance, ...]:
 
 def _lathe(component: LatheComponent) -> tuple[MeshInstance, ...]:
     mesh = revolve_profile(component.profile_rz_m, radial_segments=component.radial_segments)
+    x, y, z = detail_frame(component.normal_axis)
     return (place_mesh(mesh, name=component.id, origin=component.origin_m,
+                       axis_x=x, axis_y=y, axis_z=z,
                        material=component.material),)
 
 
@@ -86,8 +88,10 @@ def _hollow_lathe(component: HollowLatheComponent) -> tuple[MeshInstance, ...]:
         j = (i+1) % n
         faces.append((i, inner_offset+i, inner_offset+j, j))
         faces.append((last+i, last+j, inner_offset+last+j, inner_offset+last+i))
+    x, y, z = detail_frame(component.normal_axis)
     return (place_mesh(Mesh(vertices, tuple(faces)), name=component.id,
-                       origin=component.origin_m, material=component.material),)
+                       origin=component.origin_m, axis_x=x, axis_y=y,
+                       axis_z=z, material=component.material),)
 
 
 def _cross(a: Vec3, b: Vec3) -> Vec3:
@@ -115,11 +119,14 @@ def _stud_ring(component: StudRingComponent) -> tuple[MeshInstance, ...]:
     mesh = revolve_profile(((radius, 0), (radius, height)),
                            radial_segments=component.radial_segments)
     cx, cy, cz = component.center_m
+    x, y, z = detail_frame(component.normal_axis)
     return tuple(place_mesh(
         mesh, name=f"{component.id}-{index:03d}",
-        origin=(cx + component.ring_radius_m*math.cos(math.tau*index/component.count),
-                cy + component.ring_radius_m*math.sin(math.tau*index/component.count), cz),
-        material=component.material,
+        origin=tuple(center + component.ring_radius_m*(
+            x[axis]*math.cos(math.tau*index/component.count) +
+            y[axis]*math.sin(math.tau*index/component.count))
+            for axis, center in enumerate((cx, cy, cz))),
+        axis_x=x, axis_y=y, axis_z=z, material=component.material,
     ) for index in range(component.count))
 
 

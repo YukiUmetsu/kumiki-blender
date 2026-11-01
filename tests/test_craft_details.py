@@ -76,19 +76,35 @@ class CraftDetailsTests(unittest.TestCase):
     def test_sample_expands_to_named_audited_product_details(self):
         spec = load_asset_spec(EXAMPLE)
         plan = plan_assembly(spec)
-        self.assertEqual(len(plan.instances), 23)
+        self.assertEqual(len(plan.instances), 62)
         self.assertEqual(dict(plan.named_parts), {
             "solid.rounded-box": 2, "detail.panel-frame": 4,
-            "detail.linear-fasteners": 14, "mechanical.rod": 3,
+            "detail.linear-fasteners": 14, "solid.hollow-lathe": 3,
+            "detail.radial-studs": 36, "solid.lathe": 3,
         })
-        self.assertEqual(len({part.name for part in plan.instances}), 23)
+        self.assertEqual(len({part.name for part in plan.instances}), 62)
         self.assertEqual({part.material for part in plan.instances},
-                         {"housing", "panel", "trim", "screws", "controls"})
+                         {"housing", "panel", "trim", "screws", "controls", "markings"})
         for part in plan.instances:
             self.assertEqual(audit_mesh(part.mesh).boundary_edges, 0, part.name)
         # The left/right front-facing fasteners actually protrude toward -Y.
         fastener = next(p for p in plan.instances if p.name == "top-hex-screws-000")
         self.assertLess(min(p[1] for p in world_vertices(fastener)), -0.102)
+        # Both bezel shells and scale marks use local +Z rotated toward -Y.
+        bezel = next(p for p in plan.instances if p.name == "left-bezel")
+        self.assertEqual(bezel.axis_z, (0, -1, 0))
+        self.assertAlmostEqual(min(p[1] for p in world_vertices(bezel)), -0.0935)
+        tick = next(p for p in plan.instances if p.name == "left-calibration-000")
+        self.assertEqual(tick.axis_z, (0, -1, 0))
+        self.assertAlmostEqual(tick.origin[1], -0.089)
+        self.assertAlmostEqual(tick.origin[0], -0.092)
+        self.assertAlmostEqual(tick.origin[2], 0.19)
+        top_tick = next(p for p in plan.instances if p.name == "left-calibration-003")
+        self.assertAlmostEqual(top_tick.origin[0], -0.13)
+        self.assertAlmostEqual(top_tick.origin[2], 0.228)
+        control = next(p for p in plan.instances if p.name == "right-control")
+        self.assertEqual(control.axis_z, (0, -1, 0))
+        self.assertAlmostEqual(min(p[1] for p in world_vertices(control)), -0.123)
 
     def test_bounded_detail_inputs_reject_invalid_dimensions_and_spacing(self):
         mutations = (
@@ -116,7 +132,7 @@ class CraftDetailsTests(unittest.TestCase):
             parsed_spec, parsed_plan = load_compiled_plan(target)
             self.assertEqual(parsed_spec.asset_id, "precision-control-enclosure")
             self.assertEqual(parsed_plan.named_parts, plan.named_parts)
-            self.assertEqual(len(parsed_plan.instances), 23)
+            self.assertEqual(len(parsed_plan.instances), 62)
             self.assertEqual(parsed_plan.recipe_sha256, plan.recipe_sha256)
 
             raw = json.loads(target.read_text(encoding="utf-8"))

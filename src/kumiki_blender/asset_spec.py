@@ -23,6 +23,7 @@ Measure = Annotated[float, Field(ge=0.001, le=1_000, allow_inf_nan=False)]
 Position = Annotated[float, Field(ge=-10_000, le=10_000, allow_inf_nan=False)]
 Point3 = tuple[Position, Position, Position]
 RadiusHeight = tuple[Measure, Position]
+SurfaceAxis = Literal["+x", "-x", "+y", "-y", "+z", "-z"]
 
 
 class StrictModel(BaseModel):
@@ -65,6 +66,7 @@ class LatheComponent(StrictModel):
     profile_rz_m: Annotated[tuple[RadiusHeight, ...], Field(min_length=2, max_length=128)]
     origin_m: Point3 = (0.0, 0.0, 0.0)
     radial_segments: Annotated[int, Field(ge=8, le=256)] = 48
+    normal_axis: SurfaceAxis = "+z"
 
 
 class HollowLatheComponent(LatheComponent):
@@ -100,6 +102,7 @@ class StudRingComponent(StrictModel):
     stud_height_m: Measure
     count: Annotated[int, Field(ge=3, le=128)]
     radial_segments: Annotated[int, Field(ge=8, le=48)] = 16
+    normal_axis: SurfaceAxis = "+z"
 
 
 class LinearFastenersComponent(StrictModel):
@@ -111,7 +114,7 @@ class LinearFastenersComponent(StrictModel):
     count: Annotated[int, Field(ge=2, le=128)]
     head_radius_m: Measure
     head_height_m: Measure
-    normal_axis: Literal["+x", "-x", "+y", "-y", "+z", "-z"] = "+z"
+    normal_axis: SurfaceAxis = "+z"
     head_style: Literal["button", "hex"] = "button"
 
     @model_validator(mode="after")
