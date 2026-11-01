@@ -132,10 +132,12 @@ class EgyptianMonumentTests(unittest.TestCase):
                            sum(point[0] for point in upper_neck)/96, .45)
         hood = parts["sphinx-nemes-hood"]
         high_ring = hood.vertices[-96:]
-        previous_ring = hood.vertices[-192:-96]
+        previous_ring = hood.vertices[25*96:26*96]  # Last loft control point before crown cap.
         width = lambda points: max(point[1] for point in points)-min(point[1] for point in points)
-        # A nearly planar crown instead of an egg-shaped round cap.
-        self.assertGreater(width(high_ring)/width(previous_ring), .94)
+        # Preserve a tapered headdress crown: an oversized flat cap reads
+        # like a cylinder, while a fully hemispherical cap reads like an egg.
+        self.assertGreater(width(high_ring)/width(previous_ring), .70)
+        self.assertLess(width(high_ring)/width(previous_ring), .90)
         total_x = [point[0] for part in parts.values() for point in part.vertices]
         top_z = max(point[2] for part in parts.values() for point in part.vertices)
         self.assertLess(top_z/(max(total_x)-min(total_x)), .34)

@@ -363,8 +363,8 @@ def sphinx_assembly(*, prefix: str, length: float = 10.5,
                                 (3.74, -3.51, 0, .73, 1.04),
                                 (4.14, -3.47, 0, .69, .99),
                                 (4.43, -3.48, 0, .61, .83),
-                                (4.56, -3.50, 0, .57, .77),
-                                (4.60, -3.50, 0, .56, .76)),
+                                (4.56, -3.50, 0, .44, .62),
+                                (4.60, -3.50, 0, .34, .53)),
                                roughness=.028, seed=89, exponent=3.5), "casing-limestone")
     face = along_z(((2.93, -3.86, 0, .23, .23),
                     (3.14, -3.93, 0, .34, .34),
@@ -376,11 +376,11 @@ def sphinx_assembly(*, prefix: str, length: float = 10.5,
                    roughness=.012, seed=97, exponent=2.45)
     part("face", _sculpt_face_relief(face, scale_x=x, scale_y=y, scale_z=z))
     for side, sign in (("left", -1), ("right", 1)):
-        part(f"nemes-{side}-lappet", along_z(((2.18, -3.43, sign*.80, .10, .25),
-                                             (2.60, -3.49, sign*.89, .12, .28),
-                                             (3.25, -3.53, sign*.98, .15, .27),
-                                             (3.88, -3.49, sign*1.01, .16, .22)),
-                                            roughness=.022, seed=105, exponent=3.45),
+        part(f"nemes-{side}-lappet", along_z(((2.18, -3.43, sign*.74, .10, .20),
+                                             (2.60, -3.49, sign*.77, .12, .23),
+                                             (3.25, -3.53, sign*.80, .14, .24),
+                                             (3.88, -3.49, sign*.82, .15, .21)),
+                                            roughness=.022, seed=105, exponent=5.0),
              "casing-limestone")
         part(f"{side}-ear", along_z(((3.81, -3.83, sign*.58, .16, .10),
                                     (4.13, -3.80, sign*.62, .20, .18),
