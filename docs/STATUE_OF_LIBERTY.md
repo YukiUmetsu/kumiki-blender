@@ -1,5 +1,18 @@
 # Statue of Liberty — scan-assisted detail rebuild
 
+## r56 — authentic-foundation and multi-view hold gate
+
+The stricter updated Blender 3D Craft Director workflow now blocks any claim
+of photo-faithful face modeling without authenticated geometry, registered
+front/profile/three-quarter cameras and actual measured silhouette/landmark
+agreement. A checked-in `review.json`-style manifest explicitly holds the
+current r53 face, and new `geometry_compare.py`/`reconstruction_gate.py`
+scripts independently validate real masks and correspondence annotations
+instead of trusting a green render/test manifest. We did **not** fabricate
+annotations for the uncalibrated museum/HAER views. These quality tools do not
+promote the rejected r54–r55 anatomy. Full rationale and reference ledger:
+[facial acceptance gate](STATUE_OF_LIBERTY_FACE_QA.md).
+
 ## r54–r55 — measured face QA and reconstruction-method gate
 
 The updated face workflow now uses independent **NPS measured feature ratios**

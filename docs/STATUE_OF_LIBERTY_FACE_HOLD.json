@@ -1,0 +1,55 @@
+{
+  "goal": "photo-faithful",
+  "subject": "Installed Statue of Liberty copper head, Liberty Island, New York",
+  "foundation": {
+    "method": "procedural-relief",
+    "target_verified": false,
+    "sources": [
+      "NPS Statue Statistics: https://www.nps.gov/stli/learn/historyculture/statue-statistics.htm",
+      "HAER NY-138-241 installed-head left profile, 1984",
+      "HAER NY-138-227 coppersmith face display, reference-only",
+      "NPS Heritage Documentation 2019 survey exists but no authorized mesh obtained"
+    ],
+    "scale_basis": "Current illustrative cranium height 3.52 m versus NPS 5.26 m; not a full monument scale fit",
+    "constraints": [
+      "NPS head width 3.05 m",
+      "NPS eye width 0.76 m and mouth width 0.91 m",
+      "NPS nose length 1.37 m",
+      "Unregistered HAER profile gives qualitative silhouette only"
+    ]
+  },
+  "views": [
+    {
+      "id": "front",
+      "status": "hold",
+      "registration": "unregistered",
+      "camera_evidence": "HAER frontal face is a coppersmith display, not the installed head",
+      "notes": "No matching same-target reference/camera, anatomical orbital planes and mouth fail"
+    },
+    {
+      "id": "profile",
+      "status": "hold",
+      "registration": "unregistered",
+      "camera_evidence": "Installed-head 1984 HAER oblique profile has unknown lens/camera pose",
+      "notes": "Nose-to-lip profile, cheek mass and jaw-to-neck transition fail"
+    },
+    {
+      "id": "three-quarter",
+      "status": "hold",
+      "registration": "unregistered",
+      "camera_evidence": "No solved overlapping three-quarter camera or dense 3D correspondence",
+      "notes": "No comparable real-head 3D evidence for the current generator"
+    }
+  ],
+  "critical_features": [
+    {"name": "cranium and side silhouette", "status": "hold"},
+    {"name": "eyelids/orbits and nasal anatomy", "status": "hold"},
+    {"name": "cheeks, lips, mandible and neck", "status": "hold"},
+    {"name": "ears and hair/temple overlap", "status": "hold"}
+  ],
+  "unresolved_blockers": [
+    "Authentic high-resolution head mesh or a genuine manually sculpted foundation is missing",
+    "Front/profile/three-quarter cameras and landmark correspondences are not registered",
+    "Critical head anatomy fails multi-view qualitative comparison"
+  ]
+}

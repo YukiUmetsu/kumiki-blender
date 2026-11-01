@@ -1,5 +1,68 @@
 # Statue of Liberty — reference-calibrated facial acceptance gate
 
+## r56 — hard measured multi-view release gate
+
+The updated reconstruction workflow requires authenticated **real-target 3D
+geometry** or a genuinely sculpted, reference-calibrated foundation before
+detail promotion. The existing procedural r53 face and rejected r54/r55
+control-cage trials do not satisfy that condition. The NPS documents a
+2007 exterior scan and improved exterior capture during its 2019 survey,
+but no licensed high-resolution **usable head mesh** has been obtained from
+those projects; neither a decorative miniature nor a museum-face replica is
+equivalent to the installed copper monument.
+
+| Release gate | Decision | Evidence / missing work |
+| --- | --- | --- |
+| Foundation authenticity | **BLOCKED** | No rights-cleared real-head scan, calibrated 3D survey mesh or approved anatomical sculpt |
+| Camera correspondence | **BLOCKED** | HAER photos have unknown intrinsics/pose; face-display frontal is not the installed head |
+| Continuous facial anatomy | **HOLD** | Watertight surface exists but realistic orbits, alae, lip masses and cheek/jaw planes do not |
+| Front/profile/three-quarter QA | **HOLD** | Reference comparisons expose major mismatches; no calibrated pixel-grid segmentation/landmarks |
+| Photo-faithful GLB release | **HOLD** | Do not publish a new model as more realistic based on tessellation or render success alone |
+
+The versioned [HOLD manifest](STATUE_OF_LIBERTY_FACE_HOLD.json) records these
+explicitly. The new QA scripts fail closed: `geometry_compare.py` measures
+binary silhouette IoU plus diagonal-normalized landmark RMS only when masks,
+photos and named landmarks occupy the same registered pixel grid; optional
+baseline regression blocks numerical backsliding. `reconstruction_gate.py`
+requires all three actual image pairs, documented camera calibration,
+threshold rationales, authentic foundation evidence, and a passing human
+anatomy review before returning `PASS`. No artificial masks or landmark
+annotations were invented for the unregistered HAER photos.
+
+```bash
+# Expected exit code 2 and a truthful HOLD, not a passing release:
+PYTHONPATH=src python3 scripts/reconstruction_gate.py \
+  docs/STATUE_OF_LIBERTY_FACE_HOLD.json
+
+# Once genuine matching and registered views exist, evaluate them individually:
+python3 scripts/geometry_compare.py \
+  --reference-mask front-ref-mask.png --render-mask front-render-mask.png \
+  --reference-landmarks front-ref-points.json \
+  --render-landmarks front-render-points.json \
+  --registration calibrated --camera-evidence "Matched survey control points" \
+  --min-iou 0.90 --max-landmark-error 0.02 \
+  --output front-metrics.json
+```
+
+The sample numeric limits in the second command are **illustrative**; actual
+thresholds require justified camera/survey uncertainty. Numerical PASS cannot
+override a visible facial defect, nor recover hidden 3D structure.
+
+For a sculptor, the clay review can display an **editable scaled-measurement
+overlay** on the front camera. It uses the NPS feature ratios and shows where
+the existing illustrative mesh departs from those guides; it never changes
+the portrait geometry or pretends to constrain unknown side depth:
+
+```bash
+blender --background --factory-startup --threads 6 --python-exit-code 1 \
+  --python scripts/blender_liberty_face_clay.py -- \
+  --measurement-guides \
+  --output .review/landmarks/statues/statue-of-liberty/measurement-guides-next
+```
+
+The generated `clay.blend` retains named measurement curves, dimensions in
+scene metadata, and clean three-quarter/profile renders with guides hidden.
+
 ## Source ledger and confidence
 
 | ID | Primary source | Observation / intended use | Evidence and rights | Confidence |

@@ -8,6 +8,7 @@ inspection tool, not a replacement for the final all-angle GLB audit.
 from __future__ import annotations
 
 import argparse
+import math
 import sys
 from pathlib import Path
 
@@ -26,6 +27,8 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--resolution", type=int, default=640)
+    parser.add_argument("--measurement-guides", action="store_true",
+                        help="Annotate the frontal clay view with scaled NPS dimensions")
     cfg = parser.parse_args(args)
     if not 256 <= cfg.resolution <= 2048:
         parser.error("resolution must be in [256, 2048]")
@@ -85,9 +88,70 @@ def main() -> None:
     area("Large soft key", (-5., -6., 30.), 850, 4.0)
     area("Narrow raking fill", (4., -1.8, 28.5), 440, 3.0)
 
+    guides = []
+    if cfg.measurement_guides:
+        from kumiki_blender.liberty_face_measurements import scaled_nps_head_targets
+
+        target = scaled_nps_head_targets()
+        scene["nps_reference_head_width_m"] = target.width
+        scene["nps_reference_eye_width_m"] = target.eye_width
+        scene["nps_reference_mouth_width_m"] = target.mouth_width
+        scene["nps_reference_nose_length_m"] = target.nose_length
+        scene["measurement_warning"] = "Scaled ratios only; front/profile cameras not calibrated"
+
+        ink = bpy.data.materials.new("Reference guides / deep umber")
+        ink.diffuse_color = (.22, .12, .045, 1.)
+        ink.use_nodes = True
+        ink.node_tree.nodes["Principled BSDF"].inputs["Base Color"].default_value = (
+            .22, .12, .045, 1.)
+
+        def line(name: str, p1: tuple[float, float, float],
+                 p2: tuple[float, float, float]) -> None:
+            curve = bpy.data.curves.new(name, "CURVE")
+            curve.dimensions = "3D"
+            curve.bevel_depth = .011
+            curve.bevel_resolution = 3
+            spline = curve.splines.new("POLY")
+            spline.points.add(1)
+            for index, point in enumerate((p1, p2)):
+                spline.points[index].co = (*point, 1.)
+            obj = bpy.data.objects.new(name, curve)
+            obj.data.materials.append(ink)
+            scene.collection.objects.link(obj)
+            guides.append(obj)
+
+        def annotate(label: str, x: float, z: float) -> None:
+            font = bpy.data.curves.new("Measurement / " + label, "FONT")
+            font.body = label
+            font.size = .115
+            obj = bpy.data.objects.new("Measurement / " + label, font)
+            scene.collection.objects.link(obj)
+            obj.location = (x, -1.73, z)
+            obj.rotation_euler = (math.pi/2, 0, 0)
+            obj.data.materials.append(ink)
+            guides.append(obj)
+
+        def bar(label: str, x0: float, x1: float, z: float, caption_x: float) -> None:
+            line(label, (x0, -1.71, z), (x1, -1.71, z))
+            for x in (x0, x1):
+                line(label + " tick", (x, -1.71, z-.05), (x, -1.71, z+.05))
+            annotate(label, caption_x, z-.20)
+
+        bar(f"NPS head {target.width:.2f}m", -target.width/2,
+            target.width/2, 24.76, -.92)
+        for sign, word in ((-1, "left"), (1, "right")):
+            cx = sign*.43
+            bar(f"{word} eye {target.eye_width:.2f}m", cx-target.eye_width/2,
+                cx+target.eye_width/2, 27.22, cx-.23)
+        bar(f"NPS mouth {target.mouth_width:.2f}m", -target.mouth_width/2,
+            target.mouth_width/2, 25.78, -.48)
+        line("NPS nose length", (1.27, -1.71, 27.40),
+             (1.27, -1.71, 27.40-target.nose_length))
+        annotate(f"nose {target.nose_length:.2f}m", 1.31, 26.57)
+
     data = bpy.data.cameras.new("Fixed clay inspection orthographic")
     data.type = "ORTHO"
-    data.ortho_scale = 4.10
+    data.ortho_scale = 4.70 if cfg.measurement_guides else 4.10
     camera = bpy.data.objects.new(data.name, data)
     scene.collection.objects.link(camera)
     scene.camera = camera
@@ -97,11 +161,18 @@ def main() -> None:
         ("profile", (8., -.12, 26.69)),
     )
     for name, position in shots:
+        for obj in guides:
+            obj.hide_render = name != "front"
         camera.location = position
         vector = Vector((0., 0., 26.69))-camera.location
         camera.rotation_euler = vector.to_track_quat("-Z", "Y").to_euler()
         scene.render.filepath = str(cfg.output / f"{name}.png")
         bpy.ops.render.render(write_still=True)
+    for obj in guides:
+        obj.hide_render = False
+    camera.location = shots[0][1]
+    camera.rotation_euler = (Vector((0., 0., 26.69))-camera.location).to_track_quat(
+        "-Z", "Y").to_euler()
     bpy.ops.wm.save_as_mainfile(filepath=str(cfg.output / "clay.blend"))
     print(f"Neutral facial comparison views: {cfg.output}")
 
