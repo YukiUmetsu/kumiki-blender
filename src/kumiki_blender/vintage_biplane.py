@@ -133,6 +133,9 @@ def _wing_half(side: int, *, span: float, chord: float, center_y: float,
         span_points = sorted(set((*span_points, cut_at, cut_at+.03,
                                   span-.63, span-.43,
                                   *(span-.43+.043*j for j in range(11)))))
+    # Added stations are real surface sections, not spare vertices: stitch
+    # every station through the tip, including the aileron transition.
+    count = len(span_points)-1
     n = 28
     vertices: list[Vec3] = []
     for i, x in enumerate(span_points):
