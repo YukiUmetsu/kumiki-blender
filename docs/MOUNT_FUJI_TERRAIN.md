@@ -103,7 +103,7 @@ blender --background --factory-startup --python-exit-code 1 \
   --season summer --dem .review/fuji-dem/fuji-heightmap-v2.bin \
   --detail-patch .review/fuji-dem/fuji-summit-z15-patch.bin \
   --detail-patch .review/fuji-dem/fuji-hoei-z15-patch.bin \
-  --output .review/geography/terrain/mount-fuji-survey-terrain/r15
+  --output .review/geography/terrain/mount-fuji-survey-terrain/r16
 ```
 
 Season, forest density and snow coverage are **art direction**, not a satellite
@@ -154,6 +154,43 @@ python scripts/reference_compare.py /path/to/reference.jpg \
 The cameras differ between images; don't interpret an unaligned pixel
 comparison as topographic discrepancy. Revisit neutral clay geometry and
 registered camera views before changing surveyed elevations.
+
+### r16 summer / r17 winter — portable GLB color correction
+
+The first realistic GLBs carried the entire forest/scoria/snow palette as
+`COLOR_0` vertex attributes. Blender rendered that correctly, but some
+viewers ignore vertex colors and fall back to a plain white glTF material.
+This is an **export-material defect**, not a terrain-shape or lighting defect.
+
+The generator now embeds a full **georeferenced base-color PNG** in every
+realistic GLB and connects it directly to the standard glTF
+`pbrMetallicRoughness.baseColorTexture` field. The atlas has four texels per
+coarse DEM interval (4096² at high detail); the summit/Hōei fine patch colors
+overwrite the coarse interpolation at their surveyed positions. Before PNG
+encoding, linear pigments are transformed to sRGB to prevent an otherwise
+very dark, double-gamma result. Normal detail uses independent tiled UVs.
+No external color images, photography or textures are required at runtime.
+
+Inspect **the exported GLB** rather than source.blend alone:
+
+```bash
+blender --background \
+  .review/geography/terrain/mount-fuji-survey-terrain/r16/source.blend \
+  --python-exit-code 1 --python scripts/verify_fuji_glb_color.py -- \
+  --root .review/geography/terrain/mount-fuji-survey-terrain/r16
+
+PYTHONPATH=src python -m kumiki_blender audit-revision --root \
+  .review/geography/terrain/mount-fuji-survey-terrain/r16
+```
+
+The verification script imports the **actual GLB as a new mesh/material**, with
+the original source model removed, then renders under the original camera and
+light. A preview-resolution prototype had an RGB mean absolute native-vs-GLB
+render error below **0.001 on a 0–255 channel scale** after the sRGB fix.
+The GLB audit now rejects a realistic Fuji revision missing embedded albedo.
+Repeat the build, re-import and audit commands against `r17` with
+`--season winter` for the snow-covered version. Both seasonal GLBs carry
+their own color atlas instead of depending on viewer vertex-color support.
 
 For closer survey-terrain views, the Blender builder now also generates a
 deterministic, 512/1024-pixel **tangent-space rock micro-normal map**. It is

@@ -83,6 +83,21 @@ class GlbAuditTests(unittest.TestCase):
         write_glb(self.path, self.model)
         self.assertEqual(audit_glb(self.path, require_pbr_textures=True)["materials"], 1)
 
+    def test_portable_base_color_requires_embedded_image_and_uvs(self):
+        write_glb(self.path, self.model)
+        with self.assertRaisesRegex(AuditError, "base-color texture"):
+            audit_glb(self.path, require_base_color_texture=True)
+        self.model["images"] = [{"bufferView": 0, "mimeType": "image/png"}]
+        self.model["textures"] = [{"source": 0}]
+        self.model["materials"][0]["pbrMetallicRoughness"] = {"baseColorTexture": {"index": 0}}
+        self.model["meshes"][0]["primitives"][0]["attributes"]["TEXCOORD_0"] = 1
+        write_glb(self.path, self.model)
+        self.assertEqual(audit_glb(self.path, require_base_color_texture=True)["materials"], 1)
+        del self.model["images"][0]["bufferView"]
+        write_glb(self.path, self.model)
+        with self.assertRaisesRegex(AuditError, "base-color texture"):
+            audit_glb(self.path, require_base_color_texture=True)
+
 
 if __name__ == "__main__":
     unittest.main()

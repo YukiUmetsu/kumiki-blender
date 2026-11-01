@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from ...blender_output import create_model_scene, export_revision
+from ...glb_audit import audit_glb
 from ...shots import QualityShot
 from .dem import FujiDem, SUMMIT, load_dem
 from .patches import FujiDetailPatch, load_patch, validate_patches
@@ -218,6 +219,82 @@ def _stone_normal_image(bpy: Any, size: int) -> Any:
     return image
 
 
+def _terrain_albedo_image(bpy: Any, divisions: int,
+                          colors: list[tuple[float, float, float, float]],
+                          patches: tuple[FujiDetailPatch, ...],
+                          patch_indices: dict[tuple[str, int, int], int],
+                          season: str) -> Any:
+    """Bake georeferenced vertex pigments to an embedded, portable color PNG.
+
+    A standalone glTF material with COLOR_0 but no baseColorTexture appears
+    white in several real-world GLB viewers. A full-coverage albedo texture
+    removes that viewer dependency, while retaining editable source colors.
+    Its four pixels per coarse DEM interval also preserve the finer crater
+    patch pigments at their actual geographic positions. No imagery is copied.
+    """
+    import numpy as np
+
+    count = divisions + 1
+    size = divisions * 4
+    grid = np.asarray(colors[:count * count], dtype=np.float32).reshape(count, count, 4)
+    columns = np.arange(size, dtype=np.int32)
+    x0 = columns // 4
+    tx = (columns % 4).astype(np.float32) / 4
+    xcolors = (grid[:, x0, :] * (1 - tx)[None, :, None]
+               + grid[:, x0 + 1, :] * tx[None, :, None])
+    pixels = np.empty((size, size, 4), dtype=np.float32)
+    for begin in range(0, size, 128):
+        rows = np.arange(begin, min(size, begin + 128), dtype=np.int32)
+        y0 = rows // 4
+        ty = (rows % 4).astype(np.float32) / 4
+        pixels[begin:begin + len(rows)] = (
+            xcolors[y0, :, :] * (1 - ty)[:, None, None]
+            + xcolors[y0 + 1, :, :] * ty[:, None, None]
+        )
+    del xcolors
+
+    # Detail patches share coarse boundary vertices; their fine pigments must
+    # overwrite the bilinear parent colors without a visible atlas seam.
+    for patch in patches:
+        spec = patch.spec
+        fine = np.asarray(
+            [colors[patch_indices[(spec.name, r, c)]]
+             for r in range(spec.rows) for c in range(spec.cols)],
+            dtype=np.float32,
+        ).reshape(spec.rows, spec.cols, 4)
+        left, right = spec.col_start * 4, min(spec.col_end * 4 + 1, size)
+        top, bottom = spec.row_start * 4, min(spec.row_end * 4 + 1, size)
+        xs = np.arange(left, right, dtype=np.float32) / 4 - spec.col_start
+        ys = np.arange(top, bottom, dtype=np.float32) / 4 - spec.row_start
+        xs *= spec.factor
+        ys *= spec.factor
+        col = np.minimum(xs.astype(np.int32), spec.cols - 2)
+        row = np.minimum(ys.astype(np.int32), spec.rows - 2)
+        u, v = (xs - col), (ys - row)
+        horizontal = (fine[:, col, :] * (1 - u)[None, :, None]
+                      + fine[:, col + 1, :] * u[None, :, None])
+        pixels[top:bottom, left:right] = (
+            horizontal[row, :, :] * (1 - v)[:, None, None]
+            + horizontal[row + 1, :, :] * v[:, None, None]
+        )
+
+    # Vertex pigments are linear shader values, while a portable PNG base-color
+    # texture is decoded as sRGB by glTF viewers. Encode *before* writing PNG;
+    # otherwise the forest and summit render nearly black after double gamma.
+    linear = np.clip(pixels[:, :, :3], 0, 1)
+    pixels[:, :, :3] = np.where(linear <= .0031308, linear * 12.92,
+                               1.055 * np.power(linear, 1 / 2.4) - .055)
+
+    # North is the first DEM row; Blender PNG pixel storage starts at south.
+    image = bpy.data.images.new(f"Fuji / embedded {season} geographic albedo",
+                                width=size, height=size, alpha=True, float_buffer=False)
+    image.colorspace_settings.name = "sRGB"
+    image.pixels.foreach_set(np.ascontiguousarray(pixels[::-1]).ravel())
+    image.update()
+    image.pack()
+    return image
+
+
 def _terrain_object(bpy: Any, model: Any, dem: FujiDem, divisions: int,
                     patches: tuple[FujiDetailPatch, ...] = (),
                     *, season: str = "winter") -> Any:
@@ -344,30 +421,43 @@ def _terrain_object(bpy: Any, model: Any, dem: FujiDem, divisions: int,
         attr.data[i].color = color
     # UV orientation follows geographic north-to-south DEM row order. All
     # normals live in the GLB as a packed PNG, with zero external references.
-    uv_layer=mesh.uv_layers.new(name="FujiGeographicUV")
-    uv_coords=array("f")
+    albedo_uv=mesh.uv_layers.new(name="FujiAlbedoUV")
+    normal_uv=mesh.uv_layers.new(name="FujiRockNormalUV")
+    uv_color=array("f")
+    uv_normal=array("f")
     west,south=spec.xy(spec.longitude_min,spec.latitude_min)
     for polygon in faces:
         for index in polygon:
             x,y,_=verts[index]
-            uv_coords.extend((ROCK_NORMAL_TILES*(x-west)/spec.width_km,
-                              ROCK_NORMAL_TILES*(y-south)/spec.depth_km))
-    uv_layer.data.foreach_set("uv",uv_coords)
+            u,v=(x-west)/spec.width_km,(y-south)/spec.depth_km
+            uv_color.extend((u,v))
+            uv_normal.extend((u*ROCK_NORMAL_TILES,v*ROCK_NORMAL_TILES))
+    albedo_uv.data.foreach_set("uv",uv_color)
+    normal_uv.data.foreach_set("uv",uv_normal)
     mat = bpy.data.materials.new("Fuji / alpine forest, basalt and seasonal snow")
     mat.use_nodes = True
     nodes = mat.node_tree.nodes
     bsdf = next(n for n in nodes if n.type == "BSDF_PRINCIPLED")
     bsdf.inputs["Roughness"].default_value = .86
-    vertex = nodes.new("ShaderNodeVertexColor")
-    vertex.layer_name = "FujiAlbedo"
-    mat.node_tree.links.new(vertex.outputs["Color"], bsdf.inputs["Base Color"])
+    color_texture=nodes.new("ShaderNodeTexImage")
+    color_texture.image=_terrain_albedo_image(bpy,divisions,colors,patches,
+                                              per_patch_indices,season)
+    color_texture.interpolation="Linear"
+    color_texture.extension="EXTEND"
+    color_coordinates=nodes.new("ShaderNodeUVMap")
+    color_coordinates.uv_map=albedo_uv.name
+    mat.node_tree.links.new(color_coordinates.outputs["UV"],color_texture.inputs["Vector"])
+    mat.node_tree.links.new(color_texture.outputs["Color"], bsdf.inputs["Base Color"])
     normal_texture=nodes.new("ShaderNodeTexImage")
     normal_texture.image=_stone_normal_image(bpy,512 if divisions<1024 else 1024)
     normal_texture.interpolation="Linear"
     normal_texture.extension="REPEAT"
+    normal_coordinates=nodes.new("ShaderNodeUVMap")
+    normal_coordinates.uv_map=normal_uv.name
+    mat.node_tree.links.new(normal_coordinates.outputs["UV"],normal_texture.inputs["Vector"])
     normal_node=nodes.new("ShaderNodeNormalMap")
     normal_node.space="TANGENT"
-    normal_node.uv_map=uv_layer.name
+    normal_node.uv_map=normal_uv.name
     normal_node.inputs["Strength"].default_value=.53
     mat.node_tree.links.new(normal_texture.outputs["Color"],normal_node.inputs["Color"])
     mat.node_tree.links.new(normal_node.outputs["Normal"],bsdf.inputs["Normal"])
@@ -381,6 +471,7 @@ def _terrain_object(bpy: Any, model: Any, dem: FujiDem, divisions: int,
     obj["detail_patches"] = ", ".join(p.spec.name for p in patches)
     obj["surface_season"] = season
     obj["packed_normal_texture_tiles"] = ROCK_NORMAL_TILES
+    obj["portable_base_color_texture"] = True
     return obj
 
 
@@ -492,7 +583,7 @@ def build_fuji_scene(destination: Path, dem_path: Path, *, divisions: int = 512,
     camera = _studio(bpy, scene, stage)
     terrain = _terrain_object(bpy, model, dem, divisions, patches, season=season)
     wall, base = _plinth(bpy, model, dem, divisions)
-    return export_revision(bpy, scene, camera, (terrain,wall,base), plan_fuji_shots(), destination,
+    manifest=export_revision(bpy, scene, camera, (terrain,wall,base), plan_fuji_shots(), destination,
                            samples=48 if divisions>=1024 else 16, metadata={
                                "asset_id": "mount-fuji-survey-terrain",
                                "generator": "GSI elevation-mesh",
@@ -507,6 +598,7 @@ def build_fuji_scene(destination: Path, dem_path: Path, *, divisions: int = 512,
                                     "factor":p.spec.factor,"surveyed_fraction":round(p.surveyed_fraction,5),
                                     "source":p.source} for p in patches],
                                "baked_normal_texture_px": 512 if divisions<1024 else 1024,
+                               "baked_albedo_texture_px": divisions * 4,
                                "packed_normal_texture_tiles": ROCK_NORMAL_TILES,
                                "named_parts": {"terrain_surface": 1,
                                                "terrain_perimeter": 1,
@@ -516,3 +608,7 @@ def build_fuji_scene(destination: Path, dem_path: Path, *, divisions: int = 512,
                                "summit_lon_lat": SUMMIT,
                                "craters": ["summit", "Hoei / 1707 eruption"],
                            })
+    # The standard glTF vertex-color attribute is not sufficient for every
+    # consumer. Reject a Fuji checkpoint that omits its embedded color atlas.
+    audit_glb(destination / "model.glb", require_base_color_texture=True)
+    return manifest
