@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "id": "classical-column",
+  "title": "Classical Column Component Kit",
+  "description": "Reusable Tuscan, Doric and Ionic columns with physically carved details.",
+  "kind": "procedural",
+  "tags": ["column", "capital", "ionic", "doric", "tuscan", "architecture"],
+  "aliases": ["architectural pillar", "fluted stone column"],
+  "rigged": false,
+  "animated": false,
+  "sources": ["src/kumiki_blender/architecture_details.py", "docs/ARCHITECTURE_DETAILS.md"],
+  "plan": ["plan-classical-column"],
+  "build": null
+}

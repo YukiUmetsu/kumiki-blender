@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "id": "lattice-observation-tower",
+  "title": "Lattice Observation Tower",
+  "description": "Parametric steel observation tower with cross bracing, decks, rails and bolts.",
+  "kind": "procedural",
+  "tags": ["tower", "lattice", "steel", "observation", "architecture"],
+  "aliases": ["metal observation tower", "tower scaffold"],
+  "rigged": false,
+  "animated": false,
+  "sources": ["src/kumiki_blender/lattice.py", "examples/lattice-observation-tower.json"],
+  "plan": ["validate", "--recipe", "examples/lattice-observation-tower.json"],
+  "build": ["build", "--recipe", "examples/lattice-observation-tower.json"]
+}

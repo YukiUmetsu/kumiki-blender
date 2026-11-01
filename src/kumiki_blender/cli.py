@@ -7,6 +7,8 @@ import json
 import sys
 from pathlib import Path
 
+from .asset_catalog import (CatalogError, find_asset, load_catalog,
+                            revision_path, search_assets, validate_sources)
 from .asset_import import AssetImportError, inspect_source_glb, load_asset_provenance
 from .architecture_details import classical_column
 from .architecture_geometry import GeometryError, world_vertices
@@ -23,6 +25,7 @@ from .recipe import RecipeError, load_recipe
 from .render_profiles import RenderProfileError
 from .revision_audit import RevisionAuditError, audit_revision
 from .surfaces import SurfaceError
+from .vintage_biplane import make_biplane
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -64,6 +67,26 @@ def main(argv: list[str] | None = None) -> int:
             subcommand.add_argument("--sphinx-source", type=Path)
             subcommand.add_argument("--sphinx-provenance", type=Path)
             subcommand.add_argument("--sphinx-front-axis", choices=("-X", "+X", "-Y", "+Y"), default="-X")
+    subcommands.add_parser("plan-biplane")
+    airplane_parser = subcommands.add_parser("build-biplane")
+    airplane_parser.add_argument("--output", type=Path, required=True)
+    catalog_parser = subcommands.add_parser("catalog", help="Find, browse and build categorized 3D assets")
+    catalog_actions = catalog_parser.add_subparsers(dest="catalog_action", required=True)
+    catalog_actions.add_parser("categories")
+    for action in ("list", "search"):
+        item = catalog_actions.add_parser(action)
+        if action == "search":
+            item.add_argument("query", nargs="+", help="Any words in the name, tags or description")
+        item.add_argument("--category")
+        item.add_argument("--tag")
+        item.add_argument("--rigged", action="store_true")
+    for action in ("show", "path", "build"):
+        item = catalog_actions.add_parser(action)
+        item.add_argument("asset_id")
+        if action in ("path", "build"):
+            item.add_argument("--revision", default="r01")
+            item.add_argument("--root", type=Path, default=Path(".review"))
+    catalog_actions.add_parser("validate")
     column_parser = subcommands.add_parser("plan-classical-column")
     column_parser.add_argument("--order", choices=("tuscan", "doric", "ionic"), default="ionic")
     column_parser.add_argument("--height", type=float, default=4.55)
@@ -86,6 +109,84 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     try:
+        if args.command == "catalog":
+            entries = load_catalog()
+            action = args.catalog_action
+            if action == "validate":
+                repository_root = Path(__file__).resolve().parents[2]
+                checked = (repository_root / "pyproject.toml").is_file()
+                if checked:
+                    validate_sources(entries, repository_root)
+                print(json.dumps({"valid": True, "asset_count": len(entries),
+                                  "sources_checked": checked}, indent=2))
+                return 0
+            if action == "categories":
+                counts: dict[str, dict[str, int]] = {}
+                for entry in entries:
+                    subcategories = counts.setdefault(entry.category, {})
+                    subcategories[entry.subcategory] = subcategories.get(entry.subcategory, 0) + 1
+                print(json.dumps({"categories": [
+                    {"name": category, "count": sum(subcategories.values()),
+                     "subcategories": subcategories}
+                    for category, subcategories in sorted(counts.items())
+                ]}, indent=2))
+                return 0
+            if action in ("list", "search"):
+                query = " ".join(args.query) if action == "search" else ""
+                result = search_assets(entries, query, category=args.category,
+                                       tag=args.tag, rigged=args.rigged)
+                print(json.dumps({"count": len(result), "assets": [
+                    {"id": entry.asset_id, "title": entry.title,
+                     "category": entry.category, "subcategory": entry.subcategory,
+                     "tags": entry.tags, "rigged": entry.rigged,
+                     "animated": entry.animated}
+                    for entry in result
+                ]}, indent=2))
+                return 0
+            entry = find_asset(entries, args.asset_id)
+            if action == "show":
+                print(json.dumps(entry.to_dict(), indent=2))
+                return 0
+            output = revision_path(entry, args.revision, args.root).resolve()
+            if action == "path":
+                print(json.dumps({"id": entry.asset_id, "output": str(output),
+                                  "exists": output.exists() or output.is_symlink()}, indent=2))
+                return 0
+            if entry.build_command is None:
+                raise CatalogError(f"{entry.asset_id} is a reusable component; use its plan API")
+            if output.exists() or output.is_symlink():
+                raise CatalogError(f"Output already exists: {output}. Choose another revision")
+            command = list(entry.build_command)
+            if "--recipe" in command:
+                index = command.index("--recipe") + 1
+                recipe = Path(command[index])
+                if not recipe.is_file():
+                    recipe = Path(__file__).resolve().parents[2] / recipe
+                if not recipe.is_file():
+                    raise CatalogError(f"Recipe for {entry.asset_id} not found; run from a source checkout")
+                command[index] = str(recipe.resolve())
+            return main([*command, "--output", str(output)])
+        if args.command in ("plan-biplane", "build-biplane"):
+            model = make_biplane()
+            if args.command == "plan-biplane":
+                print(json.dumps({
+                    "asset_id": model.asset_id, "generator": "red-vintage-biplane",
+                    "named_parts": model.part_counts, "instances": len(model.parts),
+                    "bounds_m": [model.bounds_min, model.bounds_max],
+                    "rig_controls": dict(model.pivots),
+                    "geometry_origin": "original procedural interpretation of user reference",
+                }, indent=2))
+                return 0
+            output = args.output.resolve()
+            if output.exists() or output.is_symlink():
+                raise RecipeError(f"Output already exists: {output}. Choose a new revision directory.")
+            try:
+                import bpy  # type: ignore[import-not-found]
+            except ImportError as error:
+                raise RuntimeError("Building the airplane requires Blender: blender --background --factory-startup --python-exit-code 1 --python scripts/blender_entry.py -- build-biplane --output <new-directory>") from error
+            from .blender_biplane import build_biplane_scene
+            print(json.dumps(build_biplane_scene(model, output, bpy_module=bpy), indent=2))
+            return 0
         if args.command == "audit":
             print(json.dumps(audit_glb(args.model, require_pbr_textures=args.require_pbr_textures), indent=2))
             return 0
@@ -246,7 +347,7 @@ def main(argv: list[str] | None = None) -> int:
         manifest = build_scene(recipe, plan, output, bpy_module=bpy)
         print(json.dumps(manifest, indent=2))
         return 0
-    except (RecipeError, PorticoError, FacadeError, MonumentError, GeometryError, AssetImportError, RenderProfileError, RevisionAuditError, AuditError, ExportAuditError,
+    except (CatalogError, RecipeError, PorticoError, FacadeError, MonumentError, GeometryError, AssetImportError, RenderProfileError, RevisionAuditError, AuditError, ExportAuditError,
             SurfaceError, RuntimeError, OSError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 2

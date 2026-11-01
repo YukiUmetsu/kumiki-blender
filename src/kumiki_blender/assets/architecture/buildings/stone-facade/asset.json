@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "id": "stone-facade",
+  "title": "Stone Townhouse Facade",
+  "description": "Customizable stone building facade with windows, doors, roof, gutters and trim.",
+  "kind": "procedural",
+  "tags": ["building", "facade", "stone", "townhouse", "roof", "windows"],
+  "aliases": ["stone house", "townhouse front", "historic building"],
+  "rigged": false,
+  "animated": false,
+  "sources": ["src/kumiki_blender/facade.py", "src/kumiki_blender/blender_facade.py"],
+  "plan": ["plan-facade"],
+  "build": ["build-facade"]
+}

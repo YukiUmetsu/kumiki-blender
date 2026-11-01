@@ -2,7 +2,30 @@
 
 A standalone, code-first Blender toolkit for reusable, cinematic 3D authoring. Its first milestone is a **generic lattice observation tower**: a deterministic architectural scaffold, **not** a photorealistic or dimensionally verified replica of Tokyo Tower or another real landmark.
 
-The library separates testable Python geometry planning from Blender's `bpy` modeling and rendering. It includes four example generators: a tapered lattice observation tower, a **modular architectural portico** built from closed arch stones and lathed columns, a **reusable stone building facade** with detailed windows/doors/roof, and a **parametric Egyptian monument study** with pyramid casing blocks and a sculpted lion-bodied Sphinx figure. All use a shared revision exporter for editable `.blend`, portable `.glb`, inspection views and a JSON manifest for Kumiki-UI and ContentGen consumers.
+The library separates testable Python geometry planning from Blender's `bpy` modeling and rendering. It includes a tapered lattice observation tower, a **modular architectural portico** built from closed arch stones and lathed columns, a **reusable stone building facade** with detailed windows/doors/roof, a **parametric Egyptian monument study** with pyramid casing blocks and a sculpted lion-bodied Sphinx figure, and a **rigged red vintage biplane** modeled from user-provided multiview artwork. All use a shared revision exporter for editable `.blend`, portable `.glb`, inspection views and a JSON manifest for Kumiki-UI and ContentGen consumers.
+
+## Find models in the categorized asset catalog
+
+Every model family has one manifest in `src/kumiki_blender/assets/<category>/<subcategory>/<asset-id>/asset.json`. Existing geometry modules and CLI entry points remain compatible; discover assets by name, category, tags, or alternate names without knowing which Python module implements them:
+
+```bash
+PYTHONPATH=src python3 -m kumiki_blender catalog categories
+PYTHONPATH=src python3 -m kumiki_blender catalog list --category landmarks
+PYTHONPATH=src python3 -m kumiki_blender catalog search old red airplane
+PYTHONPATH=src python3 -m kumiki_blender catalog list --rigged
+PYTHONPATH=src python3 -m kumiki_blender catalog show red-vintage-biplane
+PYTHONPATH=src python3 -m kumiki_blender catalog validate
+```
+
+Create a categorized revision directly (inside Blender):
+
+```bash
+KUMIKI_RENDER_PROFILE=smoke blender --background --factory-startup \
+  --python-exit-code 1 --python scripts/blender_entry.py -- \
+  catalog build red-vintage-biplane --revision r01
+```
+
+The result is `.review/vehicles/aircraft/red-vintage-biplane/r01/` containing the usual `.blend`, GLB, previews and manifest. Pass `--root /your/permanent/asset-library` for a durable asset store outside the gitignored QA directory. [Catalog design, categories and conventions](docs/ASSET_CATALOG.md).
 
 ## Requirements
 
@@ -146,6 +169,18 @@ PYTHONPATH=src python3 -m kumiki_blender plan-monument --kind pyramid --pyramid-
 ```
 
 This is **measured course-height geometry, not a fully surveyed pyramid surface**: stone layouts, damage and repairs are procedural. The Sphinx remains an **illustrative sculpture** unless replaced by a separately licensed monument scan. Imported Sphinx models now receive a non-authoritative proportion review against published monument bounds; a human still needs to verify facial and paw fidelity. See the [Egyptian monument kit guide](docs/EGYPTIAN_MONUMENTS.md) for source licensing, evaluated candidate meshes and archaeological accuracy limits.
+
+## Rigged vintage red biplane
+
+The `red-vintage-biplane` generator recreates a user-supplied five-view illustration as a coherent, original 3D biplane with actual shaped fabric airfoils and rib tapes, complete upper/lower wings, wooden interplane struts and crossed flying wires, tapered fuselage, open cockpit, glazed windscreen, engine grille, sculpted wooden two-blade propeller, and separately hinged control surfaces. The Blender source exposes nine animation controls for the propeller, four ailerons, elevators, rudder and wheels. GLB exports the animation clips alongside all named geometry; six views make reference comparison possible.
+
+```bash
+PYTHONPATH=src python3 -m kumiki_blender plan-biplane
+KUMIKI_RENDER_PROFILE=smoke blender --background --factory-startup --python-exit-code 1 \
+  --python scripts/blender_entry.py -- build-biplane --output .review/biplane/r01
+```
+
+The dimensions are reference-derived estimates, not measurements of any known aircraft. See the [aircraft authoring and rig guide](docs/VINTAGE_BIPLANE.md) for design choices, surface specifications, controls and export verification.
 
 ## Reusable PBR surfaces
 
