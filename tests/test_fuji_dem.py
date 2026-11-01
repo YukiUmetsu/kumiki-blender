@@ -13,7 +13,8 @@ from kumiki_blender.geography.fuji.patches import (
     FujiDetailPatch, FujiPatchSpec, _base_sample, dem_fingerprint,
     load_patch, save_patch, validate_patches,
 )
-from kumiki_blender.geography.fuji.blender_scene import _value_noise, plan_fuji_shots, terrain_color
+from kumiki_blender.geography.fuji.blender_scene import (ROCK_NORMAL_TILES, _value_noise,
+                                                        plan_fuji_shots, terrain_color)
 from kumiki_blender.geography.fuji.iconic_scene import iconic_spec, plan_iconic_shots, _snow_limit
 
 
@@ -58,6 +59,10 @@ class FujiTerrainTests(unittest.TestCase):
         self.assertEqual(len({s.name for s in shots}), 6)
         self.assertIn("hoei-crater", [s.name for s in shots])
         self.assertIn("hoei-context", [s.name for s in shots])
+        self.assertLess(next(s.ortho_scale for s in shots if s.name == "summit-crater"), 2.6)
+        self.assertLess(next(s.ortho_scale for s in shots if s.name == "hoei-crater"), 3.0)
+        hoei_view=next(s for s in shots if s.name == "hoei-context")
+        self.assertLess(hoei_view.position[2],6.0)  # Raking aerial, not a vertical map view.
         dark = terrain_color(2300, .35, 0, 1)
         white = terrain_color(3750, .12, 0, 0)
         self.assertGreater(sum(white[:3]), sum(dark[:3])*2)
@@ -70,6 +75,7 @@ class FujiTerrainTests(unittest.TestCase):
         self.assertTrue(all(0<=channel<=1 for channel in white))
 
     def test_forest_noise_deterministic_and_continuous(self):
+        self.assertEqual(ROCK_NORMAL_TILES,6)
         at_point = _value_noise(3.4321, -2.8719)
         self.assertAlmostEqual(at_point, _value_noise(3.4321, -2.8719))
         self.assertGreaterEqual(at_point, 0)
@@ -108,6 +114,20 @@ class FujiTerrainTests(unittest.TestCase):
         self.assertEqual(winter,terrain_color(3770,.04,0,0,season="winter"))
         with self.assertRaisesRegex(ValueError,"Unsupported Fuji"):
             terrain_color(3700,.1,0,0,season="monsoon")
+
+    def test_summer_hoei_ash_shoulder_is_localized_and_forest_has_canopy_texture(self):
+        # The shoulder center sits on ~2,660 m surveyed terrain; an earlier
+        # candidate below 2,250 m never received the intended ochre color.
+        shoulder=terrain_color(2660,.25,2.30,-1.84,season="summer")
+        remote=terrain_color(2800,.25,3.8,-4.0,season="summer")
+        self.assertGreater(shoulder[0],remote[0]*2)
+        self.assertGreater(shoulder[1],remote[1]*2)
+        self.assertGreater(shoulder[0],shoulder[2]*1.6)
+        # These locations are only 60 m apart: high-frequency crown pigment
+        # must vary within one forest, not just between broad green regions.
+        a=terrain_color(1800,.16,4.2,2.8,season="summer")
+        b=terrain_color(1800,.16,4.26,2.8,season="summer")
+        self.assertGreater(sum(abs(a[i]-b[i]) for i in range(3)), .002)
 
     def test_geographic_samples_in_declared_bounds(self):
         spec = FujiSpec()

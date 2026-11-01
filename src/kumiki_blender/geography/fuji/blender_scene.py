@@ -18,14 +18,17 @@ from .dem import FujiDem, SUMMIT, load_dem
 from .patches import FujiDetailPatch, load_patch, validate_patches
 
 
+ROCK_NORMAL_TILES = 6  # 1024² shading detail across 26 km, not 26-m rock pixels.
+
+
 def plan_fuji_shots() -> tuple[QualityShot, ...]:
     """Opposing profiles plus the two named crater checkpoints."""
     return (
-        QualityShot("hero", (13, -31, 8.0), (0, 0, 2.1), 16.5),
+        QualityShot("hero", (11, -23, 8.0), (0, 0, 2.25), 12.5),
         QualityShot("north-profile", (-12, 32, 9), (0, 0, 2.05), 18.0),
-        QualityShot("summit-crater", (1.8, -3.7, 7.2), (0, 0, 3.52), 4.7),
-        QualityShot("hoei-context", (9, -10, 8.7), (1.61, -2.18, 2.43), 7.2),
-        QualityShot("hoei-crater", (1.61, -2.18, 12), (1.61, -2.18, 2.43), 4.2),
+        QualityShot("summit-crater", (0.85, -1.55, 5.9), (0, 0, 3.55), 2.0),
+        QualityShot("hoei-context", (8.5, -10.5, 5.1), (0.8, -1.2, 2.85), 5.4),
+        QualityShot("hoei-crater", (2.25, -3.25, 6.4), (1.61, -2.18, 2.55), 2.5),
         QualityShot("overhead", (0, 0, 36), (0, 0, 2), 27.0),
     )
 
@@ -80,10 +83,16 @@ def terrain_color(height_m: float, slope: float, x: float, y: float,
 
     # Dark cedar/cypress forest. Broad pockets of olive mountain scrub are
     # spatial, rather than one continuous sage-green elevation stripe.
-    dense_conifers=(.018,.052,.031)
-    sunlit_conifers=(.062,.119,.055)
+    dense_conifers=(.008,.021,.013)
+    sunlit_conifers=(.034,.077,.029)
     c=_mix(dense_conifers,sunlit_conifers,clamp(.14+woods*.98))
-    scrub=(.093,.122,.055)
+    # Sub-grid canopy shadows help the forest read as densely packed crowns,
+    # not a continuous green lawn. These pigments never alter survey geometry.
+    canopy_crowns=_value_noise(x*14.6+3.3,y*14.6-8.2)
+    canopy_gaps=_value_noise(x*30.7-6.1,y*30.7+2.8)
+    canopy_tone=.73+.47*canopy_crowns+.20*canopy_gaps
+    c=tuple(channel*canopy_tone for channel in c)
+    scrub=(.081,.113,.044)
     scrub_weight=.31*_smoothstep(1700,2070,height_m)*clamp((woods-.32)*2.1)
     c=_mix(c,scrub,scrub_weight)
 
@@ -93,18 +102,25 @@ def terrain_color(height_m: float, slope: float, x: float, y: float,
     exposed=_smoothstep(tree_line-140,tree_line+155,height_m)
     rock_pattern=_value_noise(x*.90-3.1,y*.90+8.4)
     iron_pattern=_value_noise(x*3.8+21.2,y*3.8-7.6)
-    charcoal=(.064,.065,.068)
-    gray_scoria=(.116,.107,.103)
-    iron_scoria=(.186,.108,.086)
+    charcoal=(.052,.043,.055)
+    gray_scoria=(.113,.081,.099)
+    iron_scoria=(.205,.064,.077)
     rock=_mix(charcoal,gray_scoria,.16+.59*rock_pattern)
     oxidation=clamp((iron_pattern-.43)*1.25)*(.25+.40*rock_pattern)
     rock=_mix(rock,iron_scoria,oxidation)
+    # The summit is a composite of black/grey basalt and narrower oxidized
+    # radial scoria seams; high-altitude photos do not show a uniform tint.
+    bearing=math.atan2(y,x)
+    radial_iron=max(0.,math.sin(bearing*24.0+large*3.2+rock_pattern*1.5))**8
+    outcrop_breakup=_smoothstep(.27,.76,_value_noise(x*1.9+18.1,y*1.9-23.6))
+    radial_weight=.28*radial_iron*outcrop_breakup*_smoothstep(2440,2940,height_m)
+    rock=_mix(rock,iron_scoria,radial_weight)
     rock=_mix(rock,charcoal,.20*clamp(slope*1.5))
     c=_mix(c,rock,exposed)
     if season=="summer":
         # Late-summer deciduous/birch scrub is slightly more olive than the
         # evergreen conifer belt. Never paint the barren summit green.
-        green_scrub=(.105,.137,.065)
+        green_scrub=(.089,.129,.052)
         foliage=.16*(1-exposed)*_smoothstep(1800,2250,height_m)*(.3+.7*large)
         c=_mix(c,green_scrub,foliage)
 
@@ -113,8 +129,22 @@ def terrain_color(height_m: float, slope: float, x: float, y: float,
     hoei_distance=math.hypot(x-1.61,y+2.18)
     if hoei_distance<1.8 and height_m>2020:
         influence=_smoothstep(1.8,.35,hoei_distance)
-        warm_scree=(.213,.122,.099)
+        warm_scree=(.214,.101,.103)
         c=_mix(c,warm_scree,exposed*influence*(.37+.32*clamp(slope*1.8)))
+        # The interior is dark glassy cinder, separate from the lighter outer
+        # lapilli fan. Keep the mask broad enough to respect irregular rim.
+        inner_bowl=math.exp(-.5*(hoei_distance/.53)**4)
+        c=_mix(c,(.066,.038,.052),.19*inner_bowl*exposed)
+    # A restricted ochre/ash shoulder on Hōei's southeastern ejecta apron.
+    # This is an independently drawn geological color interpretation, not a
+    # claim to classify every deposit from a soil survey.
+    if season=="summer" and height_m>2250:
+        dx=(x-2.30)/.58
+        dy=(y+1.84)/.48
+        golden_shoulder=math.exp(-1.65*(dx*dx+dy*dy))
+        golden_shoulder*=(_smoothstep(2250,2500,height_m)
+                          *(1-_smoothstep(3290,3460,height_m)))
+        c=_mix(c,(.274,.186,.093),.74*golden_shoulder)
 
     # Grain represents pigment variation only. It cannot create or erase any
     # measured erosion grooves, cliffs or other DEM geometry.
@@ -129,7 +159,6 @@ def terrain_color(height_m: float, slope: float, x: float, y: float,
 
     # Seasonal snow accumulates in irregular fingers and sheltered northern
     # gullies; steep crater cliffs retain exposed dark scoria.
-    bearing=math.atan2(y,x)
     fingers=(math.sin(bearing*9+math.sin(bearing*3.1))*112
              +math.sin(bearing*17+y*.8)*57
              +math.sin(x*2.2+y*2.7)*24)
@@ -321,7 +350,8 @@ def _terrain_object(bpy: Any, model: Any, dem: FujiDem, divisions: int,
     for polygon in faces:
         for index in polygon:
             x,y,_=verts[index]
-            uv_coords.extend(((x-west)/spec.width_km,(y-south)/spec.depth_km))
+            uv_coords.extend((ROCK_NORMAL_TILES*(x-west)/spec.width_km,
+                              ROCK_NORMAL_TILES*(y-south)/spec.depth_km))
     uv_layer.data.foreach_set("uv",uv_coords)
     mat = bpy.data.materials.new("Fuji / alpine forest, basalt and seasonal snow")
     mat.use_nodes = True
@@ -338,7 +368,7 @@ def _terrain_object(bpy: Any, model: Any, dem: FujiDem, divisions: int,
     normal_node=nodes.new("ShaderNodeNormalMap")
     normal_node.space="TANGENT"
     normal_node.uv_map=uv_layer.name
-    normal_node.inputs["Strength"].default_value=.45
+    normal_node.inputs["Strength"].default_value=.53
     mat.node_tree.links.new(normal_texture.outputs["Color"],normal_node.inputs["Color"])
     mat.node_tree.links.new(normal_node.outputs["Normal"],bsdf.inputs["Normal"])
     mesh.materials.append(mat)
@@ -350,6 +380,7 @@ def _terrain_object(bpy: Any, model: Any, dem: FujiDem, divisions: int,
     obj["kumiki_part"] = "terrain-surface"
     obj["detail_patches"] = ", ".join(p.spec.name for p in patches)
     obj["surface_season"] = season
+    obj["packed_normal_texture_tiles"] = ROCK_NORMAL_TILES
     return obj
 
 
@@ -420,11 +451,11 @@ def _studio(bpy: Any, scene: Any, stage: Any) -> Any:
     world = bpy.data.worlds.new("Fuji / clear high-altitude daylight")
     world.use_nodes = True
     bg = next(n for n in world.node_tree.nodes if n.type == "BACKGROUND")
-    bg.inputs["Color"].default_value = (.28,.40,.55,1)
-    bg.inputs["Strength"].default_value = .50
+    bg.inputs["Color"].default_value = (.32,.44,.58,1)
+    bg.inputs["Strength"].default_value = .61
     scene.world = world
-    sun_data = bpy.data.lights.new("Fuji / winter afternoon sun", "SUN")
-    sun_data.energy = 2.2
+    sun_data = bpy.data.lights.new("Fuji / clear-afternoon survey sunlight", "SUN")
+    sun_data.energy = 2.7
     sun_data.angle = math.radians(4.5)
     sun = bpy.data.objects.new(sun_data.name, sun_data)
     stage.objects.link(sun)
@@ -462,7 +493,7 @@ def build_fuji_scene(destination: Path, dem_path: Path, *, divisions: int = 512,
     terrain = _terrain_object(bpy, model, dem, divisions, patches, season=season)
     wall, base = _plinth(bpy, model, dem, divisions)
     return export_revision(bpy, scene, camera, (terrain,wall,base), plan_fuji_shots(), destination,
-                           samples=32 if divisions>=1024 else 16, metadata={
+                           samples=48 if divisions>=1024 else 16, metadata={
                                "asset_id": "mount-fuji-survey-terrain",
                                "generator": "GSI elevation-mesh",
                                "vertical_exaggeration": 1.0,
@@ -476,6 +507,7 @@ def build_fuji_scene(destination: Path, dem_path: Path, *, divisions: int = 512,
                                     "factor":p.spec.factor,"surveyed_fraction":round(p.surveyed_fraction,5),
                                     "source":p.source} for p in patches],
                                "baked_normal_texture_px": 512 if divisions<1024 else 1024,
+                               "packed_normal_texture_tiles": ROCK_NORMAL_TILES,
                                "named_parts": {"terrain_surface": 1,
                                                "terrain_perimeter": 1,
                                                "terrain_pedestal": 1},

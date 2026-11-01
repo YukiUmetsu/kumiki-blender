@@ -97,17 +97,63 @@ Reference photos (inspiration only, not reused as textures):
 To create **both** seasons with the same cached high-detail survey data:
 
 ```bash
-# Existing winter model (default) is still reproducible with --season winter.
+# Winter styling remains available via --season winter (and is the default).
 blender --background --factory-startup --python-exit-code 1 \
   --python scripts/blender_entry.py -- build-fuji --detail high \
-  --season summer --dem .review/fuji-dem/fuji-heightmap.bin \
+  --season summer --dem .review/fuji-dem/fuji-heightmap-v2.bin \
   --detail-patch .review/fuji-dem/fuji-summit-z15-patch.bin \
   --detail-patch .review/fuji-dem/fuji-hoei-z15-patch.bin \
-  --output .review/geography/terrain/mount-fuji-survey-terrain/r12
+  --output .review/geography/terrain/mount-fuji-survey-terrain/r15
 ```
 
 Season, forest density and snow coverage are **art direction**, not a satellite
 or botanical claim; the realistic variant's elevations remain unchanged.
+
+### r13 — updated Blender craft-director QA pass
+
+This pass follows a **reference → highest-risk feature → fixed camera →
+comparison → correction** loop. The surveyed geometry is already stronger
+than the material impression at normal viewing distance, so the targeted
+failures were an overly grassy, uniform forest, under-articulated Hōei ash,
+and an inspection framing that made the summit crater too small.
+
+| Evidence | Feature observed | Evidence type / use | Confidence |
+| --- | --- | --- | --- |
+| [VRT NWS October 2024 snow-free Fuji aerial](https://www.vrt.be/vrtnws/nl/2024/10/30/nog-steeds-geen-sneeuw-op-mount-fuji-in-japan/) | Charcoal/plum scoria, dark pine carpet, iron streaks and a localized pale-ochre Hōei ridge | Photographer's observed image; **reference only** | High for visible color distribution, limited by camera and daylight |
+| [Smithsonian Global Volcanism Program: Fujisan](https://volcano.si.edu/volcano.cfm?vn=283030) | Red-oxidized summit rim, 1707 SE crater, summertime exposed volcanic surfaces | Geological photography / description; **reference only** | High for broad geology |
+| [GSI DEM tile specifications](https://maps.gsi.go.jp/development/demtile.html) | Survey heights, basin, summit/side-crater location | **Measured**, transformed as documented | High at underlying grid resolution |
+| [Yukio Hayakawa summit-crater drone study](https://note.com/hayakawayukio/n/n4276f012dd71) | Steep uneven inner cliff, layered red-grey deposits | Observed drone photography; **reference only** | High for crater structure, uncertain lighting |
+| [Ministry of the Environment: scoria color](https://kanto.env.go.jp/blog/2020/05/post-870.html) | Upper mountain is dark basalt/scoria, not a uniform warm cone | Observed field photos; **reference only** | High for close-up stone color |
+
+Corrections in r13/r14: darker and less uniform canopy/crown pigment at 30–70 m
+spatial scales; localized ochre SE Hōei shoulder; narrow oxidized radial
+rock seams; clearer afternoon sun; tighter hero, Hōei and summit inspection
+views. An r13 photo/render sheet exposed a second defect: the Hōei camera was
+too elevated, showing a flattened-looking bowl, and the first ochre mask was
+centered on **~2,220 m terrain below its own threshold**. In r14, the Hōei
+camera was lowered to a raking side view and the ochre accent shifted onto
+the measured ~2,660 m southeast shoulder; the deep scoria bowl was darkened.
+The r14 macro view also revealed overly continuous red radial seams, so r15
+breaks these along spatially irregular outcrops and tiles the existing packed
+rock micro-normal six times across the 26 km terrain (lighting only).
+All measured elevations are unchanged. The forest remains **color/normal detail on a terrain surface, not
+individual 3D trees**. Close-up botanical fidelity would require a separate
+view-dependent forest-instancing/LOD system. The pigment variations are
+original visual interpretations—not geological material classifications.
+
+An unmodified source photograph can be compared with the actual Blender
+render using a non-registered two-panel sheet. Photo pixels are used **only
+for local comparison** and are not included in source control or the GLB:
+
+```bash
+python scripts/reference_compare.py /path/to/reference.jpg \
+  .review/geography/terrain/mount-fuji-survey-terrain/r15/previews/hoei-context.png \
+  --output .review/geography/terrain/mount-fuji-survey-terrain/r15/hoei-reference-comparison.png
+```
+
+The cameras differ between images; don't interpret an unaligned pixel
+comparison as topographic discrepancy. Revisit neutral clay geometry and
+registered camera views before changing surveyed elevations.
 
 For closer survey-terrain views, the Blender builder now also generates a
 deterministic, 512/1024-pixel **tangent-space rock micro-normal map**. It is
@@ -169,8 +215,8 @@ is an artistic seasonal interpretation.
 - Hōei flank crater: [Geological Survey of Japan, Fuji 1707 eruption](https://gbank.gsj.jp/volcano/esdb/go.php?volc=Fuji_1707),
   [photo of southeast flank](https://www.web-gis.jp/GM1000/GM_Red1/GM_Red1-147.html).
 
-The photographs are **inspiration/reference only** and are not downloaded or
-embedded. The derived elevation dataset is stored in `.review` and is not part
+The photographs are **inspiration/reference only** and are not redistributed or
+embedded in deliverables. The derived elevation dataset is stored in `.review` and is not part
 of git or the installable wheel. Refer to the GSI terms when redistributing
 geographic derivatives. The GSI tiles are periodically updated, so rerunning
 the preparation script may produce slightly different elevation values.
