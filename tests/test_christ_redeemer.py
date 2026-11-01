@@ -68,6 +68,11 @@ class ChristRedeemerTests(unittest.TestCase):
             self.assertGreater(report["head_width_m"], 2.5)
             self.assertGreater(report["head_depth_m"], 1.0)
             self.assertEqual(report["mesh_count"], 3)
+            # A full 3D nose projects in front of the mid-cheek on the real
+            # anatomical control cage. This is a topology regression bound,
+            # not a claim of survey-fitted likeness.
+            self.assertGreater(report["nose_advance_vs_cheek_mm"], 350)
+            self.assertLess(report["nose_advance_vs_cheek_mm"], 650)
 
     @unittest.skipUnless(os.environ.get("KUMIKI_BLENDER_BINARY"),
                          "Set KUMIKI_BLENDER_BINARY for the live Blender QA test")

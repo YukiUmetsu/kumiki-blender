@@ -977,6 +977,19 @@ def build_anatomical_head_study(path):
         corner=max(0.,1.-((abs(source_x)-.050)/.021)**2)
         lip_level=max(0.,1.-((source_z-.168)/.023)**2)
         p.z-=.009*corner*lip_level*anterior
+        # Landowski's nose reads as a long squared bridge above a substantial
+        # alar tip in the authentic scan's side/front previews. Sculpt the
+        # *actual anatomical mesh* in 3D: the tip projects along the sagittal
+        # axis, but its root withdraws continuously into the glabella.
+        # These are artist-fitted planes, not measured scan coordinates.
+        nasal_front=max(0.,min(1.,(-source_y-.110)/.045))
+        nose_lateral=max(0.,1.-(abs(source_x)/.034)**2)
+        # A shallow, broad bridge *plane* preserves the near-vertical nasal
+        # dorsum seen in the scan profile. A steep localized projection made
+        # an incorrect wedge/beak in the first anatomical trial (r07).
+        ridge_z=max(0.,1.-((source_z-.255)/.105)**4)
+        tip_z=max(0.,1.-((source_z-.207)/.035)**2)
+        p.y-=nasal_front*nose_lateral*(.008*ridge_z+.009*tip_z)
     for obj in parts:
         obj.name=("Head | anatomical quad-topology clay sculpt" if obj == heads[0]
                   else "Head | stone eyeball reference %s"%obj.name)
@@ -1213,6 +1226,17 @@ def main():
                  "head_depth_m":round(max(p.y for p in head_points)-
                                       min(p.y for p in head_points),3),
                  "mesh_count":sum(ob.type=="MESH" for ob in bpy.data.objects)}
+        if FACE_METHOD == "anatomical":
+            # The local cage has metric human-scale dimensions; its object
+            # scale is 11. A physical nose/cheek depth check guards against
+            # reverting to an entirely flat mask. This is *not* a photo fit.
+            nasal=[v.co.y for v in head.data.vertices
+                   if abs(v.co.x)<.018 and .205<v.co.z<.238]
+            cheek=[v.co.y for v in head.data.vertices
+                   if .055<abs(v.co.x)<.085 and .205<v.co.z<.238]
+            assert nasal and cheek
+            metrics["nose_advance_vs_cheek_mm"]=round(
+                (min(cheek)-min(nasal))*11000)
         assert metrics["head_surface_vertices"]>15000
     else:
         build()

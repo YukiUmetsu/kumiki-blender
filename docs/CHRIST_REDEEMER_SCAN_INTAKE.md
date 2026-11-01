@@ -88,6 +88,19 @@ A distinct `--face-method anatomical` clay workflow now uses A1's **real
 3D quad topology**, subdivided to a sculptable surface, with author-directed
 mandible/chin expansion, upper-eyelid closure and mouth-corner shaping. This
 is a geometry-foundation change, not extra Gaussians on the old ellipsoid.
+
+The next anatomy study fitted the **sagittal nose surface** itself, rather
+than attaching a separate nose primitive. Its first pass (`anatomy_r07`)
+created an over-projected beak in profile; the second (`anatomy_r08`)
+reduces the tip and gives the dorsum a flatter, longer plateau. Neither
+iteration is treated as a verified likeness: the cameras remain
+unregistered, and scan screenshots cannot supply reliable millimetric
+depths. The two attempts to create a freestanding cross-section hair
+shell (`anatomy_r05`/`r06`) produced a detached hood in both frontal and
+side clay views. **That hair-shell method is rejected and is not included
+in the generator.** Reconstruct hair from the head's actual surface or a
+rights-cleared monument scan, not by further tuning the rejected shell.
+
 It can be regenerated from the CC0 OBJ bundled in the repository:
 
 ```bash
