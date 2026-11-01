@@ -12,6 +12,7 @@ from .architecture_details import classical_column
 from .architecture_geometry import GeometryError, world_vertices
 from .export_audit import ExportAuditError
 from .facade import FacadeError, make_facade_study
+from .egyptian_monuments import MonumentError, make_monument_study
 from .glb_audit import AuditError, audit_glb
 from .lattice import make_lattice_tower
 from .material_overrides import load_material_overrides, verify_material_overrides
@@ -45,6 +46,18 @@ def main(argv: list[str] | None = None) -> int:
         if command == "build-facade":
             subcommand.add_argument("--output", type=Path, required=True)
             subcommand.add_argument("--texture-packs", type=Path)
+    for command in ("plan-monument", "build-monument"):
+        subcommand = subcommands.add_parser(command)
+        subcommand.add_argument("--kind", choices=("pyramid", "sphinx", "giza-study"),
+                                default="giza-study")
+        subcommand.add_argument("--pyramid-base", type=float, default=36.0)
+        subcommand.add_argument("--pyramid-height", type=float, default=23.0)
+        subcommand.add_argument("--pyramid-courses", type=int, default=18)
+        subcommand.add_argument("--casing-fraction", type=float, default=0.18)
+        subcommand.add_argument("--sphinx-length", type=float, default=10.5)
+        subcommand.add_argument("--restored-nose", action="store_true")
+        if command == "build-monument":
+            subcommand.add_argument("--output", type=Path, required=True)
     column_parser = subcommands.add_parser("plan-classical-column")
     column_parser.add_argument("--order", choices=("tuscan", "doric", "ionic"), default="ionic")
     column_parser.add_argument("--height", type=float, default=4.55)
@@ -164,6 +177,33 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(build_facade_scene(study, output, texture_packs=texture_packs,
                                                bpy_module=bpy), indent=2))
             return 0
+        if args.command in ("plan-monument", "build-monument"):
+            study = make_monument_study(
+                kind=args.kind, pyramid_base=args.pyramid_base,
+                pyramid_height=args.pyramid_height, pyramid_courses=args.pyramid_courses,
+                casing_fraction=args.casing_fraction, sphinx_length=args.sphinx_length,
+                restored_nose=args.restored_nose)
+            if args.command == "plan-monument":
+                print(json.dumps({
+                    "asset_id": study.asset_id,
+                    "generator": "egyptian-monument-detail-kit",
+                    "parameters": dict(study.parameters),
+                    "named_parts": dict(study.part_counts),
+                    "instances": len(study.instances),
+                    "bounds_m": [study.bounds_min, study.bounds_max],
+                }, indent=2))
+                return 0
+            output = args.output.resolve()
+            if output.exists() or output.is_symlink():
+                raise MonumentError(f"Output already exists: {output}. Choose a new revision directory.")
+            try:
+                import bpy  # type: ignore[import-not-found]
+            except ImportError as error:
+                raise RuntimeError("Building monuments requires Blender. Run via: blender --background --factory-startup --python-exit-code 1 --python scripts/blender_entry.py -- build-monument --kind giza-study --output <new-directory>") from error
+            from .blender_monuments import build_monument_scene
+
+            print(json.dumps(build_monument_scene(study, output, bpy_module=bpy), indent=2))
+            return 0
         recipe = load_recipe(args.recipe)
         plan = make_lattice_tower(recipe)
         if args.command == "validate":
@@ -192,7 +232,7 @@ def main(argv: list[str] | None = None) -> int:
         manifest = build_scene(recipe, plan, output, bpy_module=bpy)
         print(json.dumps(manifest, indent=2))
         return 0
-    except (RecipeError, PorticoError, FacadeError, GeometryError, AssetImportError, RenderProfileError, RevisionAuditError, AuditError, ExportAuditError,
+    except (RecipeError, PorticoError, FacadeError, MonumentError, GeometryError, AssetImportError, RenderProfileError, RevisionAuditError, AuditError, ExportAuditError,
             SurfaceError, RuntimeError, OSError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 2

@@ -2,7 +2,7 @@
 
 ## Dependencies
 
-`recipe.py`, `lattice.py`, `architecture_geometry.py`, and `portico.py` contain no `bpy` calls or non-standard Python dependencies. `blender_scene.py` and `blender_portico.py` receive an explicit Blender module and only touch Blender data when their builders run. `cli.py` exposes normal-Python planning and audit commands, importing Blender only for build commands.
+`recipe.py`, `lattice.py`, `architecture_geometry.py`, `portico.py` and `egyptian_monuments.py` contain no `bpy` calls or non-standard Python dependencies. `blender_scene.py`, `blender_portico.py` and `blender_monuments.py` receive an explicit Blender module and only touch Blender data when their builders run. `cli.py` exposes normal-Python planning and audit commands, importing Blender only for build commands.
 
 ## General-purpose architecture mesh kernel
 
@@ -10,6 +10,7 @@
 
 - `extrude_profile()`: triangulated, manifold extrusion of a simple concave polygon. Self-intersections, coincident/collinear corners and nonfinite values are rejected before meshing.
 - `revolve_profile()`: capped positive-radius solids for columns, balusters, finials and stepped moldings.
+- `loft_elliptical_sections()`: closed cross-section lofts along X/Y/Z, with cubic axial interpolation for stone carving, statuary, organic objects and tapered shapes.
 - `semicircular_arch()` and `arch_voussoirs()`: genuinely open semicircular arch voids, and individually closed stones with physical joint gaps.
 - `place_mesh()` / `repeat_linear()`: deterministic, named, right-handed rigid instances sharing source mesh data without duplicating every vertex.
 - `audit_mesh()`: edge orientation, boundary and non-manifold counts, signed volume and degenerate polygon checks. All generated solids pass these pure-Python inspections.

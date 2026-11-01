@@ -1,0 +1,176 @@
+"""Blender Cycles/GLB adapter for original Egyptian monument detail studies."""
+
+from __future__ import annotations
+
+import hashlib
+import math
+from pathlib import Path
+from typing import Any
+
+from .blender_output import aim_at, create_model_scene, export_revision
+from .blender_scene import _create_box, _material
+from .blender_textures import ensure_metric_uvs
+from .egyptian_monuments import MonumentStudy
+from .render_profiles import select_render_profile
+from .shots import QualityShot
+from .surfaces import get_surface
+
+
+def plan_monument_shots(study: MonumentStudy) -> tuple[QualityShot, ...]:
+    """Framing adapts to a pyramid, a sphinx closeup, or both on one site."""
+    lo, hi = study.bounds_min, study.bounds_max
+    span = hi[0]-lo[0]
+    depth = hi[1]-lo[1]
+    height = hi[2]-lo[2]
+    cx, cy = (lo[0]+hi[0])/2, (lo[1]+hi[1])/2
+    cz = (lo[2]+hi[2])/2
+    scale = max(span*1.75, depth*1.65, height*2.3, 15)
+    shots = [
+        QualityShot("hero", (cx-span*1.65, cy-depth*1.7, hi[2]*1.4),
+                    (cx, cy, cz), scale),
+        QualityShot("site", (cx, cy-depth*2.0, hi[2]*0.9),
+                    (cx, cy, cz), scale*1.06),
+    ]
+    if study.kind in ("pyramid", "giza-study"):
+        py = 8 if study.kind == "giza-study" else 0
+        base = dict(study.parameters)["pyramid_base_m"]
+        shots.append(QualityShot("masonry", (-base*.45, py-base*.72, base*.25),
+                                 (-base*.32, py-base*.42, base*.13), base*.37))
+    if study.kind in ("sphinx", "giza-study"):
+        sy = -(dict(study.parameters)["pyramid_base_m"]/2+8) if study.kind == "giza-study" else 0
+        length = dict(study.parameters)["sphinx_length_m"]
+        shots.append(QualityShot("sphinx", (-length*.85, sy-length*.75, 5.8),
+                                 (-length*.28, sy, 2.8), length*1.3))
+    return tuple(shots)
+
+
+def build_monument_scene(study: MonumentStudy, destination: Path, *,
+                         bpy_module: Any = None) -> dict[str, Any]:
+    """Stage warm limestone lighting, save editable scene and audit portable GLB."""
+    if bpy_module is None:
+        raise RuntimeError("Building monuments requires Blender bpy")
+    bpy = bpy_module
+    if tuple(bpy.app.version) < (4, 2, 0):
+        raise RuntimeError("Blender 4.2 or newer is required")
+    destination = Path(destination).resolve()
+    if destination.exists() or destination.is_symlink():
+        raise RuntimeError(f"Output revision already exists: {destination}")
+
+    profile = select_render_profile(1440, 900, 48)
+    scene = create_model_scene(bpy, study.asset_id)
+    scene.render.engine = "CYCLES"
+    scene.cycles.samples = profile.samples
+    scene.render.resolution_x = profile.width
+    scene.render.resolution_y = profile.height
+    scene.render.resolution_percentage = 100
+    scene.render.image_settings.file_format = "PNG"
+    scene.view_settings.view_transform = "AgX"
+
+    model = bpy.data.collections.new("Egyptian monuments / portable GLB")
+    scene.collection.children.link(model)
+    stage = bpy.data.collections.new("Warm limestone studio / excluded from GLB")
+    scene.collection.children.link(stage)
+    materials = {
+        "core-limestone": get_surface("weathered-stone", color="#A89A7B", roughness=0.88,
+                                      weathering_strength=0.69),
+        "weathered-limestone": get_surface("weathered-stone", color="#B9A888", roughness=0.84,
+                                           weathering_strength=0.55),
+        "casing-limestone": get_surface("natural-stone", color="#DFD5BC", roughness=0.68),
+        "sphinx-limestone": get_surface("weathered-stone", color="#B9A98A", roughness=0.79,
+                                        weathering_strength=0.62),
+        "bedrock-limestone": get_surface("weathered-stone", color="#A89576", roughness=0.91,
+                                         weathering_strength=0.78),
+        "sphinx-shadow": get_surface("weathered-stone", color="#645B4C", roughness=0.91,
+                                     weathering_strength=0.62),
+    }
+    palette = {name: _material(bpy, spec) for name, spec in materials.items()}
+    from mathutils import Matrix
+
+    cache: dict[tuple[int, str], Any] = {}
+    objects: list[Any] = []
+    for part in study.instances:
+        key = (id(part.mesh), part.material)
+        if key not in cache:
+            mesh = bpy.data.meshes.new(f"Geometry / {part.name}")
+            mesh.from_pydata(part.mesh.vertices, [], part.mesh.faces)
+            mesh.update()
+            ensure_metric_uvs(mesh, tile_size_m=1.2)
+            mesh.materials.append(palette[part.material])
+            if part.name.startswith("sphinx-"):
+                for poly in mesh.polygons:
+                    if len(poly.vertices) == 4:
+                        poly.use_smooth = True
+            cache[key] = mesh
+        obj = bpy.data.objects.new(part.name, cache[key])
+        model.objects.link(obj)
+        obj.matrix_world = Matrix((
+            (part.axis_x[0], part.axis_y[0], part.axis_z[0], part.origin[0]),
+            (part.axis_x[1], part.axis_y[1], part.axis_z[1], part.origin[1]),
+            (part.axis_x[2], part.axis_y[2], part.axis_z[2], part.origin[2]),
+            (0, 0, 0, 1),
+        ))
+        obj["kumiki_part"] = "pyramid" if part.name.startswith("pyramid-") else "sphinx"
+        # Organic silhouette lofts are already smooth; small bevels are only
+        # needed on cut, exposed stone blocks and sharp headdress bands.
+        if part.name.startswith("pyramid-") and "-core" not in part.name:
+            bevel = obj.modifiers.new("Worn stone arris", "BEVEL")
+            bevel.width = 0.016
+            bevel.segments = 2
+            obj.modifiers.new("Stone weighted normals", "WEIGHTED_NORMAL")
+        elif "hood-stripe" in part.name or "bedrock" in part.name:
+            bevel = obj.modifiers.new("Carved detail arris", "BEVEL")
+            bevel.width = 0.012
+            bevel.segments = 2
+            obj.modifiers.new("Stone weighted normals", "WEIGHTED_NORMAL")
+        objects.append(obj)
+
+    span = study.bounds_max[0] - study.bounds_min[0]
+    depth = study.bounds_max[1] - study.bounds_min[1]
+    ground = _material(bpy, get_surface("studio-matte", color="#8D7D68", roughness=0.95))
+    _create_box(bpy, stage, "Stage / sand-colored ground",
+                (max(50, span*2.7), max(50, depth*2.2), 0.45),
+                ((study.bounds_min[0]+study.bounds_max[0])/2,
+                 (study.bounds_min[1]+study.bounds_max[1])/2, -0.245), ground)
+    world = bpy.data.worlds.new("Kumiki / warm desert daylight")
+    world.use_nodes = True
+    background = next(node for node in world.node_tree.nodes if node.type == "BACKGROUND")
+    background.inputs["Color"].default_value = (0.34, 0.28, 0.22, 1)
+    background.inputs["Strength"].default_value = 0.55
+    scene.world = world
+    sun = bpy.data.lights.new("Sun / raking limestone relief", type="SUN")
+    sun.energy = 2.1
+    sun.angle = math.radians(3.0)
+    sun_obj = bpy.data.objects.new(sun.name, sun)
+    stage.objects.link(sun_obj)
+    sun_obj.rotation_euler = (math.radians(31), math.radians(-18), math.radians(-40))
+    fill = bpy.data.lights.new("Area / shadow detail", type="AREA")
+    fill.energy = 1100
+    fill.shape = "DISK"
+    fill.size = 16
+    fill_obj = bpy.data.objects.new(fill.name, fill)
+    stage.objects.link(fill_obj)
+    fill_obj.location = (-20, -28, 31)
+    aim_at(fill_obj, (0, 0, 8))
+
+    camera_data = bpy.data.cameras.new("Camera / monument inspection")
+    camera_data.type = "ORTHO"
+    camera = bpy.data.objects.new(camera_data.name, camera_data)
+    stage.objects.link(camera)
+    params = dict(study.parameters)
+    metadata = {
+        "asset_id": study.asset_id,
+        "generator": "kumiki-blender/egyptian-monument-detail-kit",
+        "status": "illustrative architecture / artistic review pending",
+        "provenance": "Original parametric study; not a surveyed reconstruction of Giza",
+        "recipe_sha256": hashlib.sha256(repr((study.kind, study.parameters)).encode()).hexdigest(),
+        "render_profile": {"name": profile.name, "width": profile.width,
+                           "height": profile.height, "samples": profile.samples},
+        "parameters": {"kind": study.kind, **params},
+        "units": "meters",
+        "named_parts": dict(study.part_counts),
+        "instances": len(study.instances),
+        "mesh_data_blocks": len(cache),
+        "bounds_m": [study.bounds_min, study.bounds_max],
+    }
+    return export_revision(bpy, scene, camera, objects, plan_monument_shots(study),
+                           destination, samples=profile.samples, metadata=metadata)

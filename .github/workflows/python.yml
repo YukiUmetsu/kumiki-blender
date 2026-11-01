@@ -88,6 +88,14 @@ jobs:
             --python scripts/blender_entry.py -- \
             build-portico --bays 2 --order tuscan --arch-style pointed --balustrade \
             --output .review/ci/pointed-balustrade-portico
+      - name: Render Egyptian pyramid and sculpted Sphinx detail study
+        env:
+          KUMIKI_RENDER_PROFILE: smoke
+        run: |
+          blender --background --factory-startup --threads 1 --python-exit-code 1 \
+            --python scripts/blender_entry.py -- \
+            build-monument --kind giza-study --pyramid-courses 18 \
+            --output .review/ci/egyptian-monuments
       - name: Render reusable architectural facade detail kit
         env:
           KUMIKI_RENDER_PROFILE: smoke
@@ -159,6 +167,7 @@ jobs:
           python -m kumiki_blender audit --model .review/ci/portico/model.glb --require-pbr-textures
           python -m kumiki_blender audit --model .review/ci/doric-portico/model.glb --require-pbr-textures
           python -m kumiki_blender audit --model .review/ci/pointed-balustrade-portico/model.glb --require-pbr-textures
+          python -m kumiki_blender audit --model .review/ci/egyptian-monuments/model.glb --require-pbr-textures
           python -m kumiki_blender audit --model .review/ci/facade/model.glb --require-pbr-textures
           python -m kumiki_blender audit --model .review/ci/imported-portico/model.glb --require-pbr-textures
           python -m kumiki_blender audit --model .review/ci/restyled-portico/model.glb --require-pbr-textures
@@ -168,6 +177,7 @@ jobs:
           python -m kumiki_blender audit-revision --root .review/ci/portico
           python -m kumiki_blender audit-revision --root .review/ci/doric-portico
           python -m kumiki_blender audit-revision --root .review/ci/pointed-balustrade-portico
+          python -m kumiki_blender audit-revision --root .review/ci/egyptian-monuments
           python -m kumiki_blender audit-revision --root .review/ci/facade
           python -m kumiki_blender audit-revision --root .review/ci/imported-portico
           python -m kumiki_blender audit-revision --root .review/ci/restyled-portico
@@ -177,6 +187,7 @@ jobs:
           gltf-transform validate .review/ci/portico/model.glb
           gltf-transform validate .review/ci/doric-portico/model.glb
           gltf-transform validate .review/ci/pointed-balustrade-portico/model.glb
+          gltf-transform validate .review/ci/egyptian-monuments/model.glb
           gltf-transform validate .review/ci/facade/model.glb
           gltf-transform validate .review/ci/imported-portico/model.glb
           gltf-transform validate .review/ci/restyled-portico/model.glb
@@ -193,6 +204,8 @@ jobs:
           test -s .review/ci/doric-portico/previews/capital.png
           test -s .review/ci/pointed-balustrade-portico/previews/detail.png
           test -s .review/ci/pointed-balustrade-portico/previews/capital.png
+          test -s .review/ci/egyptian-monuments/previews/masonry.png
+          test -s .review/ci/egyptian-monuments/previews/sphinx.png
           test -s .review/ci/facade/previews/detail.png
           test -s .review/ci/imported-portico/previews/detail.png
           test -s .review/ci/restyled-portico/previews/detail.png

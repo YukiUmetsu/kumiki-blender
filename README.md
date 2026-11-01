@@ -2,7 +2,7 @@
 
 A standalone, code-first Blender toolkit for reusable, cinematic 3D authoring. Its first milestone is a **generic lattice observation tower**: a deterministic architectural scaffold, **not** a photorealistic or dimensionally verified replica of Tokyo Tower or another real landmark.
 
-The library separates testable Python geometry planning from Blender's `bpy` modeling and rendering. It includes three example generators: a tapered lattice observation tower, a **modular architectural portico** built from closed arch stones and lathed columns, and a **reusable stone building facade** with detailed windows, a panelled door, staggered masonry, classical cornices and a pitched tile roof. All use a shared revision exporter for editable `.blend`, portable `.glb`, inspection views and a JSON manifest for Kumiki-UI and ContentGen consumers.
+The library separates testable Python geometry planning from Blender's `bpy` modeling and rendering. It includes four example generators: a tapered lattice observation tower, a **modular architectural portico** built from closed arch stones and lathed columns, a **reusable stone building facade** with detailed windows/doors/roof, and a **parametric Egyptian monument study** with pyramid casing blocks and a sculpted lion-bodied Sphinx figure. All use a shared revision exporter for editable `.blend`, portable `.glb`, inspection views and a JSON manifest for Kumiki-UI and ContentGen consumers.
 
 ## Requirements
 
@@ -116,6 +116,30 @@ blender --background --factory-startup --python-exit-code 1 \
 The detail kit also includes a **tileable weathered-stone PBR preset** with adjustable `weathering_strength` from 0–1, subtle directional runoff/mineral deposits and deterministic per-block shade variation. Its Blender studio uses **glass-only light-linked rectangular reflection softboxes** to reveal glazing response without brightening the stonework; those lights are excluded from the GLB. A Three.js scene needs its own reflection environment for similar results.
 
 The demonstration is **an original architectural detail study**, not a measured replica of an existing building. Future landmark work should substitute location-specific measured proportions, ornaments, roofs, glazing, weathering and material scans, with visual QA at production resolution. For component authoring conventions and examples, see [Architectural detail kit guide](docs/ARCHITECTURE_DETAILS.md).
+
+## Egyptian pyramids and Sphinx geometry
+
+`egyptian_monuments.py` adds a reusable kit for pyramid and statue modeling:
+
+- `pyramid_frustum()` and `pyramid_casing_stone()` create **closed tapered volumes**, with a recessed limestone core, real staggered vertical/horizontal mortar joints, individually selectable casing stones and a capstone. `pyramid_assembly()` exposes dimensions, course count, stone width, casing fraction and gaps.
+- `loft_elliptical_sections()` sculpts organic solids along X/Y/Z using independently adjustable radii, offsets and cubic interpolation; it is reusable for statuary, carved rock, animal anatomy and terrain features.
+- `sphinx_assembly()` composes smooth lion torso, chest, forepaws/toes, haunches, curled tail, royal face and nemes-style headdress into named editable components. An **optional** `restored_nose=True` allows an interpretive reconstruction variant.
+
+Preview the **393-piece** combined study without Blender:
+
+```bash
+PYTHONPATH=src python3 -m kumiki_blender plan-monument --kind giza-study
+```
+
+Build an editable `.blend`, a self-contained `.glb`, hero/site previews, and dedicated masonry/Sphinx closeups:
+
+```bash
+blender --background --factory-startup --python-exit-code 1 \
+  --python scripts/blender_entry.py -- \
+  build-monument --kind giza-study --output .review/egyptian/r01
+```
+
+`--kind pyramid` and `--kind sphinx` build each model independently. This is **original illustrative geometry**, not a measured Giza reconstruction or a production-quality scan. See [Egyptian monument kit guide](docs/EGYPTIAN_MONUMENTS.md) for parameter controls, archaeological constraints and next steps toward reference accuracy.
 
 ## Reusable PBR surfaces
 
