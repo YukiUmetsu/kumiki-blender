@@ -94,6 +94,52 @@ class LibertyTests(unittest.TestCase):
         with self.assertRaises(LibertyError):
             make_liberty_study(detailed_tablet="yes")
 
+    def test_detailed_crown_has_real_openings_and_blade_rays(self):
+        from kumiki_blender.liberty_crown import crown_band, crown_ray
+
+        # The perforated band is one connected closed surface, not dark tubes
+        # painted into an opaque helmet. Each missing window cell is an opening.
+        band = crown_band()
+        report = audit_mesh(band)
+        self.assertEqual(report.boundary_edges, 0)
+        self.assertEqual(report.nonmanifold_edges, 0)
+        self.assertGreater(report.volume_m3, 0)
+        self.assertGreater(len(band.faces), 300)
+        edges = {tuple(sorted((a, b))) for face in band.faces
+                 for a, b in zip(face, (*face[1:], face[0]))}
+        # The annulus has one base handle; each true through-window adds one.
+        genus = (2-(len(band.vertices)-len(edges)+len(band.faces)))//2
+        self.assertEqual(genus, 26)
+        base = {part.name for part in make_liberty_study().instances}
+        self.assertIn("liberty-crown-window-dark-00", base)
+        pieces = {part.name: part for part in make_liberty_study(detailed_crown=True).instances}
+        self.assertNotIn("liberty-crown-window-dark-00", pieces)
+        self.assertIn("liberty-crown-diadem-perforated", pieces)
+        self.assertIn("liberty-hair-forelock-sculpt", pieces)
+        self.assertNotIn("liberty-hair-strand-00", pieces)
+        self.assertNotIn("liberty-hair-left-temple-wave-00", pieces)
+        self.assertGreater(len(pieces["liberty-hair-forelock-sculpt"].mesh.vertices), 3000)
+        self.assertEqual(sum(name.startswith("liberty-crown-ray-") for name in pieces), 7)
+        for i in range(7):
+            ray = pieces[f"liberty-crown-ray-{i}"].mesh
+            result = audit_mesh(ray)
+            self.assertEqual(result.boundary_edges, 0)
+            self.assertEqual(result.nonmanifold_edges, 0)
+            self.assertGreater(result.volume_m3, 0)
+            self.assertGreater(len(ray.vertices), 16)
+        self.assertGreater(len(crown_ray(3).vertices), 16)
+        for name, piece in pieces.items():
+            if name.startswith("liberty-crown-") or name == "liberty-hair-forelock-sculpt":
+                with self.subTest(part=name):
+                    result = audit_mesh(piece.mesh)
+                    self.assertEqual(result.boundary_edges, 0)
+                    self.assertEqual(result.nonmanifold_edges, 0)
+                    self.assertGreater(result.volume_m3, 0)
+        scaled = make_liberty_study(scale=.5, include_pedestal=False, detailed_crown=True)
+        self.assertTrue(dict(scaled.parameters)["detailed_crown"])
+        with self.assertRaises(LibertyError):
+            make_liberty_study(detailed_crown=1)
+
     def test_export_parts_are_closed_meshes_and_have_unique_semantic_names(self):
         study = make_liberty_study()
         self.assertLess(len(study.instances), 700)

@@ -280,6 +280,27 @@ This includes three new close-up inspections of the tablet face, wedge profile
 and hand contact. Both detail flags are optional and independent; the legacy
 `build-liberty` geometry remains reproducible.
 
+### Perforated diadem and faceted crown rays (opt-in)
+
+`--detailed-crown` replaces the dark cylindrical "window" inserts with one
+connected copper shell containing **25 actual through-openings**. It also
+uses smoothly beaded elliptical rims and seven wide, faceted tapered sheet
+ray meshes with raised central folds instead of thin rods. The associated
+hair pass replaces 26 freestanding strands with a single flowing, sculpted
+forelock volume whose relief is part of its surface; the synthetic temple
+stripe cords are also removed. This improves the crown/hair silhouette,
+but is not a surveyed reconstruction or an approved facial likeness.
+
+```bash
+KUMIKI_RENDER_PROFILE=smoke blender --background --factory-startup \
+  --python-exit-code 1 --python scripts/blender_entry.py -- \
+  build-liberty --detailed-torch --detailed-tablet --detailed-crown \
+  --output .review/landmarks/statues/statue-of-liberty/r34-crown-hair
+```
+
+Four additional close-up views inspect the rays, window band, oblique seams,
+and paper-thin profile. The three detail flags may be combined or used alone.
+
 ### Earlier procedural prototype
 
 `liberty.py` creates a reference-guided, full 360° Statue of Liberty sculpture

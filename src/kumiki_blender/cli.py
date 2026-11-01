@@ -105,6 +105,8 @@ def main(argv: list[str] | None = None) -> int:
                                     help="Replace legacy flame/gallery with editable cast-detail torch")
             subcommand.add_argument("--detailed-tablet", action="store_true",
                                     help="Use the keystone tablet, serif date and curled supporting hand")
+            subcommand.add_argument("--detailed-crown", action="store_true",
+                                    help="Use a perforated 25-window diadem and seven faceted rays")
     scan_face_parser = subcommands.add_parser(
         "build-liberty-scan-face", help="Licensed photogrammetry face-detail QA checkpoint")
     scan_face_parser.add_argument("--source", type=Path, required=True)
@@ -212,7 +214,8 @@ def main(argv: list[str] | None = None) -> int:
         if args.command in ("plan-liberty", "build-liberty"):
             study = make_liberty_study(scale=args.scale,
                                        include_pedestal=not args.no_pedestal,
-                                       detailed_tablet=(args.command == "build-liberty" and args.detailed_tablet))
+                                       detailed_tablet=(args.command == "build-liberty" and args.detailed_tablet),
+                                       detailed_crown=(args.command == "build-liberty" and args.detailed_crown))
             if args.command == "plan-liberty":
                 print(json.dumps({
                     "asset_id": study.asset_id, "generator": "procedural-statue-of-liberty",

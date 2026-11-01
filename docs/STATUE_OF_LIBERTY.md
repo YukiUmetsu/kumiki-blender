@@ -1,5 +1,42 @@
 # Statue of Liberty — scan-assisted detail rebuild
 
+## Perforated copper crown (opt-in, **ongoing**)
+
+`--detailed-crown` rebuilds the headgear as a continuous annular wall with
+25 actual window apertures, 25 integral mullions, top and bottom rolled
+copper rims, and seven individually closed tapering flat sheet rays.
+This removes the legacy 27 bright mullion rods and 27 nearly opaque dark
+window tubes. The model preserves a closed, UV-textured, editable shell with
+actual exterior/interior surfaces and walls around each opening, visible in
+frontal, oblique, and low-profile QA. The seven rays are not round rods; each
+has broad copper faces, a raised central fold, narrow side thickness and an
+irregular shoulder taper.
+
+An associated forelock pass replaces the comb-like 26 freestanding strand
+cylinders with a continuous, densely tessellated, S-shaped copper hair mass
+whose drifting waves are surface relief rather than disconnected wires. The
+12 synthetic temple-wave rods are also removed; the larger temple hair
+volumes remain. This is a more coherent silhouette but not a photomatch to
+Bartholdi's unique hairline or an anatomically resolved hair sculpt.
+
+The monument's 25 crown windows and seven rays are documented by the
+[National Park Service](https://www.nps.gov/stli/learn/historyculture/statue-statistics.htm).
+Exact window aperture radii and ray cross-sections in this module remain
+**illustrative**, not obtained from archival fabrication drawings or a survey.
+
+```bash
+KUMIKI_RENDER_PROFILE=smoke blender --background --factory-startup \
+  --python-exit-code 1 --python scripts/blender_entry.py -- \
+  build-liberty --detailed-torch --detailed-tablet --detailed-crown \
+  --output .review/landmarks/statues/statue-of-liberty/r34-crown-hair
+PYTHONPATH=src python3 -m kumiki_blender audit-revision \
+  --root .review/landmarks/statues/statue-of-liberty/r34-crown-hair
+```
+
+Head sculpt, curly forelock, anatomically believable eyelids, jaw/neck and
+patina fine detail are still not photomatched. Crown remodeling alone does
+not pass the full head-likeness quality gate.
+
 ## Keystone tablet and cradling left hand (opt-in, **ongoing**)
 
 The `--detailed-tablet` mode replaces the undersized rectangular slab and

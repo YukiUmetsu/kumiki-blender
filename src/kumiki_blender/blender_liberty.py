@@ -158,7 +158,7 @@ def build_liberty_scene(study: LibertyStudy, destination: Path, *,
         obj["kumiki_source"] = "original procedural geometry / photo reference"
         for polygon in mesh.polygons:
             polygon.use_smooth = not any(word in part.name for word in (
-                "pedestal", "tablet-slab", "crown-ray", "window-dark"))
+                "pedestal", "tablet-slab", "crown-ray", "crown-diadem", "window-dark"))
         if part.name.startswith("liberty-pedestal-") or part.name == "liberty-tablet-slab":
             modifier = obj.modifiers.new("Stone or copper edge softness", "BEVEL")
             modifier.width = .014*dict(study.parameters)["scale"]
@@ -248,6 +248,20 @@ def build_liberty_scene(study: LibertyStudy, destination: Path, *,
             QualityShot("tablet-grip-detail", tablet_pos(5.8, -5.8, 22.3),
                         tablet_pos(4.27, -.9, 22.35), 2.35*parameters["scale"]),
         )
+    if parameters.get("detailed_crown"):
+        def crown_pos(x: float, y: float, z: float) -> tuple[float, float, float]:
+            return (x*parameters["scale"], y*parameters["scale"],
+                    (z+offset)*parameters["scale"])
+        shots += (
+            QualityShot("crown-rays-front", crown_pos(0, -11, 30.15),
+                        crown_pos(0, 0, 30.0), 9.0*parameters["scale"]),
+            QualityShot("crown-band-front", crown_pos(0, -7.5, 28.95),
+                        crown_pos(0, 0, 28.89), 4.7*parameters["scale"]),
+            QualityShot("crown-band-oblique", crown_pos(4.8, -7.5, 29.0),
+                        crown_pos(0, 0, 28.9), 5.0*parameters["scale"]),
+            QualityShot("crown-ray-profile", crown_pos(8, -.75, 30.05),
+                        crown_pos(0, 0, 30.0), 8.0*parameters["scale"]),
+        )
     metadata = {
         "asset_id": study.asset_id,
         "generator": "kumiki-blender/procedural-statue-of-liberty",
@@ -262,6 +276,7 @@ def build_liberty_scene(study: LibertyStudy, destination: Path, *,
         "parameters": parameters,
         "detailed_torch": detailed_torch,
         "detailed_tablet": bool(parameters.get("detailed_tablet")),
+        "detailed_crown": bool(parameters.get("detailed_crown")),
         "detailed_torch_fit": ({"origin": torch_fit.origin,
                                "radial_scale": torch_fit.radial_scale,
                                "height_scale": torch_fit.height_scale}

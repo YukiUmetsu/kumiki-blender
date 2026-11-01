@@ -167,7 +167,8 @@ def _gown() -> Mesh:
 
 
 def make_liberty_study(*, scale: float = 1., include_pedestal: bool = True,
-                       detailed_tablet: bool = False) -> LibertyStudy:
+                       detailed_tablet: bool = False,
+                       detailed_crown: bool = False) -> LibertyStudy:
     """Make the original, reference-guided statue and optional 8.9m pedestal."""
     if (isinstance(scale, bool) or not isinstance(scale, (int, float)) or
             not math.isfinite(scale) or not .05 <= scale <= 20):
@@ -176,6 +177,8 @@ def make_liberty_study(*, scale: float = 1., include_pedestal: bool = True,
         raise LibertyError("include_pedestal must be a boolean")
     if type(detailed_tablet) is not bool:
         raise LibertyError("detailed_tablet must be a boolean")
+    if type(detailed_crown) is not bool:
+        raise LibertyError("detailed_crown must be a boolean")
     result: list[MeshInstance] = []
 
     def put(name: str, mesh: Mesh, material: str = "patina") -> None:
@@ -387,36 +390,41 @@ def make_liberty_study(*, scale: float = 1., include_pedestal: bool = True,
                              (28.78, 0, .28, 1.18, .93),
                              (29.06, 0, .28, .63, .53),
                              (29.15, 0, .28, .18, .18)), 60), "patina-shadow")
-    # Sculpt the heavy S-shaped forelock first, then carve delicate ridges into
-    # the volume. Independent straight spaghetti strands read as a helmet.
-    put("hair-swept-forelock", _tube([
-        (-1.19, -.37, 28.30), (-.94, -.76, 28.25),
-        (-.49, -.91, 28.33), (.02, -.94, 28.44),
-        (.49, -.87, 28.49), (.94, -.61, 28.41), (1.18, -.27, 28.28),
-    ], [.20, .29, .32, .34, .31, .28, .18], 32))
-    for index in range(26):
-        t = (index+0.5)/26
-        x = -1.03+2.06*t
-        points = [
-            (x-.13, -1.017, 28.09+.10*math.cos(t*math.pi)),
-            (x-.19, -1.14, 28.23+.12*math.sin(t*math.pi)),
-            (x-.13, -1.16, 28.38+.12*math.cos(t*math.pi)),
-            (x+.05, -1.03, 28.60+.05*math.sin(t*math.pi)),
-            (x+.20, -.77, 28.78),
-        ]
-        put(f"hair-strand-{index:02d}", _tube(points, [.014, .023, .026, .022, .012], 10),
-            "patina-light" if index%3 else "patina-shadow")
+    if detailed_crown:
+        from .liberty_hair import sculpted_forelock
+        put("hair-forelock-sculpt", sculpted_forelock(), "patina-shadow")
+    else:
+        # The legacy forehead mass and separately swept hair wires remain
+        # reproducible for comparison with the newer integrated relief.
+        put("hair-swept-forelock", _tube([
+            (-1.19, -.37, 28.30), (-.94, -.76, 28.25),
+            (-.49, -.91, 28.33), (.02, -.94, 28.44),
+            (.49, -.87, 28.49), (.94, -.61, 28.41), (1.18, -.27, 28.28),
+        ], [.20, .29, .32, .34, .31, .28, .18], 32))
+        for index in range(26):
+            t = (index+0.5)/26
+            x = -1.03+2.06*t
+            points = [
+                (x-.13, -1.017, 28.09+.10*math.cos(t*math.pi)),
+                (x-.19, -1.14, 28.23+.12*math.sin(t*math.pi)),
+                (x-.13, -1.16, 28.38+.12*math.cos(t*math.pi)),
+                (x+.05, -1.03, 28.60+.05*math.sin(t*math.pi)),
+                (x+.20, -.77, 28.78),
+            ]
+            put(f"hair-strand-{index:02d}", _tube(points, [.014, .023, .026, .022, .012], 10),
+                "patina-light" if index%3 else "patina-shadow")
     for sign, label in ((-1, "left"), (1, "right")):
         put(f"hair-{label}-temple-volume", _tube([
             (sign*1.0, -.55, 28.10), (sign*1.25, -.34, 27.97),
             (sign*1.37, -.10, 27.68), (sign*1.28, .09, 27.34),
         ], [.22, .28, .27, .13], 24), "patina-shadow")
-        for i in range(6):
-            z = 27.92-i*.16
-            put(f"hair-{label}-temple-wave-{i:02d}", _tube([
-                (sign*1.03, -.34, z), (sign*1.32, -.24, z-.08),
-                (sign*1.37, -.08, z-.21), (sign*1.21, .09, z-.28),
-            ], [.022, .032, .029, .011], 10), "patina-light")
+        if not detailed_crown:
+            for i in range(6):
+                z = 27.92-i*.16
+                put(f"hair-{label}-temple-wave-{i:02d}", _tube([
+                    (sign*1.03, -.34, z), (sign*1.32, -.24, z-.08),
+                    (sign*1.37, -.08, z-.21), (sign*1.21, .09, z-.28),
+                ], [.022, .032, .029, .011], 10), "patina-light")
         put(f"hair-{label}-shoulder-tress", _tube([
             (sign*1.24, .34, 27.78), (sign*1.38, .55, 26.46),
             (sign*1.64, .50, 25.2), (sign*1.82, .48, 24.22),
@@ -426,28 +434,33 @@ def make_liberty_study(*, scale: float = 1., include_pedestal: bool = True,
                             (27.58, 0, 1.02, .75, .48),
                             (27.93, 0, .92, .32, .23)), 48), "patina-shadow")
 
-    # Seven individual outward-radiating crown rays and an open-slot diadem.
-    for index, degrees in enumerate((9, 36, 63, 90, 117, 144, 171)):
-        theta = math.radians(degrees)
-        start = (.94*math.cos(theta), .18, 28.83+.29*math.sin(theta))
-        end = (3.47*math.cos(theta), .20, 29.05+3.55*math.sin(theta))
-        middle = tuple(start[k]*.43+end[k]*.57 for k in range(3))
-        put(f"crown-ray-{index}", _tube([start, middle, end], [.25, .155, .028], 6),
-            "patina-light")
-    for z, radius, width in ((28.68, 1.45, .095), (29.23, 1.46, .105)):
-        ring = [(radius*math.cos(math.tau*i/72), .22+radius*.64*math.sin(math.tau*i/72), z)
-                for i in range(73)]
-        put(f"crown-rim-{str(z).replace('.', '-')}", _tube(ring, width, 8))
-    for index in range(27):
-        theta = math.tau*index/27
-        x = 1.46*math.cos(theta)
-        y = .22+.935*math.sin(theta)
-        put(f"crown-window-mullion-{index:02d}", _tube([
-            (x, y, 28.72), (x*1.012, y*1.012, 29.20),
-        ], [.043, .047], 8), "patina-shadow")
-        put(f"crown-window-dark-{index:02d}", _tube([
-            (x*.965, y-.027, 28.77), (x*.965, y-.027, 29.14),
-        ], [.055, .060], 8), "recess")
+    if detailed_crown:
+        from .liberty_crown import crown_detail_parts
+        for name, mesh, material in crown_detail_parts():
+            put(name, mesh, material)
+    else:
+        # Legacy ray rods and dark window inserts remain the default geometry.
+        for index, degrees in enumerate((9, 36, 63, 90, 117, 144, 171)):
+            theta = math.radians(degrees)
+            start = (.94*math.cos(theta), .18, 28.83+.29*math.sin(theta))
+            end = (3.47*math.cos(theta), .20, 29.05+3.55*math.sin(theta))
+            middle = tuple(start[k]*.43+end[k]*.57 for k in range(3))
+            put(f"crown-ray-{index}", _tube([start, middle, end], [.25, .155, .028], 6),
+                "patina-light")
+        for z, radius, width in ((28.68, 1.45, .095), (29.23, 1.46, .105)):
+            ring = [(radius*math.cos(math.tau*i/72), .22+radius*.64*math.sin(math.tau*i/72), z)
+                    for i in range(73)]
+            put(f"crown-rim-{str(z).replace('.', '-')}", _tube(ring, width, 8))
+        for index in range(27):
+            theta = math.tau*index/27
+            x = 1.46*math.cos(theta)
+            y = .22+.935*math.sin(theta)
+            put(f"crown-window-mullion-{index:02d}", _tube([
+                (x, y, 28.72), (x*1.012, y*1.012, 29.20),
+            ], [.043, .047], 8), "patina-shadow")
+            put(f"crown-window-dark-{index:02d}", _tube([
+                (x*.965, y-.027, 28.77), (x*.965, y-.027, 29.14),
+            ], [.055, .060], 8), "recess")
 
     # Cast torch shaft, its concentric support dish and pierced brass gallery.
     put("torch-handle", _loft(((32.70, -3.45, 0, .15, .15),
@@ -505,4 +518,5 @@ def make_liberty_study(*, scale: float = 1., include_pedestal: bool = True,
     return LibertyStudy("statue-of-liberty-procedural", tuple(scaled), bounds_min,
                         bounds_max, counts, (("scale", float(scale)),
                                              ("include_pedestal", include_pedestal),
-                                             ("detailed_tablet", detailed_tablet)))
+                                             ("detailed_tablet", detailed_tablet),
+                                             ("detailed_crown", detailed_crown)))
