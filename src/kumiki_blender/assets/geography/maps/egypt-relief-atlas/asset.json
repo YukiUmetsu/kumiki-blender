@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "id": "egypt-relief-atlas",
+  "title": "Egypt Relief Atlas Diorama",
+  "description": "Vertically exaggerated 3D Egyptian terrain table with Nile/Delta, Qattara, Sinai, detailed city districts, physical monuments and agricultural parcels.",
+  "kind": "procedural",
+  "tags": ["egypt", "geography", "map", "terrain", "topography", "nile", "sinai", "desert", "landmarks", "cities", "documentary"],
+  "aliases": ["3D Egypt map", "Egypt topographic diorama", "Nile valley map", "Egyptian terrain"],
+  "rigged": false,
+  "animated": false,
+  "sources": [
+    "src/kumiki_blender/geography/egypt/terrain.py",
+    "src/kumiki_blender/geography/egypt/geometry.py",
+    "src/kumiki_blender/geography/egypt/blender_scene.py",
+    "docs/EGYPT_RELIEF_MAP.md"
+  ],
+  "plan": ["plan-egypt-map"],
+  "build": ["build-egypt-map"]
+}
