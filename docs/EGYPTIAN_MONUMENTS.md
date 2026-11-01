@@ -67,7 +67,11 @@ profile behind the face, and end in a broad shoulder-level hem. Geometry-level
 incised linen folds cross the crown, while finer horizontal stone/cloth
 banding runs through the flared side panels. The face now has a wider squared
 jaw, separated brow and almond-shaped eye relief, less prominent ears and
-additional restrained mineral wear. A second
+additional restrained mineral wear. Blender Cycles visual QA prompted a
+second facial pass: the surviving nose now ends in a shallow damaged stub
+instead of a triangular dark cavity; eye depressions are reduced, visible
+forehead folds extend into the face, and the headdress's horizontal ridges
+are more irregular and quieter under raking light. A second
 geometry-level weathering pass adds irregular undercut bedding planes and
 small concave mineral pockets to the lion's body and haunches, with much
 weaker wear on the harder head. The facial silhouette now includes a surviving

@@ -194,6 +194,18 @@ class EgyptianMonumentTests(unittest.TestCase):
         self.assertGreater(max_carving, .06)
         # Deep cavities read as cartoon eyes or an oversized missing nose.
         self.assertLess(max_carving, .15)
+        nose_scar = [carved.vertices[i][0]-v[0]
+                     for i, v in enumerate(source.vertices)
+                     if 3.70 < v[2] < 3.79 and abs(v[1]) < .08 and v[0] < -4.2]
+        self.assertTrue(nose_scar)
+        # A broken nasal stub is shallow damage, not a triangular black pit.
+        self.assertLess(max(nose_scar), .055)
+        forehead_folds = [carved.vertices[i][0]-v[0]
+                          for i, v in enumerate(source.vertices)
+                          if 4.28 < v[2] < 4.39 and v[0] < -4.12
+                          and abs(v[1]) < .45]
+        self.assertTrue(forehead_folds)
+        self.assertGreater(max(forehead_folds)-min(forehead_folds), .018)
         self.assertEqual((audit_mesh(carved).boundary_edges,
                           audit_mesh(carved).nonmanifold_edges), (0, 0))
 

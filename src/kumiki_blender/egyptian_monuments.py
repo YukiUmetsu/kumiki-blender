@@ -307,9 +307,10 @@ def _sculpt_face_relief(mesh: Mesh, *, scale_x: float, scale_y: float,
         front = max(0.0, min(1.0, (-xx-3.96)/.31))
         front = front*front*(3.0-2.0*front)
         lateral = abs(yy)
-        # The real carving has restrained lids, rather than wide dark holes.
-        # A previous .145 m eye recess plus a .185 m broken-nose recess read
-        # like a cartoon mask after voxel remeshing; keep both shallow.
+        # Real surviving lids are shallow worn creases, not two deep black
+        # sockets. Cycles frontal QA also exposed the triangular dark hole
+        # made by the previous "broken tip" displacement: the broken nose
+        # should end in a scarred *stub*, not look punched through.
         # Actual brow/eye spacing is wider than the toy mask's close-set
         # circular holes. The super-Gaussian width creates long almond eyes;
         # separate upper lids and brows catch grazing light.
@@ -326,18 +327,24 @@ def _sculpt_face_relief(mesh: Mesh, *, scale_x: float, scale_y: float,
         lower_lip = math.exp(-(yy/.218)**4 - ((zz-3.382)/.044)**2)
         chin = math.exp(-(yy/.256)**4 - ((zz-3.237)/.111)**2)
         jaw = math.exp(-((lateral-.390)/.170)**2 - ((zz-3.360)/.210)**2)
+        # Subtle surviving vertical folds cross the exposed upper forehead.
+        # Crown-only incisions were mostly buried behind the lofted face in
+        # the voxel union, leaving a visually blank helmet-like brow.
+        forehead = max(0., min(1., (zz-4.23)/.10, (4.43-zz)/.055))
+        forehead *= max(0., min(1., (.58-lateral)/.075))
+        fold = max(0., math.cos(yy*26.5+.14*math.sin(zz*8)))**10
         wear = rock_height_field(px*4.7, py*4.7, pz*4.7,
                                  seed=301, strata_spacing=.42)
         # X points toward the rear: negative means a projected cheek/nasal
         # bridge, positive means recesses. The bridge ends in an uneven,
         # visibly broken nasal scar rather than an intact spheroidal nose.
-        relief = front*(.065*eye - .024*upper_lid - .042*brow
-                        - .046*cheekbone + .026*hollow
-                        - .017*nose_root - .077*bridge
-                        + (.069 + .011*wear)*broken_tip
-                        - .022*upper_lip + .021*mouth_cut
-                        - .016*lower_lip - .035*chin - .025*jaw
-                        + .011*wear*(1-.65*eye))
+        relief = front*(.041*eye - .017*upper_lid - .036*brow
+                        - .026*cheekbone + .016*hollow
+                        - .020*nose_root - .086*bridge
+                        + (.023 + .008*wear)*broken_tip
+                        - .012*upper_lip + .010*mouth_cut
+                        - .008*lower_lip - .027*chin - .020*jaw
+                        + .024*forehead*fold + .013*wear*(1-.45*eye))
         # Angular jaw and temporal narrowing break the toy-like oval facial
         # silhouette, while the back half of the head stays untouched.
         jaw_width = .022*jaw - .015*hollow
@@ -390,8 +397,8 @@ def _nemes_drapery_wing(*, side: int, scale_x: float, scale_y: float,
                 taper = min(1., (zz-3.10)/.15, (4.49-zz)/.16)
                 # Front pleats go across the width of the triangular stone
                 # sheet. Their real relief survives the fine head voxel union.
-                strata = .017*math.sin(zz*48 + t*.9)
-                grain = .012*rock_height_field(-3.9, yy, zz,
+                strata = .007*math.sin(zz*62 + t*1.7)
+                grain = .014*rock_height_field(-3.9, yy, zz,
                                                seed=197, strata_spacing=.22)
                 relief = max(0., taper)*(strata+grain)
                 # The outer hem sweeps backward onto the lion shoulder.
