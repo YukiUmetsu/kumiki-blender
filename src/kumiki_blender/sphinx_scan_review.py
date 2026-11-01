@@ -155,7 +155,10 @@ def render_sphinx_source_review(review: SphinxReviewInput, *,
         ("Sculpture rim", (center[0]+size, center[1]+size, center[2]+size), 1050),
     ):
         lamp = bpy.data.lights.new(name, type="AREA")
-        lamp.energy = energy
+        # Survey meshes may be metres at full monument scale (73 m+) or
+        # miniaturized replicas. Preserve approximately constant irradiance
+        # as the studio light distance and emitter size both grow with span.
+        lamp.energy = energy*max(.02, min(250., (size/10.)**2))
         lamp.shape = "DISK"
         lamp.size = size*.85
         obj = bpy.data.objects.new(name, lamp)
@@ -184,6 +187,11 @@ def render_sphinx_source_review(review: SphinxReviewInput, *,
     with review.source.open("rb") as stream:
         for chunk in iter(lambda: stream.read(1024*1024), b""):
             digest.update(chunk)
+    materials = {
+        material.as_pointer(): material
+        for obj in mesh_objects for material in obj.data.materials
+        if material is not None
+    }
     report = {
         "review_kind": "local-only-sphinx-geometry",
         "source_filename": review.source.name,
@@ -193,6 +201,10 @@ def render_sphinx_source_review(review: SphinxReviewInput, *,
         "mesh_objects": len(mesh_objects),
         "triangles": sum(sum(len(poly.vertices)-2 for poly in obj.data.polygons)
                          for obj in mesh_objects),
+        "meshes_with_uv0": sum(bool(obj.data.uv_layers) for obj in mesh_objects),
+        "image_texture_nodes": sum(
+            sum(node.type == "TEX_IMAGE" for node in material.node_tree.nodes)
+            for material in materials.values() if material.use_nodes and material.node_tree),
         "bounds": [low, high],
         "previews": screenshots,
         "no_source_geometry_exported": True,
