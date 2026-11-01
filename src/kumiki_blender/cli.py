@@ -51,6 +51,8 @@ def main(argv: list[str] | None = None) -> int:
     composer_input.add_argument("--plan", type=Path, help="Precompiled, dependency-free Blender input")
     composer_build.add_argument("--output", type=Path, required=True)
     composer_build.add_argument("--blender", default="blender", help="Host Blender executable path")
+    composer_build.add_argument("--texture-packs", type=Path,
+                                help="Reviewed local PBR pack recipe, mapped to AssetSpec material roles")
     subcommands.add_parser("asset-schema", help="Print the agent-facing AssetSpec v2 JSON Schema")
     for command in ("plan-portico", "build-portico"):
         subcommand = subcommands.add_parser(command)
@@ -159,6 +161,12 @@ def main(argv: list[str] | None = None) -> int:
                     spec, plan = load_compiled_plan(args.plan)
                 except CompiledPlanError as error:
                     raise RecipeError(str(error)) from error
+                texture_packs = (load_texture_packs(args.texture_packs)
+                                 if args.texture_packs else ())
+                verify_texture_targets(list(spec.materials), texture_packs)
+                for assignment in texture_packs:
+                    if spec.materials[assignment.target].preset == "optical-glass":
+                        raise RecipeError("Texture packs cannot replace optical-glass transmission materials")
                 output = args.output.resolve()
                 if output.exists() or output.is_symlink():
                     raise RecipeError(f"Output already exists: {output}. Choose a new revision directory.")
@@ -167,7 +175,8 @@ def main(argv: list[str] | None = None) -> int:
                 except ImportError as error:
                     raise RuntimeError("--plan rendering must run inside Blender") from error
                 from .blender_composer import build_assembly_scene
-                print(json.dumps(build_assembly_scene(spec, plan, output, bpy_module=bpy), indent=2))
+                print(json.dumps(build_assembly_scene(spec, plan, output,
+                    texture_packs=texture_packs, bpy_module=bpy), indent=2))
                 return 0
             try:
                 from .asset_spec import AssetSpecError, asset_json_schema, load_asset_spec
@@ -207,6 +216,12 @@ def main(argv: list[str] | None = None) -> int:
             output = args.output.resolve()
             if output.exists() or output.is_symlink():
                 raise RecipeError(f"Output already exists: {output}. Choose a new revision directory.")
+            texture_packs = (load_texture_packs(args.texture_packs)
+                             if args.texture_packs else ())
+            verify_texture_targets(list(spec.materials), texture_packs)
+            for assignment in texture_packs:
+                if spec.materials[assignment.target].preset == "optical-glass":
+                    raise RecipeError("Texture packs cannot replace optical-glass transmission materials")
             entry = Path(__file__).resolve().parents[2] / "scripts/blender_entry.py"
             if not entry.is_file():
                 raise RuntimeError("Automatic Blender builds require a source checkout containing scripts/blender_entry.py")
@@ -216,11 +231,14 @@ def main(argv: list[str] | None = None) -> int:
             with tempfile.TemporaryDirectory(prefix="kumiki-asset-plan-") as directory:
                 compiled = Path(directory) / "compiled-plan.json"
                 write_compiled_plan(spec, plan, compiled)
-                completed = subprocess.run([
+                command = [
                     executable, "--background", "--factory-startup", "--python-exit-code", "1",
                     "--python", str(entry), "--", "build-asset", "--plan", str(compiled),
                     "--output", str(output),
-                ], check=False)
+                ]
+                if args.texture_packs:
+                    command.extend(("--texture-packs", str(args.texture_packs.resolve())))
+                completed = subprocess.run(command, check=False)
             return completed.returncode
         if args.command == "catalog":
             entries = load_catalog()

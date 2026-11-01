@@ -49,6 +49,38 @@ blender --background --factory-startup --python-exit-code 1 \
   build-asset --plan /tmp/lamp.plan.json --output .review/desk-lamp/r01
 ```
 
+### Photo-sourced or reviewed PBR maps, without shader scripting
+
+AssetSpec material roles can also use the existing
+[provenance-verified texture-pack format](MATERIAL_PACKS.md). A pack contains
+local PNG/JPEG **base color, roughness and OpenGL normal maps**, a tile scale,
+source URL, license declaration and optional per-map SHA-256 pins. For example,
+after preparing an approved pack whose `assignments` target the `housing`
+material role:
+
+```bash
+python3 -m kumiki_blender inspect-texture-packs --input /path/to/pack.json
+python3 -m kumiki_blender build-asset \
+  --spec examples/precision-control-enclosure-v2.json \
+  --texture-packs /path/to/pack.json \
+  --output .review/control-enclosure/scanned-material-r02
+```
+
+The host validates pack paths, material roles, map dimensions, hashes and
+redistribution declarations before launching Blender; Blender checks map hashes
+again before packing the images into both `.blend` and exported GLB. UVs are
+generated using the pack's physical `tile_size_m`; the revision manifest
+records license/provenance and actual texture hashes. Existing role presets
+still work without a pack. `optical-glass` cannot be replaced with an opaque
+PBR pack, preserving its transmission behavior.
+
+This is a **user-supplied asset pathway**, not a downloader or license verifier.
+For physically scanned free materials, [Poly Haven](https://polyhaven.com/textures)
+publishes CC0 texture sets and [explicit redistribution terms](https://polyhaven.com/license).
+Check individual material suitability and save its original source URL before
+using the files. CI exercises the same path using first-party generated maps;
+those test maps are **not scans or proof of photorealism**.
+
 Choose another output directory for each revision. The output may not already
 exist. The quality preset controls the requested studio resolution and sample
 count; `KUMIKI_RENDER_PROFILE=smoke` caps render effort without changing mesh

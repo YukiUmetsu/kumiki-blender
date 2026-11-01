@@ -22,6 +22,11 @@ trim and instanced oriented fastener rows. The
 demonstrates 62 real hard-surface parts from fourteen short declarations, without
 writing any per-model Python or Blender code.
 
+For scanned or reviewed PBR materials, the generic `build-asset` command now
+accepts `--texture-packs path/to/pack.json`. This applies hash-checked,
+rights-declared color/roughness/normal maps to named AssetSpec material roles,
+embeds them in GLB and `.blend`, and preserves their provenance in the manifest.
+
 A standalone, code-first Blender toolkit for reusable, cinematic 3D authoring. Its first milestone is a **generic lattice observation tower**: a deterministic architectural scaffold, **not** a photorealistic or dimensionally verified replica of Tokyo Tower or another real landmark.
 
 The library separates testable Python geometry planning from Blender's `bpy` modeling and rendering. It includes a tapered lattice observation tower, a **modular architectural portico** built from closed arch stones and lathed columns, a **reusable stone building facade** with detailed windows/doors/roof, a **parametric Egyptian monument study** with pyramid casing blocks and a sculpted lion-bodied Sphinx figure, and a **rigged red vintage biplane** modeled from user-provided multiview artwork. All use a shared revision exporter for editable `.blend`, portable `.glb`, inspection views and a JSON manifest for Kumiki-UI and ContentGen consumers.

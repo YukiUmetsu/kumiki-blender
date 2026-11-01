@@ -6,9 +6,11 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from .blender_output import aim_at, create_model_scene, export_revision
+from .blender_material_packs import create_texture_pack_material
 from .blender_scene import _create_box, _material
 from .blender_textures import ensure_cylindrical_uvs, ensure_metric_uvs
 from .composer import AssemblyPlan, origin_component_id
+from .material_packs import TextureAssignment, verify_texture_targets
 from .render_profiles import select_render_profile
 from .shots import QualityShot
 from .surfaces import get_surface
@@ -50,6 +52,7 @@ def _inspection_shots(plan: AssemblyPlan, spec: AssetSpec) -> tuple[QualityShot,
 
 
 def build_assembly_scene(spec: AssetSpec, plan: AssemblyPlan, destination: Path, *,
+                         texture_packs: tuple[TextureAssignment, ...] = (),
                          bpy_module: Any = None) -> dict[str, Any]:
     """Render and export an immutable revision through Kumiki's shared contract."""
     if bpy_module is None:
@@ -79,8 +82,14 @@ def build_assembly_scene(spec: AssetSpec, plan: AssemblyPlan, destination: Path,
     scene.collection.children.link(model)
     stage = bpy.data.collections.new("Studio / excluded from GLB")
     scene.collection.children.link(stage)
-    palette = {role: _material(bpy, get_surface(item.preset, color=item.color,
-                                               roughness=item.roughness))
+    verify_texture_targets(list(spec.materials), texture_packs)
+    assigned = {item.target: item.pack for item in texture_packs}
+    if any(spec.materials[role].preset == "optical-glass" for role in assigned):
+        raise RuntimeError("Texture packs cannot replace optical-glass transmission materials")
+    palette = {role: (create_texture_pack_material(bpy, assigned[role], role)
+                      if role in assigned else
+                      _material(bpy, get_surface(item.preset, color=item.color,
+                                                 roughness=item.roughness)))
                for role, item in spec.materials.items()}
     from mathutils import Matrix  # Blender-only dependency.
 
@@ -98,9 +107,10 @@ def build_assembly_scene(spec: AssetSpec, plan: AssemblyPlan, destination: Path,
             mesh = bpy.data.meshes.new(f"Geometry / {instance.name}")
             mesh.from_pydata(instance.mesh.vertices, [], instance.mesh.faces)
             mesh.update()
+            tile_size = assigned[role].tile_size_m if role in assigned else 1.5
             if kind in ("solid.lathe", "solid.hollow-lathe", "mechanical.rod",
                         "detail.radial-studs", "detail.linear-fasteners"):
-                ensure_cylindrical_uvs(mesh)
+                ensure_cylindrical_uvs(mesh, tile_size_m=tile_size)
                 # The worker intentionally has no original Pydantic inputs:
                 # distinguish six-sided hex heads from curved buttons by the
                 # compiled cap topology, preserving crisp hex facets.
@@ -110,7 +120,7 @@ def build_assembly_scene(spec: AssetSpec, plan: AssemblyPlan, destination: Path,
                     if len(polygon.vertices) == 4 and smooth_sides:
                         polygon.use_smooth = True
             else:
-                ensure_metric_uvs(mesh)
+                ensure_metric_uvs(mesh, tile_size_m=tile_size)
                 if kind == "solid.rounded-box":
                     for polygon in mesh.polygons:
                         polygon.use_smooth = True
@@ -188,5 +198,7 @@ def build_assembly_scene(spec: AssetSpec, plan: AssemblyPlan, destination: Path,
         "native_axes": "Blender Z-up; GLB exported with glTF-compatible axes",
         "bounds_m": [plan.bounds_min, plan.bounds_max],
     }
+    if texture_packs:
+        metadata["texture_packs"] = [item.to_manifest() for item in texture_packs]
     return export_revision(bpy, scene, camera, objects, _inspection_shots(plan, spec),
                            destination, samples=profile.samples, metadata=metadata)
