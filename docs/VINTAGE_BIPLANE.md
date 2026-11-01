@@ -16,7 +16,7 @@ textures are included; all geometry and material maps are generated locally.
 | Rounded engine cowling, dark grille, two-blade wood propeller | Tapered cowl, individual grille bars, rivets, exhausts, and varnished sculpted propeller blades | Distinct metals, timber and red painted surfaces |
 | Open single cockpit immediately behind upper wing | Recessed well, shaped red side fairings, leather coaming/seat, stick and sloped glass windscreen | True open-cockpit silhouette from side/top |
 | Narrowing red fuselage and large swept fin | 3D lofted front/tail sections, separately hinged rudder, stabilizers and elevators | Convincing side profile and articulating tail surfaces |
-| Fixed two-wheel undercarriage | Real toroidal rubber tires, lacquered red hubs, angled wooden struts and axle wire bracing | Visible axle-to-fuselage structural load path |
+| Fixed two-wheel undercarriage | Real toroidal rubber tires, lacquered red hubs with brass trim/rivets, angled wooden struts and axle wire bracing | Visible axle-to-fuselage structural load path; asymmetric hub balance weights expose wheel spin |
 
 Coordinates: **Z up, nose along −Y, wings along ±X**. The tail ends near Y=+3.69 m and the propeller extends to −Y≈3.59 m. The model sits on its two wheels at roughly Z=0; dimensions are artistic estimates based on the illustration's relative proportions.
 
@@ -44,6 +44,16 @@ The native `.blend` contains `RIG / aircraft-root` and nine independently named 
 | `left-wheel`, `right-wheel` | Local X | Wheel rolling motion around the axle |
 
 All geometry is a child of the root or its named control. The default `flight-loop` is 97 keyed endpoints (96-frame interval), 24 fps. It is only a **mechanical demonstration**; it does not purport to simulate flight dynamics. Nine control animations are exported to GLB, while the editable `.blend` retains the object/action hierarchy.
+
+To inspect the spinning components in Blender, select `RIG / propeller` or
+`RIG / left-wheel` / `RIG / right-wheel`, then scrub the timeline. The engine
+propeller completes eight revolutions and each wheel three revolutions over
+frames 1–97. Their axes are distinct: the propeller rotates about **Y**;
+both independent wheel assemblies rotate about their **X** axles. The tires,
+red covers, trim rings, brass rivets, and asymmetric balance clips are actual
+children of the respective wheel controls; the struts and fixed axle stay
+still. The rig checker samples intermediate frames and compares actual mesh
+world positions, not merely animation metadata.
 
 ## Run
 
