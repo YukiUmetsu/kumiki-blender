@@ -215,16 +215,17 @@ The Blender end-to-end test automatically runs when a `blender` executable is on
 
 ### Focused PR checks and manual full regression
 
-Normal pushes and pull requests run **three focused Python 3.11 regression
-cases** for measured Khufu course heights and batched stone geometry. Pull
-requests add a Blender 4.5 LTS job that verifies the archive's official
-SHA-256 checksum and builds **only the Khufu pyramid**, checking its manifest,
-textured portable GLB and masonry preview. Editable `.blend`,
+Normal pushes and pull requests run focused **Python 3.11** regressions for
+both Khufu's measured masonry and Sphinx source-mesh handling. Pull requests
+add a Blender 4.5 LTS job that verifies the archive's official SHA-256
+checksum, builds the Khufu pyramid and imports a first-party **Sphinx test
+proxy**, then checks their GLBs, source provenance, geometry-readiness
+reports and dedicated masonry/anatomical previews. Editable `.blend`,
 GLB, manifests and PNG previews remain available in the **Blender QA artifact**.
 This keeps the review feedback loop centered on code still changing.
 
 **No tests have been deleted.** The complete Python test suite now runs on
-**one Python version (3.11)** when invoked manually. Sphinx scan tests, legacy
+**one Python version (3.11)** when invoked manually. Legacy
 architectural builds/import variations, broader glTF-Transform specification
 validation and revision checks are part of an **opt-in full regression**:
 open GitHub Actions `Python foundation` and select **Run workflow**

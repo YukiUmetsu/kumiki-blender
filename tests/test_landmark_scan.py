@@ -7,6 +7,7 @@ from pathlib import Path
 from kumiki_blender.asset_import import AssetImportError
 from kumiki_blender.landmark_scan import (
     fit_sphinx_scan, prepare_sphinx_scan, sphinx_proportion_review,
+    sphinx_source_readiness_review,
 )
 from tests.test_asset_import import fixture_glb, provenance_json
 
@@ -60,6 +61,41 @@ class LandmarkScanTests(unittest.TestCase):
         self.assertGreater(warning["relative_deviation"]["width"], .5)
         with self.assertRaises(AssetImportError):
             sphinx_proportion_review(real_ratio, tolerance=float("nan"))
+
+    def test_low_poly_illustrative_proxy_cannot_be_mistaken_for_cinematic_sphinx(self):
+        alignment = fit_sphinx_scan(
+            (0, 0, 0), (73.5, 19.3, 20.0),
+            front_axis="-X", target_length_m=73.5,
+            target_center_xy=(0, 0))
+        toy = sphinx_source_readiness_review(
+            alignment, mesh_objects=4, vertex_count=1000,
+            triangle_count=1800, uv_mesh_objects=4, image_textures=0)
+        self.assertFalse(toy["technical_screen_passed"])
+        self.assertFalse(toy["monument_source_authenticated"])
+        self.assertIn("closeup_triangle_floor", toy["checks"])
+        self.assertFalse(toy["checks"]["has_image_textures"])
+        self.assertEqual(len(toy["issues"]), 2)
+
+        plausible = sphinx_source_readiness_review(
+            alignment, mesh_objects=2, vertex_count=80_000,
+            triangle_count=150_000, uv_mesh_objects=2, image_textures=4)
+        self.assertTrue(plausible["technical_screen_passed"])
+        self.assertFalse(plausible["monument_source_authenticated"])
+        self.assertIn("review", plausible["status"])
+        self.assertEqual(plausible["issues"], [])
+
+    def test_source_screen_rejects_inconsistent_mesh_counts(self):
+        alignment = fit_sphinx_scan(
+            (0, 0, 0), (73.5, 19.3, 20.0),
+            front_axis="-X", target_length_m=73.5,
+            target_center_xy=(0, 0))
+        normal = dict(mesh_objects=2, vertex_count=100, triangle_count=100,
+                      uv_mesh_objects=2, image_textures=1)
+        for change in ({"mesh_objects": True}, {"triangle_count": -1},
+                       {"uv_mesh_objects": 3}, {"mesh_objects": 0},
+                       {"triangle_count": 1}, {"image_textures": 1.5}):
+            with self.subTest(change=change), self.assertRaises(AssetImportError):
+                sphinx_source_readiness_review(alignment, **(normal | change))
 
     def test_bad_axis_dims_and_silhouette_are_rejected(self):
         arguments = dict(bounds_min=(-5., -1., 0.), bounds_max=(5., 1., 4.),

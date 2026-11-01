@@ -12,7 +12,10 @@ from .blender_import import imported_bounds
 from .blender_scene import _create_box, _material
 from .blender_textures import ensure_metric_uvs
 from .egyptian_monuments import MonumentStudy
-from .landmark_scan import SphinxScan, fit_sphinx_scan, sphinx_proportion_review
+from .landmark_scan import (
+    SphinxScan, fit_sphinx_scan, sphinx_proportion_review,
+    sphinx_source_readiness_review,
+)
 from .asset_import import AssetImportError
 from .render_profiles import select_render_profile
 from .shots import QualityShot
@@ -149,9 +152,10 @@ def _place_sphinx_scan(bpy: Any, scene: Any, model: Any, scan: SphinxScan,
     if any(image.source == "FILE" and image.filepath and not image.packed_file
            for image in bpy.data.images):
         raise AssetImportError("Sphinx scan texture was not packed into the scene")
-    materials = {slot.material.name for obj in meshes for slot in obj.material_slots
-                 if slot.material is not None}
-    if scan.inspection["glb_audit"]["materials"] and not materials:
+    source_materials = {slot.material.name: slot.material
+                        for obj in meshes for slot in obj.material_slots
+                        if slot.material is not None}
+    if scan.inspection["glb_audit"]["materials"] and not source_materials:
         raise AssetImportError("Blender lost the Sphinx scan's PBR materials")
     # Move newly imported meshes and hierarchy empties into the intended model
     # collection. Parent transforms remain intact and are applied just once.
@@ -183,14 +187,27 @@ def _place_sphinx_scan(bpy: Any, scene: Any, model: Any, scan: SphinxScan,
     if any(abs(actual[side][axis] - alignment.aligned_bounds_m[side][axis]) > 1e-3
            for side in range(2) for axis in range(3)):
         raise AssetImportError("Sphinx scan hierarchy did not preserve its fitted bounds")
+    source_readiness = sphinx_source_readiness_review(
+        alignment,
+        mesh_objects=len(meshes),
+        vertex_count=sum(len(obj.data.vertices) for obj in meshes),
+        triangle_count=sum(sum(len(poly.vertices)-2 for poly in obj.data.polygons)
+                           for obj in meshes),
+        uv_mesh_objects=sum(bool(obj.data.uv_layers) for obj in meshes),
+        image_textures=sum(
+            node.type == "TEX_IMAGE" and node.image is not None
+            for material in source_materials.values() if material.use_nodes
+            for node in material.node_tree.nodes),
+    )
     return meshes, {
         "provenance": scan.provenance.to_manifest(scan.inspection["input_sha256"]),
         "source_glb_bytes": scan.inspection["input_bytes"],
         "source_front_axis": scan.front_axis,
-        "mesh_objects": len(meshes), "source_materials": len(materials),
+        "mesh_objects": len(meshes), "source_materials": len(source_materials),
         "placement": alignment.to_manifest(),
         "verified_bounds_m": actual,
         "source_geometry_review": sphinx_proportion_review(alignment),
+        "source_readiness_review": source_readiness,
         "geometry_origin": "external scan / visually and historically unverified",
     }
 

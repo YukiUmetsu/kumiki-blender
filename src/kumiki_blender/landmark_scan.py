@@ -23,6 +23,7 @@ FRONT_ANGLES = {"-X": 0.0, "+X": math.pi, "-Y": -math.pi / 2, "+Y": math.pi / 2}
 SPHINX_SURVEY_LENGTH_M = 73.5
 SPHINX_SURVEY_WIDTH_M = 19.3
 SPHINX_SURVEY_HEIGHT_M = 20.0
+SPHINX_CINEMATIC_TRIANGLE_FLOOR = 50_000
 
 
 @dataclass(frozen=True)
@@ -96,6 +97,58 @@ def sphinx_proportion_review(alignment: ScanAlignment, *,
             "foreleg/paw geometry", "hindquarters and damaged masonry repairs",
             "provenance as an actual monument scan rather than a replica",
         ],
+    }
+
+
+def sphinx_source_readiness_review(
+    alignment: ScanAlignment, *,
+    mesh_objects: int,
+    vertex_count: int,
+    triangle_count: int,
+    uv_mesh_objects: int,
+    image_textures: int,
+) -> dict[str, Any]:
+    """Audit imported Sphinx *technical* detail, with an explicit no-approval verdict.
+
+    A source may have millions of polygons and textures yet still depict an
+    inaccurate toy, misaligned parts, or fabricated restoration. Counts are
+    only a useful low-cost rejection screen for cinematic closeup candidates.
+    Every accepted input must still be visually checked against a monument
+    survey and photos from more than one view.
+    """
+    counts = (mesh_objects, vertex_count, triangle_count, uv_mesh_objects, image_textures)
+    if any(type(value) is not int or value < 0 or value > 1_000_000_000 for value in counts):
+        raise AssetImportError("Sphinx mesh readiness requires nonnegative integer counts")
+    if not mesh_objects or uv_mesh_objects > mesh_objects or triangle_count < mesh_objects:
+        raise AssetImportError("Sphinx mesh readiness has inconsistent mesh counts")
+    proportion = sphinx_proportion_review(alignment)
+    checks = {
+        "monument_envelope_plausible": proportion["passes_bounding_envelope_screen"],
+        "closeup_triangle_floor": triangle_count >= SPHINX_CINEMATIC_TRIANGLE_FLOOR,
+        "every_mesh_has_uv0": uv_mesh_objects == mesh_objects,
+        "has_image_textures": image_textures > 0,
+    }
+    explanations = {
+        "monument_envelope_plausible": "Scan dimensions differ markedly from the recorded Sphinx envelope; check cropping, orientation and anatomy.",
+        "closeup_triangle_floor": "Scan is below the 50k-triangle screening floor for cinematic closeups; inspect face and paw topology.",
+        "every_mesh_has_uv0": "One or more scan meshes lacks UV0; source textures may be unusable.",
+        "has_image_textures": "No image-based material texture was preserved; the proxy or asset may lack photographic stone detail.",
+    }
+    return {
+        "surface": {
+            "mesh_objects": mesh_objects,
+            "vertices": vertex_count,
+            "triangles": triangle_count,
+            "meshes_with_uv0": uv_mesh_objects,
+            "image_texture_nodes": image_textures,
+        },
+        "checks": checks,
+        "technical_screen_passed": all(checks.values()),
+        "issues": [explanations[name] for name, passed in checks.items() if not passed],
+        "monument_source_authenticated": False,
+        "status": ("technically screenable / visual and archaeological review still required"
+                   if all(checks.values()) else
+                   "unsuitable for unreviewed cinematic landmark use"),
     }
 
 

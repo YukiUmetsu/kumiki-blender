@@ -192,6 +192,16 @@ over 25% are flagged for review. Passing the ratio screen **does not certify**
 the nemes, face, paws, hindquarters or repaired stone. A miniaturized replica
 could have perfectly plausible overall dimensions but the wrong anatomy.
 
+`sphinx_scan.source_readiness_review` is a separate, reproducible technical
+screen: it records imported vertex/triangle counts, UV0 coverage and image
+texture nodes. For cinematic closeup *candidates*, it flags fewer than
+50,000 triangles, absent UVs or image textures, and implausible dimensions.
+The threshold is a **screening heuristic** rather than proof of quality.
+The first-party CI proxy is deliberately below this bar and must receive
+`technical_screen_passed: false`; the CI tests require that verdict.
+`monument_source_authenticated` is always false until a real provenance and
+multi-view silhouette/anatomy review occurs outside these numeric checks.
+
 ### Sphinx source-geometry shortlist
 
 Only a validated capture of the **actual Giza monument**, or a reconstruction
@@ -202,6 +212,8 @@ geometry in a documentary-grade shot. Candidates researched in November
 | Candidate | Role | Source-fidelity and rights caution |
 |---|---|---|
 | [ARCE Sphinx Project / Open Context](https://opencontext.org/projects/141e814a-ba2d-4560-879f-80f1afb019e9) | Primary 1:50 plans/elevations and repair cross sections; CC BY 4.0 metadata | Archaeological reference drawings, **not** a ready-to-render 3D mesh |
+| [AERA Return to the Sphinx project](https://aeraweb.org/projects/sphinx/) | **Highest-priority source inquiry:** 2018–19 Japanese Giza 3D Survey team (Yukinori Kawae) made a complete monument model from drone photogrammetry and laser scans | Site-authentic capture is documented, but no public GLB download or redistribution license has been verified |
+| [Harvard Digital Giza — Sphinx primary model](https://giza.fas.harvard.edu/3dmodels/71021/full/) | Curated institutional 3D visualization and reference views | Public display is not equivalent to permission to extract and redistribute model geometry |
 | [Chenzoss Great Sphinx / Sketchfab](https://sketchfab.com/3d-models/the-great-sphinx-of-giza-egypt-f169dbe7974648babe327179091e0ee3) | CC BY, roughly 40k-triangle model for visual assessment | Listing does not prove original monument capture or true facial geometry |
 | [Watt Institution / Sketchfab](https://sketchfab.com/3d-models/the-great-sphinx-of-giza-c126509af31142a9a0d116e264e7b629) | **Reject** as historical ground truth | Photogrammetry depicts a *1903 bronze miniature*, not the monument |
 | [Scan the World / Zenodo](https://zenodo.org/records/21647117) | Pending rights review | GLB listing exists; commercial redistribution and actual survey origin unverified |
