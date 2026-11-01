@@ -34,6 +34,7 @@ jobs:
             tests.test_rock_weathering.RockWeatheringTests.test_differential_bedding_and_mineral_pits_are_real_closed_relief \
             tests.test_rock_weathering.RockWeatheringTests.test_sphinx_has_rough_anatomical_surfaces_not_smooth_loft \
             tests.test_landmark_scan \
+            tests.test_sphinx_scan_review \
             tests.test_sphinx_sculpt \
             tests.test_cli.CLITests.test_sphinx_scan_build_preflights_rights_and_pairs_without_blender \
             tests.test_cli.CLITests.test_sphinx_scan_build_passes_prepared_record_to_blender
@@ -356,6 +357,16 @@ jobs:
         run: |
           blender --background --factory-startup --threads 1 --python-exit-code 1 \
             --python scripts/blender_sphinx_scan_fixture.py
+      - name: Render-only Sphinx source review without exporting source geometry
+        env:
+          KUMIKI_RENDER_PROFILE: smoke
+        run: |
+          blender --background --factory-startup --threads 1 --python-exit-code 1 \
+            --python scripts/blender_entry.py -- \
+            review-sphinx-source \
+            --input .review/ci/first-party-sphinx-proxy.glb \
+            --front-axis=-X \
+            --output .review/ci/sphinx-source-review
       - name: Render Sphinx external geometry intake and anatomical views
         env:
           KUMIKI_RENDER_PROFILE: smoke
@@ -391,6 +402,11 @@ jobs:
           test -s .review/ci/sphinx-scan-integration/previews/sphinx-profile.png
           test -s .review/ci/sphinx-scan-integration/previews/sphinx-face.png
           test -s .review/ci/sphinx-scan-integration/previews/sphinx-frontal.png
+          test -s .review/ci/sphinx-source-review/frontal.png
+          test -s .review/ci/sphinx-source-review/face-three-quarter.png
+          test -s .review/ci/sphinx-source-review/side-profile.png
+          test -s .review/ci/sphinx-source-review/review.json
+          python -c 'import json; m=json.load(open(".review/ci/sphinx-source-review/review.json")); assert m["no_source_geometry_exported"] and m["no_source_textures_exported"] and m["mesh_objects"] == 4 and len(m["previews"]) == 4'
       - name: Upload focused Blender previews and source artifacts
         if: always()
         uses: actions/upload-artifact@v4

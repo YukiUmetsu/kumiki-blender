@@ -22,6 +22,7 @@ from .portico import PorticoError, make_portico_study
 from .recipe import RecipeError, load_recipe
 from .render_profiles import RenderProfileError
 from .revision_audit import RevisionAuditError, audit_revision
+from .sphinx_scan_review import prepare_sphinx_review
 from .surfaces import SurfaceError
 
 
@@ -75,6 +76,11 @@ def main(argv: list[str] | None = None) -> int:
     revision_parser.add_argument("--root", type=Path, required=True)
     source_parser = subcommands.add_parser("inspect-asset")
     source_parser.add_argument("--input", type=Path, required=True)
+    scan_review_parser = subcommands.add_parser("review-sphinx-source")
+    scan_review_parser.add_argument("--input", type=Path, required=True)
+    scan_review_parser.add_argument("--output", type=Path, required=True)
+    scan_review_parser.add_argument("--front-axis", choices=("-X", "+X", "-Y", "+Y"),
+                                    default="-X")
     texture_parser = subcommands.add_parser("inspect-texture-packs")
     texture_parser.add_argument("--input", type=Path, required=True)
     import_parser = subcommands.add_parser("import-asset")
@@ -94,6 +100,22 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.command == "inspect-asset":
             print(json.dumps(inspect_source_glb(args.input), indent=2))
+            return 0
+        if args.command == "review-sphinx-source":
+            review = prepare_sphinx_review(args.input, args.output,
+                                           front_axis=args.front_axis)
+            try:
+                import bpy  # type: ignore[import-not-found]
+            except ImportError as error:
+                raise RuntimeError(
+                    "Reviewing external scans requires Blender. Run via: "
+                    "blender --background --factory-startup --python-exit-code 1 "
+                    "--python scripts/blender_entry.py -- review-sphinx-source "
+                    "--input licensed-model.obj --output .review/sphinx-scan"
+                ) from error
+            from .sphinx_scan_review import render_sphinx_source_review
+
+            print(json.dumps(render_sphinx_source_review(review, bpy_module=bpy), indent=2))
             return 0
         if args.command == "inspect-texture-packs":
             print(json.dumps({"assignments": [entry.to_manifest() for entry in

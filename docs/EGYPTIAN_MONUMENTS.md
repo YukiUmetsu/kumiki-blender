@@ -190,6 +190,42 @@ stone configuration is not fully surveyed by this data. To avoid fabricating
 the site's real relative positions, this preset requires `--kind pyramid`
 and cannot be added to the miniature `giza-study` composition.
 
+### Scan-first facial fidelity: local render-only checkpoint
+
+**The procedural face is a layout fallback, not a documentary-grade likeness.**
+Neither changing its facial control points nor increasing its subdivision
+count can recover missing, historically specific anatomy. Start with a scan of
+the real Giza monument, or a scanned/reconstructed model whose source is
+independently verifiable.
+
+Before a third-party asset is authorized for a production export, review its
+actual geometry in Blender. This separate command supports local **GLB, OBJ
+and FBX** inputs, including paid assets. It preserves imported materials and
+renders frontal facial, three-quarter facial, full side, and whole-frontal
+PNG previews. It writes only these previews and a small inspection JSON; it
+does **not** write a `.blend`, repack textures, export mesh geometry, upload
+any files, or add an asset to Git. This makes it useful for evaluating models
+that may be licensed for rendered video but **not for source redistribution**.
+
+```bash
+blender --background --factory-startup --python-exit-code 1 \
+  --python scripts/blender_entry.py -- \
+  review-sphinx-source \
+  --input /path/to/licensed-sphinx.fbx \
+  --front-axis=-X \
+  --output .review/sphinx-source-check-r01
+```
+
+Inspect `frontal.png` and `face-three-quarter.png` alongside real frontal
+and oblique photographs, and `side-profile.png` against survey elevations.
+Check eyelid/ear topology, the broken nose and chin silhouette, nemes profile,
+repair seams and mineral wear. A successful render checks technical intake,
+**not** source authenticity or licensing. Record the asset's actual creator,
+specific license, permitted output uses and capture provenance outside Git.
+The source's front axis is measured **after Blender imports** that format; if
+the face is not centered, correct the axis and remove surrounding terrain
+before repeating the review.
+
 ### Place your own licensed Sphinx scan
 
 If the stylized Sphinx anatomy is not sufficient for a cinematic shot, supply
@@ -278,6 +314,7 @@ geometry in a documentary-grade shot. Candidates researched in November
 | [Chenzoss Great Sphinx / Sketchfab](https://sketchfab.com/3d-models/the-great-sphinx-of-giza-egypt-f169dbe7974648babe327179091e0ee3) | CC BY, roughly 40k-triangle model for visual assessment | Listing does not prove original monument capture or true facial geometry |
 | [Watt Institution / Sketchfab](https://sketchfab.com/3d-models/the-great-sphinx-of-giza-c126509af31142a9a0d116e264e7b629) | **Reject** as historical ground truth | Photogrammetry depicts a *1903 bronze miniature*, not the monument |
 | [Scan the World / Zenodo](https://zenodo.org/records/21647117) | Pending rights review | GLB listing exists; commercial redistribution and actual survey origin unverified |
+| [Fab scan-derived Sphinx](https://www.fab.com/listings/511d31db-91e0-4919-affc-3a0ac634ac26) | Paid/private scan-first candidate: GLB and FBX with scanned stone textures | Advertised scan provenance still needs external validation; review locally, do not place purchased geometry in public Git |
 | [TurboSquid Great Sphinx scan](https://www.turbosquid.com/3d-models/great-sphinx-giza-scan-3d-model-1302443) | Optional paid production reference | Payment does not grant the right to redistribute the mesh in an open-source GLB |
 
 Verify the exact asset's current rights, original capture evidence and visual
