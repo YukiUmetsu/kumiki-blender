@@ -104,6 +104,15 @@ class VintageBiplaneTests(unittest.TestCase):
         self.assertIn("engine-left-louver-00", names)
         self.assertIn("cockpit-instrument-dial-0", names)
         self.assertEqual(groups["wheel"], 4)  # tires and red hubs
+        for side in ("left", "right"):
+            for i in range(8):
+                rivet = next(p for p in self.model.parts
+                             if p.name == f"{side}-hub-rivet-{i:02d}")
+                self.assertEqual(rivet.rig, f"{side}-wheel")
+            weight = next(p for p in self.model.parts
+                          if p.name == f"{side}-wheel-balance-weight")
+            self.assertEqual(weight.rig, f"{side}-wheel",
+                             "sidewall marker must rotate with the tire, not the chassis")
 
     def test_loopable_rig_animation_uses_opposing_ailerons_and_prop_spin(self):
         frames = animation_keyframes()
