@@ -58,8 +58,11 @@ KUMIKI_BLENDER_BINARY=/path/to/blender PYTHONPATH=src \
 The original PR used large primitive spheres for facial features, featureless
 torso cylinders, and oversized straight sleeves. The current revision fixes
 the physically floating base, sleeve normals and proportions, and replaces
-many details with curved tapered meshes. The new front/profile/head/hand
-cameras make the gaps visible during review.
+many details with curved tapered meshes. The most recent face revision
+sculpts the brow, recessed eye sockets, bridge and tip of the nose, cheeks,
+chin, and lips as **continuous displacement of a dense head mesh**, instead
+of separate spheres that protrude in profile. The front/profile/head/hand
+cameras make unresolved gaps visible during review.
 
 **Still needed before a photo-faithful landmark claim:** high-resolution
 anatomical sculpting of the eyelids, mouth, nose and jaw; complex cloak

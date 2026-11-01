@@ -51,6 +51,7 @@ class ChristRedeemerTests(unittest.TestCase):
                                 for value in report["sleeve_outward_fraction"].values()))
             self.assertEqual(report["sleeve_nonmanifold_edges"], {"-1": 0, "1": 0})
             self.assertGreater(report["mesh_count"], 60)
+            self.assertGreater(report["head_surface_vertices"], 5000)
             self.assertGreater(report["vertex_count"], 15000)
             portable = audit_glb(output)
             self.assertEqual(portable["external_references"], 0)

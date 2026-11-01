@@ -221,48 +221,60 @@ def face():
             x=rx*math.cos(a)
             y=cy+ry*math.sin(a)
             if math.sin(a)<0:
-                # High cheek, tapering lower jaw, and a projecting rounded chin.
+                # Integrate the full facial relief into the head surface.
+                # Features are smooth local displacements of the same manifold,
+                # eliminating the stacked cylinder/ball appearance in profile.
                 cheek=.17*math.exp(-((abs(x)-.82)/.33)**2-((z-35.43)/.46)**2)
                 jaw=.07*math.exp(-((abs(x)-.66)/.42)**2-((z-34.90)/.35)**2)
                 chin=.18*math.exp(-(x/.57)**2-((z-34.46)/.32)**2)
-                y-=cheek+jaw+chin
+                brow=.07*math.exp(-((abs(x)-.65)/.37)**2-((z-36.77)/.115)**2)
+                upper_lid=.052*math.exp(-((abs(x)-.66)/.32)**2-((z-36.55)/.052)**2)
+                lower_lid=.029*math.exp(-((abs(x)-.67)/.32)**2-((z-36.37)/.067)**2)
+                eye_socket=.08*math.exp(-((abs(x)-.67)/.36)**2-((z-36.46)/.13)**2)
+                nose_bridge=.13*math.exp(-(x/.18)**2-((z-36.18)/.48)**2)
+                nose_tip=.31*math.exp(-(x/.22)**2-((z-35.74)/.19)**2)
+                nostril_wing=.12*math.exp(-((abs(x)-.23)/.16)**2-((z-35.64)/.13)**2)
+                top_lip=.057*math.exp(-(x/.40)**2-((z-35.20)/.072)**2)
+                bottom_lip=.049*math.exp(-(x/.37)**2-((z-35.075)/.068)**2)
+                mouth_crease=.045*math.exp(-(x/.38)**2-((z-35.13)/.030)**2)
+                y-= (cheek+jaw+chin+brow+upper_lid+lower_lid+
+                     nose_bridge+nose_tip+nostril_wing+top_lip+bottom_lip)
+                y+=eye_socket+mouth_crease
             ring.append((x,y,z))
         rings.append(ring)
-    loft("Head | integrated cheekbone jaw and cranium",rings)
+    head_surface=loft("Head | integrated cheekbone jaw and cranium",rings)
+
+    def face_y(x,z,lift=.012):
+        # Ray-cast the actual sculpted surface: grooves follow the cheek/eye
+        # relief instead of floating as straight rods in profile.
+        hit,point,normal,index=head_surface.ray_cast(
+            Vector((x,-4,z)),Vector((0,1,0)))
+        assert hit, "Facial detail must project onto the sculpted surface"
+        return point.y-lift
+
     for side in (-1,1):
-        # Facial planes are integrated above; only carved ridges remain separate.
-        sphere("Face | %s | eye recess"%side,(side*.68,-1.21,36.47),(.34,.046,.072),CARVING)
-        shaped_path("Face | %s | upper eyelid"%side,
-                    [(side*.30,-1.20,36.53),(side*.55,-1.23,36.56),
-                     (side*.83,-1.21,36.53),(side*1.06,-1.12,36.48)],
-                    (.016,.028,.025,.008))
-        shaped_path("Face | %s | lower eyelid"%side,
-                    [(side*.30,-1.19,36.42),(side*.59,-1.22,36.40),
-                     (side*.86,-1.18,36.42),(side*1.06,-1.11,36.49)],
-                    (.012,.020,.019,.008))
-        shaped_path("Face | %s | brow ridge"%side,
-                    [(side*.27,-1.10,36.77),(side*.57,-1.16,36.81),
-                     (side*.85,-1.13,36.76),(side*1.15,-1.04,36.63)],
-                    (.016,.034,.028,.008))
+        # Almond eyelid lines conform to the sculpted surface, even in profile.
+        top=[(side*.32,36.48),(side*.53,36.50),(side*.78,36.485),
+             (side*1.04,36.46)]
+        bottom=[(side*.32,36.44),(side*.58,36.395),(side*.84,36.415),
+                (side*1.04,36.46)]
+        shaped_path("Face | %s | upper eyelid incision"%side,
+                    [(x,face_y(x,z),z) for x,z in top],
+                    (.008,.022,.019,.006),CARVING,sides=8)
+        shaped_path("Face | %s | lower eyelid incision"%side,
+                    [(x,face_y(x,z,.009),z) for x,z in bottom],
+                    (.007,.012,.011,.004),CARVING,sides=8)
         sphere("Ear | %s | helix"%side,(side*1.41,-.035,36.08),(.11,.15,.36))
         sphere("Ear | %s | concha shadow"%side,(side*1.50,-.16,36.06),(.027,.066,.17),CARVING)
         sphere("Ear | %s | lobule"%side,(side*1.41,-.07,35.78),(.08,.10,.11))
-    shaped_path("Face | nasal ridge",[(0,-1.10,36.69),(0,-1.15,36.31),
-                                     (0,-1.31,35.95),(0,-1.37,35.75)],
-                (.062,.098,.135,.091),sides=16)
-    sphere("Face | integrated nose tip",(0,-1.37,35.72),(.16,.155,.105))
     for side in (-1,1):
-        sphere("Face | %s | nostril wing"%side,(side*.19,-1.30,35.67),(.09,.10,.073))
-        sphere("Face | %s | carved nostril"%side,(side*.16,-1.42,35.61),(.037,.025,.016),CARVING)
-    shaped_path("Face | philtrum",[(0,-1.14,35.50),(0,-1.17,35.34)],(.026,.019))
-    shaped_path("Face | upper lip",[(-.42,-1.09,35.21),(-.20,-1.17,35.22),
-                                    (0,-1.21,35.23),(.20,-1.17,35.22),(.42,-1.09,35.21)],
-                (.009,.028,.036,.028,.009))
-    shaped_path("Face | carved closed mouth",[(-.38,-1.07,35.14),(-.17,-1.19,35.13),
-                                               (0,-1.23,35.13),(.17,-1.19,35.13),(.38,-1.07,35.14)],
-                (.007,.009,.012,.009,.007),CARVING)
-    shaped_path("Face | lower lip",[(-.32,-1.07,35.085),(0,-1.18,35.07),(.32,-1.07,35.085)],
-                (.008,.024,.008))
+        x=side*.16
+        sphere("Face | %s | carved nostril"%side,
+               (x,face_y(x,35.61,.008),35.61),(.032,.020,.014),CARVING)
+    lip=[(-.38,35.14),(-.17,35.13),(0,35.13),(.17,35.13),(.38,35.14)]
+    shaped_path("Face | carved closed mouth",
+                [(x,face_y(x,z,.009),z) for x,z in lip],
+                (.006,.011,.012,.011,.006),CARVING)
     # Center-parted, gravity-led waves; lengths descend behind the cheeks.
     for side in (-1,1):
         for k in range(4):
@@ -318,6 +330,7 @@ def verify():
     maximum=[max(p[i] for p in points) for i in range(3)]
     pedestal_ob=next(ob for ob in objs if ob.name.startswith("Pedestal |"))
     torso_ob=next(ob for ob in objs if ob.name.startswith("Statue |"))
+    head_ob=next(ob for ob in objs if ob.name.startswith("Head | integrated cheekbone"))
     ptop=max((pedestal_ob.matrix_world@v.co).z for v in pedestal_ob.data.vertices)
     rbot=min((torso_ob.matrix_world@v.co).z for v in torso_ob.data.vertices)
     winding={}
@@ -336,12 +349,14 @@ def verify():
     result={"bounds_min":minimum,"bounds_max":maximum,"pedestal_top":ptop,
             "robe_bottom":rbot,"sleeve_outward_fraction":winding,
             "sleeve_nonmanifold_edges":open_edges,
+            "head_surface_vertices":len(head_ob.data.vertices),
             "mesh_count":len(objs),"vertex_count":sum(len(ob.data.vertices) for ob in objs)}
     assert abs(ptop-rbot)<.001,"Statue must meet pedestal without floating"
     assert maximum[0]-minimum[0]>27.6,"Hands should span 28 m"
     assert maximum[2]>37.9 and minimum[2]<.01,"Scale should be 38 m including pedestal"
     assert min(winding.values())>.60,"Both sleeve normals must face outward"
     assert not any(open_edges.values()),"Sleeve meshes must be closed and manifold"
+    assert len(head_ob.data.vertices)>5000,"Face needs a dense sculptable surface"
     return result
 
 
