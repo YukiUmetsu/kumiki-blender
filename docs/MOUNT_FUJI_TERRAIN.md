@@ -1,4 +1,44 @@
-# Mount Fuji — surveyed terrain, mesh-first workflow
+# Mount Fuji — two distinct 3D interpretations
+
+There are **two intentionally different models**, sharing the same Fuji
+subject but not the same geometry or scale:
+
+| Variant | Purpose | Geometry | Footprint |
+| --- | --- | --- | --- |
+| `--style realistic` (default) | Geographic and documentary | GSI survey DEM, 1:1 vertical scale | Approximately 26 × 26 km |
+| `--style iconic` | Read as **Mount Fuji / Japan** instantly, including at small sizes | Art-directed Fuji cone, snow tongues, curved black-and-red torii, two multi-hue sakura trees and volcanic garden | 10.2 × 8.6 arbitrary scene units |
+
+The iconic model deliberately sacrifices realistic dimensions and geography.
+It is a miniature symbol rather than a topographic study. All landmarks and
+five-petal flowers are **actual exportable mesh**, not camera-facing sprites.
+
+## Iconic spring diorama
+
+Builds without a DEM or network access. Use Blender 4.2+ (4.5 LTS recommended):
+
+```bash
+PYTHONPATH=src python -m kumiki_blender plan-fuji --style iconic --detail high
+blender --background --factory-startup --python-exit-code 1 \
+  --python scripts/blender_entry.py -- \
+  build-fuji --style iconic --detail high \
+  --output .review/geography/terrain/mount-fuji-iconic-diorama/r01
+```
+
+The physically modeled objects include the blue-grey sculptural Fuji flanks,
+irregular ivory snow crown and summit depression; lacquered red hashira, nuki,
+shimaki, sweeping black kasagi and brass plaque; tapering branching cherry
+trunks with pink blossom clouds and many individual five-petal flowers; slate
+approach stones and a beveled obsidian display plinth. The floating photo studio
+is excluded from GLB. The result is art-directed and **must never be represented
+as survey-accurate Fuji**.
+
+Iconic visual references (not copied or distributed as textures):
+
+- [Japan National Tourism Organization: Mount Fuji](https://www.japan.travel/en/fuji-guide/)
+- [Japan National Tourism Organization: cherry blossoms](https://www.japan.travel/en/see-and-do/cherry-blossom/)
+- [Fushimi Inari Taisha: shrine and torii](https://inari.jp/en/)
+
+## Realistic topographic relief
 
 This asset is a geographically measured **relief mesh**, not an idealized cone.
 It covers approximately 26 × 26 km and preserves the summit crater, jagged rim,

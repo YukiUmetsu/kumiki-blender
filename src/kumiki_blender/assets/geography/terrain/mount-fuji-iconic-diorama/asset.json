@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "id": "mount-fuji-iconic-diorama",
+  "title": "Mount Fuji / Iconic Sakura and Torii Miniature",
+  "description": "A compact, intentionally non-geographic springtime Japan icon: sculpted snowy Mount Fuji, scarlet torii gate, two blossoming sakura and a volcanic display base.",
+  "kind": "hybrid",
+  "tags": ["japan", "fuji", "volcano", "mountain", "spring", "sakura", "cherry-blossom", "torii", "shrine", "stylized", "iconic", "miniature", "diorama"],
+  "aliases": ["Fuji miniature", "Japan diorama", "Fujisan icon", "Japanese shrine and cherry blossoms"],
+  "rigged": false,
+  "animated": false,
+  "sources": [
+    "src/kumiki_blender/geography/fuji/iconic_scene.py",
+    "docs/MOUNT_FUJI_TERRAIN.md"
+  ],
+  "plan": ["plan-fuji", "--style", "iconic"],
+  "build": ["build-fuji", "--style", "iconic"]
+}

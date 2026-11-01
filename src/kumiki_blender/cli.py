@@ -96,6 +96,8 @@ def main(argv: list[str] | None = None) -> int:
             subcommand.add_argument("--output", type=Path, required=True)
     for command in ("plan-fuji", "build-fuji"):
         subcommand = subcommands.add_parser(command)
+        subcommand.add_argument("--style", choices=("realistic", "iconic"), default="realistic",
+                                help="Surveyed terrain or compact stylized Japan diorama")
         subcommand.add_argument("--dem", type=Path, default=Path(".review/fuji-dem/fuji-heightmap.bin"))
         subcommand.add_argument("--detail", choices=("preview", "standard", "high"), default="standard")
         if command == "build-fuji":
@@ -226,6 +228,19 @@ def main(argv: list[str] | None = None) -> int:
             }, indent=2))
             return 0
         if args.command in ("plan-fuji", "build-fuji"):
+            if args.style == "iconic":
+                from .geography.fuji.iconic_scene import iconic_spec
+                if args.command == "plan-fuji":
+                    print(json.dumps(iconic_spec(args.detail), indent=2))
+                    return 0
+                try:
+                    import bpy  # type: ignore[import-not-found]
+                except ImportError as error:
+                    raise RuntimeError("Iconic Fuji builds require Blender 4.2+") from error
+                from .geography.fuji.iconic_scene import build_iconic_fuji_scene
+                print(json.dumps(build_iconic_fuji_scene(args.output, detail=args.detail,
+                                                        bpy_module=bpy), indent=2))
+                return 0
             if not args.dem.is_file():
                 raise RuntimeError(f"Mount Fuji DEM not found: {args.dem}. First run: python scripts/prepare_fuji_dem.py {args.dem}")
             dem = load_dem(args.dem)
