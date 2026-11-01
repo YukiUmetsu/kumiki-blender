@@ -1,0 +1,41 @@
+{
+  "schema_version": 2,
+  "asset_id": "precision-control-enclosure",
+  "generator": "component-assembly",
+  "materials": {
+    "housing": {"preset": "painted-steel", "color": "#566970", "roughness": 0.33},
+    "panel": {"preset": "painted-steel", "color": "#BEC7C2", "roughness": 0.27},
+    "trim": {"preset": "galvanized-steel", "color": "#BBC1BA", "roughness": 0.25},
+    "screws": {"preset": "galvanized-steel", "color": "#808E94", "roughness": 0.31},
+    "controls": {"preset": "painted-steel", "color": "#252D33", "roughness": 0.39}
+  },
+  "components": [
+    {"type": "solid.rounded-box", "id": "filleted-housing", "material": "housing",
+      "size_m": [0.56, 0.16, 0.3], "corner_radius_m": 0.024,
+      "corner_segments": 7, "origin_m": [0, 0, 0.19]},
+    {"type": "solid.rounded-box", "id": "recessed-front-panel", "material": "panel",
+      "size_m": [0.44, 0.006, 0.21], "corner_radius_m": 0.002,
+      "corner_segments": 4, "origin_m": [0, -0.086, 0.19]},
+    {"type": "detail.panel-frame", "id": "front-mitered-trim", "material": "trim",
+      "size_m": [0.48, 0.25], "trim_width_m": 0.015, "depth_m": 0.009,
+      "plane": "xz", "origin_m": [0, -0.093, 0.19]},
+    {"type": "detail.linear-fasteners", "id": "top-hex-screws", "material": "screws",
+      "start_m": [-0.205, -0.102, 0.307], "end_m": [0.205, -0.102, 0.307],
+      "count": 7, "head_radius_m": 0.0038, "head_height_m": 0.003,
+      "normal_axis": "-y", "head_style": "hex"},
+    {"type": "detail.linear-fasteners", "id": "bottom-button-screws", "material": "screws",
+      "start_m": [-0.205, -0.102, 0.073], "end_m": [0.205, -0.102, 0.073],
+      "count": 7, "head_radius_m": 0.0038, "head_height_m": 0.003,
+      "normal_axis": "-y", "head_style": "button"},
+    {"type": "mechanical.rod", "id": "left-control", "material": "controls",
+      "start_m": [-0.13, -0.091, 0.19], "end_m": [-0.13, -0.123, 0.19],
+      "radius_m": 0.021, "radial_segments": 48},
+    {"type": "mechanical.rod", "id": "center-control", "material": "controls",
+      "start_m": [0, -0.091, 0.19], "end_m": [0, -0.123, 0.19],
+      "radius_m": 0.021, "radial_segments": 48},
+    {"type": "mechanical.rod", "id": "right-control", "material": "controls",
+      "start_m": [0.13, -0.091, 0.19], "end_m": [0.13, -0.123, 0.19],
+      "radius_m": 0.021, "radial_segments": 48}
+  ],
+  "quality": {"preset": "production", "views": ["hero", "front", "side", "detail"]}
+}

@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any
 from .blender_output import aim_at, create_model_scene, export_revision
 from .blender_scene import _create_box, _material
 from .blender_textures import ensure_cylindrical_uvs, ensure_metric_uvs
-from .composer import AssemblyPlan
+from .composer import AssemblyPlan, origin_component_id
 from .render_profiles import select_render_profile
 from .shots import QualityShot
 from .surfaces import get_surface
@@ -24,8 +24,9 @@ def _inspection_shots(plan: AssemblyPlan, spec: AssetSpec) -> tuple[QualityShot,
     cx, cy, cz = tuple((lo[i]+hi[i])/2 for i in range(3))
     full_scale = max(0.4, width*1.7, height*2.05, depth*1.8)
     primary_id = next((item.id for item in reversed(spec.components)
-                       if item.type != "detail.radial-studs"), spec.components[-1].id)
-    last = next(part for part in reversed(plan.instances) if part.name == primary_id)
+                       if not item.type.startswith("detail.")), None)
+    last = (next(part for part in reversed(plan.instances) if part.name == primary_id)
+            if primary_id is not None else plan.instances[-1])
     # The detail view targets the last authored primary piece, not a random
     # camera direction or a radial stud at the edge of the asset.
     coords = tuple(tuple(last.origin[a] + vertex[0]*last.axis_x[a] +
@@ -89,10 +90,7 @@ def build_assembly_scene(spec: AssetSpec, plan: AssemblyPlan, destination: Path,
     for instance in plan.instances:
         role = instance.material
         key = (id(instance.mesh), role)
-        component_id = next((item.id for item in spec.components
-                             if instance.name == item.id or
-                             (item.type == "detail.radial-studs" and
-                              instance.name.startswith(item.id+"-"))), None)
+        component_id = origin_component_id(instance.name, spec.components)
         if component_id is None:
             raise RuntimeError(f"Unregistered generated component: {instance.name}")
         kind = component_type[component_id]
@@ -100,13 +98,22 @@ def build_assembly_scene(spec: AssetSpec, plan: AssemblyPlan, destination: Path,
             mesh = bpy.data.meshes.new(f"Geometry / {instance.name}")
             mesh.from_pydata(instance.mesh.vertices, [], instance.mesh.faces)
             mesh.update()
-            if kind in ("solid.lathe", "solid.hollow-lathe", "mechanical.rod", "detail.radial-studs"):
+            if kind in ("solid.lathe", "solid.hollow-lathe", "mechanical.rod",
+                        "detail.radial-studs", "detail.linear-fasteners"):
                 ensure_cylindrical_uvs(mesh)
+                # The worker intentionally has no original Pydantic inputs:
+                # distinguish six-sided hex heads from curved buttons by the
+                # compiled cap topology, preserving crisp hex facets.
+                smooth_sides = (kind != "detail.linear-fasteners" or
+                                any(len(face.vertices) >= 16 for face in mesh.polygons))
                 for polygon in mesh.polygons:
-                    if len(polygon.vertices) == 4:
+                    if len(polygon.vertices) == 4 and smooth_sides:
                         polygon.use_smooth = True
             else:
                 ensure_metric_uvs(mesh)
+                if kind == "solid.rounded-box":
+                    for polygon in mesh.polygons:
+                        polygon.use_smooth = True
             mesh.materials.append(palette[role])
             cache[key] = mesh
         obj = bpy.data.objects.new(instance.name, cache[key])
@@ -118,7 +125,7 @@ def build_assembly_scene(spec: AssetSpec, plan: AssemblyPlan, destination: Path,
         obj["kumiki_part"] = component_id
         obj["kumiki_component_type"] = kind
         obj["kumiki_material_role"] = role
-        if kind != "detail.radial-studs":
+        if kind not in ("detail.radial-studs", "detail.linear-fasteners", "solid.rounded-box"):
             # Small real bevels give machined edges highlight response, without
             # smoothing the fasteners away or inflating a distant LOD.
             dimensions = [max(v[i] for v in instance.mesh.vertices)-
@@ -127,6 +134,10 @@ def build_assembly_scene(spec: AssetSpec, plan: AssemblyPlan, destination: Path,
             bevel.width = min(0.004, max(0.0002, min(dimensions)*0.12))
             bevel.segments = 3 if cinematic else 2
             obj.modifiers.new("Weighted craft normals", "WEIGHTED_NORMAL")
+        elif kind == "solid.rounded-box":
+            # Preserve broad planar highlights while the real fillet meshes
+            # interpolate smoothly around their narrow edge/corner bands.
+            obj.modifiers.new("Weighted fillet normals", "WEIGHTED_NORMAL")
         objects.append(obj)
 
     lo, hi = plan.bounds_min, plan.bounds_max

@@ -46,6 +46,18 @@ class BoxComponent(StrictModel):
     origin_m: Point3 = (0.0, 0.0, 0.0)
 
 
+class RoundedBoxComponent(BoxComponent):
+    type: Literal["solid.rounded-box"]
+    corner_radius_m: Measure
+    corner_segments: Annotated[int, Field(ge=2, le=12)] = 5
+
+    @model_validator(mode="after")
+    def check_radius(self) -> "RoundedBoxComponent":
+        if self.corner_radius_m >= min(self.size_m) / 2:
+            raise ValueError("corner_radius_m must be smaller than half the shortest box dimension")
+        return self
+
+
 class LatheComponent(StrictModel):
     type: Literal["solid.lathe"]
     id: Slug
@@ -90,8 +102,49 @@ class StudRingComponent(StrictModel):
     radial_segments: Annotated[int, Field(ge=8, le=48)] = 16
 
 
+class LinearFastenersComponent(StrictModel):
+    type: Literal["detail.linear-fasteners"]
+    id: Slug
+    material: Slug
+    start_m: Point3
+    end_m: Point3
+    count: Annotated[int, Field(ge=2, le=128)]
+    head_radius_m: Measure
+    head_height_m: Measure
+    normal_axis: Literal["+x", "-x", "+y", "-y", "+z", "-z"] = "+z"
+    head_style: Literal["button", "hex"] = "button"
+
+    @model_validator(mode="after")
+    def check_spacing(self) -> "LinearFastenersComponent":
+        normal_index = {"x": 0, "y": 1, "z": 2}[self.normal_axis[1]]
+        if abs(self.end_m[normal_index] - self.start_m[normal_index]) > 1e-6:
+            raise ValueError("linear fastener row must lie in a plane perpendicular to normal_axis")
+        spacing = math.dist(self.start_m, self.end_m) / (self.count - 1)
+        if spacing <= 2.4 * self.head_radius_m:
+            raise ValueError("linear fastener heads overlap or have insufficient clearance")
+        return self
+
+
+class PanelFrameComponent(StrictModel):
+    type: Literal["detail.panel-frame"]
+    id: Slug
+    material: Slug
+    size_m: tuple[Measure, Measure]
+    trim_width_m: Measure
+    depth_m: Measure
+    origin_m: Point3 = (0.0, 0.0, 0.0)
+    plane: Literal["xy", "xz", "yz"] = "xy"
+
+    @model_validator(mode="after")
+    def check_trim_width(self) -> "PanelFrameComponent":
+        if self.trim_width_m >= min(self.size_m) / 2:
+            raise ValueError("trim_width_m must be smaller than half the shortest panel dimension")
+        return self
+
+
 Component = Annotated[
-    Union[BoxComponent, LatheComponent, HollowLatheComponent, RodComponent, StudRingComponent],
+    Union[BoxComponent, RoundedBoxComponent, LatheComponent, HollowLatheComponent,
+          RodComponent, StudRingComponent, LinearFastenersComponent, PanelFrameComponent],
     Field(discriminator="type"),
 ]
 

@@ -16,7 +16,8 @@ from typing import TYPE_CHECKING
 
 from .architecture_geometry import (Mesh, MeshInstance, audit_mesh, place_mesh,
                                     world_vertices)
-from .composer import COMPONENT_REGISTRY, AssemblyPlan
+from .composer import (COMPONENT_REGISTRY, AssemblyPlan, matches_component_instance,
+                       origin_component_id)
 from .surfaces import get_surface
 
 if TYPE_CHECKING:
@@ -79,9 +80,7 @@ def write_compiled_plan(spec: "AssetSpec", plan: AssemblyPlan, output: Path) -> 
         if identity not in indexes:
             indexes[identity] = len(meshes)
             meshes.append({"vertices": part.mesh.vertices, "faces": part.mesh.faces})
-        component_id = next((item.id for item in spec.components if part.name == item.id or
-                             (item.type == "detail.radial-studs" and
-                              part.name.startswith(item.id + "-"))), None)
+        component_id = origin_component_id(part.name, spec.components)
         if component_id is None:
             raise CompiledPlanError(f"Missing origin component for {part.name}")
         instances.append({
@@ -230,9 +229,8 @@ def load_compiled_plan(source: str | Path) -> tuple[CompiledSpec, AssemblyPlan]:
             if component is None:
                 raise CompiledPlanError("Instance references missing component")
             counted_types[component.type] = counted_types.get(component.type, 0) + 1
-            if item["name"] != cid and not (component.type == "detail.radial-studs" and
-                                               isinstance(item["name"], str) and
-                                               re.fullmatch(re.escape(cid)+r"-[0-9]{3}", item["name"])):
+            if (not isinstance(item["name"], str) or
+                    not matches_component_instance(component.type, cid, item["name"])):
                 raise CompiledPlanError("Instance name does not match its component")
             if item["material"] not in spec.materials:
                 raise CompiledPlanError("Instance material role is missing")

@@ -5,16 +5,20 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Callable
 
 from .architecture_details import box_mesh
 from .architecture_geometry import (Mesh, MeshInstance, Vec3, audit_mesh, place_mesh,
                                     revolve_profile, world_vertices)
+from .craft_details import (detail_frame, fastener_head_mesh, mitered_panel_rails,
+                            rounded_box_mesh)
 
 if TYPE_CHECKING:
     from .asset_spec import (AssetSpec, BoxComponent, HollowLatheComponent, LatheComponent,
-                             RodComponent, StudRingComponent)
+                             LinearFastenersComponent, PanelFrameComponent,
+                             RodComponent, RoundedBoxComponent, StudRingComponent)
 
 
 class ComposerError(ValueError):
@@ -41,6 +45,13 @@ class AssemblyPlan:
 def _box(component: BoxComponent) -> tuple[MeshInstance, ...]:
     return (place_mesh(box_mesh(*component.size_m), name=component.id,
                        origin=component.origin_m, material=component.material),)
+
+
+def _rounded_box(component: RoundedBoxComponent) -> tuple[MeshInstance, ...]:
+    mesh = rounded_box_mesh(component.size_m, component.corner_radius_m,
+                            corner_segments=component.corner_segments)
+    return (place_mesh(mesh, name=component.id, origin=component.origin_m,
+                       material=component.material),)
 
 
 def _lathe(component: LatheComponent) -> tuple[MeshInstance, ...]:
@@ -112,13 +123,60 @@ def _stud_ring(component: StudRingComponent) -> tuple[MeshInstance, ...]:
     ) for index in range(component.count))
 
 
+def _linear_fasteners(component: LinearFastenersComponent) -> tuple[MeshInstance, ...]:
+    mesh = fastener_head_mesh(component.head_style, component.head_radius_m,
+                              component.head_height_m)
+    x, y, z = detail_frame(component.normal_axis)
+    return tuple(place_mesh(
+        mesh, name=f"{component.id}-{index:03d}",
+        origin=tuple(start + (end-start)*index/(component.count-1)
+                     for start, end in zip(component.start_m, component.end_m)),
+        axis_x=x, axis_y=y, axis_z=z, material=component.material,
+    ) for index in range(component.count))
+
+
+def _panel_frame(component: PanelFrameComponent) -> tuple[MeshInstance, ...]:
+    x, y, z = detail_frame({"xy": "+z", "xz": "-y", "yz": "+x"}[component.plane])
+    return tuple(place_mesh(
+        mesh, name=f"{component.id}-{label}", origin=component.origin_m,
+        axis_x=x, axis_y=y, axis_z=z, material=component.material,
+    ) for label, mesh in mitered_panel_rails(
+        component.size_m, component.trim_width_m, component.depth_m))
+
+
+_INSTANCE_SUFFIX = {
+    "detail.radial-studs": r"-[0-9]{3}",
+    "detail.linear-fasteners": r"-[0-9]{3}",
+    "detail.panel-frame": r"-(?:top|right|bottom|left)",
+}
+
+
+def matches_component_instance(kind: str, component_id: str, name: str) -> bool:
+    """Share expansion-name rules across the compiler and Blender handoff."""
+    suffix = _INSTANCE_SUFFIX.get(kind)
+    if suffix is None:
+        return name == component_id
+    return re.fullmatch(re.escape(component_id) + suffix, name) is not None
+
+
+def origin_component_id(name: str, components: tuple) -> str | None:
+    """Resolve the typed declaration that emitted a named mesh instance."""
+    for component in components:
+        if matches_component_instance(component.type, component.id, name):
+            return component.id
+    return None
+
+
 COMPONENT_REGISTRY: dict[str, ComponentDefinition] = {
     item.kind: item for item in (
         ComponentDefinition("solid.box", "Centered closed rectangular solid", _box),
+        ComponentDefinition("solid.rounded-box", "Real filleted manufactured solid", _rounded_box),
         ComponentDefinition("solid.lathe", "Capped radial profile for machined parts", _lathe),
         ComponentDefinition("solid.hollow-lathe", "Open shade/shell with physical inner and outer walls", _hollow_lathe),
         ComponentDefinition("mechanical.rod", "Oriented cylindrical connector", _rod),
         ComponentDefinition("detail.radial-studs", "Instanced circular fastener detail", _stud_ring),
+        ComponentDefinition("detail.linear-fasteners", "Instanced surface-oriented machine fasteners", _linear_fasteners),
+        ComponentDefinition("detail.panel-frame", "Four individually mitered raised frame rails", _panel_frame),
     )
 }
 

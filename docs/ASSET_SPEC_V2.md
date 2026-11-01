@@ -30,6 +30,11 @@ python3 -m kumiki_blender plan-asset --spec examples/desk-lamp-assembly-v2.json
 
 KUMIKI_RENDER_PROFILE=smoke python3 -m kumiki_blender build-asset \
   --spec examples/desk-lamp-assembly-v2.json --output .review/desk-lamp/r01
+
+# A second product family uses reusable rounded corners, mitered trim and fasteners.
+KUMIKI_RENDER_PROFILE=smoke python3 -m kumiki_blender build-asset \
+  --spec examples/precision-control-enclosure-v2.json \
+  --output .review/control-enclosure/r01
 ```
 
 The last command uses Blender from `PATH` (or specify `--blender /path/to/blender`).
@@ -54,10 +59,39 @@ fidelity or GLB export.
 | `type` | Mandatory parameters | Result |
 |---|---|---|
 | `solid.box` | `id`, `material`, `size_m` | Closed centered box, optional `origin_m` |
+| `solid.rounded-box` | `id`, `material`, `size_m`, `corner_radius_m` | True welded fillets on every edge and corner, with optional `corner_segments` |
 | `solid.lathe` | `id`, `material`, `profile_rz_m` | Capped revolved solid, optional `origin_m` and `radial_segments` |
 | `solid.hollow-lathe` | `id`, `material`, `profile_rz_m`, `wall_thickness_m` | Hollow revolved shell with real inner wall and annular open ends |
 | `mechanical.rod` | `id`, `material`, `start_m`, `end_m`, `radius_m` | Properly oriented cylinder between two endpoints |
 | `detail.radial-studs` | `id`, `material`, `center_m`, `ring_radius_m`, `stud_radius_m`, `stud_height_m`, `count` | Named, shared-mesh repeated fasteners |
+| `detail.linear-fasteners` | `id`, `material`, `start_m`, `end_m`, `count`, `head_radius_m`, `head_height_m` | Spaced, instanced button or hexagonal heads along an edge; optional `normal_axis` and `head_style` |
+| `detail.panel-frame` | `id`, `material`, `size_m`, `trim_width_m`, `depth_m` | Four independent 45° mitered rails with a real open center; optional `plane` and `origin_m` |
+
+### Hard-surface craftsmanship presets
+
+These three added types reduce the amount of mesh-generation code needed for
+product enclosures, furniture, equipment, books, display frames, instruments,
+and other hard-surface assets:
+
+- **Rounded box:** `corner_radius_m` is a physical, exported radius, less than
+  half the shortest dimension. `corner_segments` ranges from 2–12. It is not
+  a render-only bevel modifier; the Blender and glTF geometry agree.
+- **Panel frame:** `size_m` is the outer `[width, height]`; `trim_width_m` makes
+  a centered clear opening. `plane` chooses `xy` (+Z outward), `xz` (−Y
+  outward, e.g. a front panel), or `yz` (+X outward). `origin_m` locates the
+  center of the panel at the back of the raised trim.
+- **Linear fasteners:** Start and end positions include the first and last
+  fastener. Set `normal_axis` to `+x`, `-x`, `+y`, `-y`, `+z` or `-z` to make
+  the physical head protrude from the chosen surface. `head_style` selects a
+  faceted `hex` head or curved `button` head; both have actual solid geometry.
+  Head spacing is validated before Blender runs.
+
+The [precision-control-enclosure example](../examples/precision-control-enclosure-v2.json)
+combines eight high-level declarations into 23 real, named parts. All reusable
+parts are validated and compiled by the same generic `build-asset` command;
+no new command or Blender script is needed per product. This is a **detail
+library**, not a substitute for survey-based shape reconstruction or physical
+reference matching.
 
 Materials are named roles backed by the existing PBR catalog (`preset`, with
 optional `color` and `roughness`). Component IDs are unique slugs. Unknown
@@ -117,10 +151,11 @@ fidelity, or whether the composition is aesthetically compelling.
 
 ## Extension boundaries
 
-This initial vertical slice exposes four reusable shapes and one generic
-CLI/Blender adapter. It deliberately does not claim that a desk lamp assembled
-from four primitives is photo-faithful. Next work should add controlled
-Geometry Nodes groups, reference alignment, materials with provenance, better
-connectors and domain-specific component packs. Optional CAD/scan libraries
-such as build123d and Open3D belong in separate workers; they are not installed
-in Blender's bundled Python interpreter.
+The current registry exposes eight reusable component types and one generic
+CLI/Blender adapter. It deliberately does not claim that an assembled desk
+lamp or control enclosure is a photo-faithful recreation. Next work should add
+controlled Geometry Nodes groups, surveyed reference alignment, materials
+with provenance, microdetail maps, calibrated connectors and domain-specific
+component packs. Optional CAD/scan libraries such as build123d and Open3D
+belong in separate workers; they are not installed in Blender's bundled
+Python interpreter.

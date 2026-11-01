@@ -16,6 +16,12 @@ generates a labeled multi-view contact sheet and exposure metrics. Adding
 `--baseline` compares revisions and highlights pixel-level regressions; artistic
 quality still requires a human review. See [the visual QA guide](docs/ASSET_SPEC_V2.md#multi-view-visual-qa-pillow--optional-openimageio).
 
+The composer also includes true rounded-edge solids, four-part mitered panel
+trim and instanced oriented fastener rows. The
+[precision-control-enclosure recipe](examples/precision-control-enclosure-v2.json)
+demonstrates 23 real hard-surface parts from eight short declarations, without
+writing any per-model Python or Blender code.
+
 A standalone, code-first Blender toolkit for reusable, cinematic 3D authoring. Its first milestone is a **generic lattice observation tower**: a deterministic architectural scaffold, **not** a photorealistic or dimensionally verified replica of Tokyo Tower or another real landmark.
 
 The library separates testable Python geometry planning from Blender's `bpy` modeling and rendering. It includes a tapered lattice observation tower, a **modular architectural portico** built from closed arch stones and lathed columns, a **reusable stone building facade** with detailed windows/doors/roof, a **parametric Egyptian monument study** with pyramid casing blocks and a sculpted lion-bodied Sphinx figure, and a **rigged red vintage biplane** modeled from user-provided multiview artwork. All use a shared revision exporter for editable `.blend`, portable `.glb`, inspection views and a JSON manifest for Kumiki-UI and ContentGen consumers.

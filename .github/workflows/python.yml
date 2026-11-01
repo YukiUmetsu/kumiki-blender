@@ -17,10 +17,10 @@ jobs:
           python-version: "3.11"
       - name: Install optional composer and visual QA dependencies
         run: python -m pip install -e '.[composer,qa]'
-      - name: Test declarative component composer and compiled handoff
+      - name: Test declarative composer, product details and compiled handoff
         env:
           PYTHONPATH: src
-        run: python -m unittest tests.test_composer tests.test_composer_cli tests.test_compiled_plan tests.test_visual_qa -v
+        run: python -m unittest tests.test_composer tests.test_craft_details tests.test_composer_cli tests.test_compiled_plan tests.test_visual_qa -v
       - name: Test measured Khufu masonry and Sphinx source intake
         env:
           PYTHONPATH: src
@@ -106,6 +106,18 @@ jobs:
           python -m kumiki_blender visual-qa \
             --revision .review/ci/desk-lamp --output .review/ci/desk-lamp-visual-qa
           test -s .review/ci/desk-lamp-visual-qa/contact-sheet.png
+      - name: Render precision product-detail component kit using the same generic worker
+        env:
+          KUMIKI_RENDER_PROFILE: smoke
+        run: |
+          python -m kumiki_blender build-asset \
+            --spec examples/precision-control-enclosure-v2.json \
+            --output .review/ci/control-enclosure
+          python -m kumiki_blender audit --model .review/ci/control-enclosure/model.glb --require-pbr-textures
+          python -m kumiki_blender audit-revision --root .review/ci/control-enclosure
+          python -m kumiki_blender visual-qa \
+            --revision .review/ci/control-enclosure --output .review/ci/control-enclosure-visual-qa
+          test -s .review/ci/control-enclosure-visual-qa/contact-sheet.png
       - name: Audit portable GLB and immutable revision
         env:
           PYTHONPATH: src
@@ -121,6 +133,7 @@ jobs:
           npm install --global @gltf-transform/cli@4.5.1
           gltf-transform validate .review/ci/egypt-map/model.glb
           gltf-transform validate .review/ci/desk-lamp/model.glb
+          gltf-transform validate .review/ci/control-enclosure/model.glb
       - name: Upload editable map, GLB, manifest and visual QA previews
         if: always()
         uses: actions/upload-artifact@v4
@@ -136,6 +149,15 @@ jobs:
           path: |
             .review/ci/desk-lamp/
             .review/ci/desk-lamp-visual-qa/
+          if-no-files-found: warn
+      - name: Upload control enclosure craftsmanship geometry and visual QA
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: composer-control-enclosure-qa
+          path: |
+            .review/ci/control-enclosure/
+            .review/ci/control-enclosure-visual-qa/
           if-no-files-found: warn
 
   tests:
