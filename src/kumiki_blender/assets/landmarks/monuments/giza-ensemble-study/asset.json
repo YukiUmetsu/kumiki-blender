@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "id": "giza-ensemble-study",
+  "title": "Egyptian Pyramid and Sphinx Ensemble",
+  "description": "Combined parametric pyramid and Sphinx presentation with separate components.",
+  "kind": "procedural",
+  "tags": ["egypt", "giza", "pyramid", "sphinx", "ensemble", "ancient"],
+  "aliases": ["giza plateau", "egyptian monuments"],
+  "rigged": false,
+  "animated": false,
+  "sources": ["src/kumiki_blender/egyptian_monuments.py", "src/kumiki_blender/blender_monuments.py"],
+  "plan": ["plan-monument", "--kind", "giza-study"],
+  "build": ["build-monument", "--kind", "giza-study"]
+}

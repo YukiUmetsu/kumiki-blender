@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "id": "red-vintage-biplane",
+  "title": "Red Vintage Biplane",
+  "description": "Reference-guided two-wing aircraft with moving propeller, wheels, and flight controls.",
+  "kind": "procedural",
+  "tags": ["aircraft", "biplane", "historical", "red", "rigged", "animated", "propeller"],
+  "aliases": ["old red plane", "vintage airplane", "two wing aircraft"],
+  "rigged": true,
+  "animated": true,
+  "sources": ["src/kumiki_blender/vintage_biplane.py", "src/kumiki_blender/blender_biplane.py", "docs/VINTAGE_BIPLANE.md"],
+  "plan": ["plan-biplane"],
+  "build": ["build-biplane"]
+}

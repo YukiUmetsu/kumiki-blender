@@ -7,7 +7,7 @@ on:
 
 jobs:
   focused-tests:
-    name: Khufu and Sphinx source geometry regressions (Python 3.11)
+    name: Focused Egypt, Sphinx and asset catalog tests (Python 3.11)
     if: github.event_name != 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
@@ -38,10 +38,82 @@ jobs:
             tests.test_sphinx_landmarks \
             tests.test_sphinx_reference_shape \
             tests.test_sphinx_sculpt \
+            tests.test_egypt_map \
             tests.test_cli.CLITests.test_sphinx_scan_build_preflights_rights_and_pairs_without_blender \
-            tests.test_cli.CLITests.test_sphinx_scan_build_passes_prepared_record_to_blender
+            tests.test_cli.CLITests.test_sphinx_scan_build_passes_prepared_record_to_blender \
+            tests.test_asset_catalog
+      - name: Verify categorized 3D asset catalog and source links
+        env:
+          PYTHONPATH: src
+        run: python -m kumiki_blender catalog validate
       - name: Compile Python sources
         run: python -m compileall -q src scripts
+
+  egypt-map-render:
+    name: Egypt relief atlas Blender + GLB QA
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install Blender runtime libraries
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y libxrender1 libxi6 libxxf86vm1 libegl1 libgl1
+      - name: Cache official Blender archive
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/blender-4.5.15-linux-x64.tar.xz
+          key: blender-4.5.15-linux-x64
+      - name: Download Blender and verify the official SHA-256
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/blender-4.5.15-linux-x64.tar.xz"
+          if [ ! -f "$archive" ]; then
+            curl --fail --location --retry 3 \
+              "https://download.blender.org/release/Blender4.5/blender-4.5.15-linux-x64.tar.xz" \
+              --output "$archive"
+          fi
+          curl --fail --location --retry 3 \
+            "https://download.blender.org/release/Blender4.5/blender-4.5.15.sha256" \
+            --output "$RUNNER_TEMP/blender-4.5.15.sha256"
+          checksum="$(sha256sum "$archive" | cut -d ' ' -f 1)"
+          grep -q "$checksum.*blender-4.5.15-linux-x64.tar.xz" "$RUNNER_TEMP/blender-4.5.15.sha256"
+          mkdir -p "$RUNNER_TEMP/blender"
+          tar -xf "$archive" -C "$RUNNER_TEMP/blender"
+          echo "$RUNNER_TEMP/blender/blender-4.5.15-linux-x64" >> "$GITHUB_PATH"
+      - name: Render Egypt relief map (smoke profile, full scene geometry)
+        env:
+          KUMIKI_RENDER_PROFILE: smoke
+        run: |
+          blender --background --factory-startup --threads 4 --python-exit-code 1 \
+            --python scripts/blender_entry.py -- \
+            build-egypt-map --output .review/ci/egypt-map
+      - name: Audit portable GLB and immutable revision
+        env:
+          PYTHONPATH: src
+        run: |
+          python -m kumiki_blender audit --model .review/ci/egypt-map/model.glb --require-pbr-textures
+          python -m kumiki_blender audit-revision --root .review/ci/egypt-map
+          python -m unittest tests.test_egypt_map -v
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Independent glTF specification validation
+        run: |
+          npm install --global @gltf-transform/cli@4.5.1
+          gltf-transform validate .review/ci/egypt-map/model.glb
+      - name: Upload editable map, GLB, manifest and visual QA previews
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: egypt-map-blender-qa
+          path: .review/ci/egypt-map/
+          if-no-files-found: warn
 
   tests:
     # Historical full-suite regression is intentionally opt-in; preserve all
