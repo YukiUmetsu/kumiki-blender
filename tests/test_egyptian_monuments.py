@@ -260,12 +260,13 @@ class EgyptianMonumentTests(unittest.TestCase):
         from kumiki_blender.egyptian_monuments import _sculpt_ear_relief
         parts = {part.name: part.mesh for part in sphinx_assembly(prefix="sphinx")}
         face = parts["sphinx-face"]
-        normalized_height = ((max(v[2] for v in face.vertices) -
-                              min(v[2] for v in face.vertices))/(3.6/4.6))
+        world_height = (max(v[2] for v in face.vertices) -
+                        min(v[2] for v in face.vertices))
         width = max(v[1] for v in face.vertices)-min(v[1] for v in face.vertices)
-        # Earlier face was only ~1.04 high/width and rendered like a squat
-        # helmet. The royal forehead-to-chin contour now needs a long profile.
-        self.assertGreater(normalized_height/width, 1.22)
+        # The old test divided away the statue's 3.6/4.6 vertical scale and
+        # measured an apparently tall 1.26 ratio. Blender actually rendered
+        # that face at ~1.0 world height / width. Check real model meters.
+        self.assertGreater(world_height/width, 1.24)
         for side, sign in (("left", -1), ("right", 1)):
             ear = parts[f"sphinx-{side}-ear"]
             report = audit_mesh(ear)

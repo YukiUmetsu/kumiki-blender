@@ -376,6 +376,35 @@ def _sculpt_face_relief(mesh: Mesh, *, scale_x: float, scale_y: float,
     return Mesh(tuple(vertices), mesh.faces)
 
 
+def _elongate_anatomical_face(mesh: Mesh, *, scale_y: float,
+                             scale_z: float) -> Mesh:
+    """Stretch *finished-world* facial proportions without stretching the lion.
+
+    The reference face was evaluated in source coordinates while the statue's
+    final Z scaling was only 3.6/4.6. A 1.26 source height/width ratio thus
+    rendered at barely 1.0 in actual meters: a squat human face. Stretch its
+    landmark regions nonuniformly, lifting the upper orbital plane, dropping
+    the mouth and extending the jaw and chin. Keep crown height, neck, body,
+    and headdress fixed, and compress the facial width slightly. This bends
+    the same closed surface without disconnected sculptural add-ons.
+    """
+    def ease(value: float) -> float:
+        t = max(0., min(1., value))
+        return t*t*(3.-2.*t)
+
+    vertices = []
+    for px, py, pz in mesh.vertices:
+        yy = py/scale_y
+        zz = pz/scale_z
+        orbital_lift = .125*math.exp(-((zz-4.06)/.335)**2)
+        jaw_drop = .270*ease((3.82-zz)/.84)
+        # A 92% facial width makes world-space face height / cheek width
+        # genuinely elongated. Full headcloth/ear widths are not rescaled.
+        vertices.append((px, yy*.920*scale_y,
+                         (zz+orbital_lift-jaw_drop)*scale_z))
+    return Mesh(tuple(vertices), mesh.faces)
+
+
 def _sculpt_ear_relief(mesh: Mesh, *, side: int, scale_x: float,
                       scale_y: float, scale_z: float) -> Mesh:
     """Carve a raised outer helix and recessed concha in each embedded ear.
@@ -667,7 +696,8 @@ def sphinx_assembly(*, prefix: str, length: float = 10.5,
                     (4.49, -3.87, 0, .35, .48)),
                    roughness=.025, seed=97, exponent=4.35,
                    subdivisions=8, bedding=.006, pitting=.012)
-    part("face", _sculpt_face_relief(face, scale_x=x, scale_y=y, scale_z=z))
+    sculpted_face = _sculpt_face_relief(face, scale_x=x, scale_y=y, scale_z=z)
+    part("face", _elongate_anatomical_face(sculpted_face, scale_y=y, scale_z=z))
     for side, sign in (("left", -1), ("right", 1)):
         part(f"nemes-{side}-lappet", _nemes_drapery_wing(
              side=sign, scale_x=x, scale_y=y, scale_z=z),

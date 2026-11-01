@@ -73,9 +73,13 @@ instead of a triangular dark cavity; eye depressions are reduced, visible
 forehead folds extend into the face, and the headdress's horizontal ridges
 are more irregular and quieter under raking light. A second
 reference-based anatomy revision addresses the remaining compressed mask:
-the modeled forehead-to-chin face ratio is now at least **1.22:1** in the
-unscaled sculpt coordinates, with a downward-tapering, undercut chin rather
-than a constant-width face slab. Separate upper and lower eyelid ridges
+the modeled forehead-to-chin face ratio is now at least **1.24:1 in finished
+world-space meters**, not just in the unscaled source coordinates. This
+addresses the previously overlooked **3.6/4.6 vertical compression** of the
+statue and uses a nonuniform facial landmark deformation: upper orbital
+planes move higher, the jaw/mouth region extends downward and cheeks narrow
+without raising the entire headdress or lion. The jaw also has a tapered,
+undercut chin rather than a constant-width face slab. Separate eyelid ridges
 surround tapered eye depressions, the surviving nasal bridge has flanking
 planes, and the mouth and lips sit above a protruding lower jaw. Both ears
 use editable closed meshes with physically recessed inner conchae and raised

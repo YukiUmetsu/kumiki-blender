@@ -54,12 +54,12 @@ def plan_monument_shots(study: MonumentStudy) -> tuple[QualityShot, ...]:
         shots.append(QualityShot("sphinx-profile", (length*.15, sy-length*1.6, sphinx_height*1.04),
                                  (-length*.005, sy, sphinx_height*.45), length*1.33))
         shots.append(QualityShot("sphinx-face", (-length*.88, sy-length*.42, sphinx_height*1.11),
-                                 (-length*.36, sy, sphinx_height*.83), length*.46))
+                                 (-length*.36, sy, sphinx_height*.80), length*.46))
         # True frontal elevation is essential for comparing the triangular
         # nemes wings, squared jaw, eye spacing and ear placement against
         # archaeological photographs; the oblique face view hides asymmetry.
         shots.append(QualityShot("sphinx-frontal", (-length*.96, sy, sphinx_height*1.04),
-                                 (-length*.36, sy, sphinx_height*.86), length*.31))
+                                 (-length*.36, sy, sphinx_height*.835), length*.33))
     return tuple(shots)
 
 
