@@ -84,23 +84,25 @@ def terrain_color(height_m: float, slope: float, x: float, y: float,
 
     # Dark cedar/cypress forest. Broad pockets of olive mountain scrub are
     # spatial, rather than one continuous sage-green elevation stripe.
-    dense_conifers=(.008,.021,.013)
-    sunlit_conifers=(.034,.077,.029)
+    # Dark evergreen canopy from the Smithsonian summer view and the VRT
+    # Hōei aerial: conifer shadows should read nearly black-green, not mint.
+    dense_conifers=(.002,.008,.003)
+    sunlit_conifers=(.016,.041,.013)
     c=_mix(dense_conifers,sunlit_conifers,clamp(.14+woods*.98))
     # Sub-grid canopy shadows help the forest read as densely packed crowns,
     # not a continuous green lawn. These pigments never alter survey geometry.
     canopy_crowns=_value_noise(x*14.6+3.3,y*14.6-8.2)
     canopy_gaps=_value_noise(x*30.7-6.1,y*30.7+2.8)
-    canopy_tone=.73+.47*canopy_crowns+.20*canopy_gaps
+    canopy_tone=.56+.73*canopy_crowns+.23*canopy_gaps
     c=tuple(channel*canopy_tone for channel in c)
-    scrub=(.081,.113,.044)
+    scrub=(.072,.101,.039)
     scrub_weight=.31*_smoothstep(1700,2070,height_m)*clamp((woods-.32)*2.1)
     c=_mix(c,scrub,scrub_weight)
 
     # The real tree line varies by exposure, local gullies and elevation.
     # 2,200–2,400m is a broad reference, not a perfectly circular contour.
     tree_line=2230+125*(large-.5)+90*(canopy-.5)+55*clamp(y/6)
-    exposed=_smoothstep(tree_line-140,tree_line+155,height_m)
+    exposed=_smoothstep(tree_line-90,tree_line+125,height_m)
     rock_pattern=_value_noise(x*.90-3.1,y*.90+8.4)
     iron_pattern=_value_noise(x*3.8+21.2,y*3.8-7.6)
     # Neutral basalt and weathered warm-grey ash dominate broad views. The

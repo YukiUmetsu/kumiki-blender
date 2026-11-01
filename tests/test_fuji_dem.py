@@ -94,7 +94,9 @@ class FujiTerrainTests(unittest.TestCase):
         snow=terrain_color(3700,.12,0,0)
         self.assertGreater(trees[1],trees[0]*1.6)
         self.assertLess(trees[1],.15)  # Dense forest, not mint-green grass.
-        self.assertGreater(abs(trees[1]-other_trees[1]),.015)
+        # With much darker conifers, measure the spatial canopy contrast
+        # relative to its new mean rather than an outdated bright-green delta.
+        self.assertGreater(abs(trees[1]-other_trees[1])/max(trees[1],other_trees[1]),.16)
         self.assertLess(max(basalt[:3]),.16)  # Main cone is dark scoria.
         self.assertLess(max(basalt[:3])-min(basalt[:3]),.035)
         # A lit mountain should read as warm/neutral ash, not mauve or violet.
