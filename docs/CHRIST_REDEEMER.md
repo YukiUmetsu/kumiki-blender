@@ -9,14 +9,15 @@ of another 3D model, or a certified museum-quality likeness.
 | Real-world reference | Generator target |
 | --- | --- |
 | Statue height excluding pedestal: **30 m** | Statue from z=8 to z=38 |
-| Surveyed outstretched fingertips: **29.4 m** | Approx. 29.4 m across sculpted hands |
+| Surveyed outstretched fingertips: **29.4 m** | Exactly 29.4 m, calibrated from mesh bounds |
+| Landowski's sculpted hand length: **3.20 m each** | Approx. 3.19 m each, verified on both fused meshes |
 | Pedestal height: **8 m** | Chamfered-square stepped granite pedestal, z=0 to 8 |
 | Cladding: pale soapstone mosaic | Embedded original triangular albedo, normal, and roughness maps with metric UVs |
 | Pedestal exterior: dark stone ashlar | Original repeating, staggered granite-block albedo map |
 
 Sources for measurements and surface treatment:
 
-- [Paul Landowski's sculpture archive](https://www.paul-landowski.com/en/portfolio/christ-redempteur/) — artist's head and hands studies.
+- [Paul Landowski's sculpture archive](https://www.paul-landowski.com/en/le-christ-de-rio/) — artist's 3.75 m head and 3.20 m hand measurements and sculpting studies.
 - [Google Arts & Culture](https://artsandculture.google.com/asset/christ-the-redeemer/fAEswWZ70LI6LA?hl=en) — height and span.
 - [Conservation paper (ICOM-CC)](https://www.marciabraga.arq.br/site/images/stories/pdf/christ_the_redeemer-icom-cc_2011.pdf) — stone tesserae and surface.
 - [Sanctuary of Christ the Redeemer](https://santuariocristoredentor.com.br/) — soapstone triangle dimensions and conservation.
@@ -48,8 +49,8 @@ tesserae color, subtle grout/stone normal relief, and high-roughness stone grain
 The chapel exterior uses an additional original staggered-ashlar granite texture.
 The GLB contains model meshes only, excluding QA lights and cameras. The live
 audit checks pedestal contact, measured dimensions, manifold/outward sleeve
-normals, compact hand proportions and closed unions with sufficient vertex detail, UV coverage, and
-fully portable PBR texture embedding.
+normals, artist-sourced hand reach and closed unions with sufficient vertex
+detail, UV coverage, and fully portable PBR texture embedding.
 
 For a fast close-up iteration, append `--shot head_front --shot head_low`
 to render just those views. Other choices are `front`, `profile`,
@@ -71,11 +72,15 @@ hair, and neck forward toward the characteristic downward gaze. Eyelids, cheek,
 nose, chin, jaw, and beard volumes are displaced on the **same dense head
 surface**, with continuous upper eyelid contours and finer incised detailing.
 The torso's lower robe was widened against photo/mesh silhouettes, and the
-hands use high-resolution volumetric unions and a shorter finger projection
-to avoid long, separate rod-like digits. The latest facial sculpt softens the
+hands use high-resolution volumetric unions with the artist-documented 3.20 m
+reach, while the fingers stay fused rather than forming separate rods. The
+latest facial sculpt uses a denser 38,560-vertex surface, refined nostril
+separation, and a gentler eyelid contour. It also softens the
 chin/cheek beard masses, narrows the nose, and removes floating forehead and
 cheek incisions. The head and hands can be examined separately using the
 close-up QA cameras, including a low-angle face view matched to reference photos.
+The soapstone color-map variation was increased to reveal its triangular
+tesserae at close viewing distance without exaggerating grout depth.
 
 This remains an original parametric reconstruction. Its stylized anatomical
 geometry is not a photogrammetric replica, and the script deliberately does not

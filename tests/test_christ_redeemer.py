@@ -47,14 +47,14 @@ class ChristRedeemerTests(unittest.TestCase):
             self.assertAlmostEqual(report["bounds_max"][2] - report["bounds_min"][2],
                                    38.0, delta=.05)
             self.assertAlmostEqual(report["bounds_max"][0] - report["bounds_min"][0],
-                                   29.4, delta=.35)
+                                   29.4, delta=.015)
             self.assertTrue(all(value >= .90
                                 for value in report["sleeve_outward_fraction"].values()))
             self.assertEqual(report["sleeve_nonmanifold_edges"], {"-1": 0, "1": 0})
             self.assertEqual(report["hand_nonmanifold_edges"], {"-1": 0, "1": 0})
             self.assertTrue(all(value > 1500
                                 for value in report["fused_hand_vertices"].values()))
-            self.assertTrue(all(1.8 < reach < 2.35
+            self.assertTrue(all(3.10 < reach < 3.30
                                 for reach in report["hand_reach_m"].values()))
             self.assertGreater(report["mesh_count"], 60)
             self.assertGreater(report["head_surface_vertices"], 5000)

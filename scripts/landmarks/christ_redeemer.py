@@ -45,12 +45,15 @@ def soapstone_mosaic():
         for x in range(size):
             cx, fx = divmod(x, tile_size)
             upper = int(fx + fy >= tile_size)
-            variation = (hash01(cx, cy, upper) - .5) * .046
+            # The original stone is distinctly assembled from hand-set
+            # tesserae. At normal viewing distances the prior .046 modulation
+            # vanished into Eevee noise and read as featureless white plastic.
+            variation = (hash01(cx, cy, upper) - .5) * .088
             fine = (hash01(x // 3, y // 3, 7) - .5) * .006
             # Fine joints between the triangles, without hard dark grid lines.
             joint = min(fx, fy, tile_size - 1 - fx,
                         tile_size - 1 - fy, abs(fx + fy - tile_size) / 1.414)
-            grout = -.022 * max(0, 1 - joint / 1.3)
+            grout = -.032 * max(0, 1 - joint / 1.3)
             shade = variation + fine + grout
             albedo.extend((.665 + shade, .673 + shade, .650 + shade, 1))
             rough = min(.985, .895 + .075*hash01(cx, cy, upper) +
@@ -443,9 +446,9 @@ def arms(side):
     measurements = [
         (2.65,30.75,1.50,1.00),(3.35,30.10,1.93,1.12),
         (4.45,29.40,2.28,1.18),(5.65,29.20,2.23,1.16),
-        (7.20,29.10,2.00,1.08),(8.65,29.14,1.70,.90),
-        (10.03,29.28,1.37,.75),(11.10,29.48,.98,.55),
-        (11.82,29.60,.68,.40),(12.15,29.70,.39,.34),
+        (7.20,29.10,2.00,1.08),(8.30,29.14,1.70,.90),
+        (9.30,29.28,1.37,.75),(10.30,29.48,.98,.55),
+        (10.90,29.60,.68,.40),(11.13,29.70,.39,.34),
     ]
     def sleeve_dimensions(x):
         for left,right in zip(measurements[:-1],measurements[1:]):
@@ -456,7 +459,7 @@ def arms(side):
 
     sections=[]
     for j in range(97):
-        x=2.65+(12.15-2.65)*j/96
+        x=2.65+(11.13-2.65)*j/96
         z,r,d=sleeve_dimensions(x)
         ring=[]
         for k in range(64):
@@ -464,7 +467,7 @@ def arms(side):
             lower=max(0,-math.cos(a))
             fluting=.18*math.cos(5*a+x*.42)+.10*math.cos(9*a-.23*x)
             front=max(0,-math.sin(a))**2
-            gather=math.sin(math.pi*(x-2.65)/(12.15-2.65))**.7
+            gather=math.sin(math.pi*(x-2.65)/(11.13-2.65))**.7
             large_fold=.15*math.cos(6.5*a+.41*x+.25*math.sin(.7*x))
             small_fold=.065*math.sin(12.5*a-.19*x)
             y=d*math.sin(a)-front*gather*(large_fold+small_fold)
@@ -473,16 +476,16 @@ def arms(side):
         sections.append(ring)
     loft("Sleeve | %s | physically closed carved volume"%side,sections,invert=side==1)
     sphere("Cuff | %s | carved fold joining wrist"%side,
-           (side*12.14,0,29.7),(.095,.31,.32))
+           (side*11.12,0,29.7),(.095,.31,.32))
     hands(side)
 
 
 def hands(side):
     existing=set(bpy.data.objects)
     z=29.68
-    sphere("Hand | %s | broad wrist"%side,(side*12.35,0,z),(.34,.245,.325))
+    sphere("Hand | %s | broad wrist"%side,(side*11.37,0,z),(.38,.245,.325))
     sphere("Hand | %s | convex palmar mass"%side,
-           (side*12.90,-.015,z+.025),(.64,.29,.43),segments=40,rings=24)
+           (side*12.01,-.015,z+.025),(.80,.29,.43),segments=40,rings=24)
     # Individual digits depart from the hand's continuous palm, but their
     # joint lines curve slightly and their distal ends are round, not prongs.
     for k,tip in enumerate((13.79,13.972,13.90,13.70)):
@@ -491,7 +494,7 @@ def hands(side):
         widths=[]
         for j in range(15):
             t=j/14
-            x=13.15+(tip-13.15)*t
+            x=12.37+(tip-12.37)*t
             finger_curve=.032*math.sin(math.pi*t)+.025*t*t
             y=-.018-.045*math.sin(math.pi*t)+.036*t*t
             points.append((side*x,y,finger_z-finger_curve))
@@ -504,7 +507,7 @@ def hands(side):
     widths=[]
     for j in range(17):
         t=j/16
-        x=12.63+.96*t
+        x=11.71+1.20*t
         y=-.13-.046*math.sin(math.pi*t)+.045*t*t
         h=z-.24-.34*math.sin(.80*math.pi*t)-.035*t
         thumb.append((side*x,y,h))
@@ -561,8 +564,8 @@ def face():
     # Surface folds are smooth Gaussian volumes, not glued-on primitive cheeks.
     sampled=[]
     for low,high in zip(HEAD[:-1],HEAD[1:]):
-        for j in range(12):
-            t=j/12
+        for j in range(24):
+            t=j/24
             sampled.append(tuple(low[k]*(1-t)+high[k]*t for k in range(4)))
     sampled.append(HEAD[-1])
     rings=[]
@@ -586,8 +589,10 @@ def face():
                 eye_socket=.27*math.exp(-((abs(x)-.69)/.41)**2-((z-36.91)/.22)**2)
                 nose_bridge=.34*math.exp(-(x/.21)**2-((z-36.65)/.50)**2)
                 nose_tip=.39*math.exp(-(x/.235)**2-((z-36.16)/.165)**2)
-                nostril_wing=.13*math.exp(-((abs(x)-.245)/.135)**2-((z-36.07)/.12)**2)
-                nostril_cavity=.10*math.exp(-((abs(x)-.18)/.085)**2-((z-36.015)/.055)**2)
+                nostril_wing=.16*math.exp(-((abs(x)-.26)/.13)**2-((z-36.07)/.12)**2)
+                nostril_cavity=.145*math.exp(-((abs(x)-.25)/.075)**2-((z-36.012)/.049)**2)
+                septum=.095*math.exp(-(x/.095)**2-((z-35.99)/.074)**2)
+                philtrum=.043*math.exp(-((abs(x)-.135)/.08)**2-((z-35.88)/.16)**2)
                 top_lip=.12*math.exp(-(x/.49)**2-((z-35.76)/.095)**2)
                 bottom_lip=.115*math.exp(-(x/.47)**2-((z-35.56)/.11)**2)
                 mouth_crease=.09*math.exp(-(x/.49)**2-((z-35.66)/.047)**2)
@@ -598,7 +603,7 @@ def face():
                 carved_grain=.009*beard_mask*(.6*math.cos(33*x+8*z)+
                                                 .4*math.cos(21*x-12*z))
                 y-= (cheek+jaw+chin+brow+upper_lid+lower_lid+
-                     nose_bridge+nose_tip+nostril_wing+top_lip+bottom_lip+
+                     nose_bridge+nose_tip+nostril_wing+septum+philtrum+top_lip+bottom_lip+
                      jaw_beard+side_beard+beard_tip+carved_grain)
                 y+=eye_socket+mouth_crease+nostril_cavity+cheek_hollow
             ring.append((x,y,z))
@@ -614,9 +619,8 @@ def face():
         return point.y-lift
 
     for side in (-1,1):
-        # A continuously curved half-lidded almond eye: reference photographs
-        # show an almost semicircular upper lid nested in a deep arch, not the
-        # sharp two-segment chevrons of the early procedural face.
+        # Reference photographs show a continuous semicircular upper lid
+        # set into a recessed almond-shaped eye, not an angular dark slit.
         top=[]
         widths=[]
         for j in range(29):
@@ -624,8 +628,8 @@ def face():
             x=side*(.30+.80*t)
             z=36.80+.215*math.sin(math.pi*t)**.83-.015*t
             top.append((x,face_y(x,z,-.006),z))
-            widths.append(.003+.016*math.sin(math.pi*t)**.7)
-        shaped_path("Face | %s | upper eyelid incision"%side,
+            widths.append(.003+.014*math.sin(math.pi*t)**.7)
+        shaped_path("Face | %s | upper eyelid contour"%side,
                     top,widths,CARVING,sides=9)
         # Tuck the outer ear behind the temple plane and hair curtain. Three
         # separate ellipsoids previously read as stacked beads in profile.
@@ -775,8 +779,12 @@ def build():
         arms(side)
     # A measured photogrammetric survey reports 29.4 m fingertip span,
     # compared with the widely repeated rounded 28 m figure.
-    for obj in set(bpy.data.objects)-existing:
-        obj.matrix_world=Matrix.Scale(1.05,4,Vector((1,0,0))) @ obj.matrix_world
+    arm_objects=set(bpy.data.objects)-existing
+    half_span=max(abs((obj.matrix_world@v.co).x)
+                  for obj in arm_objects for v in obj.data.vertices)
+    arm_scale=14.70/half_span
+    for obj in arm_objects:
+        obj.matrix_world=Matrix.Scale(arm_scale,4,Vector((1,0,0))) @ obj.matrix_world
     existing=set(bpy.data.objects)
     face()
     # Side photographs show the gaze tilted downward. Apply one rigid
@@ -848,14 +856,14 @@ def verify():
             "head_surface_vertices":len(head_ob.data.vertices),
             "mesh_count":len(objs),"vertex_count":sum(len(ob.data.vertices) for ob in objs)}
     assert abs(ptop-rbot)<.001,"Statue must meet pedestal without floating"
-    assert 29.1<maximum[0]-minimum[0]<29.8,"Survey fingertip span should be 29.4 m"
+    assert abs(maximum[0]-minimum[0]-29.40)<.015,"Survey fingertip span should be 29.4 m"
     assert maximum[2]>37.9 and minimum[2]<.01,"Scale should be 38 m including pedestal"
     assert min(winding.values())>.60,"Both sleeve normals must face outward"
     assert not any(open_edges.values()),"Sleeve meshes must be closed and manifold"
     assert not any(hand_open_edges.values()),"Fused hands must be closed and manifold"
     assert min(hand_vertex_counts.values())>1500,"Hands must have sculpted union detail"
-    assert all(1.8 < reach < 2.35 for reach in hand_reach_m.values()), (
-        "Hand projection should be a compact fraction of the surveyed 29.4 m span")
+    assert all(3.10 < reach < 3.30 for reach in hand_reach_m.values()), (
+        "Each sculpted hand should match Landowski's recorded 3.20 m length")
     assert len(head_ob.data.vertices)>5000,"Face needs a dense sculptable surface"
     assert result["mosaic_images"]==3 and result["uv_mesh_count"]>70, "PBR mosaic needs glTF UVs"
     return result
