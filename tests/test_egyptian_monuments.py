@@ -310,8 +310,8 @@ class EgyptianMonumentTests(unittest.TestCase):
             return point[0]
 
         # All projection is actual -X surface geometry, not normal/bump maps.
-        self.assertLess(depth(.29, 4.24), depth(.29, 4.12)-.07)
-        self.assertLess(depth(0., 3.99), depth(.29, 3.99)-.11)
+        self.assertLess(depth(.29, 4.10), depth(.29, 3.965)-.07)
+        self.assertLess(depth(0., 3.87), depth(.29, 3.87)-.11)
         self.assertLess(depth(0., 3.34), depth(0., 3.26)-.025)
         self.assertLess(depth(0., 2.93), depth(0., 2.74)-.09)
 

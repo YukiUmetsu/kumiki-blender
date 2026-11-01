@@ -99,10 +99,10 @@ class RockWeatheringTests(unittest.TestCase):
         # a tall pedestal and swollen triangular forelegs read like a toy.
         self.assertLess(max(v[2] for v in front_paw.vertices), 1.55)
         self.assertLess(max(v[2] for v in bedrock.vertices), .35)
-        eye_z = 4.12 * (3.6/4.6)
-        eyes = [v[0] for v in head.vertices if abs(v[2]-eye_z)<.052
+        eye_z = 3.965 * (3.6/4.6)
+        eyes = [v[0] for v in head.vertices if abs(v[2]-eye_z)<.025
                 and .21<abs(v[1])<.34 and v[0]<-4.0]
-        bridge = [v[0] for v in head.vertices if abs(v[2]-eye_z)<.052
+        bridge = [v[0] for v in head.vertices if abs(v[2]-eye_z)<.025
                   and abs(v[1])<.07 and v[0]<-4.0]
         # Eye sockets need actual inward depth relative to the surviving
         # nasal bridge, not floating eyeball objects or shader-only darkness.

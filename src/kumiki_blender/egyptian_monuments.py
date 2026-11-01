@@ -448,17 +448,17 @@ def _anatomical_sphinx_face(*, scale_x: float, scale_y: float,
             cy = sign*.292
             aperture_u = (y-cy)/.177
             if abs(aperture_u) < 1.:
-                half_open = .047*(max(0., 1.-aperture_u**2))**.72
-                eye_center = 4.121+.013*aperture_u*sign
-                xx += .063*blob(y, z, cy, eye_center,
+                half_open = .040*(max(0., 1.-aperture_u**2))**.72
+                eye_center = 3.965+.013*aperture_u*sign
+                xx += .040*blob(y, z, cy, eye_center,
                                  .154, max(.017, half_open), exponent=2.5)
-                xx -= .068*blob(y, z, cy, eye_center+half_open+.022,
+                xx -= .055*blob(y, z, cy, eye_center+half_open+.022,
                                  .167, .027, exponent=2.)
-                xx -= .037*blob(y, z, cy, eye_center-half_open-.022,
+                xx -= .030*blob(y, z, cy, eye_center-half_open-.022,
                                  .158, .030, exponent=2.)
-            xx -= .081*blob(y, z, sign*.305, 4.237,
+            xx -= .071*blob(y, z, sign*.305, 4.088,
                              .191, .065, exponent=2.)
-            xx -= .074*blob(y, z, sign*.397, 3.841,
+            xx -= .063*blob(y, z, sign*.397, 3.725,
                              .169, .203, exponent=2.)
             # Subtle nasolabial transition separates the lower cheek from
             # the surviving nasal scar without pasted-on spheres.
@@ -466,17 +466,17 @@ def _anatomical_sphinx_face(*, scale_x: float, scale_y: float,
                              .049, .169, exponent=2.)
         # Vertical nasal root/bridge and interrupted broken tip. Leave a
         # proud surviving bridge, NOT a triangular hole at the nose's end.
-        xx -= .181*blob(y, z, 0., 3.990, .121, .197, exponent=2.)
-        xx -= .062*blob(y, z, 0., 3.758, .133, .093, exponent=2.)
-        xx += .019*blob(y, z, -.055, 3.727, .075, .052)
+        xx -= .122*blob(y, z, 0., 3.870, .112, .158, exponent=2.)
+        xx -= .028*blob(y, z, 0., 3.719, .124, .078, exponent=2.)
+        xx += .016*blob(y, z, -.055, 3.703, .075, .052)
         # Central philtrum, irregular bowed mouth cut, paired lip volumes.
         mouth_z = 3.275+.020*(y/.24)**2+.005*y
         xx -= .035*(blob(y, z, -.062, 3.450, .033, .097) +
                     blob(y, z, .068, 3.449, .033, .097))
-        xx -= .061*blob(y, z, 0., 3.339, .240, .063, exponent=4.)
-        xx += .039*blob(y, z, 0., mouth_z, .233, .019, exponent=4.)
-        xx -= .048*blob(y, z, 0., 3.223, .216, .051, exponent=4.)
-        xx -= .104*blob(y, z, 0., 2.934, .302, .145, exponent=3.)
+        xx -= .039*blob(y, z, 0., 3.339, .240, .063, exponent=4.)
+        xx += .024*blob(y, z, 0., mouth_z, .233, .019, exponent=4.)
+        xx -= .031*blob(y, z, 0., 3.223, .216, .051, exponent=4.)
+        xx -= .087*blob(y, z, 0., 2.934, .302, .145, exponent=3.)
         xx += .036*blob(y, z, 0., 2.725, .272, .069, exponent=2.)
         # Physically incised crown pleats and differential mineral wear.
         fold_mask = max(0., min(1., (z-4.29)/.055, (4.54-z)/.075))
