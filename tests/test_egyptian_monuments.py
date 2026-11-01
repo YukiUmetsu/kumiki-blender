@@ -189,8 +189,11 @@ class EgyptianMonumentTests(unittest.TestCase):
         self.assertTrue(all(carved.vertices[i] == source.vertices[i]
                             for i in rear_indices))
         anterior = [i for i, v in enumerate(source.vertices) if v[0] < -4.19]
-        self.assertGreater(max(abs(carved.vertices[i][0]-source.vertices[i][0])
-                               for i in anterior), .09)
+        max_carving = max(abs(carved.vertices[i][0]-source.vertices[i][0])
+                          for i in anterior)
+        self.assertGreater(max_carving, .06)
+        # Deep cavities read as cartoon eyes or an oversized missing nose.
+        self.assertLess(max_carving, .15)
         self.assertEqual((audit_mesh(carved).boundary_edges,
                           audit_mesh(carved).nonmanifold_edges), (0, 0))
 

@@ -106,7 +106,11 @@ class RockWeatheringTests(unittest.TestCase):
                   and abs(v[1])<.07 and v[0]<-4.0]
         # Eye sockets need actual inward depth relative to the surviving
         # nasal bridge, not floating eyeball objects or shader-only darkness.
-        self.assertGreater(min(eyes)-min(bridge), .12)
+        socket_depth = min(eyes)-min(bridge)
+        self.assertGreater(socket_depth, .08)
+        # A deep .12+ m cavity combined with the broken nose looked cartoonish
+        # in rendered QA. Preserve carved lids without oversized eye holes.
+        self.assertLess(socket_depth, .16)
         # No two adjacent strata share the precise same longitudinal profile.
         self.assertNotEqual(torso.vertices[96:192], torso.vertices[192:288])
 

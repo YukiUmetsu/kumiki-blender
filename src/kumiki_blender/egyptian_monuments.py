@@ -307,33 +307,36 @@ def _sculpt_face_relief(mesh: Mesh, *, scale_x: float, scale_y: float,
         front = max(0.0, min(1.0, (-xx-3.96)/.31))
         front = front*front*(3.0-2.0*front)
         lateral = abs(yy)
-        eye = math.exp(-((lateral-.252)/.145)**2 - ((zz-4.047)/.090)**2)
-        upper_lid = math.exp(-((lateral-.259)/.172)**2 - ((zz-4.141)/.058)**2)
-        brow = math.exp(-((lateral-.28)/.192)**2 - ((zz-4.215)/.088)**2)
-        cheekbone = math.exp(-((lateral-.344)/.19)**2 - ((zz-3.771)/.168)**2)
-        hollow = math.exp(-((lateral-.485)/.134)**2 - ((zz-3.95)/.185)**2)
-        nose_root = math.exp(-(yy/.125)**2 - ((zz-4.085)/.153)**2)
-        bridge = math.exp(-(yy/.112)**2 - ((zz-3.920)/.195)**2)
-        broken_tip = math.exp(-(yy/.155)**4 - ((zz-3.727)/.105)**2)
-        upper_lip = math.exp(-(yy/.239)**4 - ((zz-3.494)/.058)**2)
-        mouth_cut = math.exp(-(yy/.285)**6 - ((zz-3.427)/.026)**2)
-        lower_lip = math.exp(-(yy/.252)**4 - ((zz-3.375)/.054)**2)
-        chin = math.exp(-(yy/.288)**4 - ((zz-3.238)/.119)**2)
+        # The real carving has restrained lids, rather than wide dark holes.
+        # A previous .145 m eye recess plus a .185 m broken-nose recess read
+        # like a cartoon mask after voxel remeshing; keep both shallow.
+        eye = math.exp(-((lateral-.267)/.117)**2 - ((zz-4.050)/.056)**2)
+        upper_lid = math.exp(-((lateral-.267)/.157)**2 - ((zz-4.124)/.047)**2)
+        brow = math.exp(-((lateral-.29)/.175)**2 - ((zz-4.190)/.065)**2)
+        cheekbone = math.exp(-((lateral-.366)/.181)**2 - ((zz-3.779)/.170)**2)
+        hollow = math.exp(-((lateral-.51)/.130)**2 - ((zz-3.95)/.178)**2)
+        nose_root = math.exp(-(yy/.124)**2 - ((zz-4.062)/.140)**2)
+        bridge = math.exp(-(yy/.099)**2 - ((zz-3.940)/.172)**2)
+        broken_tip = math.exp(-(yy/.111)**4 - ((zz-3.734)/.093)**2)
+        upper_lip = math.exp(-(yy/.208)**4 - ((zz-3.493)/.048)**2)
+        mouth_cut = math.exp(-(yy/.255)**6 - ((zz-3.433)/.019)**2)
+        lower_lip = math.exp(-(yy/.218)**4 - ((zz-3.382)/.044)**2)
+        chin = math.exp(-(yy/.256)**4 - ((zz-3.237)/.111)**2)
         jaw = math.exp(-((lateral-.343)/.166)**2 - ((zz-3.360)/.207)**2)
         wear = rock_height_field(px*4.7, py*4.7, pz*4.7,
                                  seed=301, strata_spacing=.42)
         # X points toward the rear: negative means a projected cheek/nasal
         # bridge, positive means recesses. The bridge ends in an uneven,
         # visibly broken nasal scar rather than an intact spheroidal nose.
-        relief = front*(.145*eye - .052*upper_lid - .071*brow
-                        - .071*cheekbone + .039*hollow
-                        - .034*nose_root - .111*bridge
-                        + (.185 + .033*wear)*broken_tip
-                        - .052*upper_lip + .052*mouth_cut
-                        - .039*lower_lip - .079*chin - .040*jaw)
+        relief = front*(.065*eye - .024*upper_lid - .042*brow
+                        - .046*cheekbone + .026*hollow
+                        - .017*nose_root - .077*bridge
+                        + (.069 + .011*wear)*broken_tip
+                        - .022*upper_lip + .021*mouth_cut
+                        - .016*lower_lip - .035*chin - .025*jaw)
         # Angular jaw and temporal narrowing break the toy-like oval facial
         # silhouette, while the back half of the head stays untouched.
-        jaw_width = .024*jaw - .020*hollow
+        jaw_width = .022*jaw - .015*hollow
         vertices.append((px+relief*scale_x,
                          py + math.copysign(jaw_width*scale_y*front, yy), pz))
     return Mesh(tuple(vertices), mesh.faces)
@@ -470,18 +473,21 @@ def sphinx_assembly(*, prefix: str, length: float = 10.5,
                                 (3.20, -3.49, 0, .70, .93),
                                 (3.74, -3.51, 0, .73, 1.04),
                                 (4.14, -3.47, 0, .69, .99),
-                                (4.43, -3.48, 0, .61, .83),
-                                (4.56, -3.50, 0, .44, .62),
-                                (4.60, -3.50, 0, .34, .53)),
+                                (4.43, -3.48, 0, .65, .88),
+                                (4.56, -3.50, 0, .53, .72),
+                                (4.60, -3.50, 0, .43, .61)),
                                roughness=.028, seed=89, exponent=3.5), "casing-limestone")
-    face = along_z(((2.93, -3.86, 0, .23, .23),
-                    (3.14, -3.93, 0, .34, .34),
-                    (3.43, -3.95, 0, .46, .41),
-                    (3.73, -3.94, 0, .49, .49),
-                    (4.00, -3.91, 0, .53, .52),
-                    (4.23, -3.90, 0, .46, .49),
-                    (4.38, -3.88, 0, .35, .42)),
-                   roughness=.012, seed=97, exponent=2.45,
+    # A broader, less convex facial plane fills the front of the nemes.
+    # Earlier .53 m front radii created a bulbous little mask surrounded by
+    # a huge helmet; distinct cheek and brow planes now define the face.
+    face = along_z(((2.93, -3.86, 0, .23, .25),
+                    (3.14, -3.93, 0, .32, .39),
+                    (3.43, -3.95, 0, .42, .48),
+                    (3.73, -3.94, 0, .45, .57),
+                    (4.00, -3.91, 0, .48, .61),
+                    (4.23, -3.90, 0, .44, .58),
+                    (4.38, -3.88, 0, .34, .48)),
+                   roughness=.012, seed=97, exponent=3.65,
                    subdivisions=8, bedding=.002, pitting=.004)
     part("face", _sculpt_face_relief(face, scale_x=x, scale_y=y, scale_z=z))
     for side, sign in (("left", -1), ("right", 1)):
@@ -491,9 +497,9 @@ def sphinx_assembly(*, prefix: str, length: float = 10.5,
                                              (3.88, -3.49, sign*.82, .15, .21)),
                                             roughness=.022, seed=105, exponent=5.0),
              "casing-limestone")
-        part(f"{side}-ear", along_z(((3.81, -3.83, sign*.58, .16, .10),
-                                    (4.13, -3.80, sign*.62, .20, .18),
-                                    (4.42, -3.79, sign*.61, .12, .10)),
+        part(f"{side}-ear", along_z(((3.56, -3.96, sign*.69, .10, .10),
+                                    (3.85, -4.00, sign*.76, .15, .14),
+                                    (4.12, -3.95, sign*.71, .10, .10)),
                                    roughness=.023, seed=118))
         # Eye/brow objects and oversized headdress collars looked like
         # cartoon attachments. The facial details are now sculpted directly

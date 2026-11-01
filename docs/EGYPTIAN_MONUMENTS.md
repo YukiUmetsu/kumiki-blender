@@ -64,8 +64,9 @@ shoulder-to-neck transition, and narrower headdress lappets. A second
 geometry-level weathering pass adds irregular undercut bedding planes and
 small concave mineral pockets to the lion's body and haunches, with much
 weaker wear on the harder head. The facial silhouette now includes a surviving
-nasal bridge and chipped lower tip, recessed sockets, differentiated lids,
-cheek and jaw planes, and distinct lips instead of a smooth oval mask.
+nasal bridge and chipped lower tip, narrow recessed sockets, differentiated
+lids, cheek and jaw planes, and shallow carved lips. A rendered QA pass led
+to reduced nasal and eye recesses and a broader, less round nemes crown.
 
 The supplied side-profile concept image is used as an **art-direction and
 silhouette reference**, not a surveyed depth map. AERA documents why the
