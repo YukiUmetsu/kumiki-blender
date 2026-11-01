@@ -469,6 +469,70 @@ def classical_column(*, prefix: str, height: float = 4.55,
     return tuple(parts)
 
 
+@lru_cache(maxsize=128)
+def turned_stone_baluster(*, height: float = 0.72, radius: float = 0.12) -> Mesh:
+    """Solid turned-stone spindle with necks, swelling belly and square-cut ends."""
+    height = _finite_number(height, "baluster height", 0.25, 3.0)
+    radius = _finite_number(radius, "baluster radius", 0.035, 0.6)
+    if height < radius * 4.5:
+        raise GeometryError("Baluster height must be at least 4.5 radii")
+    shape = ((0.60, 0), (0.85, 0.035), (0.90, 0.095), (0.63, 0.14),
+             (0.54, 0.23), (0.78, 0.35), (1.0, 0.47), (1.0, 0.54),
+             (0.78, 0.67), (0.54, 0.79), (0.63, 0.87), (0.90, 0.93),
+             (0.85, 0.975), (0.60, 1.0))
+    return revolve_profile(tuple((radius * r, height * z) for r, z in shape),
+                           radial_segments=48)
+
+
+def balustrade_assembly(*, prefix: str, length: float = 3.30,
+                        height: float = 1.10, baluster_count: int = 7,
+                        depth: float = 0.30) -> tuple[MeshInstance, ...]:
+    """Modular stone railing: shaped spindles, continuous rails and end piers.
+
+    Centered on local X, with its footing at Z=0 and facade facing -Y.
+    Each element is an individually selectable, watertight mesh. Structural
+    clearances are checked so repeated balusters cannot intersect each other.
+    """
+    length = _finite_number(length, "balustrade length", 0.8, 50)
+    height = _finite_number(height, "balustrade height", 0.55, 3.0)
+    depth = _finite_number(depth, "balustrade depth", 0.16, 1.0)
+    if type(baluster_count) is not int or not 2 <= baluster_count <= 100:
+        raise GeometryError("baluster_count must be an integer from 2 to 100")
+    post_width = min(depth, height * 0.26)
+    radius = min(depth * 0.38, height * 0.11)
+    inner_span = length - 2 * post_width
+    spacing = inner_span / (baluster_count + 1)
+    if spacing <= radius * 2.2:
+        raise GeometryError("Balusters would overlap: increase length or reduce count")
+    rail_bottom = height * 0.19
+    rail_top = height * 0.82
+    spindle_height = rail_top - rail_bottom + height * 0.018
+    spindle = turned_stone_baluster(height=spindle_height, radius=radius)
+
+    items: list[MeshInstance] = [
+        place_mesh(box_mesh(length, depth, rail_bottom),
+                   name=f"{prefix}-bottom-rail", origin=(0, 0, rail_bottom/2),
+                   material="limestone"),
+        place_mesh(box_mesh(length, depth*1.12, height-rail_top),
+                   name=f"{prefix}-coping-rail", origin=(0, 0, (height+rail_top)/2),
+                   material="limestone-light"),
+    ]
+    for index in range(baluster_count):
+        x = -inner_span/2 + (index+1)*spacing
+        items.append(place_mesh(spindle, name=f"{prefix}-baluster-{index:02d}",
+                                origin=(x, 0, rail_bottom-height*0.009),
+                                material="limestone-light"))
+    for side, sign in (("left", -1), ("right", 1)):
+        x = sign * (length - post_width) / 2
+        items.append(place_mesh(box_mesh(post_width, depth*1.25, height),
+                                name=f"{prefix}-{side}-post", origin=(x, 0, height/2),
+                                material="limestone"))
+        items.append(place_mesh(box_mesh(post_width*1.2, depth*1.34, height*0.10),
+                                name=f"{prefix}-{side}-post-cap",
+                                origin=(x, 0, height*0.98), material="limestone-light"))
+    return tuple(items)
+
+
 def gutter_channel(length: float, *, radius: float = 0.105,
                    wall: float = 0.018, segments: int = 14) -> Mesh:
     """Half-round metal rain gutter with a real open U-shaped channel.

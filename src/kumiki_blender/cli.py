@@ -35,6 +35,8 @@ def main(argv: list[str] | None = None) -> int:
         subcommand = subcommands.add_parser(command)
         subcommand.add_argument("--bays", type=int, default=3)
         subcommand.add_argument("--order", choices=("tuscan", "doric", "ionic"), default="ionic")
+        subcommand.add_argument("--arch-style", choices=("round", "pointed"), default="round")
+        subcommand.add_argument("--balustrade", action="store_true")
         if command == "build-portico":
             subcommand.add_argument("--output", type=Path, required=True)
     for command in ("plan-facade", "build-facade"):
@@ -113,12 +115,15 @@ def main(argv: list[str] | None = None) -> int:
                                                  texture_packs=texture_packs, bpy_module=bpy), indent=2))
             return 0
         if args.command in ("plan-portico", "build-portico"):
-            study = make_portico_study(bays=args.bays, order=args.order)
+            study = make_portico_study(bays=args.bays, order=args.order,
+                                      arch_style=args.arch_style, balustrade=args.balustrade)
             if args.command == "plan-portico":
                 print(json.dumps({
                     "asset_id": study.asset_id,
                     "generator": "modular-portico",
                     "order": study.order,
+                    "arch_style": study.arch_style,
+                    "balustrade": study.balustrade,
                     "named_parts": dict(study.part_counts),
                     "instances": len(study.instances),
                     "bounds_m": [study.bounds_min, study.bounds_max],

@@ -46,17 +46,19 @@ The current prototype uses tapered legs, structural X bracing, **64 physical gus
 
 ## Reusable architecture geometry and portico study
 
-`architecture_geometry.py` is a Blender-independent mesh kernel for **concave profile extrusion** (with triangulated caps), **lathed columns and balusters**, **semicircular arches**, and **individual arch voussoir stones with real mortar gaps**. It validates self-intersecting profiles, computes watertightness and signed volume, and supports shared mesh instances with right-handed placement frames and linear repetition.
+`architecture_geometry.py` is a Blender-independent mesh kernel for **concave profile extrusion** (with triangulated caps), **lathed columns and balusters**, **semicircular and pointed Gothic arches**, and **individual arch voussoir stones with real mortar gaps**. It validates self-intersecting profiles, computes watertightness and signed volume, and supports shared mesh instances with right-handed placement frames and linear repetition.
 
 The `portico.py` demonstration composes these primitives into an original, three-bay limestone arcade: **4 physically fluted shafts with entasis, 16 spiral Ionic-style volute ridges mounted on 16 shaped stone cushions, carved base and capital profiles, 33 individual arch stones, projecting keystones, pedestals and a molding cornice**. Flutes are recessed in the actual shaft mesh rather than floating thin rods. This is an architectural craft study—not a measured real landmark.
 
-For other architectural styles, `classical_column()` generates **Tuscan-inspired smooth**, **Doric-inspired 20-flute**, and **Ionic-inspired 24-flute and scroll-capital** assemblies with named, editable parts. It can be reused in a new building recipe without authoring Blender mesh code. Preview exact geometry and component names without Blender:
+For other architectural styles, `classical_column()` generates **Tuscan-inspired smooth**, **Doric-inspired 20-flute**, and **Ionic-inspired 24-flute and scroll-capital** assemblies with named, editable parts. `pointed_arch_voussoirs()` builds two-arc Gothic masonry with a real pointed apex; `balustrade_assembly()` repeats individually turned stone spindles between coping rails and end piers. These can be reused in new building recipes without authoring Blender mesh code. Preview exact geometry and component names without Blender:
 
 ```bash
 PYTHONPATH=src python3 -m kumiki_blender plan-classical-column \
   --order ionic --height 4.55 --radius 0.36
 PYTHONPATH=src python3 -m kumiki_blender plan-portico \
   --bays 2 --order doric
+PYTHONPATH=src python3 -m kumiki_blender plan-portico \
+  --bays 2 --order tuscan --arch-style pointed --balustrade
 ```
 
 Preview its structural plan without Blender:
@@ -76,6 +78,8 @@ On a Mac with Blender installed, render and export a new revision:
 
 This writes editable geometry, GLB, a hero preview and front/detail views through the **same export and audit pipeline** as the lattice tower. Headless Blender 4.5 has rendered both models successfully; smoke-quality previews still require artistic review before a claim of cinematic realism.
 
+The Gothic-and-balustrade variant uses the same exporter and can be rendered with `build-portico --bays 2 --order tuscan --arch-style pointed --balustrade --output .review/gothic/r01`. The options are independent: pointed arches need not have railings, and railings also work with round arches.
+
 ## Reusable architectural-detail system
 
 The Blender-independent `architecture_details.py` provides composable, **manifold 3D solids** rather than texture-only facades:
@@ -89,6 +93,8 @@ The Blender-independent `architecture_details.py` provides composable, **manifol
 | `gable_roof()` | Closed front/back pitched roof slabs, solid gable ends, a ridge cap and individually sloped/staggered tiles |
 | `gutter_channel()` / `rainwater_system()` | Real open half-round gutters, connected downspouts, and fastening collars along the eaves |
 | `rosette_relief()` | Parametric carved floral medallions with separate leaves, raised veins and central boss |
+| `pointed_arch_voussoirs()` | Two-circle Gothic intrados/extrados, genuinely sharp apex and mortar-separated masonry blocks |
+| `turned_stone_baluster()` / `balustrade_assembly()` | Curved lathed spindles, continuous base/coping rails, end posts and post caps; checked spacing |
 | `box_mesh()` | Cached, closed mesh primitive for any rectangular architectural detail |
 
 Every piece returns a named `MeshInstance` with editable material role, transform and physical geometry. You can mix these functions in **new landmark recipes** without rewriting Blender object placement. `facade.py` demonstrates composition into a fully enclosed, 3/5/7-bay stone townhouse study with consistently named `masonry`, `window`, `door`, `roof`, `dentil` and `cornice` categories.

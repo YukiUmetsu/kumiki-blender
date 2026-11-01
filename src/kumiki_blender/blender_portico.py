@@ -60,14 +60,15 @@ def build_portico_scene(study: PorticoStudy, destination: Path, *, bpy_module: A
             mesh = bpy.data.meshes.new(f"Geometry / {instance.name}")
             mesh.from_pydata(instance.mesh.vertices, [], instance.mesh.faces)
             mesh.update()
-            wrapped_column = (instance.name.endswith("-shaft") or
+            wrapped_column = ("-baluster-" in instance.name or
+                              instance.name.endswith("-shaft") or
                               instance.name.endswith(("-base-torus", "-capital-necking", "-capital-echinus")))
             if wrapped_column:
                 ensure_cylindrical_uvs(mesh)
             else:
                 ensure_metric_uvs(mesh)
             mesh.materials.append(palette[instance.material])
-            if instance.name.startswith(("column-", "arch-")):
+            if instance.name.startswith(("column-", "arch-", "balustrade-")):
                 for polygon in mesh.polygons:
                     if len(polygon.vertices) == 4:
                         polygon.use_smooth = True
@@ -83,7 +84,8 @@ def build_portico_scene(study: PorticoStudy, destination: Path, *, bpy_module: A
         obj["kumiki_part"] = instance.name.split("-")[0]
         # The flutes and spiral volutes are already sculpted into the mesh.
         # A broad bevel would obliterate their 20 mm channels and thin turns.
-        actual_carving = (instance.name.endswith("-shaft") or
+        actual_carving = ("-baluster-" in instance.name or
+                          instance.name.endswith("-shaft") or
                           "-volute-front-" in instance.name or "-volute-back-" in instance.name)
         if not actual_carving:
             bevel = obj.modifiers.new("Light-catching masonry edges", "BEVEL")
@@ -131,10 +133,14 @@ def build_portico_scene(study: PorticoStudy, destination: Path, *, bpy_module: A
         "generator": "kumiki-blender/modular-portico",
         "status": "architectural-detail-study / visual-review-pending",
         "provenance": "Original illustrative architecture; no reference landmark claimed",
-        "recipe_sha256": hashlib.sha256(f"portico-study-v2:bays={study.bays}:order={study.order}".encode()).hexdigest(),
+        "recipe_sha256": hashlib.sha256(
+            f"portico-study-v3:bays={study.bays}:order={study.order}:"
+            f"arch={study.arch_style}:balustrade={study.balustrade}".encode()).hexdigest(),
         "render_profile": {"name": profile.name, "width": profile.width,
                            "height": profile.height, "samples": profile.samples},
-        "parameters": {"bays": study.bays, "order": study.order, "bay_pitch_m": 4.2},
+        "parameters": {"bays": study.bays, "order": study.order,
+                       "arch_style": study.arch_style, "balustrade": study.balustrade,
+                       "bay_pitch_m": 4.2},
         "units": "meters",
         "native_axes": "Blender Z-up; GLB exported with glTF-compatible axes",
         "named_parts": dict(study.part_counts),

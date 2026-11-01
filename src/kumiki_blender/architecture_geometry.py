@@ -233,6 +233,64 @@ def arch_voussoirs(inner_radius: float, outer_radius: float, depth: float, *, st
     return tuple(pieces)
 
 
+def pointed_arch_voussoirs(half_span: float, rise: float, band_width: float, depth: float, *,
+                           stone_count: int = 11, joint_gap_m: float = 0.006,
+                           segments_per_stone: int = 6) -> tuple[Mesh, ...]:
+    """Independent, mortar-gapped Gothic arch stones with two true circular arcs.
+
+    The intrados rises from (+/-half_span, 0) to (0, rise). Each side is a
+    different circular arc, meeting at an actual pointed apex; the extrados
+    uses concentric, wider arcs. Coordinates are local XY with depth along Z.
+    No booleans, nonphysical planar decals, or overlapping arch-sized slabs.
+    """
+    a = _finite_number(half_span, "half_span", 0.1, 1000)
+    h = _finite_number(rise, "rise", 0.1, 1000)
+    t = _finite_number(band_width, "band_width", 0.01, 100)
+    depth = _finite_number(depth, "depth", 1e-5, 10000)
+    if h <= a * 1.01:
+        raise GeometryError("Pointed arch rise must exceed the half-span by at least 1%")
+    if h > a * 5:
+        raise GeometryError("Pointed arch rise cannot exceed five times the half-span")
+    if t >= a * 0.65:
+        raise GeometryError("Pointed arch band is too wide for its span")
+    if type(stone_count) is not int or not 3 <= stone_count <= 64:
+        raise GeometryError("stone_count must be an integer from 3 to 64")
+    if type(segments_per_stone) is not int or not 2 <= segments_per_stone <= 16:
+        raise GeometryError("segments_per_stone must be in [2, 16]")
+
+    center_offset = (h*h - a*a) / (2*a)
+    inner_radius = a + center_offset
+    outer_radius = inner_radius + t
+    # Parametrize each side by its own arc angle, reserving u=0.5 for
+    # the apex. Stone boundaries occur at matching fractions of arc length.
+    inner_half_sweep = math.pi - math.acos(-center_offset / inner_radius)
+    mean_half_length = (inner_radius + outer_radius) / 2 * inner_half_sweep
+    joint = _finite_number(joint_gap_m, "joint_gap_m", 0, 1000) / (4 * mean_half_length)
+    if joint > 0.10 / stone_count:
+        raise GeometryError("Joint gap is too wide for pointed arch stones")
+
+    def curve(u: float, radius: float) -> Vec2:
+        if u <= 0.5:
+            apex_angle = math.acos(-center_offset / radius)
+            angle = math.pi + (apex_angle - math.pi) * u * 2
+            return (center_offset + radius * math.cos(angle), radius * math.sin(angle))
+        apex_angle = math.acos(center_offset / radius)
+        angle = apex_angle * (2 - 2*u)
+        return (-center_offset + radius * math.cos(angle), radius * math.sin(angle))
+
+    stones: list[Mesh] = []
+    for index in range(stone_count):
+        start, end = index/stone_count + joint, (index+1)/stone_count - joint
+        steps = [start + (end-start)*i/segments_per_stone for i in range(segments_per_stone+1)]
+        if start < 0.5 < end and not any(abs(u-0.5) < 1e-10 for u in steps):
+            steps.append(0.5)
+            steps.sort()
+        outer_arc = [curve(u, outer_radius) for u in steps]
+        inner_arc = [curve(u, inner_radius) for u in reversed(steps)]
+        stones.append(extrude_profile(tuple(outer_arc + inner_arc), depth))
+    return tuple(stones)
+
+
 def audit_mesh(mesh: Mesh) -> MeshReport:
     """Report topology errors and signed volume; malformed indexing raises."""
     if not isinstance(mesh, Mesh) or not mesh.vertices or not mesh.faces:

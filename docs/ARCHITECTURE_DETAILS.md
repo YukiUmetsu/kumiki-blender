@@ -96,6 +96,39 @@ Vitruvian ratios or archaeological copies. The Metropolitan Museum of Art's
 is useful for identifying the base/echinus/abacus/volute language, while a
 specific landmark will need surveyed proportions and verified ornament.
 
+## Pointed arches and turned stone balustrades
+
+`pointed_arch_voussoirs(half_span, rise, band_width, depth, ...)` produces
+individually closed stones along two circular arcs, meeting at a **real pointed
+apex**. `half_span` is half the clear opening width at the springline, `rise`
+is springline-to-intrados-apex height, `band_width` is radial stone depth, and
+`depth` extrudes the masonry into the building. `stone_count` and `joint_gap_m`
+control radial block segmentation and visible mortar gaps. The function is
+Blender-independent and will reject unsafe proportions and negative dimensions.
+
+`turned_stone_baluster(height, radius)` returns a single capped, lathed solid
+with a narrowed neck and rounded belly. `balustrade_assembly(prefix, length,
+height, baluster_count, depth)` repeats the shape along X, between base and
+coping rails and two end posts with shaped caps. Each element is separately
+named/material-addressable. A spacing check rejects interpenetrating spindles;
+identical balusters share immutable geometry for lightweight instancing.
+
+Compose them with existing classical orders in a portico:
+
+```bash
+PYTHONPATH=src python3 -m kumiki_blender plan-portico \
+  --bays 2 --order tuscan --arch-style pointed --balustrade
+blender --background --factory-startup --python-exit-code 1 \
+  --python scripts/blender_entry.py -- \
+  build-portico --bays 2 --order tuscan --arch-style pointed --balustrade \
+  --output .review/pointed-arcade/r01
+```
+
+`--arch-style` is `round` (default) or `pointed`; `--balustrade` is an
+independent switch. The raised Gothic extrados automatically lifts the cornice,
+and full-height QA camera framing follows the actual bounding box. Both APIs
+are *building blocks*, not a claim that the shape matches a surveyed landmark.
+
 ## Built-in reference study
 
 ```bash

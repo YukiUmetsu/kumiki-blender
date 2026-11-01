@@ -35,12 +35,18 @@ def plan_quality_shots(recipe: TowerRecipe) -> tuple[QualityShot, ...]:
 def plan_portico_shots(bounds_min: Vec3, bounds_max: Vec3) -> tuple[QualityShot, ...]:
     """Frame a modular arcade from one to twenty bays in landscape previews."""
     span = bounds_max[0] - bounds_min[0]
+    height = bounds_max[2] - bounds_min[2]
+    center_z = (bounds_min[2] + bounds_max[2]) / 2
+    # The 16:9 vertical field must clear a taller pointed-arch cornice even
+    # for the narrowest single-bay configuration.
+    vertical_fit = height * 1.28 * (16 / 9)
     return (
-        QualityShot("hero", (span * 0.65, -span * 1.55, 10.5),
-                    (0, 0, 3.7), max(13, span * 1.38)),
-        QualityShot("front", (0, -span * 1.5, 5.0),
-                    (0, 0, 3.6), max(12, span * 1.32)),
-        QualityShot("detail", (4.2, -9, 7.5), (0, 0, 5.1), 4.8),
+        QualityShot("hero", (span * 0.65, -span * 1.55, center_z + height),
+                    (0, 0, center_z), max(13, span * 1.38, vertical_fit)),
+        QualityShot("front", (0, -span * 1.5, center_z + 1.3),
+                    (0, 0, center_z), max(12, span * 1.32, vertical_fit)),
+        QualityShot("detail", (min(2.1, span/4) + 3, -9, center_z + 3.5),
+                    (min(2.1, span/4), 0, center_z + 1.0), 4.8),
     )
 
 

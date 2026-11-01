@@ -147,6 +147,20 @@ class CLITests(unittest.TestCase):
         self.assertEqual(report["named_parts"]["volutes"], 32)
         self.assertEqual(report["named_parts"]["column_capitals"], 16)
 
+    def test_cli_plans_gothic_arcade_with_turning_balusters(self):
+        stream = io.StringIO()
+        with contextlib.redirect_stdout(stream):
+            code = main(["plan-portico", "--bays", "2", "--order", "tuscan",
+                         "--arch-style", "pointed", "--balustrade"])
+        self.assertEqual(code, 0)
+        report = json.loads(stream.getvalue())
+        self.assertEqual(report["order"], "tuscan")
+        self.assertEqual(report["arch_style"], "pointed")
+        self.assertTrue(report["balustrade"])
+        self.assertEqual(report["named_parts"]["balusters"], 14)
+        self.assertEqual(report["named_parts"]["arch_stones"], 22)
+        self.assertEqual(sum(report["named_parts"].values()), report["instances"])
+
     def test_plan_facade_reports_individually_editable_architectural_parts(self):
         stream = io.StringIO()
         with contextlib.redirect_stdout(stream):
