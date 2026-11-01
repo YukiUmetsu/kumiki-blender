@@ -101,6 +101,8 @@ def main(argv: list[str] | None = None) -> int:
         subcommand.add_argument("--no-pedestal", action="store_true")
         if command == "build-liberty":
             subcommand.add_argument("--output", type=Path, required=True)
+            subcommand.add_argument("--detailed-torch", action="store_true",
+                                    help="Replace legacy flame/gallery with editable cast-detail torch")
     scan_face_parser = subcommands.add_parser(
         "build-liberty-scan-face", help="Licensed photogrammetry face-detail QA checkpoint")
     scan_face_parser.add_argument("--source", type=Path, required=True)
@@ -224,7 +226,9 @@ def main(argv: list[str] | None = None) -> int:
             except ImportError as error:
                 raise RuntimeError("Building Liberty requires Blender 4.2+: run via scripts/blender_entry.py") from error
             from .blender_liberty import build_liberty_scene
-            print(json.dumps(build_liberty_scene(study, output, bpy_module=bpy), indent=2))
+            print(json.dumps(build_liberty_scene(
+                study, output, bpy_module=bpy,
+                detailed_torch=args.detailed_torch), indent=2))
             return 0
         if args.command == "build-liberty-scan-face":
             provenance = verify_scan_source(args.source)

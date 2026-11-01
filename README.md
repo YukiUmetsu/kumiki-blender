@@ -240,6 +240,26 @@ blender -b -t 6 --python-exit-code 1 \
   --conform --export
 ```
 
+### Detailed torch and gripping hand (opt-in)
+
+The sculptural torch study can now replace the old procedural flame and
+gallery **without** removing the palm, thumb or four curved grip fingers.
+It fits its shaft and gallery to the original hand position and uses closed
+layered gold-copper flame geometry, a fluted neck, a pierced baluster ring,
+cast diagonal braces and PBR materials. The default `build-liberty` remains
+unchanged while front/profile/low-angle close-ups are evaluated:
+
+```bash
+KUMIKI_RENDER_PROFILE=smoke blender --background --factory-startup \
+  --python-exit-code 1 --python scripts/blender_entry.py -- \
+  build-liberty --detailed-torch \
+  --output .review/landmarks/statues/statue-of-liberty/r29-torch
+```
+
+The output includes editable `.blend`, portable GLB, manifest and dedicated
+flame/grip QA renders. This is a better detailed illustration, **not yet a
+measured photomatch** of the original torch or a finished hand sculpt.
+
 ### Earlier procedural prototype
 
 `liberty.py` creates a reference-guided, full 360° Statue of Liberty sculpture

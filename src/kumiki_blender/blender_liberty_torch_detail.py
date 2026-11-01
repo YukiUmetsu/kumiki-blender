@@ -8,6 +8,8 @@ import math
 import bpy
 from mathutils import Vector
 
+from .liberty_torch_flame import make_layered_flame
+
 
 def _material(name, color, metallic=0.7, roughness=0.38):
     m = bpy.data.materials.get(name) or bpy.data.materials.new(name)
@@ -102,31 +104,17 @@ def build_torch_detail(origin=(0, 0, 0), scale=1.0):
         parts.append(_rod(f"Torch / diagonal gallery brace {j:02d}",
                           (.19*c, .19*s, .79),
                           (.255*c, .255*s, .93), .014, bronze))
-    # Individual asymmetric flame sheets, with volumetric thickness, rather
-    # than a single cone. Stylized until calibrated to monument photography.
-    for j in range(9):
-        a = math.tau*j/9
-        height = 0.38 + 0.12*math.sin(j*2.4)
-        verts = []
-        for k in range(9):
-            t = k/8
-            z = 1.36 + height*t
-            angle = a + .42*t + .1*math.sin(t*math.pi)
-            radius = (.15*(1-t) + .018) * (1+.17*math.sin(j))
-            for side in (-1, 1):
-                aa = angle + side * (.21*(1-t)+.015)
-                verts.append((radius*math.cos(aa), radius*math.sin(aa), z))
-        faces = []
-        for k in range(8):
-            n = 2*k
-            faces.append((n,n+1,n+3,n+2))
-        mesh = bpy.data.meshes.new(f"Flame / sheet {j:02d}")
-        mesh.from_pydata(verts, [], faces)
+    # A continuous gold core and asymmetrically curled, solid copper leaves.
+    # This replaces the former thin triangular prongs, whose silhouette read
+    # like separate rods rather than the monument's repoussé flame.
+    for name, geometry in make_layered_flame().items():
+        mesh = bpy.data.meshes.new(name)
+        mesh.from_pydata(geometry.vertices, [], geometry.faces)
         mesh.update()
         obj = bpy.data.objects.new(mesh.name, mesh)
         bpy.context.collection.objects.link(obj)
-        solid = obj.modifiers.new("Cast flame thickness", "SOLIDIFY")
-        solid.thickness = .018
+        for polygon in mesh.polygons:
+            polygon.use_smooth = len(polygon.vertices) == 4
         obj.data.materials.append(gold)
         parts.append(obj)
     for part in parts:

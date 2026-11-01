@@ -43,6 +43,15 @@ class LibertyTests(unittest.TestCase):
         self.assertGreater(max(v[2] for v in pieces["liberty-tablet-slab"].mesh.vertices), 22)
         self.assertGreater(sum("torch-grip-finger-" in n for n in pieces), 3)
 
+    def test_torch_fingers_wrap_around_the_grip_with_tapered_knuckle_geometry(self):
+        pieces = {part.name: part for part in make_liberty_study().instances}
+        for i in range(4):
+            mesh = pieces[f"liberty-torch-grip-finger-{i}"].mesh
+            self.assertGreater(len(mesh.vertices), 120)
+            ys = [p[1] for p in mesh.vertices]
+            self.assertLess(min(ys), -.34)
+            self.assertGreater(max(ys), 0.0)
+
     def test_export_parts_are_closed_meshes_and_have_unique_semantic_names(self):
         study = make_liberty_study()
         self.assertLess(len(study.instances), 700)

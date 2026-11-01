@@ -288,16 +288,25 @@ def make_liberty_study(*, scale: float = 1., include_pedestal: bool = True) -> L
     put("arm-raised-palm", _loft(((32.20, -3.46, -.03, .30, .26),
                                   (32.60, -3.46, -.02, .32, .27),
                                   (33.14, -3.46, .0, .27, .25)), 24))
-    # Four curled fingers in front of shaft, and a visible opposing thumb.
+    # Four articulated fingers clasp the *circumference* rather than forming
+    # four vertical rods painted onto the shaft. Uneven knuckle swells and
+    # tapered distal phalanges make the silhouette read like a copper hand.
     for i in range(4):
         x = -3.77+i*.17
+        fingertip_z = 33.50 - .025*abs(i-1.5)
         put(f"torch-grip-finger-{i}", _tube([
-            (x, -.27, 32.77), (x-.06, -.32, 33.05),
-            (x-.08, -.27, 33.39), (x+.01, -.15, 33.48),
-        ], [.115, .105, .084, .065], 12))
+            (x, -.19, 32.76), (x-.025, -.29, 32.85),
+            (x-.063, -.355, 33.00), (x-.094, -.36, 33.13),
+            (x-.087, -.305, 33.28), (x-.055, -.205, 33.40),
+            (x+.011, -.075, fingertip_z-.025),
+            (x+.075, .07, fingertip_z),
+        ], [.112, .121, .129, .112, .098, .079, .059, .038], 20))
     put("torch-grip-thumb", _tube([
-        (-3.14, -.04, 32.68), (-3.28, -.29, 32.84), (-3.52, -.34, 32.96)
-    ], [.16, .14, .10], 12))
+        (-3.12, -.005, 32.64), (-3.18, -.13, 32.71),
+        (-3.29, -.27, 32.82), (-3.41, -.35, 32.94),
+        (-3.51, -.38, 33.05), (-3.60, -.32, 33.13),
+        (-3.64, -.23, 33.17),
+    ], [.17, .17, .155, .139, .117, .090, .059], 20))
 
     # Other arm bends at elbow and supports the inscription tablet.
     put("arm-tablet", _tube([

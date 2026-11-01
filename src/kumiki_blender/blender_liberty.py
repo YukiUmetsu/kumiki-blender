@@ -10,6 +10,9 @@ from .blender_output import create_model_scene, export_revision
 from .blender_scene import _create_box, _material
 from .blender_textures import ensure_metric_uvs
 from .liberty import LibertyStudy
+from .liberty_torch_placement import (detailed_torch_placement,
+                                      detailed_torch_shots,
+                                      replace_legacy_torch_part)
 from .render_profiles import select_render_profile
 from .shots import QualityShot
 from .surfaces import PBRSurface, get_surface
@@ -70,7 +73,8 @@ def _tablet_lettering(bpy: Any, collection: Any, material: Any, scale: float,
 
 
 def build_liberty_scene(study: LibertyStudy, destination: Path, *,
-                        bpy_module: Any = None) -> dict[str, Any]:
+                        bpy_module: Any = None,
+                        detailed_torch: bool = False) -> dict[str, Any]:
     """Author an editable .blend, portable GLB and 7 camera inspections."""
     if bpy_module is None:
         raise RuntimeError("Blender bpy is required to build Liberty")
@@ -119,6 +123,8 @@ def build_liberty_scene(study: LibertyStudy, destination: Path, *,
     palette = {key: _material(bpy, spec) for key, spec in specs.items()}
     objects = []
     for part in study.instances:
+        if detailed_torch and replace_legacy_torch_part(part.name):
+            continue
         mesh = bpy.data.meshes.new(f"Geometry / {part.name}")
         mesh.from_pydata(part.mesh.vertices, [], part.mesh.faces)
         mesh.update()
@@ -142,6 +148,34 @@ def build_liberty_scene(study: LibertyStudy, destination: Path, *,
     offset = 0 if parameters["include_pedestal"] else -9.30
     objects.extend(_tablet_lettering(bpy, model, palette["patina-shadow"],
                                      parameters["scale"], offset))
+    torch_fit = None
+    if detailed_torch:
+        from .blender_liberty_torch_detail import build_torch_detail
+
+        torch_fit = detailed_torch_placement(study)
+        torch_root = build_torch_detail(origin=torch_fit.origin)
+        torch_root.scale = (torch_fit.radial_scale, torch_fit.radial_scale,
+                            torch_fit.height_scale)
+        torch_root["kumiki_part"] = "torch-assembly-control"
+        torch_root["kumiki_source"] = "original editable geometric detail study"
+        torch_parts = [obj for obj in bpy.data.objects if obj.parent is torch_root]
+        if len(torch_parts) < 40:
+            raise RuntimeError("Detailed torch assembly is missing expected cast components")
+        for obj in [torch_root, *torch_parts]:
+            for old_collection in tuple(obj.users_collection):
+                old_collection.objects.unlink(obj)
+            model.objects.link(obj)
+            if obj.type != "MESH":
+                continue
+            surface = (palette["flame-gold"] if obj.name.startswith("Flame /")
+                       else palette["patina-shadow"] if "dark recessed" in obj.name.lower()
+                       else palette["patina"])
+            obj.data.materials.clear()
+            obj.data.materials.append(surface)
+            ensure_metric_uvs(obj.data, tile_size_m=1.30)
+            obj["kumiki_part"] = "torch"
+            obj["kumiki_source"] = "original detailed torch geometry / photographic reference"
+            objects.append(obj)
     stage_floor = get_surface("studio-matte", color="#363A3C", roughness=.97)
     extent = 54*parameters["scale"]
     _create_box(bpy, stage, "Studio / charcoal cyclorama", (extent, extent, .35*parameters["scale"]),
@@ -177,6 +211,8 @@ def build_liberty_scene(study: LibertyStudy, destination: Path, *,
     stage.objects.link(camera)
     scene.camera = camera
     shots = plan_liberty_shots(study)
+    if detailed_torch:
+        shots += detailed_torch_shots(study)
     metadata = {
         "asset_id": study.asset_id,
         "generator": "kumiki-blender/procedural-statue-of-liberty",
@@ -189,6 +225,11 @@ def build_liberty_scene(study: LibertyStudy, destination: Path, *,
         "named_parts": dict(study.part_counts),
         "bounds_m": [study.bounds_min, study.bounds_max],
         "parameters": parameters,
+        "detailed_torch": detailed_torch,
+        "detailed_torch_fit": ({"origin": torch_fit.origin,
+                               "radial_scale": torch_fit.radial_scale,
+                               "height_scale": torch_fit.height_scale}
+                              if torch_fit else None),
         "detail_cameras": [shot.name for shot in shots],
     }
     return export_revision(bpy, scene, camera, objects, shots, destination,

@@ -1,5 +1,38 @@
 # Statue of Liberty — scan-assisted detail rebuild
 
+## Detailed torch and hand review (opt-in, **ongoing**)
+
+The procedural figure's old gallery/flame could not adequately convey the
+cast-metal detail in NPS and visitor photographs. A second, opt-in construction
+now uses `--detailed-torch` with `build-liberty` to produce:
+
+- A 96-sided fluted, ringed torch neck, separate lower and upper cornices,
+  24 pierced-gallery balusters and 12 radial cast braces.
+- A closed, irregular gold flame core and eleven individually editable,
+  twisted copper-leaf tongues—volumetric geometry rather than flat planes.
+- Calibrated nonuniform scale from the existing handle radius and flame
+  height, retaining the existing arm/palm and sculpted fingers.
+- A more curved grasp with eight-section tapered fingers, distinct swollen
+  joints, and a thumb curling under the shaft.
+- Copper and gold PBR materials exported with the GLB. Preview angles
+  separately inspect the gallery, flame and hand contact; no reference
+  photographs are copied into the model.
+
+```bash
+KUMIKI_RENDER_PROFILE=smoke blender --background --factory-startup \
+  --python-exit-code 1 --python scripts/blender_entry.py -- \
+  build-liberty --detailed-torch \
+  --output .review/landmarks/statues/statue-of-liberty/r29-torch
+PYTHONPATH=src python3 -m kumiki_blender audit-revision \
+  --root .review/landmarks/statues/statue-of-liberty/r29-torch
+```
+
+This is still a reference-guided **geometric study**, not a monument survey.
+The grip silhouette and flame require photo-matching refinement, especially
+at the fingertip contact, undercuts and thin sheet folds. The architectural
+torch study is separately opt-in because the scan-assisted face remains
+visually unapproved; the base figure's facial quality is not improved by it.
+
 ## r23 — donor-face edge fitting and classical-eye study (**not approved**)
 
 Comparison of the r22 front, three-quarter and profile renders found the
