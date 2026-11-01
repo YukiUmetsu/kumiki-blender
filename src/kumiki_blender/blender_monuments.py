@@ -13,6 +13,7 @@ from .blender_textures import ensure_metric_uvs
 from .egyptian_monuments import MonumentStudy
 from .render_profiles import select_render_profile
 from .shots import QualityShot
+from .sphinx_sculpt import combine_sculpture_sources, sphinx_integral_parts
 from .surfaces import get_surface
 
 
@@ -43,7 +44,89 @@ def plan_monument_shots(study: MonumentStudy) -> tuple[QualityShot, ...]:
         # front paws in frame; the former head-centered framing cropped its rump.
         shots.append(QualityShot("sphinx", (-length*.63, sy-length*.97, 5.5),
                                  (-length*.025, sy, 2.08), length*1.48))
+        shots.append(QualityShot("sphinx-profile", (length*.15, sy-length*1.6, 4.25),
+                                 (-length*.005, sy, 1.9), length*1.33))
+        shots.append(QualityShot("sphinx-face", (-length*.81, sy-length*.42, 5.10),
+                                 (-length*.34, sy, 3.63), length*.46))
     return tuple(shots)
+
+
+def _integrate_sphinx_body(bpy: Any, scene: Any, model: Any,
+                           parts: tuple[Any, ...], objects: list[Any],
+                           limestone: Any, *, length: float) -> dict[str, int | float]:
+    """Voxel-union the lion body, retaining hidden source meshes in .blend.
+
+    Repeatedly overlapping watertight lofts show distracting circular seams
+    under realistic lighting. A single evaluated Blender voxel-remesh surface
+    resolves those seams while leaving original semantic source components
+    editable in a clearly labeled source collection. The fused object alone
+    appears in the portable GLB and the actual renders.
+    """
+    sources = sphinx_integral_parts(parts)
+    if not sources:
+        return {"sources": 0, "voxel_size_m": 0, "unified_vertices": 0}
+    by_name = {obj.name: obj for obj in objects}
+    if any(part.name not in by_name for part in sources):
+        raise RuntimeError("Missing Blender source meshes for Sphinx body union")
+
+    merged = combine_sculpture_sources(sources)
+    union_mesh = bpy.data.meshes.new("Sphinx / intersecting editable source volumes")
+    union_mesh.from_pydata(merged.vertices, [], merged.faces)
+    union_mesh.update()
+    union_mesh.materials.append(limestone)
+    sculpt = bpy.data.objects.new("sphinx-unified-carved-body", union_mesh)
+    model.objects.link(sculpt)
+
+    voxel = max(.04, min(.095, .065*length/10.5))
+    modifier = sculpt.modifiers.new("Manifold limestone sculpt / voxel union", "REMESH")
+    modifier.mode = "VOXEL"
+    modifier.voxel_size = voxel
+    modifier.use_remove_disconnected = False
+    modifier.use_smooth_shade = True
+    depsgraph = bpy.context.evaluated_depsgraph_get()
+    evaluated = sculpt.evaluated_get(depsgraph)
+    skin = bpy.data.meshes.new_from_object(
+        evaluated, preserve_all_data_layers=True, depsgraph=depsgraph)
+    if skin is None or len(skin.vertices) < 3000 or not skin.polygons:
+        raise RuntimeError("Blender voxel union did not create a useful Sphinx body surface")
+    if len(skin.vertices) > 800_000:
+        raise RuntimeError("Blender Sphinx voxel union exceeded 800k vertices")
+    # A voxel operation can change material slots and UVs. Assign both on its
+    # evaluated geometry so GLB export and Cycles agree on the same sculpture.
+    if not skin.materials:
+        skin.materials.append(limestone)
+    for poly in skin.polygons:
+        poly.use_smooth = True
+    ensure_metric_uvs(skin, tile_size_m=.95)
+    sculpt.modifiers.clear()
+    sculpt.data = skin
+    bpy.data.meshes.remove(union_mesh)
+
+    import bmesh
+    check = bmesh.new()
+    try:
+        check.from_mesh(skin)
+        bad_edges = sum(not edge.is_manifold for edge in check.edges)
+        if bad_edges:
+            raise RuntimeError(f"Unified Sphinx body has {bad_edges} non-manifold edges")
+    finally:
+        check.free()
+
+    source_collection = bpy.data.collections.new("Sphinx / hidden editable body sources")
+    scene.collection.children.link(source_collection)
+    source_names = {part.name for part in sources}
+    for obj in tuple(objects):
+        if obj.name in source_names:
+            model.objects.unlink(obj)
+            source_collection.objects.link(obj)
+            obj.hide_render = True
+    source_collection.hide_render = True
+    objects[:] = [obj for obj in objects if obj.name not in source_names]
+    objects.append(sculpt)
+    sculpt["kumiki_part"] = "sphinx"
+    sculpt["kumiki_source_names"] = ",".join(sorted(source_names))
+    return {"sources": len(sources), "voxel_size_m": voxel,
+            "unified_vertices": len(skin.vertices)}
 
 
 def build_monument_scene(study: MonumentStudy, destination: Path, *,
@@ -137,6 +220,10 @@ def build_monument_scene(study: MonumentStudy, destination: Path, *,
             obj.modifiers.new("Stone weighted normals", "WEIGHTED_NORMAL")
         objects.append(obj)
 
+    sculpt_report = _integrate_sphinx_body(
+        bpy, scene, model, study.instances, objects, palette["sphinx-limestone"],
+        length=dict(study.parameters)["sphinx_length_m"])
+
     span = study.bounds_max[0] - study.bounds_min[0]
     depth = study.bounds_max[1] - study.bounds_min[1]
     ground = _material(bpy, get_surface("studio-matte", color="#8D7D68", roughness=0.95))
@@ -183,6 +270,8 @@ def build_monument_scene(study: MonumentStudy, destination: Path, *,
         "named_parts": dict(study.part_counts),
         "instances": len(study.instances),
         "mesh_data_blocks": len(cache),
+        "visible_mesh_objects": len(objects),
+        "sphinx_sculpt_union": sculpt_report,
         "bounds_m": [study.bounds_min, study.bounds_max],
     }
     return export_revision(bpy, scene, camera, objects, plan_monument_shots(study),

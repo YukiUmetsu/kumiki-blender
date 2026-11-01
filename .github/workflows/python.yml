@@ -206,6 +206,8 @@ jobs:
           test -s .review/ci/pointed-balustrade-portico/previews/capital.png
           test -s .review/ci/egyptian-monuments/previews/masonry.png
           test -s .review/ci/egyptian-monuments/previews/sphinx.png
+          test -s .review/ci/egyptian-monuments/previews/sphinx-profile.png
+          test -s .review/ci/egyptian-monuments/previews/sphinx-face.png
           test -s .review/ci/facade/previews/detail.png
           test -s .review/ci/imported-portico/previews/detail.png
           test -s .review/ci/restyled-portico/previews/detail.png
@@ -252,4 +254,6 @@ jobs:
           python scripts/emit_qa_jpegs.py \
             .review/ci/egyptian-monuments/preview.png \
             .review/ci/egyptian-monuments/previews/sphinx.png \
+            .review/ci/egyptian-monuments/previews/sphinx-profile.png \
+            .review/ci/egyptian-monuments/previews/sphinx-face.png \
             .review/ci/egyptian-monuments/previews/masonry.png

@@ -111,8 +111,12 @@ class EgyptianMonumentTests(unittest.TestCase):
                 self.assertGreater(study.bounds_max[2], 4.0)
                 shots = plan_monument_shots(study)
                 self.assertEqual(shots[0].name, "hero")
-                self.assertEqual(len(shots), 4 if kind == "giza-study" else 3)
+                self.assertEqual(len(shots), {"giza-study": 6, "sphinx": 5,
+                                              "pyramid": 3}[kind])
                 self.assertEqual(len({s.name for s in shots}), len(shots))
+                if kind != "pyramid":
+                    self.assertIn("sphinx-profile", [s.name for s in shots])
+                    self.assertIn("sphinx-face", [s.name for s in shots])
                 self.assertGreater(shots[0].ortho_scale/1.6,
                                    (study.bounds_max[2]-study.bounds_min[2])*1.1)
 

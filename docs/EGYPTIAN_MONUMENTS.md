@@ -17,6 +17,8 @@ the Great Sphinx.
 | `pyramid_casing_stone(bottom_width, top_width, course_height, start, end, inset, joint, face_grid, erosion_strength, seed)` | One closed tapered masonry block facing +Y; tessellated worn surfaces have actual geometric relief, while polished casing can remain planar |
 | `pyramid_assembly(prefix, base_width, height, courses, block_width, joint, casing_fraction)` | Recessed core, individually named alternating-course blocks, worn vacancies, light lower casing and capstone |
 | `sphinx_assembly(prefix, length, width, height, restored_nose)` | Sculpted body/haunches/paws/toes/tail, hood, face, eye/brow/mouth relief and headdress stripes |
+| `sphinx_integral_parts(parts)` | Identify the eight overlapping anatomical volumes for one visible carved lion body |
+| `combine_sculpture_sources(parts)` | Flatten transformed closed body meshes into a world-space surface input for Blender's voxel union |
 | `make_monument_study(kind, ...)` | Scene-independent composition for `pyramid`, `sphinx`, or `giza-study` |
 
 Every piece is a separate `MeshInstance` with unique name, material role and
@@ -29,6 +31,23 @@ micro-normal maps, Cycles raking
 sunlight, local metric UVs, edge softening, dedicated camera views, native
 source preservation and portable GLB export. Studio ground/lights are excluded
 from the exported model.
+
+### Seamless statue sculpt in Blender
+
+The pure-Python recipe deliberately keeps the torso, shoulder, neck, two
+forelegs, haunches and tail as **eight separate editable closed solids**. In
+Blender, a bounded-resolution voxel remesh produces a **single continuous
+limestone skin** from these intersecting body volumes. This removes the
+visible overlap seams while retaining real erosion across the statue.
+Toe reliefs, the damaged face, headdress, bedrock and carvings remain separate
+so their fine details are not lost in the body remesh.
+
+The `source.blend` preserves every original anatomical solid in a hidden
+`Sphinx / hidden editable body sources` collection alongside the visible
+unified body. The GLB exports only the latter and the other detail meshes:
+**387 visible model objects** for the default 394-part combined source study.
+The manifest records the union's voxel size, source count and generated vertex
+count. This remains an original illustrative sculpt, not photogrammetry.
 
 ## Examples
 
@@ -88,7 +107,7 @@ are procedural approximations, not scans of the site.
    does **not** prove that a 3D scene looks like the real Giza Plateau.
 
 The CI smoke profile verifies render/export **functionality** and makes small
-JPEG versions of the actual Sphinx and masonry renders available for visual
+JPEG versions of the actual full-body, side-profile, facial and masonry renders available for visual
 review in the separate `visual-qa` job log. It cannot certify anatomy or
 cinematic realism. Production-grade acceptance must still examine high-sample
 Cycles views and a Three.js import of `model.glb`.
