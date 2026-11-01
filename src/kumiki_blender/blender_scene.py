@@ -10,9 +10,11 @@ import math
 from pathlib import Path
 from typing import Any
 
-from .blender_output import export_revision
+from .blender_output import create_model_scene, export_revision
+from .blender_textures import attach_packed_pbr, ensure_metric_uvs
 from .lattice import Beam, GussetPlate, TowerPlan
 from .recipe import TowerRecipe
+from .render_profiles import select_render_profile
 from .shots import plan_quality_shots
 from .surfaces import PBRSurface, get_surface
 
@@ -37,6 +39,7 @@ def _material(bpy: Any, spec: PBRSurface) -> Any:
     if spec.transmission:
         shader.inputs["Transmission Weight"].default_value = spec.transmission
         shader.inputs["IOR"].default_value = spec.ior
+    attach_packed_pbr(bpy, material, spec)
     return material
 
 
@@ -44,6 +47,7 @@ def _attach_mesh(bpy: Any, collection: Any, name: str, vertices: list[tuple[floa
     mesh = bpy.data.meshes.new(name)
     mesh.from_pydata(vertices, [], faces)
     mesh.update()
+    ensure_metric_uvs(mesh)
     obj = bpy.data.objects.new(name, mesh)
     collection.objects.link(obj)
     obj.data.materials.append(material)
@@ -151,15 +155,12 @@ def build_scene(recipe: TowerRecipe, plan: TowerPlan, destination: Path, *, bpy_
     if destination.exists() or destination.is_symlink():
         raise RuntimeError(f"Output revision already exists: {destination}")
 
-    scene = bpy.data.scenes.new(f"Kumiki / {recipe.asset_id}")
-    # Background Blender builds may have no window; scene overrides work without
-    # relying on a visible UI. Never remove or replace an existing scene.
-    if bpy.context.window is not None:
-        bpy.context.window.scene = scene
+    profile = select_render_profile(recipe.preview_width, recipe.preview_height, recipe.samples)
+    scene = create_model_scene(bpy, recipe.asset_id)
     scene.render.engine = "CYCLES"
-    scene.cycles.samples = recipe.samples
-    scene.render.resolution_x = recipe.preview_width
-    scene.render.resolution_y = recipe.preview_height
+    scene.cycles.samples = profile.samples
+    scene.render.resolution_x = profile.width
+    scene.render.resolution_y = profile.height
     scene.render.resolution_percentage = 100
     scene.render.image_settings.file_format = "PNG"
     scene.view_settings.view_transform = "AgX"
@@ -176,7 +177,7 @@ def build_scene(recipe: TowerRecipe, plan: TowerPlan, destination: Path, *, bpy_
     fastener_steel = _material(bpy, get_surface("galvanized-steel"))
     trim = _material(bpy, get_surface("galvanized-steel", color="#9EA8AD", roughness=0.35))
     platform = _material(bpy, get_surface("cast-concrete", color="#70767B", roughness=0.78))
-    ground_mat = _material(bpy, get_surface("natural-stone", color="#77736A", roughness=0.93))
+    ground_mat = _material(bpy, get_surface("studio-matte", color="#77736A", roughness=0.97))
 
     objects = []
     for beam in plan.beams:
@@ -220,6 +221,8 @@ def build_scene(recipe: TowerRecipe, plan: TowerPlan, destination: Path, *, bpy_
         "status": "structural-prototype / visual-review-pending",
         "provenance": "Original procedural demonstration; NOT a verified replica of a landmark",
         "recipe_sha256": recipe.recipe_sha256,
+        "render_profile": {"name": profile.name, "width": profile.width,
+                           "height": profile.height, "samples": profile.samples},
         "units": "meters",
         "native_axes": "Blender Z-up; exported GLB has glTF-compatible axes",
         "named_parts": {"beams": len(plan.beams), "decks": len(plan.decks),
@@ -227,4 +230,4 @@ def build_scene(recipe: TowerRecipe, plan: TowerPlan, destination: Path, *, bpy_
         "bounds_m": [plan.bounds_min, plan.bounds_max],
     }
     return export_revision(bpy, scene, camera, objects, shots, destination,
-                           samples=recipe.samples, metadata=metadata)
+                           samples=profile.samples, metadata=metadata)

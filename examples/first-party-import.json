@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "asset_id": "portico-roundtrip-study",
+  "creator": "Kumiki Blender contributors",
+  "source_url": "https://github.com/YukiUmetsu/kumiki-blender",
+  "license": "MIT",
+  "attribution": "Original Kumiki Blender modular portico study",
+  "redistribution_allowed": true
+}

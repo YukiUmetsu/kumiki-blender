@@ -183,6 +183,85 @@ def revolve_profile(points_rz: Sequence[Vec2], *, radial_segments: int = 32) -> 
     return Mesh(vertices, tuple(faces))
 
 
+def loft_elliptical_sections(sections: Sequence[tuple[float, float, float, float, float]], *,
+                             axis: str = "z", radial_segments: int = 48,
+                             subdivisions: int = 1,
+                             cross_section_exponent: float = 2.0) -> Mesh:
+    """Skin capped elliptical rings along X, Y or Z into a watertight solid.
+
+    Each section is ``(axis_position, center_a, center_b, radius_a, radius_b)``.
+    Cross-plane coordinates are (Y,Z) for X, (Z,X) for Y, and (X,Y) for Z.
+    Radii can change independently to sculpt a taper, shoulders, anatomy,
+    rounded masonry, or a carved stone silhouette without Blender booleans.
+    """
+    if axis not in ("x", "y", "z"):
+        raise GeometryError("Loft axis must be x, y or z")
+    if not isinstance(sections, (tuple, list)) or not 2 <= len(sections) <= 128:
+        raise GeometryError("Loft requires 2–128 elliptical sections")
+    if type(radial_segments) is not int or not 8 <= radial_segments <= 128:
+        raise GeometryError("Loft radial_segments must be an integer from 8 to 128")
+    if type(subdivisions) is not int or not 1 <= subdivisions <= 8:
+        raise GeometryError("Loft subdivisions must be an integer from 1 to 8")
+    exponent = _finite_number(cross_section_exponent, "cross_section_exponent", 1.2, 6.0)
+    rings = tuple(_vector(section, 5, "elliptical section") for section in sections)
+    for index, section in enumerate(rings):
+        if min(section[3:]) < 0.001:
+            raise GeometryError("Elliptical radii must be at least 0.001 m")
+        if index and section[0] - rings[index - 1][0] < 1e-5:
+            raise GeometryError("Loft sections must strictly advance along their axis")
+
+    if subdivisions > 1:
+        # Nonuniform cubic Hermite interpolation for organic sculpture;
+        # axial positions remain linear/strictly ordered. Tangents use
+        # neighboring section locations, so rounded anatomy retains its
+        # silhouette without Blender-specific subdivision modifiers.
+        dense = []
+        for i in range(len(rings)-1):
+            low, high = rings[i], rings[i+1]
+            delta = high[0]-low[0]
+            for step in range(subdivisions):
+                u = step/subdivisions
+                h00 = 2*u**3 - 3*u*u + 1
+                h10 = u**3 - 2*u*u + u
+                h01 = -2*u**3 + 3*u*u
+                h11 = u**3 - u*u
+                values = [low[0] + delta*u]
+                for field in range(1, 5):
+                    before = rings[max(0, i-1)]
+                    after = rings[min(len(rings)-1, i+2)]
+                    d0 = (high[field]-before[field])/(high[0]-before[0])*delta
+                    d1 = (after[field]-low[field])/(after[0]-low[0])*delta
+                    value = (h00*low[field] + h10*d0 +
+                             h01*high[field] + h11*d1)
+                    values.append(max(0.001, value) if field >= 3 else value)
+                dense.append(tuple(values))
+        dense.append(rings[-1])
+        rings = tuple(dense)
+
+    vertices: list[Vec3] = []
+    for p, a, b, ra, rb in rings:
+        for sector in range(radial_segments):
+            angle = math.tau * sector / radial_segments
+            # Exponent 2 is an ellipse. Higher exponents build flatter sides
+            # and squarer shoulders for carved monuments and bedrock masses,
+            # without introducing discontinuous edges or empty open shells.
+            c, s = math.cos(angle), math.sin(angle)
+            u = ra * math.copysign(abs(c)**(2/exponent), c)
+            v = rb * math.copysign(abs(s)**(2/exponent), s)
+            vertices.append(((p, a+u, b+v) if axis == "x" else
+                             (b+v, p, a+u) if axis == "y" else
+                             (a+u, b+v, p)))
+    faces: list[tuple[int, ...]] = [tuple(reversed(range(radial_segments)))]
+    for ring in range(len(rings)-1):
+        low, high = ring*radial_segments, (ring+1)*radial_segments
+        for sector in range(radial_segments):
+            nxt = (sector+1) % radial_segments
+            faces.append((low+sector, low+nxt, high+nxt, high+sector))
+    last = (len(rings)-1)*radial_segments
+    faces.append(tuple(last+i for i in range(radial_segments)))
+    return Mesh(tuple(vertices), tuple(faces))
+
+
 def semicircular_arch(inner_radius: float, outer_radius: float, depth: float, *, segments: int = 32) -> Mesh:
     """A closed semicircular archivolt, with an actual open central void.
 
@@ -231,6 +310,64 @@ def arch_voussoirs(inner_radius: float, outer_radius: float, depth: float, *, st
         inner_arc = [(inner * math.cos(theta), inner * math.sin(theta)) for theta in reversed(angles)]
         pieces.append(extrude_profile(tuple(outer_arc + inner_arc), depth))
     return tuple(pieces)
+
+
+def pointed_arch_voussoirs(half_span: float, rise: float, band_width: float, depth: float, *,
+                           stone_count: int = 11, joint_gap_m: float = 0.006,
+                           segments_per_stone: int = 6) -> tuple[Mesh, ...]:
+    """Independent, mortar-gapped Gothic arch stones with two true circular arcs.
+
+    The intrados rises from (+/-half_span, 0) to (0, rise). Each side is a
+    different circular arc, meeting at an actual pointed apex; the extrados
+    uses concentric, wider arcs. Coordinates are local XY with depth along Z.
+    No booleans, nonphysical planar decals, or overlapping arch-sized slabs.
+    """
+    a = _finite_number(half_span, "half_span", 0.1, 1000)
+    h = _finite_number(rise, "rise", 0.1, 1000)
+    t = _finite_number(band_width, "band_width", 0.01, 100)
+    depth = _finite_number(depth, "depth", 1e-5, 10000)
+    if h <= a * 1.01:
+        raise GeometryError("Pointed arch rise must exceed the half-span by at least 1%")
+    if h > a * 5:
+        raise GeometryError("Pointed arch rise cannot exceed five times the half-span")
+    if t >= a * 0.65:
+        raise GeometryError("Pointed arch band is too wide for its span")
+    if type(stone_count) is not int or not 3 <= stone_count <= 64:
+        raise GeometryError("stone_count must be an integer from 3 to 64")
+    if type(segments_per_stone) is not int or not 2 <= segments_per_stone <= 16:
+        raise GeometryError("segments_per_stone must be in [2, 16]")
+
+    center_offset = (h*h - a*a) / (2*a)
+    inner_radius = a + center_offset
+    outer_radius = inner_radius + t
+    # Parametrize each side by its own arc angle, reserving u=0.5 for
+    # the apex. Stone boundaries occur at matching fractions of arc length.
+    inner_half_sweep = math.pi - math.acos(-center_offset / inner_radius)
+    mean_half_length = (inner_radius + outer_radius) / 2 * inner_half_sweep
+    joint = _finite_number(joint_gap_m, "joint_gap_m", 0, 1000) / (4 * mean_half_length)
+    if joint > 0.10 / stone_count:
+        raise GeometryError("Joint gap is too wide for pointed arch stones")
+
+    def curve(u: float, radius: float) -> Vec2:
+        if u <= 0.5:
+            apex_angle = math.acos(-center_offset / radius)
+            angle = math.pi + (apex_angle - math.pi) * u * 2
+            return (center_offset + radius * math.cos(angle), radius * math.sin(angle))
+        apex_angle = math.acos(center_offset / radius)
+        angle = apex_angle * (2 - 2*u)
+        return (-center_offset + radius * math.cos(angle), radius * math.sin(angle))
+
+    stones: list[Mesh] = []
+    for index in range(stone_count):
+        start, end = index/stone_count + joint, (index+1)/stone_count - joint
+        steps = [start + (end-start)*i/segments_per_stone for i in range(segments_per_stone+1)]
+        if start < 0.5 < end and not any(abs(u-0.5) < 1e-10 for u in steps):
+            steps.append(0.5)
+            steps.sort()
+        outer_arc = [curve(u, outer_radius) for u in steps]
+        inner_arc = [curve(u, inner_radius) for u in reversed(steps)]
+        stones.append(extrude_profile(tuple(outer_arc + inner_arc), depth))
+    return tuple(stones)
 
 
 def audit_mesh(mesh: Mesh) -> MeshReport:

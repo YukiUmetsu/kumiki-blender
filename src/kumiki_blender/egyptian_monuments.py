@@ -1,0 +1,582 @@
+"""Original, parametric pyramid and lion-bodied royal monument studies.
+
+These are Blender-independent geometric building blocks, NOT survey-accurate
+copies of the monuments at Giza. Dimensions are meters; all meshes are closed.
+Pyramid casing stones are separate solids, while the lion body, head, haunches
+and paws use sculpted elliptical lofts rather than rectangular placeholders.
+"""
+
+from __future__ import annotations
+
+import math
+from dataclasses import dataclass, replace
+
+from .architecture_geometry import (
+    GeometryError, Mesh, MeshInstance, Vec3, _finite_number,
+    loft_elliptical_sections, place_mesh, world_vertices,
+)
+from .rock_weathering import erode_loft, rock_height_field, rough_bedrock_slab
+from .pyramid_survey import (
+    KHUFU_ORIGINAL_BASE_M, KHUFU_ORIGINAL_HEIGHT_M,
+    PETRIE_LAST_PRESERVED_COURSE, petrie_course_tops_m,
+)
+
+
+class MonumentError(ValueError):
+    """Invalid monument composition or dimensions."""
+
+
+@dataclass(frozen=True)
+class MonumentStudy:
+    asset_id: str
+    kind: str
+    instances: tuple[MeshInstance, ...]
+    part_counts: tuple[tuple[str, int], ...]
+    bounds_min: Vec3
+    bounds_max: Vec3
+    parameters: tuple[tuple[str, float | int | bool | str], ...]
+
+
+def pyramid_frustum(bottom_width: float, top_width: float, height: float) -> Mesh:
+    """Closed, square-sided tapered stone mass, from Z=0 to Z=height."""
+    b = _finite_number(bottom_width, "bottom_width", 0.05, 10000) / 2
+    t = _finite_number(top_width, "top_width", 0.01, 10000) / 2
+    h = _finite_number(height, "height", 0.01, 10000)
+    if t > b:
+        raise GeometryError("Pyramid frustum must not widen toward its top")
+    return Mesh(((-b, -b, 0), (b, -b, 0), (b, b, 0), (-b, b, 0),
+                 (-t, -t, h), (t, -t, h), (t, t, h), (-t, t, h)),
+                ((3, 2, 1, 0), (4, 5, 6, 7), (0, 1, 5, 4),
+                 (1, 2, 6, 5), (2, 3, 7, 6), (3, 0, 4, 7)))
+
+
+def pyramid_casing_stone(bottom_width: float, top_width: float,
+                         course_height: float, start: float, end: float, *,
+                         inset: float = 0.2, joint: float = 0.015,
+                         face_grid: int = 1, erosion_strength: float = 0.0,
+                         seed: int = 0, height_offset: float = 0.0) -> Mesh:
+    """One tapered, physically thick casing block for the pyramid's +Y face.
+
+    ``start`` and ``end`` are fractions across a course's horizontal span.
+    Rotate this right-handed solid around Z for the other three faces.
+    Adjacent blocks have actual air joints, not drawn grid lines.
+    """
+    b = _finite_number(bottom_width, "bottom_width", 0.01, 10000)
+    t = _finite_number(top_width, "top_width", 0.01, 10000)
+    h = _finite_number(course_height, "course_height", 0.01, 100)
+    inset = _finite_number(inset, "inset", 0.01, 10)
+    joint = _finite_number(joint, "joint", 0, 1)
+    u0 = _finite_number(start, "start", 0, 1)
+    u1 = _finite_number(end, "end", 0, 1)
+    if t > b or u1 - u0 <= 0.001:
+        raise GeometryError("Casing stone needs a narrowing course and positive interval")
+    if min(b, t) * (u1-u0) <= joint + 0.005:
+        raise GeometryError("Casing block would collapse after its mortar joint")
+    if inset >= t/2:
+        raise GeometryError("Casing stone inset cannot reach the pyramid center")
+    if type(face_grid) is not int or not 1 <= face_grid <= 12:
+        raise GeometryError("Casing face_grid must be an integer from 1 to 12")
+    erosion_strength = _finite_number(erosion_strength, "erosion_strength", 0, 0.5)
+    height_offset = _finite_number(height_offset, "height_offset", -10000, 10000)
+    if erosion_strength > min(inset*0.95, h*0.3):
+        raise GeometryError("Casing relief must fit behind its stone edges")
+    if type(seed) is not int or not 0 <= seed <= 100000:
+        raise GeometryError("Casing seed must be an integer from 0 to 100000")
+    x0, x1 = -b/2 + b*u0 + joint/2, -b/2 + b*u1 - joint/2
+    x2, x3 = -t/2 + t*u0 + joint/2, -t/2 + t*u1 - joint/2
+    y0, y1 = b/2, t/2
+    # Four exterior corners followed by their recessed (interior) copies.
+    verts = ((x0, y0, 0), (x1, y0, 0), (x3, y1, h), (x2, y1, h),
+             (x0, y0-inset, 0), (x1, y0-inset, 0),
+             (x3, y1-inset, h), (x2, y1-inset, h))
+    faces = ((3, 2, 1, 0), (4, 5, 6, 7), (0, 1, 5, 4),
+             (1, 2, 6, 5), (2, 3, 7, 6), (3, 0, 4, 7))
+    if face_grid == 1:
+        return Mesh(verts, faces)
+
+    # A tessellated *physical* outside face provides silhouette-level chips
+    # and light-catching relief rather than shader-only normal variation.
+    # The inner surface stays planar against the solid tapered core.
+    grid_w, grid_h = face_grid*2, face_grid
+    row_width = grid_w+1
+    layer_count = (grid_w+1)*(grid_h+1)
+    points = []
+    for outside in (True, False):
+        for row in range(grid_h+1):
+            v = row/grid_h
+            left_x = x0*(1-v) + x2*v
+            right_x = x1*(1-v) + x3*v
+            yy = y0*(1-v) + y1*v
+            zz = h*v
+            for col in range(grid_w+1):
+                u = col/grid_w
+                xx = left_x*(1-u) + right_x*u
+                dent = 0.0
+                if outside:
+                    mineral = rock_height_field(xx, yy, zz+height_offset,
+                                                seed=seed, strata_spacing=.31)
+                    # High-frequency, asymmetrically broken arrises survive
+                    # distant views better than a smooth sine-wave height map.
+                    chips = math.sin(xx*13.7 + seed*.31)*math.cos(
+                        (zz+height_offset)*17.9 - seed*.17)
+                    pit = max(0.0, mineral*.72 + chips*.48)**2
+                    interior = math.sin(math.pi*u)*math.sin(math.pi*v)
+                    dent = erosion_strength*((.40+.60*interior)*(
+                        mineral*.75 + chips*.34) - .66*pit)
+                    # Damage boundary vertices *inward* from each mortar
+                    # edge. The back face remains a solid, tapered wedge;
+                    # the outside face has genuinely irregular chip outlines.
+                    chip_depth = erosion_strength*.48*max(
+                        0.0, abs(mineral*.65 + chips*.65)-.12)
+                    if col == 0:
+                        xx += chip_depth
+                    elif col == grid_w:
+                        xx -= chip_depth
+                    if row == 0:
+                        zz += chip_depth*.48
+                    elif row == grid_h:
+                        zz -= chip_depth*.48
+                points.append((xx, yy+(dent if outside else -inset), zz))
+    all_faces: list[tuple[int, ...]] = []
+    for row in range(grid_h):
+        for col in range(grid_w):
+            a = row*row_width+col
+            b, c, d = a+1, a+row_width+1, a+row_width
+            all_faces.append((d, c, b, a))
+            all_faces.append((a+layer_count, b+layer_count,
+                              c+layer_count, d+layer_count))
+    perimeter = ([col for col in range(grid_w+1)] +
+                 [row*row_width+grid_w for row in range(1, grid_h+1)] +
+                 [grid_h*row_width+col for col in range(grid_w-1, -1, -1)] +
+                 [row*row_width for row in range(grid_h-1, 0, -1)])
+    for a, b in zip(perimeter, (*perimeter[1:], perimeter[0])):
+        all_faces.append((a, b, b+layer_count, a+layer_count))
+    return Mesh(tuple(points), tuple(all_faces))
+
+
+def pyramid_assembly(*, prefix: str, base_width: float = 36.0,
+                     height: float = 23.0, courses: int = 18,
+                     block_width: float = 4.5, joint: float = 0.025,
+                     casing_fraction: float = 0.04) -> tuple[MeshInstance, ...]:
+    """A hollow-free pyramid core with individually editable four-face courses.
+
+    Lower, light-colored Tura-inspired casing and upper weathered exterior
+    can be controlled independently. Alternating courses offset vertical
+    joints, and a few deterministic worn gaps expose the recessed core.
+    """
+    base = _finite_number(base_width, "base_width", 8, 1000)
+    height = _finite_number(height, "height", 5, 700)
+    target = _finite_number(block_width, "block_width", 0.4, 30)
+    joint = _finite_number(joint, "joint", 0, 0.1)
+    casing_fraction = _finite_number(casing_fraction, "casing_fraction", 0, 1)
+    if type(courses) is not int or not 6 <= courses <= 128:
+        raise GeometryError("courses must be an integer from 6 to 128")
+    if height/base < 0.25 or height/base > 1.1:
+        raise GeometryError("Pyramid height/base ratio must be in [0.25, 1.1]")
+    cap_h = height / courses * 0.70
+    work_h = height - cap_h
+    cap_base = base * cap_h / height
+    # A consistent tapered inner mass supports every exposed/weathered stone.
+    inset = min(base*0.008, cap_base*0.30, 0.45)
+    if joint > min(target/10, cap_base/12):
+        raise GeometryError("Mortar joint is too wide for the upper courses")
+    core = pyramid_frustum(base-2*inset, cap_base-2*inset, work_h)
+    items = [place_mesh(core, name=f"{prefix}-core", material="core-limestone")]
+    for course in range(courses):
+        # Inset the tops/bottoms of consecutive courses to form a genuine
+        # horizontal mortar seam above the recessed core, not a painted line.
+        z0 = work_h * course / courses + (joint/2 if course else 0)
+        z1 = work_h * (course+1) / courses - (joint/2 if course+1 < courses else 0)
+        w0 = base*(1-z0/height)
+        w1 = base*(1-z1/height)
+        blocks = max(1, min(16, math.ceil(w1/target)))
+        boundaries = ([0] + [(n+0.5)/blocks for n in range(blocks)] + [1]
+                      if course % 2 else [n/blocks for n in range(blocks+1)])
+        for face in range(4):
+            angle = face*math.pi/2
+            axes = {"axis_x": (round(math.cos(angle)), round(math.sin(angle)), 0),
+                    "axis_y": (-round(math.sin(angle)), round(math.cos(angle)), 0),
+                    "axis_z": (0, 0, 1)}
+            for index, (start, end) in enumerate(zip(boundaries, boundaries[1:])):
+                # Missing weathered blocks are an intentional, predictable
+                # outer-casing loss. Solid core remains below the vacancy.
+                covered = (course+0.5)/courses <= casing_fraction
+                if not covered and (course*17+face*13+index*7) % 47 == 0:
+                    continue
+                stone = pyramid_casing_stone(
+                    w0, w1, z1-z0, start, end, inset=inset, joint=joint,
+                    face_grid=1 if covered else 8,
+                    erosion_strength=0 if covered else min(.215, inset*.78, (z1-z0)*.22),
+                    height_offset=z0, seed=(course*71+face*13+index*3) % 100000)
+                material = ("casing-limestone" if covered else
+                            "weathered-limestone" if (course+face+index) % 3 else
+                            "core-limestone")
+                items.append(place_mesh(stone, name=f"{prefix}-course-{course:03d}-"
+                                             f"face-{face}-stone-{index:02d}",
+                                        origin=(0, 0, z0), material=material, **axes))
+    cap = pyramid_frustum(cap_base, 0.045, cap_h)
+    items.append(place_mesh(cap, name=f"{prefix}-capstone", origin=(0, 0, work_h),
+                            material="casing-limestone"))
+    return tuple(items)
+
+
+def khufu_petrie_assembly(*, prefix: str,
+                          last_course: int = PETRIE_LAST_PRESERVED_COURSE,
+                          target_block_width: float = 4.2) -> tuple[MeshInstance, ...]:
+    """Measured course-height study, with scalable batched exterior masonry.
+
+    Course elevations come from Petrie's 1883 NE measurements. Course widths
+    follow a *nominal* 230.4 m base / 146.5 m original apex envelope, so block
+    positions, counts, erosion and individual cuts are illustrative, not a
+    measured archaeological plan. The model ends in a flat damaged top,
+    without the invented pristine capstone of the miniature preset.
+
+    Four batches per course (one per cardinal face) keep the Blender scene
+    below ~810 objects instead of tens of thousands of loose stone objects.
+    Each batch is an ordinary mesh holding separate watertight stone wedges,
+    with open mortar joints and physically chipped close-range stones.
+    """
+    tops = petrie_course_tops_m(last_course=last_course)
+    target = _finite_number(target_block_width, "target_block_width", 1.5, 12)
+    base = KHUFU_ORIGINAL_BASE_M
+    apex = KHUFU_ORIGINAL_HEIGHT_M
+    top_height = tops[-1]
+    inset, joint = 0.42, 0.028
+    top_width = base*(1-top_height/apex)
+    core = pyramid_frustum(base-2*inset, top_width-2*inset, top_height)
+    items: list[MeshInstance] = [
+        place_mesh(core, name=f"{prefix}-core", material="core-limestone")
+    ]
+
+    previous_top = 0.0
+    for course, course_top in enumerate(tops):
+        # A level represents the *top* of one measured course. We retain a
+        # narrow physical gap at both horizontal stone-bed joints.
+        lower = previous_top + (joint/2 if course else 0.0)
+        upper = course_top - (joint/2 if course < len(tops)-1 else 0.0)
+        previous_top = course_top
+        bottom_w = base*(1-lower/apex)
+        upper_w = base*(1-upper/apex)
+        count = max(2, math.ceil(upper_w/target))
+        if course % 2:
+            intervals = [0.0] + [(i+0.5)/count for i in range(count)] + [1.0]
+        else:
+            intervals = [i/count for i in range(count+1)]
+        # Close masonry is physically roughened, but distant upper courses
+        # retain real mortar joints with cheaper watertight wedge geometry.
+        grid = 4 if course < 12 else (2 if course < 42 or course % 11 == 0 else 1)
+        erosion = min(0.19, inset*.72, (upper-lower)*.23) if grid > 1 else 0.0
+        for face in range(4):
+            offset = face*math.pi/2
+            axes = {
+                "axis_x": (round(math.cos(offset)), round(math.sin(offset)), 0),
+                "axis_y": (-round(math.sin(offset)), round(math.cos(offset)), 0),
+                "axis_z": (0, 0, 1),
+            }
+            vertices: list[Vec3] = []
+            faces: list[tuple[int, ...]] = []
+            for stone_no, (start, end) in enumerate(zip(intervals, intervals[1:])):
+                block = pyramid_casing_stone(
+                    bottom_w, upper_w, upper-lower, start, end,
+                    inset=inset, joint=joint, face_grid=grid,
+                    erosion_strength=erosion, height_offset=lower,
+                    seed=(course*71+face*19+stone_no*7) % 100000)
+                index_offset = len(vertices)
+                vertices.extend(block.vertices)
+                faces.extend(tuple(i+index_offset for i in polygon) for polygon in block.faces)
+            material = ("weathered-limestone" if course % 5 else "core-limestone")
+            items.append(place_mesh(
+                Mesh(tuple(vertices), tuple(faces)),
+                name=f"{prefix}-course-{course+1:03d}-face-{face}-batch",
+                origin=(0, 0, lower), material=material, **axes))
+    return tuple(items)
+
+
+def _sculpt_face_relief(mesh: Mesh, *, scale_x: float, scale_y: float,
+                       scale_z: float) -> Mesh:
+    """Carve anatomical planes and surviving facial features into the head.
+
+    Relief is applied to the existing manifold face shell rather than layering
+    protruding eye/brow blobs onto it. The present-day nose has a preserved
+    bridge but a chipped, recessed lower tip; lips and chin project subtly
+    from the jaw. All displacements are in *normalized* statue coordinates.
+    """
+    vertices = []
+    for px, py, pz in mesh.vertices:
+        xx, yy, zz = px/scale_x, py/scale_y, pz/scale_z
+        front = max(0.0, min(1.0, (-xx-3.96)/.31))
+        front = front*front*(3.0-2.0*front)
+        lateral = abs(yy)
+        # The real carving has restrained lids, rather than wide dark holes.
+        # A previous .145 m eye recess plus a .185 m broken-nose recess read
+        # like a cartoon mask after voxel remeshing; keep both shallow.
+        eye = math.exp(-((lateral-.267)/.117)**2 - ((zz-4.050)/.056)**2)
+        upper_lid = math.exp(-((lateral-.267)/.157)**2 - ((zz-4.124)/.047)**2)
+        brow = math.exp(-((lateral-.29)/.175)**2 - ((zz-4.190)/.065)**2)
+        cheekbone = math.exp(-((lateral-.366)/.181)**2 - ((zz-3.779)/.170)**2)
+        hollow = math.exp(-((lateral-.51)/.130)**2 - ((zz-3.95)/.178)**2)
+        nose_root = math.exp(-(yy/.124)**2 - ((zz-4.062)/.140)**2)
+        bridge = math.exp(-(yy/.099)**2 - ((zz-3.940)/.172)**2)
+        broken_tip = math.exp(-(yy/.111)**4 - ((zz-3.734)/.093)**2)
+        upper_lip = math.exp(-(yy/.208)**4 - ((zz-3.493)/.048)**2)
+        mouth_cut = math.exp(-(yy/.255)**6 - ((zz-3.433)/.019)**2)
+        lower_lip = math.exp(-(yy/.218)**4 - ((zz-3.382)/.044)**2)
+        chin = math.exp(-(yy/.256)**4 - ((zz-3.237)/.111)**2)
+        jaw = math.exp(-((lateral-.343)/.166)**2 - ((zz-3.360)/.207)**2)
+        wear = rock_height_field(px*4.7, py*4.7, pz*4.7,
+                                 seed=301, strata_spacing=.42)
+        # X points toward the rear: negative means a projected cheek/nasal
+        # bridge, positive means recesses. The bridge ends in an uneven,
+        # visibly broken nasal scar rather than an intact spheroidal nose.
+        relief = front*(.065*eye - .024*upper_lid - .042*brow
+                        - .046*cheekbone + .026*hollow
+                        - .017*nose_root - .077*bridge
+                        + (.069 + .011*wear)*broken_tip
+                        - .022*upper_lip + .021*mouth_cut
+                        - .016*lower_lip - .035*chin - .025*jaw)
+        # Angular jaw and temporal narrowing break the toy-like oval facial
+        # silhouette, while the back half of the head stays untouched.
+        jaw_width = .022*jaw - .015*hollow
+        vertices.append((px+relief*scale_x,
+                         py + math.copysign(jaw_width*scale_y*front, yy), pz))
+    return Mesh(tuple(vertices), mesh.faces)
+
+
+def sphinx_assembly(*, prefix: str, length: float = 10.5,
+                    width: float | None = None, height: float | None = None,
+                    restored_nose: bool = False) -> tuple[MeshInstance, ...]:
+    """Lion-bodied royal figure, assembled from shaped closed stone solids.
+
+    -X is the front of its face and forepaws. This is an interpretive
+    silhouette study, not a scan or archaeological restoration. A nose can
+    be toggled explicitly; it is absent on the default present-day study.
+    """
+    length = _finite_number(length, "sphinx length", 3, 150)
+    width = _finite_number(width if width is not None else length*3.4/10.5,
+                           "sphinx width", .9, 150)
+    height = _finite_number(height if height is not None else length*3.6/10.5,
+                            "sphinx height", 1.0, 150)
+    if type(restored_nose) is not bool:
+        raise GeometryError("restored_nose must be boolean")
+    x, y, z = length/10.5, width/3.4, height/4.6
+
+    def along_x(points: tuple[tuple[float, float, float, float, float], ...], *,
+                roughness: float = .045, seed: int = 17,
+                exponent: float = 3.0, bedding: float = .045,
+                pitting: float = .027) -> Mesh:
+        mesh = loft_elliptical_sections(tuple((p*x, a*y, b*z, ra*y, rb*z)
+                                              for p, a, b, ra, rb in points), axis="x",
+                                        radial_segments=96, subdivisions=5,
+                                        cross_section_exponent=exponent)
+        return erode_loft(mesh, axis="x", radial_segments=96,
+                          strength=roughness*min(y, z), seed=seed,
+                          strata_spacing=.31*z,
+                          bedding_strength=bedding*min(y, z),
+                          pitting_strength=pitting*min(y, z))
+
+    def along_z(points: tuple[tuple[float, float, float, float, float], ...], *,
+                roughness: float = .025, seed: int = 19,
+                exponent: float = 2.6, subdivisions: int = 5,
+                bedding: float = .009, pitting: float = .009) -> Mesh:
+        mesh = loft_elliptical_sections(tuple((p*z, a*x, b*y, ra*x, rb*y)
+                                              for p, a, b, ra, rb in points),
+                                        radial_segments=96, subdivisions=subdivisions,
+                                        cross_section_exponent=exponent)
+        return erode_loft(mesh, axis="z", radial_segments=96,
+                          strength=roughness*min(x, y), seed=seed,
+                          strata_spacing=.29*z,
+                          bedding_strength=bedding*min(x, y),
+                          pitting_strength=pitting*min(x, y))
+
+    items: list[MeshInstance] = []
+
+    def part(name: str, mesh: Mesh, material: str = "sphinx-limestone") -> None:
+        items.append(place_mesh(mesh, name=f"{prefix}-{name}", material=material))
+
+    # The statue is hewn from a bedrock ridge, not perched on a tall plinth.
+    # A low irregular terrain seam keeps the paws grounded in site material.
+    part("bedrock", rough_bedrock_slab(length*1.065, width*1.37, height*.058,
+                                       roughness=.10*min(x, y, z), seed=271),
+         "bedrock-limestone")
+    # Long recumbent lion back, tapering rump and forward shoulder masses.
+    part("lion-torso", along_x(((-3.30, 0, 1.57, .68, .76),
+                                (-2.86, 0, 1.80, 1.00, 1.00),
+                                (-2.28, 0, 1.64, 1.16, 1.00),
+                                (-1.20, 0, 1.28, 1.22, .94),
+                                (0.25, 0, 1.17, 1.29, .90),
+                                (1.65, 0, 1.18, 1.29, .89),
+                                (2.85, 0, 1.28, 1.13, .90),
+                                (3.67, 0, 1.10, .78, .69),
+                                (4.16, 0, .99, .22, .29)),
+                               roughness=.17, seed=211, exponent=2.25,
+                               bedding=.083, pitting=.061),
+         "sphinx-limestone")
+    # A forward shoulder mass merges with the lion torso; the narrower neck
+    # connects it to the headdress. The old single upstanding spheroid made the
+    # figure read like a bust standing on a pedestal.
+    part("chest", along_x(((-3.91, 0, 1.49, .54, .64),
+                            (-3.60, 0, 1.49, .72, .82),
+                            (-3.25, 0, 1.45, .92, .94),
+                            (-2.80, 0, 1.36, 1.07, 1.02),
+                            (-2.14, 0, 1.30, 1.21, .99)),
+                          roughness=.14, seed=43, exponent=2.38,
+                          bedding=.077, pitting=.051))
+    # Broad, sloping royal breast/shoulder, not the former straight cylinder
+    # carrying a disproportionately oversized helmet above a toy-like body.
+    part("carved-neck", along_z(((1.68, -2.94, 0, 1.04, 1.00),
+                                  (2.03, -3.08, 0, .94, .93),
+                                  (2.43, -3.29, 0, .75, .81),
+                                  (2.78, -3.45, 0, .61, .72),
+                                  (3.13, -3.50, 0, .50, .64)),
+                                 roughness=.075, seed=49, exponent=2.55,
+                                 bedding=.020, pitting=.018))
+    for side, sign in (("left", -1), ("right", 1)):
+        side_y = sign*1.07
+        part(f"{side}-forepaw", along_x(((-5.43, side_y, .32, .22, .19),
+                                         (-5.12, side_y, .33, .33, .26),
+                                         (-4.70, side_y, .35, .39, .30),
+                                         (-4.03, side_y, .38, .43, .34),
+                                         (-3.34, side_y, .43, .45, .37),
+                                         (-2.75, side_y, .53, .45, .46),
+                                         (-2.20, side_y, .74, .42, .61),
+                                         (-1.90, side_y, .87, .37, .63)),
+                                        roughness=.145, seed=61, exponent=2.42,
+                                        bedding=.047, pitting=.031))
+        # Four shallow, closely spaced digits are recessed into each forepaw.
+        # Keeping them as individually editable relief sources retains the
+        # inter-toe shadow grooves at cinematic close-up distances.
+        for toe in range(4):
+            toe_y = side_y + (toe-1.5)*.177
+            part(f"{side}-toe-{toe}", along_x(((-5.51, toe_y, .225, .058, .085),
+                                                (-5.39, toe_y, .24, .105, .125),
+                                                (-5.17, toe_y, .25, .126, .139),
+                                                (-4.93, toe_y, .265, .129, .143)),
+                                               roughness=.015, seed=73+toe,
+                                               bedding=.004, pitting=.006),
+                 "weathered-limestone")
+        part(f"{side}-haunch", along_x(((1.90, sign*1.03, 1.03, .37, .56),
+                                       (2.40, sign*1.04, 1.07, .62, .81),
+                                       (3.14, sign*1.02, 1.03, .67, .84),
+                                       (3.75, sign*.98, .84, .50, .65),
+                                       (4.08, sign*.94, .60, .18, .31)),
+                                      roughness=.155, seed=151, exponent=2.19,
+                                      bedding=.086, pitting=.057))
+    part("curved-tail", along_x(((2.1, -1.04, .61, .14, .15),
+                                (2.7, -1.26, .58, .16, .17),
+                                (3.4, -1.38, .65, .15, .15),
+                                (3.86, -1.27, .74, .13, .12),
+                                (4.13, -1.12, .82, .09, .09)),
+                               roughness=.025, seed=156, bedding=.012,
+                               pitting=.009))
+    # Broad rounded nemes headdress sits behind a separate sculpted face.
+    part("nemes-hood", along_z(((2.70, -3.40, 0, .60, .79),
+                                (3.20, -3.49, 0, .70, .93),
+                                (3.74, -3.51, 0, .73, 1.04),
+                                (4.14, -3.47, 0, .69, .99),
+                                (4.43, -3.48, 0, .65, .88),
+                                (4.56, -3.50, 0, .53, .72),
+                                (4.60, -3.50, 0, .43, .61)),
+                               roughness=.028, seed=89, exponent=3.5), "casing-limestone")
+    # A broader, less convex facial plane fills the front of the nemes.
+    # Earlier .53 m front radii created a bulbous little mask surrounded by
+    # a huge helmet; distinct cheek and brow planes now define the face.
+    face = along_z(((2.93, -3.86, 0, .23, .25),
+                    (3.14, -3.93, 0, .32, .39),
+                    (3.43, -3.95, 0, .42, .48),
+                    (3.73, -3.94, 0, .45, .57),
+                    (4.00, -3.91, 0, .48, .61),
+                    (4.23, -3.90, 0, .44, .58),
+                    (4.38, -3.88, 0, .34, .48)),
+                   roughness=.012, seed=97, exponent=3.65,
+                   subdivisions=8, bedding=.002, pitting=.004)
+    part("face", _sculpt_face_relief(face, scale_x=x, scale_y=y, scale_z=z))
+    for side, sign in (("left", -1), ("right", 1)):
+        part(f"nemes-{side}-lappet", along_z(((2.18, -3.43, sign*.74, .10, .20),
+                                             (2.60, -3.49, sign*.77, .12, .23),
+                                             (3.25, -3.53, sign*.80, .14, .24),
+                                             (3.88, -3.49, sign*.82, .15, .21)),
+                                            roughness=.022, seed=105, exponent=5.0),
+             "casing-limestone")
+        part(f"{side}-ear", along_z(((3.56, -3.96, sign*.69, .10, .10),
+                                    (3.85, -4.00, sign*.76, .15, .14),
+                                    (4.12, -3.95, sign*.71, .10, .10)),
+                                   roughness=.023, seed=118))
+        # Eye/brow objects and oversized headdress collars looked like
+        # cartoon attachments. The facial details are now sculpted directly
+        # and natural bedding provides subtler grooves on both lappets.
+    if restored_nose:
+        part("optional-restored-nose", along_z(((3.52, -4.43, 0, .13, .17),
+                                                (3.82, -4.52, 0, .19, .13),
+                                                (4.18, -4.45, 0, .09, .12))))
+    return tuple(items)
+
+
+def make_monument_study(*, kind: str = "giza-study",
+                        pyramid_base: float = 36.0, pyramid_height: float = 23.0,
+                        pyramid_courses: int = 18, casing_fraction: float = 0.04,
+                        sphinx_length: float = 10.5, restored_nose: bool = False,
+                        pyramid_preset: str = "illustrative") -> MonumentStudy:
+    """Compose a pyramid, a lion-bodied royal figure or a staged pair."""
+    if kind not in ("pyramid", "sphinx", "giza-study"):
+        raise MonumentError("kind must be pyramid, sphinx or giza-study")
+    if pyramid_preset not in ("illustrative", "khufu-petrie"):
+        raise MonumentError("pyramid_preset must be illustrative or khufu-petrie")
+    if pyramid_preset == "khufu-petrie":
+        if kind != "pyramid":
+            raise MonumentError("khufu-petrie currently requires kind=pyramid: the combined Giza site layout is not surveyed")
+        if (pyramid_base != 36.0 or pyramid_height != 23.0 or
+                pyramid_courses != 18 or casing_fraction != 0.04):
+            raise MonumentError("khufu-petrie uses fixed historic geometry; omit the illustrative pyramid dimension/course/casing options")
+    # Validate the whole exposed recipe even if an unused optional model is
+    # disabled. Otherwise a sphinx-only plan could emit non-finite JSON in
+    # its manifest, or accept an unsafe setting that changes behavior later.
+    pyramid_base = _finite_number(pyramid_base, "pyramid_base", 8, 1000)
+    pyramid_height = _finite_number(pyramid_height, "pyramid_height", 5, 700)
+    casing_fraction = _finite_number(casing_fraction, "casing_fraction", 0, 1)
+    sphinx_length = _finite_number(sphinx_length, "sphinx_length", 3, 150)
+    if type(pyramid_courses) is not int or not 6 <= pyramid_courses <= 128:
+        raise MonumentError("pyramid_courses must be an integer from 6 to 128")
+    if type(restored_nose) is not bool:
+        raise MonumentError("restored_nose must be boolean")
+    parts: list[MeshInstance] = []
+    if kind in ("pyramid", "giza-study"):
+        shift_y = 8.0 if kind == "giza-study" else 0.0
+        if pyramid_preset == "khufu-petrie":
+            pyramid_base = KHUFU_ORIGINAL_BASE_M
+            pyramid_height = KHUFU_ORIGINAL_HEIGHT_M
+            pyramid_courses = PETRIE_LAST_PRESERVED_COURSE
+            casing_fraction = 0.0
+            pyramid_parts = khufu_petrie_assembly(prefix="pyramid")
+        else:
+            pyramid_parts = pyramid_assembly(
+                prefix="pyramid", base_width=pyramid_base,
+                height=pyramid_height, courses=pyramid_courses,
+                casing_fraction=casing_fraction)
+        for part in pyramid_parts:
+            parts.append(replace(part, origin=(part.origin[0], part.origin[1]+shift_y,
+                                               part.origin[2])))
+    if kind in ("sphinx", "giza-study"):
+        shift_y = -(pyramid_base/2+8.0) if kind == "giza-study" else 0.0
+        for part in sphinx_assembly(prefix="sphinx", length=sphinx_length,
+                                    restored_nose=restored_nose):
+            parts.append(replace(part, origin=(part.origin[0], part.origin[1]+shift_y,
+                                               part.origin[2]+0.02)))
+    mins = [float("inf")]*3
+    maxs = [float("-inf")]*3
+    for part in parts:
+        for vertex in world_vertices(part):
+            for axis in range(3):
+                mins[axis] = min(mins[axis], vertex[axis])
+                maxs[axis] = max(maxs[axis], vertex[axis])
+    return MonumentStudy(
+        asset_id=(f"egyptian-{kind}-khufu-petrie-course-study" if pyramid_preset == "khufu-petrie"
+                  else f"egyptian-{kind}-detail-study"), kind=kind,
+        instances=tuple(parts),
+        part_counts=(("pyramid_parts", sum(p.name.startswith("pyramid-") for p in parts)),
+                     ("sphinx_parts", sum(p.name.startswith("sphinx-") for p in parts))),
+        bounds_min=tuple(mins), bounds_max=tuple(maxs),
+        parameters=(("pyramid_base_m", pyramid_base), ("pyramid_height_m", pyramid_height),
+                    ("pyramid_courses", pyramid_courses), ("casing_fraction", casing_fraction),
+                    ("sphinx_length_m", sphinx_length), ("restored_nose", restored_nose),
+                    ("pyramid_preset", pyramid_preset)),
+    )

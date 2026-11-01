@@ -28,6 +28,18 @@ class SurfaceTests(unittest.TestCase):
         with self.assertRaises(SurfaceError):
             get_surface("painted-steel", roughness=float("nan"))
 
+    def test_weathered_stone_strength_is_configurable_and_presets_are_immutable(self):
+        base = get_surface("weathered-stone")
+        adjusted = get_surface("weathered-stone", weathering_strength=0.83)
+        self.assertEqual(adjusted.weathering_strength, 0.83)
+        self.assertEqual(get_surface("weathered-stone"), base)
+        self.assertNotEqual(adjusted, base)
+        for spec in (-0.1, 1.2, True, float("inf")):
+            with self.subTest(spec=spec), self.assertRaises(SurfaceError):
+                get_surface("weathered-stone", weathering_strength=spec)
+        with self.assertRaises(SurfaceError):
+            get_surface("natural-stone", weathering_strength=0.5)
+
 
 if __name__ == "__main__":
     unittest.main()

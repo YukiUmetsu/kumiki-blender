@@ -7,10 +7,12 @@ import math
 from pathlib import Path
 from typing import Any
 
-from .blender_output import export_revision
+from .blender_output import create_model_scene, export_revision
 from .blender_scene import _create_box, _material
+from .blender_textures import ensure_cylindrical_uvs, ensure_metric_uvs
 from .portico import PorticoStudy
-from .shots import QualityShot
+from .render_profiles import select_render_profile
+from .shots import plan_capital_shot, plan_portico_shots
 from .surfaces import get_surface
 
 
@@ -25,13 +27,12 @@ def build_portico_scene(study: PorticoStudy, destination: Path, *, bpy_module: A
     if destination.exists() or destination.is_symlink():
         raise RuntimeError(f"Output revision already exists: {destination}")
 
-    scene = bpy.data.scenes.new(f"Kumiki / {study.asset_id}")
-    if bpy.context.window is not None:
-        bpy.context.window.scene = scene
+    profile = select_render_profile(1440, 900, 48)
+    scene = create_model_scene(bpy, study.asset_id)
     scene.render.engine = "CYCLES"
-    scene.cycles.samples = 48
-    scene.render.resolution_x = 1440
-    scene.render.resolution_y = 900
+    scene.cycles.samples = profile.samples
+    scene.render.resolution_x = profile.width
+    scene.render.resolution_y = profile.height
     scene.render.resolution_percentage = 100
     scene.render.image_settings.file_format = "PNG"
     scene.render.film_transparent = False
@@ -59,8 +60,15 @@ def build_portico_scene(study: PorticoStudy, destination: Path, *, bpy_module: A
             mesh = bpy.data.meshes.new(f"Geometry / {instance.name}")
             mesh.from_pydata(instance.mesh.vertices, [], instance.mesh.faces)
             mesh.update()
+            wrapped_column = ("-baluster-" in instance.name or
+                              instance.name.endswith("-shaft") or
+                              instance.name.endswith(("-base-torus", "-capital-necking", "-capital-echinus")))
+            if wrapped_column:
+                ensure_cylindrical_uvs(mesh)
+            else:
+                ensure_metric_uvs(mesh)
             mesh.materials.append(palette[instance.material])
-            if instance.name.startswith(("column-", "arch-")):
+            if instance.name.startswith(("column-", "arch-", "balustrade-")):
                 for polygon in mesh.polygons:
                     if len(polygon.vertices) == 4:
                         polygon.use_smooth = True
@@ -74,13 +82,19 @@ def build_portico_scene(study: PorticoStudy, destination: Path, *, bpy_module: A
             (0, 0, 0, 1),
         ))
         obj["kumiki_part"] = instance.name.split("-")[0]
-        bevel = obj.modifiers.new("Light-catching masonry edges", "BEVEL")
-        bevel.width = 0.006 if instance.name.startswith("column-") and "-flute-" in instance.name else 0.018
-        bevel.segments = 2
-        obj.modifiers.new("Masonry weighted normals", "WEIGHTED_NORMAL")
+        # The flutes and spiral volutes are already sculpted into the mesh.
+        # A broad bevel would obliterate their 20 mm channels and thin turns.
+        actual_carving = ("-baluster-" in instance.name or
+                          instance.name.endswith("-shaft") or
+                          "-volute-front-" in instance.name or "-volute-back-" in instance.name)
+        if not actual_carving:
+            bevel = obj.modifiers.new("Light-catching masonry edges", "BEVEL")
+            bevel.width = 0.012 if instance.name.startswith("column-") else 0.018
+            bevel.segments = 2
+            obj.modifiers.new("Masonry weighted normals", "WEIGHTED_NORMAL")
         objects.append(obj)
 
-    floor_material = _material(bpy, get_surface("cast-concrete", color="#737673", roughness=0.93))
+    floor_material = _material(bpy, get_surface("studio-matte", color="#737673", roughness=0.97))
     extent = study.bounds_max[0] - study.bounds_min[0]
     _create_box(bpy, stage, "Stage / matte ground", (extent * 1.8, 22, 0.4),
                 (0, 0, -0.56), floor_material)
@@ -112,19 +126,21 @@ def build_portico_scene(study: PorticoStudy, destination: Path, *, bpy_module: A
     camera_data.type = "ORTHO"
     camera = bpy.data.objects.new(camera_data.name, camera_data)
     stage.objects.link(camera)
-    span = study.bounds_max[0] - study.bounds_min[0]
-    shots = (
-        QualityShot("hero", (span * 0.65, -span * 1.55, 10.5), (0, 0, 3.7), max(11, span * 0.78)),
-        QualityShot("front", (0, -span * 1.5, 5.0), (0, 0, 3.6), max(10, span * 0.68)),
-        QualityShot("detail", (4.2, -9, 7.5), (0, 0, 5.1), 4.8),
-    )
+    shots = (*plan_portico_shots(study.bounds_min, study.bounds_max),
+             plan_capital_shot(study.bays))
     metadata = {
         "asset_id": study.asset_id,
         "generator": "kumiki-blender/modular-portico",
         "status": "architectural-detail-study / visual-review-pending",
         "provenance": "Original illustrative architecture; no reference landmark claimed",
-        "recipe_sha256": hashlib.sha256(f"portico-study-v1:bays={study.bays}".encode()).hexdigest(),
-        "parameters": {"bays": study.bays, "bay_pitch_m": 4.2},
+        "recipe_sha256": hashlib.sha256(
+            f"portico-study-v3:bays={study.bays}:order={study.order}:"
+            f"arch={study.arch_style}:balustrade={study.balustrade}".encode()).hexdigest(),
+        "render_profile": {"name": profile.name, "width": profile.width,
+                           "height": profile.height, "samples": profile.samples},
+        "parameters": {"bays": study.bays, "order": study.order,
+                       "arch_style": study.arch_style, "balustrade": study.balustrade,
+                       "bay_pitch_m": 4.2},
         "units": "meters",
         "native_axes": "Blender Z-up; GLB exported with glTF-compatible axes",
         "named_parts": dict(study.part_counts),
@@ -132,4 +148,5 @@ def build_portico_scene(study: PorticoStudy, destination: Path, *, bpy_module: A
         "instances": len(study.instances),
         "bounds_m": [study.bounds_min, study.bounds_max],
     }
-    return export_revision(bpy, scene, camera, objects, shots, destination, samples=48, metadata=metadata)
+    return export_revision(bpy, scene, camera, objects, shots, destination,
+                           samples=profile.samples, metadata=metadata)

@@ -2,7 +2,7 @@
 
 ## Dependencies
 
-`recipe.py`, `lattice.py`, `architecture_geometry.py`, and `portico.py` contain no `bpy` calls or non-standard Python dependencies. `blender_scene.py` and `blender_portico.py` receive an explicit Blender module and only touch Blender data when their builders run. `cli.py` exposes normal-Python planning and audit commands, importing Blender only for build commands.
+`recipe.py`, `lattice.py`, `architecture_geometry.py`, `portico.py` and `egyptian_monuments.py` contain no `bpy` calls or non-standard Python dependencies. `blender_scene.py`, `blender_portico.py` and `blender_monuments.py` receive an explicit Blender module and only touch Blender data when their builders run. `cli.py` exposes normal-Python planning and audit commands, importing Blender only for build commands.
 
 ## General-purpose architecture mesh kernel
 
@@ -10,11 +10,16 @@
 
 - `extrude_profile()`: triangulated, manifold extrusion of a simple concave polygon. Self-intersections, coincident/collinear corners and nonfinite values are rejected before meshing.
 - `revolve_profile()`: capped positive-radius solids for columns, balusters, finials and stepped moldings.
+- `loft_elliptical_sections()`: closed cross-section lofts along X/Y/Z, with cubic axial interpolation for stone carving, statuary, organic objects and tapered shapes.
 - `semicircular_arch()` and `arch_voussoirs()`: genuinely open semicircular arch voids, and individually closed stones with physical joint gaps.
 - `place_mesh()` / `repeat_linear()`: deterministic, named, right-handed rigid instances sharing source mesh data without duplicating every vertex.
 - `audit_mesh()`: edge orientation, boundary and non-manifold counts, signed volume and degenerate polygon checks. All generated solids pass these pure-Python inspections.
 
-`portico.py` demonstrates composition into a reusable 1–20-bay arcade with repeated column flutes, alternate stone surfaces, projecting keystones, pedestals and a concave extruded cornice. The adapter caches Blender mesh datablocks by source geometry and material, while preserving individual object names and metadata. A passing geometry audit is **not** a substitute for real image/render QA.
+`portico.py` demonstrates composition into a reusable 1–20-bay arcade with **true carved concave flutes inside the shaft topology**, subtle entasis, separate classical base/capital elements, four visible scroll volutes per Ionic-style column, alternate stone surfaces, projecting keystones, pedestals and a concave extruded cornice. The adapter caches Blender mesh datablocks by source geometry and material, while preserving individual object names and metadata. A passing geometry audit is **not** a substitute for real image/render QA.
+
+`architecture_details.py` supplies independent building details: centered manifold boxes, opening-aware staggered masonry courses, paneled door and framed/recessed window assemblies, extruded non-flat molding profiles, repeated dentil teeth, **carved rosette medallions**, true concave **fluted column shafts**, spiral volutes and Tuscan/Doric/Ionic-inspired classical-column subassemblies, pitched gable roofing with individually sloped tiles, and open-section half-round gutters/downspouts. Parameters are meters and bounded for safe topology. Each part is a named `MeshInstance` with a semantic material role; the larger `facade.py` demonstration composes the details into an enclosed mass. `blender_facade.py` translates these instances into Blender with UVs, bevel details and the standard revision/export/preview contracts. This study is illustrative, not a measured landmark.
+
+`asset_import.py` is the **external-model intake boundary**. It inspects static self-contained GLBs in ordinary Python, limits input size, rejects unsupported animation/skin content, reports original material names, optionally pins the source hash, and requires a provenance record with creator, HTTPS source permalink, license, attribution and explicitly asserted raw redistribution rights. It does not fetch source URLs. `blender_import.py` uses Blender's built-in GLB importer with packed images and node extras, validates imported mesh/material/semantic data and renders through the same shared revision exporter. `material_overrides.py` separately validates opt-in, exact-name material substitutions and refuses missing/ambiguous names before any revision is created; the Blender adapter then replaces only targeted material slots with embedded PBR presets, preserving other imported materials. This first iteration is GLB-only and intentionally refuses marketplace assets without raw redistribution rights; a separate render-only workflow is future work.
 
 ## Recipe version 1
 
@@ -24,18 +29,28 @@ Recipes never accept executable Python or arbitrary paths. A recipe cannot direc
 
 ## Scene and export
 
-- A new Blender scene is created without deleting the caller's existing scenes.
+- Headless builds require an empty factory-started process and reuse its **active** scene, hiding stock startup objects without deleting their datablocks. The Blender 4.5 glTF exporter has reproducibly segfaulted when exporting meshes from an inactive newly created scene via a temporary context override. In interactive Blender, a separate scene is created and activated without deleting pre-existing scenes.
 - Model meshes are grouped in `Model / portable GLB`; studio elements are separate.
 - Structural beams carry stable names and a `kumiki_part` custom property for future camera-target and semantic part bindings.
 - The preview uses Cycles, a neutral sky, daylight sun, a ground plane and an architecture-framing camera. Four deterministic camera poses cover hero, front, side and construction detail, with cheaper sampling on secondary views.
 - The GLB contains only selected model objects; shader compatibility and visual parity must be checked by a real glTF/Three.js import before release.
-- `blender_output.py` owns the shared immutable revision exporter, camera passes, manifest construction and output audits for both tower and portico models.
+- `blender_output.py` owns the shared immutable revision exporter, camera passes, manifest construction and output audits for both tower and portico models. It saves the editable `.blend` **before** baking evaluated modifiers into the transient export scene, preserving source editing while ensuring the portable GLB contains real bevel and normal details. This also avoids an observed Blender 4.5 headless glTF-export crash with the exporter's global Apply Modifiers option.
+- `render_profiles.py` provides a production profile and a resource-capped smoke profile. `KUMIKI_RENDER_PROFILE=smoke` affects only sample count and preview resolution, never model mesh fidelity or GLB exports. The selected profile and its dimensions are recorded in the manifest.
 - A GLB envelope audit detects malformed exports and external texture/buffer references. The build verifies native `.blend` and PNG file signatures, then includes the audit report and output file sizes in the manifest.
+- `revision_audit.py` independently rechecks the full delivered asset package against its manifest, rejecting missing/tampered/path-escaping files, GLB audit mismatches and absent semantic part tags. It is the asset-integrity boundary for future consumers.
 - A source digest and Blender version are recorded to aid repeatability and provenance.
+
+### Headless Blender CI
+
+The pull-request CI job installs a pinned official Blender 4.5 LTS Linux release and checks its SHA-256 against the Blender Foundation manifest before execution. It builds the lattice, portico and detailed facade studies, **imports our own portico GLB unchanged and with an explicit material override**, audits GLB portability with local semantic checks **and** the official Khronos validator via a pinned glTF-Transform CLI, and uploads previews, editable source and manifests to GitHub workflow artifacts. Low-sample smoke renders are intended to catch broken geometry/export/camera setups; final cinematic acceptance still requires production-resolution renders and visual review.
 
 ## Materials
 
-`surfaces.py` defines immutable PBR presets for painted steel (dielectric coating), galvanized metal, concrete, stone, timber, and glass. `blender_scene.py` converts their sRGB colors to linear Blender shader inputs and maps metallic/roughness/transmission values to Principled BSDF. No shader-only procedural textures are silently assumed to transfer to GLB: a tested bake pipeline is required before texture-based fidelity claims.
+`surfaces.py` defines immutable PBR presets for painted steel (dielectric coating), galvanized metal, concrete, clean/weathered stone, timber, and glass, plus untextured studio matte. `procedural_pbr.py` deterministically generates tileable base-color, roughness and tangent-normal PNGs using only the standard library; its weathered-stone map adds tile-periodic rain tracks and mineral bloom. `blender_textures.py` packs those images into the native scene and wires them to glTF-supported Principled BSDF sockets. Both procedural mesh builders receive per-face meter-scaled UVs. Imported assets retain existing UVs; a material override generates planar UVs if absent. This makes image textures portable to GLB without an external dependency or shader bake. A separate `--require-pbr-textures` GLB check gates texture image/UV retention. These original procedural patterns are **not measurements** of historical masonry or actual scanned surfaces.
+
+`blender_lighting.py` plans a reusable pair of physically sized rectangular, specular-dominant reflection softboxes. They help reveal glass in the facade's Cycles QA scene while remaining in the excluded studio collection. The GLB carries true Principled glass transmission and IOR but not studio lighting. Real-time viewers need their own reflection environment, and support for glTF transmission extensions varies. See [Architectural detail kit guide](ARCHITECTURE_DETAILS.md).
+
+`material_packs.py` is the independent, rights-declared, hash-checked local image import boundary. `blender_material_packs.py` wires inspected color/roughness/normal/optional metallic textures into Principled nodes and packs their images. Exact assignments can replace either facade material roles or imported GLB names without depending on a texture marketplace. See [material-pack guide](MATERIAL_PACKS.md).
 
 ## Artifact states
 

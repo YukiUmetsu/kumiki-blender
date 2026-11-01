@@ -7,8 +7,10 @@ named instances with physically closed geometry.
 
 from __future__ import annotations
 
+from dataclasses import dataclass, replace
 import math
-from dataclasses import dataclass
+
+from .architecture_details import balustrade_assembly, classical_column
 
 from .architecture_geometry import (
     MeshInstance,
@@ -16,7 +18,7 @@ from .architecture_geometry import (
     arch_voussoirs,
     extrude_profile,
     place_mesh,
-    revolve_profile,
+    pointed_arch_voussoirs,
     world_vertices,
 )
 
@@ -29,48 +31,57 @@ class PorticoError(ValueError):
 class PorticoStudy:
     asset_id: str
     bays: int
+    order: str
+    arch_style: str
+    balustrade: bool
     instances: tuple[MeshInstance, ...]
     part_counts: tuple[tuple[str, int], ...]
     bounds_min: Vec3
     bounds_max: Vec3
 
 
-def make_portico_study(*, bays: int = 3) -> PorticoStudy:
-    """Three-dimensional, 4.2 m-pitch limestone arcade with fluted columns.
+def make_portico_study(*, bays: int = 3, order: str = "ionic",
+                      arch_style: str = "round", balustrade: bool = False) -> PorticoStudy:
+    """Three-dimensional, 4.2 m-pitch limestone arcade with interchangeable details.
 
-    Each column and flute shares a mesh datablock, while every stone has
-    real planar mortar spacing for readable highlights and silhouettes.
+    Each shaft has real concave flutes, distinct moulded base/capital solids
+    and carved Ionic-style volutes. Arch stones have actual mortar spacing.
     """
     if type(bays) is not int or not 1 <= bays <= 20:
         raise PorticoError("bays must be an integer from 1 to 20")
+    if order not in ("tuscan", "doric", "ionic"):
+        raise PorticoError("order must be tuscan, doric or ionic")
+    if arch_style not in ("round", "pointed"):
+        raise PorticoError("arch_style must be round or pointed")
+    if type(balustrade) is not bool:
+        raise PorticoError("balustrade must be a boolean")
     pitch = 4.2
     overall_span = pitch * bays
-    columns = revolve_profile((
-        (0.48, 0), (0.48, 0.13), (0.42, 0.23), (0.36, 0.35),
-        (0.32, 0.48), (0.32, 4.08), (0.36, 4.2),
-        (0.44, 4.34), (0.50, 4.43), (0.50, 4.55),
-    ), radial_segments=48)
-    flute = revolve_profile(((0.018, 0), (0.018, 3.52)), radial_segments=10)
     pedestal = extrude_profile(((-0.68, -0.65), (0.68, -0.65),
                                 (0.68, 0.65), (-0.68, 0.65)), 0.26)
     # Arcade spring line is level with the capital. The keystone projects
     # forward an additional 150 mm, as an architectural shadow detail.
-    arch = arch_voussoirs(1.64, 1.96, 0.60, stone_count=11, joint_gap_m=0.006)
-    keystone = arch_voussoirs(1.64, 1.96, 0.75, stone_count=11, joint_gap_m=0.006)[5]
+    if arch_style == "pointed":
+        arch = pointed_arch_voussoirs(1.64, 2.55, 0.32, 0.60, stone_count=11)
+        keystone = pointed_arch_voussoirs(1.64, 2.55, 0.32, 0.75, stone_count=11)[5]
+        circle_offset = (2.55**2 - 1.64**2) / (2*1.64)
+        extrados_r = 1.64 + circle_offset + 0.32
+        cornice_z = 4.55 + math.sqrt(extrados_r**2 - circle_offset**2) + 0.02
+    else:
+        arch = arch_voussoirs(1.64, 1.96, 0.60, stone_count=11, joint_gap_m=0.006)
+        keystone = arch_voussoirs(1.64, 1.96, 0.75, stone_count=11, joint_gap_m=0.006)[5]
+        cornice_z = 6.52
 
     instances: list[MeshInstance] = []
     for col in range(bays + 1):
         x = -overall_span / 2 + col * pitch
         instances.append(place_mesh(pedestal, name=f"pedestal-{col:02d}",
                                     origin=(x, 0.15, -0.10), material="stone-foundation"))
-        instances.append(place_mesh(columns, name=f"column-{col:02d}",
-                                    origin=(x, 0.15, 0), material="limestone"))
-        for index in range(16):
-            angle = math.tau * index / 16
-            instances.append(place_mesh(flute, name=f"column-{col:02d}-flute-{index:02d}",
-                                        origin=(x + 0.324 * math.cos(angle),
-                                                0.15 + 0.324 * math.sin(angle), 0.51),
-                                        material="limestone-light"))
+        for component in classical_column(prefix=f"column-{col:02d}", height=4.55,
+                                          base_radius=0.36, order=order):
+            instances.append(replace(component, origin=(component.origin[0] + x,
+                                                        component.origin[1] + 0.15,
+                                                        component.origin[2])))
 
     # Local mesh axes: X=horizontal, Y=height, Z=thickness. Rotate into
     # world X/Z, thickness pointing toward the camera along world -Y.
@@ -84,13 +95,18 @@ def make_portico_study(*, bays: int = 3) -> PorticoStudy:
                                         material="keystone" if index == 5 else
                                                  ("limestone" if index % 3 else "limestone-warm"),
                                         **arch_axes))
+        if balustrade:
+            for detail in balustrade_assembly(prefix=f"balustrade-{bay:02d}"):
+                instances.append(replace(detail, origin=(detail.origin[0] + center_x,
+                                                         detail.origin[1] - 0.48,
+                                                         detail.origin[2])))
 
     # A concave molding profile, extruded the full length of the arcade.
     cornice_profile = ((0, 0), (0.78, 0), (0.78, 0.14), (0.91, 0.17),
                        (0.91, 0.27), (0.78, 0.31), (0.84, 0.44),
                        (0.71, 0.53), (0.71, 0.64), (0, 0.64))
     cornice = extrude_profile(cornice_profile, overall_span + 1.6)
-    instances.append(place_mesh(cornice, name="cornice-main", origin=(-overall_span / 2 - 0.8, -0.65, 6.52),
+    instances.append(place_mesh(cornice, name="cornice-main", origin=(-overall_span / 2 - 0.8, -0.65, cornice_z),
                                 axis_x=(0, 1, 0), axis_y=(0, 0, 1), axis_z=(1, 0, 0),
                                 material="limestone-light"))
     floor_span = overall_span + 2.4
@@ -98,7 +114,7 @@ def make_portico_study(*, bays: int = 3) -> PorticoStudy:
                               (floor_span / 2, 1.15), (-floor_span / 2, 1.15)), 0.28)
     instances.append(place_mesh(plinth, name="plinth-main", origin=(0, 0, -0.28), material="stone-foundation"))
 
-    # Exact world bounds include the stone courses, flutes and cornice.
+    # Exact world bounds include grooved shafts, volutes and cornice.
     mins = [float("inf")] * 3
     maxs = [float("-inf")] * 3
     for instance in instances:
@@ -107,12 +123,24 @@ def make_portico_study(*, bays: int = 3) -> PorticoStudy:
                 mins[axis] = min(mins[axis], vertex[axis])
                 maxs[axis] = max(maxs[axis], vertex[axis])
 
+    variant = "" if arch_style == "round" and not balustrade else (
+        f"-{arch_style}" + ("-balustrade" if balustrade else ""))
     return PorticoStudy(
-        asset_id="portico-detail-study",
+        asset_id=("portico-detail-study" if order == "ionic" else f"portico-{order}-study") + variant,
         bays=bays,
+        order=order,
+        arch_style=arch_style,
+        balustrade=balustrade,
         instances=tuple(instances),
         part_counts=(("arch_stones", bays * 11), ("columns", bays + 1),
-                     ("flutes", (bays + 1) * 16), ("pedestals", bays + 1),
-                     ("cornices", 1), ("plinths", 1)),
+                     ("column_bases", (bays + 1) * (0 if order == "doric" else 2)),
+                     ("column_capitals", (bays + 1) * (4 if order == "ionic" else 3)),
+                     ("volutes", (bays + 1) * (8 if order == "ionic" else 0)),
+                     ("pedestals", bays + 1),
+                     ("cornices", 1), ("plinths", 1),
+                     ("balusters", bays * 7 if balustrade else 0),
+                     ("balustrade_rails", bays * 2 if balustrade else 0),
+                     ("balustrade_posts", bays * 2 if balustrade else 0),
+                     ("balustrade_caps", bays * 2 if balustrade else 0)),
         bounds_min=tuple(mins), bounds_max=tuple(maxs),
     )
