@@ -54,10 +54,10 @@ class LibertyScanTests(unittest.TestCase):
         # The same eyelid has a genuinely recessed crease AND a protruding
         # supporting ledge: subdivision can resolve the surface contrast.
         self.assertGreater(face_relief_offset(-.53, -.5, 8.788),
-                           face_relief_offset(-.53, -.5, 8.811) + .01)
-        self.assertLess(face_relief_offset(-.53, -.5, 8.811), -.015)
+                           face_relief_offset(-.53, -.5, 8.811) + .004)
+        self.assertLess(face_relief_offset(-.53, -.5, 8.811), -.006)
         self.assertLess(face_relief_offset(-.53, -.5, 8.861), 0)
-        self.assertLess(face_relief_offset(-.353, -.5, 8.405), -.015)
+        self.assertLess(face_relief_offset(-.353, -.5, 8.405), -.007)
         self.assertGreater(face_relief_offset(-.353, -.5, 8.244), 0)
         self.assertLess(face_relief_offset(-.353, -.5, 8.203), 0)
         for point in ((-.53, .2, 8.755), (-.53, -.5, 9.25),

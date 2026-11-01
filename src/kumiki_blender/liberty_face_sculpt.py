@@ -110,7 +110,7 @@ def face_relief_offset(x: float, y: float, z: float) -> float:
         d -= .016 * _gaussian(x, cheek_x, .103) * _gaussian(z, 8.52, .080)
     # The source already contains broad facial masses. Full displacement would
     # carve unrealistic trenches; model a controlled *incremental* sculpt.
-    return region * d * .38
+    return region * d * .15
 
 
 def hair_relief_offset(x: float, y: float, z: float) -> float:

@@ -36,12 +36,11 @@ def _world_bounds(objects: list[Any], vector_type: Any) -> tuple[Any, Any]:
 
 
 def _refine_captured_face_topology(obj: Any) -> int:
-    """Add sculpt resolution only where the miniature's face/forelock lives.
+    """Add sculpt resolution only where captured forelock striae can survive.
 
-    The source is just ~2,300 vertices in the facial review volume. A crisp
-    millimetre-scale lid needs more local triangles, but subdividing the full
-    monument makes the GLB needlessly huge. BMesh splits connected polygon
-    edges consistently, so this does not create detached overlays or cracks.
+    The face scan is too noisy to extract authentic lids by tessellation. Leave
+    its broad facial skin untouched and add resolution only to the captured
+    hair mass. BMesh splits connected edges, without disconnected overlays.
     """
     import bmesh
 
@@ -54,7 +53,7 @@ def _refine_captured_face_topology(obj: Any) -> int:
         for vert in bm.verts:
             p = transform @ vert.co
             if (-.95 < p.x < .24 and -.93 < p.y < -.15
-                    and 7.91 < p.z < 9.38):
+                    and 8.96 < p.z < 9.38):
                 eligible.add(vert)
         edges = [edge for edge in bm.edges
                  if edge.verts[0] in eligible and edge.verts[1] in eligible]
@@ -158,7 +157,7 @@ def build_liberty_scan_face_scene(source: Path, destination: Path,
         obj["kumiki_source_author"] = provenance["author"]
         obj["kumiki_source_url"] = provenance["original_url"]
         obj["kumiki_license"] = provenance["license"]
-        obj["kumiki_modifications"] = "Recentered, adaptive facial retessellation, sculpted eye/nose/lip/hair mesh relief, copper study material"
+        obj["kumiki_modifications"] = "Recentered, forelock-only retessellation, restrained eye/nose/lip/hair mesh relief, copper study material"
         _refine_captured_face_topology(obj)
         ensure_metric_uvs(obj.data, tile_size_m=.56)
         obj.data.materials.clear()
@@ -228,7 +227,7 @@ def build_liberty_scan_face_scene(source: Path, destination: Path,
         "source_url": provenance["original_url"],
         "source_sha256": provenance["sha256"],
         "attribution": provenance["attribution"],
-        "changes": ["centered scan", "adaptive face and hair mesh retessellation",
+        "changes": ["centered scan", "forelock-only mesh retessellation",
                     "carved almond eyelid edges and iris rings", "nostril, lips and philtrum relief",
                     "combed forelock striations", "copper material treatment",
                     "face-angle inspection cameras"],

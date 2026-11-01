@@ -193,8 +193,8 @@ prototype**, not a convincing facial likeness. Its geometric primitives are
 inadequate for the photographed eyelids, hair, hands and drapery. The new
 scan-assisted **face checkpoint** is built from a checksum-verified, CC BY 4.0
 photogrammetry scan of a nineteenth-century bronze model by **jerryfisher**.
-It preserves scanned sculptural relief, adaptively subdivides only the facial
-region, adds reference-directed eye/nose/lip and swept-hair surface carving,
+It preserves scanned facial topology, adaptively subdivides the swept forelock
+only, adds restrained eye/nose/lip and swept-hair surface carving,
 and applies an embedded verdigris-copper PBR material. Eleven QA cameras
 include two tight eye/mouth macro views and a complete figure reference.
 The scanned miniature is not a measured capture of the full-size statue.
@@ -204,7 +204,7 @@ python3 scripts/fetch_liberty_scan.py --output .review/_sources/liberty-bronze.g
 KUMIKI_RENDER_PROFILE=smoke blender --background --factory-startup \
   --python-exit-code 1 --python scripts/blender_entry.py -- \
   build-liberty-scan-face --source .review/_sources/liberty-bronze.glb \
-  --output .review/landmarks/statues/statue-of-liberty/r14
+  --output .review/landmarks/statues/statue-of-liberty/r15
 ```
 
 The binary source remains outside git. The origin, CC BY license, exact SHA-256,
