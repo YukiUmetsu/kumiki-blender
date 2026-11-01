@@ -9,6 +9,10 @@ import unittest
 
 from kumiki_blender.cli import main
 from kumiki_blender.geography.fuji.dem import FujiDem, FujiSpec, load_dem, save_dem
+from kumiki_blender.geography.fuji.patches import (
+    FujiDetailPatch, FujiPatchSpec, _base_sample, dem_fingerprint,
+    load_patch, save_patch, validate_patches,
+)
 from kumiki_blender.geography.fuji.blender_scene import _value_noise, plan_fuji_shots, terrain_color
 from kumiki_blender.geography.fuji.iconic_scene import iconic_spec, plan_iconic_shots, _snow_limit
 
@@ -81,6 +85,48 @@ class FujiTerrainTests(unittest.TestCase):
             x,y = spec.xy(lon,lat)
             self.assertLess(abs(x), spec.width_km/2)
             self.assertLess(abs(y), spec.depth_km/2)
+
+    def test_survey_patch_checksums_exact_boundary_and_no_overlap(self):
+        dem=self._fixture()
+        spec=FujiPatchSpec("summit",6,14,7,15,4,33)
+        values=array("f")
+        for r in range(spec.rows):
+            for c in range(spec.cols):
+                h=_base_sample(dem,spec,r,c)
+                if 0<r<spec.rows-1 and 0<c<spec.cols-1:
+                    h+=12*math.sin(math.pi*r/(spec.rows-1))*math.sin(math.pi*c/(spec.cols-1))
+                values.append(h)
+        patch=FujiDetailPatch(spec,values,"GSI test fixture",dem_fingerprint(dem),.99)
+        validate_patches((patch,),dem,32)
+        self.assertGreater(patch.elevations[16*spec.cols+16],_base_sample(dem,spec,16,16))
+        with tempfile.TemporaryDirectory() as directory:
+            path=Path(directory)/"summit.bin"
+            save_patch(path,patch)
+            decoded=load_patch(path)
+            self.assertEqual(decoded.elevations,patch.elevations)
+            self.assertEqual(decoded.spec,patch.spec)
+            path.write_bytes(path.read_bytes()[:-5])
+            with self.assertRaises(ValueError):
+                load_patch(path)
+        overlap_spec=FujiPatchSpec("other",12,18,13,19,2,33)
+        other=FujiDetailPatch(overlap_spec,array("f",(_base_sample(dem,overlap_spec,r,c)
+                                  for r in range(overlap_spec.rows)
+                                  for c in range(overlap_spec.cols))),"fixture",dem_fingerprint(dem),1)
+        with self.assertRaisesRegex(ValueError,"Overlapping"):
+            validate_patches((patch,other),dem,32)
+        duplicate_spec=FujiPatchSpec("summit",18,22,18,22,2,33)
+        duplicated=FujiDetailPatch(duplicate_spec,
+                                   array("f",(_base_sample(dem,duplicate_spec,r,c)
+                                   for r in range(duplicate_spec.rows)
+                                   for c in range(duplicate_spec.cols))),"fixture",dem_fingerprint(dem),1)
+        with self.assertRaisesRegex(ValueError,"Duplicate"):
+            validate_patches((patch,duplicated),dem,32)
+        wrong=FujiDetailPatch(spec,values,"fixture",123,.99)
+        with self.assertRaisesRegex(ValueError,"does not match"):
+            validate_patches((wrong,),dem,32)
+        values[0]+=1
+        with self.assertRaisesRegex(ValueError,"Seam"):
+            validate_patches((FujiDetailPatch(spec,values,"fixture",dem_fingerprint(dem),.99),),dem,32)
 
     def test_plan_command_with_fixture_and_no_blender(self):
         with tempfile.TemporaryDirectory() as directory:

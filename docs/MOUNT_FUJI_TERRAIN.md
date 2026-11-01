@@ -71,6 +71,36 @@ The texture modifies surface *lighting*, **never the GSI vertex elevations**;
 the original 1:1 geometry stays unchanged. High-detail QA renders use more
 samples to retain close-up rock and crater structure.
 
+### Native-resolution crater craftsmanship
+
+The whole-mountain mesh samples the GSI DEM at approximately 25 m intervals.
+For true, closer crater relief, optionally prepare two **seam-stitched survey
+patches**: one around the summit crater and one around the 1707 Hōei flank
+crater. Both measure approximately 2.03 × 2.03 km, keep 321² vertices each
+at approximately 6.3 m spacing, and derive their interior heights from the
+official **zoom-15 GSI 5 m-class tiles**. A 180 m transition shoulder blends
+those GSI samples into the parent DEM. The boundary is **exactly the parent
+DEM**, with no gaps, overlapping faces, artificial volcano sculpting, or
+vertical exaggeration. The meshes are stitched into **one topological terrain
+mesh**, splitting every coarse boundary edge where the finer mesh meets it.
+
+```bash
+# After preparing the 1025² whole-Fuji DEM:
+python scripts/prepare_fuji_dem.py --crater-patches \
+  .review/fuji-dem/fuji-heightmap.bin .review/fuji-dem
+blender --background --factory-startup --python-exit-code 1 \
+  --python scripts/blender_entry.py -- build-fuji --detail high \
+  --dem .review/fuji-dem/fuji-heightmap.bin \
+  --detail-patch .review/fuji-dem/fuji-summit-z15-patch.bin \
+  --detail-patch .review/fuji-dem/fuji-hoei-z15-patch.bin \
+  --output .review/geography/terrain/mount-fuji-survey-terrain/r02
+```
+
+The optional patches are tied to a CRC32 fingerprint of the exact parent DEM;
+the builder rejects mismatched input, overlapping areas, altered seam values,
+and partial survey coverage. They require `--detail high`. Generated patch
+data remains a reproducible, excluded-from-git build input in `.review`.
+
 ## Realistic topographic relief
 
 This asset is a geographically measured **relief mesh**, not an idealized cone.
@@ -116,7 +146,8 @@ PYTHONPATH=src python -m kumiki_blender catalog search "Fuji"
 ```
 
 Detail modes: `preview` = 257² vertices, `standard` = 513², `high` =
-1025². The source heightmap contains 1025² samples. The Blender build exports
+1025², or **1,243,585 vertices** with both optional native crater patches.
+The source heightmap contains 1025² samples. The Blender build exports
 `source.blend`, `model.glb`, `preview.png`, five alternate views and a
 `manifest.json`. Edit the source `.blend` for bespoke shots. The GLB contains
 editable physical geometry and color attributes, not an image plane.

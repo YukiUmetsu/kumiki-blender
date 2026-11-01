@@ -15,6 +15,7 @@ from typing import Any
 from ...blender_output import create_model_scene, export_revision
 from ...shots import QualityShot
 from .dem import FujiDem, SUMMIT, load_dem
+from .patches import FujiDetailPatch, load_patch, validate_patches
 
 
 def plan_fuji_shots() -> tuple[QualityShot, ...]:
@@ -154,12 +155,16 @@ def _stone_normal_image(bpy: Any, size: int) -> Any:
     return image
 
 
-def _terrain_object(bpy: Any, model: Any, dem: FujiDem, divisions: int) -> Any:
+def _terrain_object(bpy: Any, model: Any, dem: FujiDem, divisions: int,
+                    patches: tuple[FujiDetailPatch, ...] = ()) -> Any:
     spec = dem.spec
     if (divisions < 32 or divisions > spec.samples-1 or
             (spec.samples-1) % divisions):
         raise ValueError("Terrain divisions must evenly divide DEM intervals")
     row_stride = (spec.samples-1)//divisions
+    if patches and row_stride != 1:
+        raise ValueError("Survey patches require the full 1024-division parent mesh")
+    validate_patches(patches,dem,divisions)
     count = divisions+1
     heights = dem.elevations
     verts: list[tuple[float, float, float]] = []
@@ -182,8 +187,89 @@ def _terrain_object(bpy: Any, model: Any, dem: FujiDem, divisions: int) -> Any:
             grad_y = (down-up)/1000/max(1e-6, spec.depth_km*(2 if 0<row<divisions else 1)/divisions)
             colors.append(terrain_color(height, math.hypot(grad_x,grad_y), x, y))
 
-    faces = [(r*count+c, (r+1)*count+c, (r+1)*count+c+1, r*count+c+1)
-             for r in range(divisions) for c in range(divisions)]
+    # Refine only the craters; keep their fine boundary vertices shared with
+    # adjacent coarse polygons. Explicit edge splits eliminate T-junctions,
+    # holes, z-fighting and overlapping coarse terrain underneath the patches.
+    edge_splits: dict[tuple[int,int], list[int]] = {}
+    per_patch_indices: dict[tuple[str,int,int], int] = {}
+    skipped_cells: set[tuple[int,int]] = set()
+    for patch in patches:
+        s=patch.spec
+        for r in range(s.row_start,s.row_end):
+            for c in range(s.col_start,s.col_end):
+                skipped_cells.add((r,c))
+        ids=[]
+        dx=spec.width_km/(spec.samples-1)/s.factor
+        dy=spec.depth_km/(spec.samples-1)/s.factor
+        for r in range(s.rows):
+            row=s.row_start+r/s.factor
+            lat=spec.latitude_max-row/(spec.samples-1)*(spec.latitude_max-spec.latitude_min)
+            for c in range(s.cols):
+                col=s.col_start+c/s.factor
+                lon=spec.longitude_min+col/(spec.samples-1)*(spec.longitude_max-spec.longitude_min)
+                x,y=spec.xy(lon,lat)
+                h=patch.elevations[r*s.cols+c]
+                l=patch.elevations[r*s.cols+max(0,c-1)]
+                ri=patch.elevations[r*s.cols+min(s.cols-1,c+1)]
+                up=patch.elevations[max(0,r-1)*s.cols+c]
+                down=patch.elevations[min(s.rows-1,r+1)*s.cols+c]
+                slope=math.hypot((ri-l)/(1000*dx*(2 if 0<c<s.cols-1 else 1)),
+                                 (down-up)/(1000*dy*(2 if 0<r<s.rows-1 else 1)))
+                location=(x,y,h/1000)
+                color=terrain_color(h,slope,x,y)
+                if r%s.factor==0 and c%s.factor==0:
+                    idx=(s.row_start+r//s.factor)*count+s.col_start+c//s.factor
+                    verts[idx]=location
+                    colors[idx]=color
+                else:
+                    idx=len(verts)
+                    verts.append(location)
+                    colors.append(color)
+                ids.append(idx)
+                per_patch_indices[(s.name,r,c)]=idx
+        def split(start: int, end: int, between: list[int]) -> None:
+            edge_splits[(start,end)]=between
+            edge_splits[(end,start)]=list(reversed(between))
+        for c in range(s.col_start,s.col_end):
+            k=(c-s.col_start)*s.factor
+            a=s.row_start*count+c
+            b=a+1
+            split(a,b,[ids[k+i] for i in range(1,s.factor)])
+            k=(s.rows-1)*s.cols+(c-s.col_start)*s.factor
+            a=s.row_end*count+c
+            split(a,a+1,[ids[k+i] for i in range(1,s.factor)])
+        for r in range(s.row_start,s.row_end):
+            k=(r-s.row_start)*s.factor*s.cols
+            a=r*count+s.col_start
+            split(a,a+count,[ids[k+i*s.cols] for i in range(1,s.factor)])
+            k=(r-s.row_start)*s.factor*s.cols+s.cols-1
+            a=r*count+s.col_end
+            split(a,a+count,[ids[k+i*s.cols] for i in range(1,s.factor)])
+
+    faces=[]
+    for r in range(divisions):
+        for c in range(divisions):
+            if (r,c) in skipped_cells:
+                continue
+            ring=(r*count+c,(r+1)*count+c,(r+1)*count+c+1,r*count+c+1)
+            polygon=[]
+            for j,idx in enumerate(ring):
+                polygon.append(idx)
+                polygon.extend(edge_splits.get((idx,ring[(j+1)%4]),()))
+            faces.append(tuple(polygon))
+    for patch in patches:
+        s=patch.spec
+        # Original sampled coarse vertices are reused inside the refined mesh.
+        def index(r: int,c: int) -> int:
+            if r%s.factor==0 and c%s.factor==0:
+                return (s.row_start+r//s.factor)*count+s.col_start+c//s.factor
+            # Fine vertices are stored in the order assembled above. A lookup
+            # avoids relying on unrelated patches' vertex offsets.
+            return per_patch_indices[(s.name,r,c)]
+
+        for r in range(s.rows-1):
+            for c in range(s.cols-1):
+                faces.append((index(r,c),index(r+1,c),index(r+1,c+1),index(r,c+1)))
     mesh = bpy.data.meshes.new("Fuji / sampled GSI relief mesh")
     mesh.from_pydata(verts, [], faces)
     mesh.update()
@@ -196,13 +282,11 @@ def _terrain_object(bpy: Any, model: Any, dem: FujiDem, divisions: int) -> Any:
     # normals live in the GLB as a packed PNG, with zero external references.
     uv_layer=mesh.uv_layers.new(name="FujiGeographicUV")
     uv_coords=array("f")
-    for row in range(divisions):
-        v0=1-row/divisions
-        v1=1-(row+1)/divisions
-        for col in range(divisions):
-            u0=col/divisions
-            u1=(col+1)/divisions
-            uv_coords.extend((u0,v0,u0,v1,u1,v1,u1,v0))
+    west,south=spec.xy(spec.longitude_min,spec.latitude_min)
+    for polygon in faces:
+        for index in polygon:
+            x,y,_=verts[index]
+            uv_coords.extend(((x-west)/spec.width_km,(y-south)/spec.depth_km))
     uv_layer.data.foreach_set("uv",uv_coords)
     mat = bpy.data.materials.new("Fuji / alpine forest, basalt and seasonal snow")
     mat.use_nodes = True
@@ -229,6 +313,7 @@ def _terrain_object(bpy: Any, model: Any, dem: FujiDem, divisions: int) -> Any:
     obj["vertical_exaggeration"] = 1.0
     obj["metres_per_scene_unit"] = 1000
     obj["kumiki_part"] = "terrain-surface"
+    obj["detail_patches"] = ", ".join(p.spec.name for p in patches)
     return obj
 
 
@@ -316,6 +401,7 @@ def _studio(bpy: Any, scene: Any, stage: Any) -> Any:
 
 
 def build_fuji_scene(destination: Path, dem_path: Path, *, divisions: int = 512,
+                     detail_patches: tuple[Path, ...] = (),
                      bpy_module: Any = None, preview_resolution: int = 1150) -> dict[str, Any]:
     if bpy_module is None:
         raise RuntimeError("Building Mount Fuji requires Blender bpy")
@@ -326,6 +412,7 @@ def build_fuji_scene(destination: Path, dem_path: Path, *, divisions: int = 512,
     if destination.exists() or destination.is_symlink():
         raise RuntimeError(f"Output revision already exists: {destination}")
     dem = load_dem(Path(dem_path))
+    patches=tuple(load_patch(path) for path in detail_patches)
     scene = create_model_scene(bpy, "mount-fuji-survey-terrain")
     scene.render.resolution_x = preview_resolution
     scene.render.resolution_y = round(preview_resolution*.75)
@@ -335,7 +422,7 @@ def build_fuji_scene(destination: Path, dem_path: Path, *, divisions: int = 512,
     scene.collection.children.link(model)
     scene.collection.children.link(stage)
     camera = _studio(bpy, scene, stage)
-    terrain = _terrain_object(bpy, model, dem, divisions)
+    terrain = _terrain_object(bpy, model, dem, divisions, patches)
     wall, base = _plinth(bpy, model, dem, divisions)
     return export_revision(bpy, scene, camera, (terrain,wall,base), plan_fuji_shots(), destination,
                            samples=32 if divisions>=1024 else 16, metadata={
@@ -343,7 +430,12 @@ def build_fuji_scene(destination: Path, dem_path: Path, *, divisions: int = 512,
                                "generator": "GSI elevation-mesh",
                                "vertical_exaggeration": 1.0,
                                "terrain_divisions": divisions,
-                               "terrain_vertices": (divisions+1)**2,
+                               "terrain_vertices": len(terrain.data.vertices),
+                               "terrain_faces": len(terrain.data.polygons),
+                               "detail_patches": [
+                                   {"name":p.spec.name,"grid":[p.spec.rows,p.spec.cols],
+                                    "factor":p.spec.factor,"surveyed_fraction":round(p.surveyed_fraction,5),
+                                    "source":p.source} for p in patches],
                                "baked_normal_texture_px": 512 if divisions<1024 else 1024,
                                "named_parts": {"terrain_surface": 1,
                                                "terrain_perimeter": 1,

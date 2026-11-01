@@ -18,7 +18,10 @@ import urllib.request
 from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]/"src"))
-from kumiki_blender.geography.fuji.dem import FujiDem, FujiSpec, save_dem  # noqa: E402
+from kumiki_blender.geography.fuji.dem import FujiDem, FujiSpec, load_dem, save_dem  # noqa: E402
+from kumiki_blender.geography.fuji.patches import (  # noqa: E402
+    FujiDetailPatch, FujiPatchSpec, _base_sample, dem_fingerprint, save_patch,
+)
 
 
 BASE_ZOOM = 13
@@ -140,8 +143,90 @@ def prepare(path: Path, *, spec: FujiSpec = FujiSpec()) -> FujiDem:
     return dem
 
 
+def prepare_crater_patches(dem_path: Path, output_dir: Path,
+                           *, factor: int = 4, span_cells: int = 80) -> list[Path]:
+    """Keep original z15 GSI detail around the two distinctive craters.
+
+    Separate patch meshes replace coarse faces, using a stitched subdivision
+    of the 1025-cell global DEM. Edges match exactly; only the central region
+    retains near-native (~6 m) zoom-15 survey relief. No random displacement.
+    """
+    if factor not in (2,4,8) or span_cells<16 or span_cells>120 or span_cells%2:
+        raise ValueError("Invalid crater patch refinement or span")
+    dem=load_dem(dem_path)
+    spec=dem.spec
+    if spec.samples!=1025:
+        raise ValueError("Crater patches currently target the 1025-sample parent GSI raster")
+    centres=(("summit",138.7274,35.3606), ("hoei",138.7451,35.34098))
+    patches=[]
+    for name,lon,lat in centres:
+        row=round((spec.latitude_max-lat)/(spec.latitude_max-spec.latitude_min)*(spec.samples-1))
+        col=round((lon-spec.longitude_min)/(spec.longitude_max-spec.longitude_min)*(spec.samples-1))
+        s=FujiPatchSpec(name,row-span_cells//2,row+span_cells//2,
+                        col-span_cells//2,col+span_cells//2,factor,spec.samples)
+        if any(s.overlaps(p) for p in patches):
+            raise ValueError("Crater refinement extents overlap")
+        patches.append(s)
+
+    # Download only the native tiles intersecting these two ~2 km patches.
+    coords=set()
+    for s in patches:
+        lon0=spec.longitude_min+s.col_start/(spec.samples-1)*(spec.longitude_max-spec.longitude_min)
+        lon1=spec.longitude_min+s.col_end/(spec.samples-1)*(spec.longitude_max-spec.longitude_min)
+        lat0=spec.latitude_max-s.row_end/(spec.samples-1)*(spec.latitude_max-spec.latitude_min)
+        lat1=spec.latitude_max-s.row_start/(spec.samples-1)*(spec.latitude_max-spec.latitude_min)
+        coords.update(_tile_bounds(lon0,lon1,lat0,lat1,DETAIL_ZOOM))
+    tiles=_load_tiles(sorted(coords),DETAIL_ZOOM)
+
+    output_dir=Path(output_dir)
+    fingerprint=dem_fingerprint(dem)
+    results=[]
+    for s in patches:
+        values=array("f")
+        available=0
+        for r in range(s.rows):
+            rr=s.row_start+r/s.factor
+            lat=spec.latitude_max-rr/(spec.samples-1)*(spec.latitude_max-spec.latitude_min)
+            for c in range(s.cols):
+                cc=s.col_start+c/s.factor
+                lon=spec.longitude_min+cc/(spec.samples-1)*(spec.longitude_max-spec.longitude_min)
+                baseline=_base_sample(dem,s,r,c)
+                # Shared grid edges are bit-for-bit the underlying sampled relief.
+                if r in (0,s.rows-1) or c in (0,s.cols-1):
+                    values.append(baseline)
+                    continue
+                measured=sample_tiles(tiles,DETAIL_ZOOM,lon,lat)
+                if measured is not None:
+                    available+=1
+                    # 180 m shoulder connects the original 25 m GSI surface
+                    # smoothly to the 5 m-source detail in the patch centre.
+                    nearest=min(r,s.rows-1-r)*spec.depth_km/(spec.samples-1)/s.factor
+                    nearest=min(nearest,min(c,s.cols-1-c)*spec.width_km/(spec.samples-1)/s.factor)
+                    t=max(0.,min(1.,nearest/.18))
+                    t=t*t*(3-2*t)
+                    values.append(baseline*(1-t)+measured*t)
+                else:
+                    values.append(baseline)
+        fraction=available/((s.rows-2)*(s.cols-2))
+        if fraction < .90:
+            raise ValueError(f"{s.name} lacks GSI z15 data ({fraction:.1%}); refusing fake refinement")
+        patch=FujiDetailPatch(s,values,"GSI DEM5A/5B/5C zoom-15 elevations",fingerprint,fraction)
+        target=output_dir/f"fuji-{s.name}-z15-patch.bin"
+        if target.exists():
+            raise FileExistsError(f"Won't overwrite crater survey patch: {target}")
+        save_patch(target,patch)
+        print(f"Saved {target} — {s.rows}×{s.cols}, native z15 coverage {fraction:.1%}",flush=True)
+        results.append(target)
+    return results
+
+
 if __name__ == "__main__":
-    target = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(".review/fuji-dem/fuji-heightmap.bin")
-    if target.exists():
-        raise SystemExit(f"Won't overwrite existing DEM: {target}")
-    prepare(target)
+    if len(sys.argv)>1 and sys.argv[1]=="--crater-patches":
+        source=Path(sys.argv[2]) if len(sys.argv)>2 else Path(".review/fuji-dem/fuji-heightmap-v2.bin")
+        target_dir=Path(sys.argv[3]) if len(sys.argv)>3 else source.parent
+        prepare_crater_patches(source,target_dir)
+    else:
+        target = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(".review/fuji-dem/fuji-heightmap.bin")
+        if target.exists():
+            raise SystemExit(f"Won't overwrite existing DEM: {target}")
+        prepare(target)
