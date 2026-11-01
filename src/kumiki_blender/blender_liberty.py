@@ -1,0 +1,195 @@
+"""Blender 4.2+ Cycles staging and revision export for the Liberty study."""
+
+from __future__ import annotations
+
+import math
+from pathlib import Path
+from typing import Any
+
+from .blender_output import create_model_scene, export_revision
+from .blender_scene import _create_box, _material
+from .blender_textures import ensure_metric_uvs
+from .liberty import LibertyStudy
+from .render_profiles import select_render_profile
+from .shots import QualityShot
+from .surfaces import PBRSurface, get_surface
+
+
+def plan_liberty_shots(study: LibertyStudy) -> tuple[QualityShot, ...]:
+    """Front, back, profile, face, torch and tablet all receive dedicated QA."""
+    scale = dict(study.parameters)["scale"]
+    offset = 0 if dict(study.parameters)["include_pedestal"] else -9.30
+
+    def pos(x: float, y: float, z: float) -> tuple[float, float, float]:
+        return (x*scale, y*scale, (z+offset)*scale)
+
+    return (
+        QualityShot("hero", pos(19, -44, 24), pos(0, 0, 18), 61*scale),
+        QualityShot("front", pos(0, -48, 18), pos(0, 0, 18), 58*scale),
+        QualityShot("side", pos(48, 0, 18), pos(0, 0, 18), 58*scale),
+        QualityShot("rear", pos(0, 48, 18), pos(0, 0, 18), 58*scale),
+        QualityShot("face", pos(3.0, -11, 27.25), pos(0, 0, 27.1), 7.4*scale),
+        QualityShot("tablet", pos(5.2, -8.5, 23), pos(3.20, -.7, 22.9), 6.3*scale),
+        QualityShot("torch", pos(-1.1, -8.0, 34.6), pos(-3.45, 0, 34.6), 5.6*scale),
+    )
+
+
+def _tablet_lettering(bpy: Any, collection: Any, material: Any, scale: float,
+                      base_offset: float) -> list[Any]:
+    """Emboss the Roman-date inscription as genuine editable 3D text meshes."""
+    objects = []
+    for index, (label, z, size) in enumerate((("JULY IV", 23.42, .31),
+                                               ("MDCCLXXVI", 22.66, .27))):
+        glyph = bpy.data.curves.new(f"Tablet engraving / {label}", "FONT")
+        glyph.body = label
+        glyph.align_x = "CENTER"
+        glyph.align_y = "CENTER"
+        glyph.size = size*scale
+        glyph.extrude = .012*scale
+        glyph.bevel_depth = .0025*scale
+        glyph.bevel_resolution = 1
+        font_obj = bpy.data.objects.new(f"liberty-tablet-inscription-{index}", glyph)
+        collection.objects.link(font_obj)
+        font_obj.location = (3.32*scale, -.993*scale, (z+base_offset)*scale)
+        font_obj.rotation_euler = (math.pi/2, 0, -.09)
+        bpy.context.view_layer.update()
+        depsgraph = bpy.context.evaluated_depsgraph_get()
+        evaluated = font_obj.evaluated_get(depsgraph)
+        mesh = bpy.data.meshes.new_from_object(evaluated, preserve_all_data_layers=True,
+                                               depsgraph=depsgraph)
+        if mesh is None or not mesh.vertices or not mesh.polygons:
+            raise RuntimeError(f"Could not convert tablet inscription {label} into a 3D mesh")
+        shape = bpy.data.objects.new(font_obj.name+"-mesh", mesh)
+        collection.objects.link(shape)
+        shape.matrix_world = font_obj.matrix_world.copy()
+        shape.data.materials.append(material)
+        shape["kumiki_part"] = "tablet-inscription"
+        objects.append(shape)
+        bpy.data.objects.remove(font_obj, do_unlink=True)
+    return objects
+
+
+def build_liberty_scene(study: LibertyStudy, destination: Path, *,
+                        bpy_module: Any = None) -> dict[str, Any]:
+    """Author an editable .blend, portable GLB and 7 camera inspections."""
+    if bpy_module is None:
+        raise RuntimeError("Blender bpy is required to build Liberty")
+    bpy = bpy_module
+    if tuple(bpy.app.version) < (4, 2, 0):
+        raise RuntimeError("Blender 4.2 or newer is required")
+    destination = Path(destination).resolve()
+    if destination.exists() or destination.is_symlink():
+        raise RuntimeError(f"Output revision exists: {destination}")
+
+    profile = select_render_profile(1280, 800, 48)
+    scene = create_model_scene(bpy, study.asset_id)
+    scene.render.engine = "CYCLES"
+    scene.cycles.samples = profile.samples
+    scene.render.resolution_x = profile.width
+    scene.render.resolution_y = profile.height
+    scene.render.resolution_percentage = 100
+    scene.render.image_settings.file_format = "PNG"
+    scene.view_settings.view_transform = "AgX"
+    scene.render.film_transparent = False
+
+    model = bpy.data.collections.new("Liberty / named editable copper and masonry")
+    scene.collection.children.link(model)
+    stage = bpy.data.collections.new("Liberty / studio - exclude from GLB")
+    scene.collection.children.link(stage)
+
+    # Palette uses PBR textures packaged in the GLB, with a cooler shadow
+    # variant to reveal carved cloth and a contrasting real golden flame.
+    specs = {
+        "patina": PBRSurface("Liberty / oxidized copper", "#79AA9C", .31, .70,
+                              texture_kind="galvanized-steel"),
+        "patina-light": PBRSurface("Liberty / sunlit verdigris", "#92BCB0", .22, .77,
+                                    texture_kind="galvanized-steel"),
+        "patina-shadow": PBRSurface("Liberty / dark green recess", "#487D72", .28, .76,
+                                     texture_kind="galvanized-steel"),
+        "flame-gold": PBRSurface("Liberty / fire-gilded copper", "#E5B64E", .78, .37,
+                                  texture_kind="galvanized-steel"),
+        "masonry": get_surface("weathered-stone", color="#AB9F8B", roughness=.89,
+                               weathering_strength=.62),
+        "limestone": get_surface("weathered-stone", color="#C1B7A3", roughness=.83,
+                                 weathering_strength=.38),
+        "granite": get_surface("weathered-stone", color="#88867E", roughness=.9,
+                               weathering_strength=.49),
+        "recess": get_surface("natural-stone", color="#393E3A", roughness=.91),
+    }
+    palette = {key: _material(bpy, spec) for key, spec in specs.items()}
+    objects = []
+    for part in study.instances:
+        mesh = bpy.data.meshes.new(f"Geometry / {part.name}")
+        mesh.from_pydata(part.mesh.vertices, [], part.mesh.faces)
+        mesh.update()
+        ensure_metric_uvs(mesh, tile_size_m=1.30)
+        mesh.materials.append(palette[part.material])
+        obj = bpy.data.objects.new(part.name, mesh)
+        model.objects.link(obj)
+        obj["kumiki_part"] = part.name.removeprefix("liberty-").split("-")[0]
+        obj["kumiki_source"] = "original procedural geometry / photo reference"
+        for polygon in mesh.polygons:
+            polygon.use_smooth = not any(word in part.name for word in (
+                "pedestal", "tablet-slab", "crown-ray", "window-dark"))
+        if part.name.startswith("liberty-pedestal-") or part.name == "liberty-tablet-slab":
+            modifier = obj.modifiers.new("Stone or copper edge softness", "BEVEL")
+            modifier.width = .014*dict(study.parameters)["scale"]
+            modifier.segments = 2
+            obj.modifiers.new("Weighted flat face normals", "WEIGHTED_NORMAL")
+        objects.append(obj)
+
+    parameters = dict(study.parameters)
+    offset = 0 if parameters["include_pedestal"] else -9.30
+    objects.extend(_tablet_lettering(bpy, model, palette["patina-shadow"],
+                                     parameters["scale"], offset))
+    stage_floor = get_surface("studio-matte", color="#363A3C", roughness=.97)
+    extent = 54*parameters["scale"]
+    _create_box(bpy, stage, "Studio / charcoal cyclorama", (extent, extent, .35*parameters["scale"]),
+                (0, 0, -.23*parameters["scale"]), _material(bpy, stage_floor))
+
+    world = bpy.data.worlds.new("Liberty / blue-grey ambience")
+    world.use_nodes = True
+    background = next(n for n in world.node_tree.nodes if n.type == "BACKGROUND")
+    background.inputs["Color"].default_value = (.19, .24, .27, 1)
+    background.inputs["Strength"].default_value = .55
+    scene.world = world
+
+    def area(name: str, location: tuple[float, float, float], power: float,
+             color: tuple[float, float, float], size: float) -> None:
+        from .blender_output import aim_at
+        light_data = bpy.data.lights.new(name, "AREA")
+        light_data.energy = power
+        light_data.shape = "DISK"
+        light_data.size = size*parameters["scale"]
+        light_data.color = color
+        light = bpy.data.objects.new(name, light_data)
+        stage.objects.link(light)
+        light.location = tuple(p*parameters["scale"] for p in location)
+        aim_at(light, (0, 0, (18+offset)*parameters["scale"]))
+
+    area("Key / broad overcast studio", (-16, -23, 32+offset), 6800, (0.86, .94, 1.0), 15)
+    area("Fill / pale aqua bounce", (18, -8, 21+offset), 4200, (.61, .80, .87), 11)
+    area("Rim / warm autumn", (8, 14, 30+offset), 7800, (1.0, .81, .60), 12)
+
+    camera_data = bpy.data.cameras.new("Camera / Liberty cinematic inspection")
+    camera_data.type = "ORTHO"
+    camera = bpy.data.objects.new(camera_data.name, camera_data)
+    stage.objects.link(camera)
+    scene.camera = camera
+    shots = plan_liberty_shots(study)
+    metadata = {
+        "asset_id": study.asset_id,
+        "generator": "kumiki-blender/procedural-statue-of-liberty",
+        "status": "reference-driven sculpture / requires human likeness review",
+        "provenance": "Original procedural sculpture derived from user-supplied photos; not a surveyed photogrammetry scan",
+        "render_profile": {"name": profile.name, "width": profile.width,
+                           "height": profile.height, "samples": profile.samples},
+        "units": "meters (illustrative proportions)",
+        "native_axes": "Blender Z-up, front -Y",
+        "named_parts": dict(study.part_counts),
+        "bounds_m": [study.bounds_min, study.bounds_max],
+        "parameters": parameters,
+        "detail_cameras": [shot.name for shot in shots],
+    }
+    return export_revision(bpy, scene, camera, objects, shots, destination,
+                           samples=profile.samples, metadata=metadata)

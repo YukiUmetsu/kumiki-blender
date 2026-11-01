@@ -1,0 +1,14 @@
+{
+  "schema_version": 1,
+  "id": "statue-of-liberty",
+  "title": "Statue of Liberty",
+  "description": "Procedural copper Liberty figure with seven-ray crown, draped robes, raised torch, inscribed tablet, and classical stone pedestal.",
+  "kind": "procedural",
+  "tags": ["liberty", "statue", "monument", "new-york", "crown", "torch", "historic", "copper"],
+  "aliases": ["lady liberty", "liberty enlightening the world", "statue of liberty", "new york harbor statue"],
+  "rigged": false,
+  "animated": false,
+  "sources": ["src/kumiki_blender/liberty.py", "src/kumiki_blender/blender_liberty.py", "docs/STATUE_OF_LIBERTY.md"],
+  "plan": ["plan-liberty"],
+  "build": ["build-liberty"]
+}

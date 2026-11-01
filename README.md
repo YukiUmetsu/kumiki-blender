@@ -186,6 +186,32 @@ KUMIKI_RENDER_PROFILE=smoke blender --background --factory-startup --python-exit
 
 The dimensions are reference-derived estimates, not measurements of any known aircraft. See the [aircraft authoring and rig guide](docs/VINTAGE_BIPLANE.md) for design choices, surface specifications, controls and export verification.
 
+## Statue of Liberty procedural landmark
+
+`liberty.py` creates a reference-guided, full 360° Statue of Liberty sculpture
+using closed, semantic meshes: a densely shaped face with individual eye/lip/
+nose/ear elements, swept textured coiffure, seven diadem rays, layered diagonal
+robe and deeply sculpted pleats, raised torch arm with individual curled fingers,
+tilted 1776 tablet, gilded flame, and four-sided masonry pedestal. The Blender
+adapter adds a raised Roman numeral inscription, oxidized copper PBR colors,
+seven cinematic QA cameras and the normal immutable `.blend`/`.glb` export.
+
+```bash
+PYTHONPATH=src python3 -m kumiki_blender catalog show statue-of-liberty
+PYTHONPATH=src python3 -m kumiki_blender plan-liberty
+KUMIKI_RENDER_PROFILE=smoke blender --background --factory-startup \
+  --python-exit-code 1 --python scripts/blender_entry.py -- \
+  catalog build statue-of-liberty --revision r01
+```
+
+Use `--no-pedestal` for the freestanding figure and `--scale 0.5` for a
+half-size asset. This is an **original illustrated study**, not a measured scan
+or independently validated portrait likeness. For photographic feature mapping,
+camera QA and limitations, see [Statue of Liberty guide](docs/STATUE_OF_LIBERTY.md).
+Its categorized revision is stored under
+`.review/landmarks/statues/statue-of-liberty/r01/`; the existing `build-liberty`
+command remains available for custom scale and destination options.
+
 ## Reusable PBR surfaces
 
 The pure Python material catalog defines physically distinct presets for painted structural steel, galvanized metal, concrete, stone, timber and optical glass. Recipes may override sRGB color and roughness without mutating shared presets. A plain, untextured `studio-matte` surface is available for presentation floors, keeping floor noise separate from the modeled object.

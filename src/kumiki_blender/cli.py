@@ -19,6 +19,7 @@ from .egypt_map import CITY_MARKERS, LABELS, RIVER_CHANNELS, EgyptMapSpec
 from .glb_audit import AuditError, audit_glb
 from .lattice import make_lattice_tower
 from .landmark_scan import prepare_sphinx_scan
+from .liberty import LibertyError, make_liberty_study
 from .material_overrides import load_material_overrides, verify_material_overrides
 from .material_packs import load_texture_packs, verify_texture_targets
 from .portico import PorticoError, make_portico_study
@@ -92,6 +93,12 @@ def main(argv: list[str] | None = None) -> int:
         subcommand = subcommands.add_parser(command)
         subcommand.add_argument("--detail", choices=("standard", "high"), default="standard")
         if command == "build-egypt-map":
+            subcommand.add_argument("--output", type=Path, required=True)
+    for command in ("plan-liberty", "build-liberty"):
+        subcommand = subcommands.add_parser(command, help="Procedural Statue of Liberty sculpt and pedestal")
+        subcommand.add_argument("--scale", type=float, default=1.0)
+        subcommand.add_argument("--no-pedestal", action="store_true")
+        if command == "build-liberty":
             subcommand.add_argument("--output", type=Path, required=True)
     column_parser = subcommands.add_parser("plan-classical-column")
     column_parser.add_argument("--order", choices=("tuscan", "doric", "ionic"), default="ionic")
@@ -192,6 +199,27 @@ def main(argv: list[str] | None = None) -> int:
                 raise RuntimeError("Building the airplane requires Blender: blender --background --factory-startup --python-exit-code 1 --python scripts/blender_entry.py -- build-biplane --output <new-directory>") from error
             from .blender_biplane import build_biplane_scene
             print(json.dumps(build_biplane_scene(model, output, bpy_module=bpy), indent=2))
+            return 0
+        if args.command in ("plan-liberty", "build-liberty"):
+            study = make_liberty_study(scale=args.scale, include_pedestal=not args.no_pedestal)
+            if args.command == "plan-liberty":
+                print(json.dumps({
+                    "asset_id": study.asset_id, "generator": "procedural-statue-of-liberty",
+                    "named_parts": dict(study.part_counts),
+                    "crown_rays": sum("crown-ray-" in p.name for p in study.instances),
+                    "instances": len(study.instances),
+                    "bounds_m": [study.bounds_min, study.bounds_max],
+                }, indent=2))
+                return 0
+            output = args.output.resolve()
+            if output.exists() or output.is_symlink():
+                raise LibertyError(f"Output already exists: {output}. Choose a new revision.")
+            try:
+                import bpy  # type: ignore[import-not-found]
+            except ImportError as error:
+                raise RuntimeError("Building Liberty requires Blender 4.2+: run via scripts/blender_entry.py") from error
+            from .blender_liberty import build_liberty_scene
+            print(json.dumps(build_liberty_scene(study, output, bpy_module=bpy), indent=2))
             return 0
         if args.command == "audit":
             print(json.dumps(audit_glb(args.model, require_pbr_textures=args.require_pbr_textures), indent=2))
@@ -380,7 +408,8 @@ def main(argv: list[str] | None = None) -> int:
         manifest = build_scene(recipe, plan, output, bpy_module=bpy)
         print(json.dumps(manifest, indent=2))
         return 0
-    except (CatalogError, RecipeError, PorticoError, FacadeError, MonumentError, GeometryError, AssetImportError, RenderProfileError, RevisionAuditError, AuditError, ExportAuditError,
+    except (CatalogError, RecipeError, PorticoError, FacadeError, MonumentError, LibertyError,
+            GeometryError, AssetImportError, RenderProfileError, RevisionAuditError, AuditError, ExportAuditError,
             SurfaceError, RuntimeError, OSError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 2
