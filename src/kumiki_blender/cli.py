@@ -16,6 +16,7 @@ from .export_audit import ExportAuditError
 from .facade import FacadeError, make_facade_study
 from .egyptian_monuments import MonumentError, make_monument_study
 from .egypt_map import CITY_MARKERS, LABELS, RIVER_CHANNELS, EgyptMapSpec
+from .geography.fuji import load_dem
 from .glb_audit import AuditError, audit_glb
 from .lattice import make_lattice_tower
 from .landmark_scan import prepare_sphinx_scan
@@ -92,6 +93,12 @@ def main(argv: list[str] | None = None) -> int:
         subcommand = subcommands.add_parser(command)
         subcommand.add_argument("--detail", choices=("standard", "high"), default="standard")
         if command == "build-egypt-map":
+            subcommand.add_argument("--output", type=Path, required=True)
+    for command in ("plan-fuji", "build-fuji"):
+        subcommand = subcommands.add_parser(command)
+        subcommand.add_argument("--dem", type=Path, default=Path(".review/fuji-dem/fuji-heightmap.bin"))
+        subcommand.add_argument("--detail", choices=("preview", "standard", "high"), default="standard")
+        if command == "build-fuji":
             subcommand.add_argument("--output", type=Path, required=True)
     column_parser = subcommands.add_parser("plan-classical-column")
     column_parser.add_argument("--order", choices=("tuscan", "doric", "ionic"), default="ionic")
@@ -217,6 +224,27 @@ def main(argv: list[str] | None = None) -> int:
                 "bounds_m": [[min(p[axis] for p in coords) for axis in range(3)],
                              [max(p[axis] for p in coords) for axis in range(3)]],
             }, indent=2))
+            return 0
+        if args.command in ("plan-fuji", "build-fuji"):
+            if not args.dem.is_file():
+                raise RuntimeError(f"Mount Fuji DEM not found: {args.dem}. First run: python scripts/prepare_fuji_dem.py {args.dem}")
+            dem = load_dem(args.dem)
+            divisions = {"preview": 256, "standard": 512, "high": 1024}[args.detail]
+            if args.command == "plan-fuji":
+                print(json.dumps({"asset_id": "mount-fuji-survey-terrain",
+                                  "source": dem.source, "detail": args.detail,
+                                  "terrain_divisions": divisions,
+                                  "terrain_vertices": (divisions+1)**2,
+                                  "statistics": dem.statistics(),
+                                  "vertical_exaggeration": 1.0}, indent=2))
+                return 0
+            try:
+                import bpy  # type: ignore[import-not-found]
+            except ImportError as error:
+                raise RuntimeError("Mount Fuji builds require Blender 4.2+. Run with --background --factory-startup --python scripts/blender_entry.py") from error
+            from .geography.fuji.blender_scene import build_fuji_scene
+            print(json.dumps(build_fuji_scene(args.output, args.dem, divisions=divisions,
+                                             bpy_module=bpy), indent=2))
             return 0
         if args.command in ("plan-egypt-map", "build-egypt-map"):
             spec = (EgyptMapSpec(columns=700, rows=420) if args.detail == "high"
