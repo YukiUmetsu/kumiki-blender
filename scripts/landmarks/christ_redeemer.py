@@ -20,6 +20,7 @@ TAU = math.tau
 STONE = None
 CARVING = None
 GRANITE = None
+HEAD_TILT_DEG = 22.0  # Measured against authentic side-view scan previews.
 MOSAIC_PITCH = .72 / 24  # 3 cm squares split into ~4.2 cm triangular tesserae.
 
 
@@ -798,7 +799,7 @@ def pedestal():
 def orient_head(head_objects):
     """Apply one measured gaze transform to every sculpt and hair detail."""
     pivot=Matrix.Translation((0,0,34.20))
-    tilt=pivot @ Matrix.Rotation(math.radians(22),4,'X') @ pivot.inverted()
+    tilt=pivot @ Matrix.Rotation(math.radians(HEAD_TILT_DEG),4,'X') @ pivot.inverted()
     for obj in head_objects:
         obj.matrix_world=tilt @ obj.matrix_world
     peak=max((obj.matrix_world@v.co).z
@@ -902,6 +903,7 @@ def verify():
             "mosaic_images":len([im for im in bpy.data.images if im.name.startswith("Soapstone |")]),
             "uv_mesh_count":sum(bool(ob.data.uv_layers) for ob in objs),
             "head_surface_vertices":len(head_ob.data.vertices),
+            "head_tilt_deg":HEAD_TILT_DEG,
             "mesh_count":len(objs),"vertex_count":sum(len(ob.data.vertices) for ob in objs)}
     assert abs(ptop-rbot)<.001,"Statue must meet pedestal without floating"
     assert abs(maximum[0]-minimum[0]-29.40)<.015,"Survey fingertip span should be 29.4 m"
@@ -990,6 +992,7 @@ def export(path):
 
 
 def main():
+    global HEAD_TILT_DEG
     argv=sys.argv[sys.argv.index("--")+1:] if "--" in sys.argv else []
     p=argparse.ArgumentParser()
     p.add_argument("--output")
@@ -999,6 +1002,8 @@ def main():
     p.add_argument("--verify",action="store_true")
     p.add_argument("--head-study",action="store_true",
                    help="Clay-only head study for rapid multi-view anatomical QA")
+    p.add_argument("--head-tilt",type=float,default=22.,
+                   help="Head bow angle in degrees for scan/profile comparison")
     p.add_argument("--samples",type=int,default=16)
     p.add_argument("--size",type=int,default=720)
     p.add_argument("--shot",action="append",choices=("front","profile","three_quarter",
@@ -1006,11 +1011,15 @@ def main():
                                                    "head_three_quarter","hand_detail"),
                    help="Render only selected camera(s); repeat for multiple shots")
     args=p.parse_args(argv)
+    if not 0 <= args.head_tilt <= 50:
+        p.error("--head-tilt must be between 0 and 50 degrees")
+    HEAD_TILT_DEG=args.head_tilt
     if args.head_study:
         build_head_study()
         head=next(ob for ob in bpy.data.objects
                   if ob.name.startswith("Head | integrated cheekbone"))
         metrics={"study":"head","head_surface_vertices":len(head.data.vertices),
+                 "head_tilt_deg":HEAD_TILT_DEG,
                  "mesh_count":sum(ob.type=="MESH" for ob in bpy.data.objects)}
         assert metrics["head_surface_vertices"]>15000
     else:

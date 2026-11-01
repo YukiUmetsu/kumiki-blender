@@ -35,12 +35,13 @@ class ChristRedeemerTests(unittest.TestCase):
             cmd = [os.environ["KUMIKI_BLENDER_BINARY"], "--background",
                    "--factory-startup", "--python-exit-code", "1",
                    "--python", str(SCRIPT), "--", "--head-study",
-                   "--verify", "--metrics", str(metrics)]
+                   "--head-tilt", "34", "--verify", "--metrics", str(metrics)]
             process = subprocess.run(cmd, capture_output=True, text=True, timeout=75)
             self.assertEqual(process.returncode, 0, process.stdout[-1800:] +
                              process.stderr[-1800:])
             report = json.loads(metrics.read_text())
             self.assertEqual(report["study"], "head")
+            self.assertEqual(report["head_tilt_deg"], 34)
             self.assertGreater(report["head_surface_vertices"], 30000)
             self.assertLess(report["mesh_count"], 30)
 
@@ -75,6 +76,7 @@ class ChristRedeemerTests(unittest.TestCase):
                                 for reach in report["hand_reach_m"].values()))
             self.assertGreater(report["mesh_count"], 60)
             self.assertGreater(report["head_surface_vertices"], 5000)
+            self.assertEqual(report["head_tilt_deg"], 22)
             self.assertGreater(report["vertex_count"], 15000)
             self.assertEqual(report["pedestal_sides"], 8)
             self.assertEqual(report["mosaic_images"], 3)

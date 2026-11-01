@@ -28,6 +28,12 @@ Sources for measurements and surface treatment:
 References are for visual inspection only; no external images or third-party
 model assets are embedded into the export.
 
+The [authentic-scan intake and anatomy quality gate](CHRIST_REDEEMER_SCAN_INTAKE.md)
+separates the Pix4D/PUC Rio and Baukunst surveys of the *actual monument* from
+CC0 printable miniatures and other unverified reproductions. Authentic survey
+previews may be inspected for proportions; no rights-cleared original scan mesh
+has been identified for redistribution.
+
 ## Build
 
 Blender **4.2+** is required; verified with Blender **4.5.3 LTS** on Linux.
@@ -71,6 +77,19 @@ These camera angles expose different faults: straight-on symmetry, nose/forehead
 profile, three-quarter facial volume, and a low-angle view closer to the
 monument photographs. The clay proof shares the exact same head geometry and
 pose as the full build. The generated QA folder is excluded from git.
+
+For an experimental alternate head bow, add `--head-tilt 34`; the default is
+22 degrees. The alternate pose is **not** yet accepted as the monument's true
+gaze because screen-space matches must be calibrated across multiple views.
+Create a side-by-side evidence sheet with:
+
+```bash
+python3 scripts/reference_compare.py reference.png rendered.png \
+  --output .review/christ/head-compare.png
+```
+
+Only add `--aligned` when the source and Blender cameras have actually been
+registered; unmatched overlay pixels do not prove geometric error.
 
 Run the live integration test with:
 
