@@ -310,11 +310,14 @@ def _sculpt_face_relief(mesh: Mesh, *, scale_x: float, scale_y: float,
         # The real carving has restrained lids, rather than wide dark holes.
         # A previous .145 m eye recess plus a .185 m broken-nose recess read
         # like a cartoon mask after voxel remeshing; keep both shallow.
-        eye = math.exp(-((lateral-.267)/.117)**2 - ((zz-4.050)/.056)**2)
-        upper_lid = math.exp(-((lateral-.267)/.157)**2 - ((zz-4.124)/.047)**2)
-        brow = math.exp(-((lateral-.29)/.175)**2 - ((zz-4.190)/.065)**2)
-        cheekbone = math.exp(-((lateral-.366)/.181)**2 - ((zz-3.779)/.170)**2)
-        hollow = math.exp(-((lateral-.51)/.130)**2 - ((zz-3.95)/.178)**2)
+        # Actual brow/eye spacing is wider than the toy mask's close-set
+        # circular holes. The super-Gaussian width creates long almond eyes;
+        # separate upper lids and brows catch grazing light.
+        eye = math.exp(-((lateral-.307)/.145)**4 - ((zz-4.048)/.054)**2)
+        upper_lid = math.exp(-((lateral-.310)/.172)**4 - ((zz-4.124)/.046)**2)
+        brow = math.exp(-((lateral-.33)/.193)**4 - ((zz-4.193)/.061)**2)
+        cheekbone = math.exp(-((lateral-.390)/.183)**2 - ((zz-3.779)/.175)**2)
+        hollow = math.exp(-((lateral-.53)/.130)**2 - ((zz-3.95)/.175)**2)
         nose_root = math.exp(-(yy/.124)**2 - ((zz-4.062)/.140)**2)
         bridge = math.exp(-(yy/.099)**2 - ((zz-3.940)/.172)**2)
         broken_tip = math.exp(-(yy/.111)**4 - ((zz-3.734)/.093)**2)
@@ -322,7 +325,7 @@ def _sculpt_face_relief(mesh: Mesh, *, scale_x: float, scale_y: float,
         mouth_cut = math.exp(-(yy/.255)**6 - ((zz-3.433)/.019)**2)
         lower_lip = math.exp(-(yy/.218)**4 - ((zz-3.382)/.044)**2)
         chin = math.exp(-(yy/.256)**4 - ((zz-3.237)/.111)**2)
-        jaw = math.exp(-((lateral-.343)/.166)**2 - ((zz-3.360)/.207)**2)
+        jaw = math.exp(-((lateral-.390)/.170)**2 - ((zz-3.360)/.210)**2)
         wear = rock_height_field(px*4.7, py*4.7, pz*4.7,
                                  seed=301, strata_spacing=.42)
         # X points toward the rear: negative means a projected cheek/nasal
@@ -333,12 +336,115 @@ def _sculpt_face_relief(mesh: Mesh, *, scale_x: float, scale_y: float,
                         - .017*nose_root - .077*bridge
                         + (.069 + .011*wear)*broken_tip
                         - .022*upper_lip + .021*mouth_cut
-                        - .016*lower_lip - .035*chin - .025*jaw)
+                        - .016*lower_lip - .035*chin - .025*jaw
+                        + .011*wear*(1-.65*eye))
         # Angular jaw and temporal narrowing break the toy-like oval facial
         # silhouette, while the back half of the head stays untouched.
         jaw_width = .022*jaw - .015*hollow
         vertices.append((px+relief*scale_x,
                          py + math.copysign(jaw_width*scale_y*front, yy), pz))
+    return Mesh(tuple(vertices), mesh.faces)
+
+
+def _nemes_drapery_wing(*, side: int, scale_x: float, scale_y: float,
+                       scale_z: float) -> Mesh:
+    """Watertight, swept royal headcloth wing based on frontal elevations.
+
+    In the actual Sphinx the nemes spreads *outward and backward* from the
+    temple, ending in a broad, almost horizontal shoulder-level hem. It is
+    not a vertical cylindrical lappet. A two-sided subdivided strip creates
+    its continuous triangular silhouette and shallow carved cloth/stone
+    banding without an image texture or zero-thickness geometry.
+
+    The input photographs inform the silhouette, not absolute survey points.
+    Dimensions below describe the normalized 10.5 m educational statue.
+    """
+    if side not in (-1, 1) or type(side) is not int:
+        raise GeometryError("Nemes wing side must be -1 or 1")
+    # Z, near-face inner Y, outside Y. The outer edge sweeps to the flank;
+    # the bottom hem is broad and squared off rather than pinching to a tip.
+    stations = (
+        (3.10, .75, 1.51),
+        (3.21, .76, 1.57),
+        (3.36, .77, 1.57),
+        (3.61, .74, 1.49),
+        (3.95, .68, 1.18),
+        (4.23, .58, .87),
+        (4.49, .49, .67),
+    )
+    divisions_z, divisions_y = 8, 20
+    samples = []
+    for index in range(len(stations)-1):
+        low, high = stations[index], stations[index+1]
+        for step in range(divisions_z):
+            u = step/divisions_z
+            samples.append(tuple(a+(b-a)*u for a, b in zip(low, high)))
+    samples.append(stations[-1])
+    rows, cols = len(samples), divisions_y+1
+    vertices: list[tuple[float, float, float]] = []
+    for front in (True, False):
+        for zz, inner, outer in samples:
+            for column in range(cols):
+                t = column/divisions_y
+                yy = inner+(outer-inner)*t
+                taper = min(1., (zz-3.10)/.15, (4.49-zz)/.16)
+                # Front pleats go across the width of the triangular stone
+                # sheet. Their real relief survives the fine head voxel union.
+                strata = .017*math.sin(zz*48 + t*.9)
+                grain = .012*rock_height_field(-3.9, yy, zz,
+                                               seed=197, strata_spacing=.22)
+                relief = max(0., taper)*(strata+grain)
+                # The outer hem sweeps backward onto the lion shoulder.
+                # Its X/Z diagonal is essential in profile; a constant-X
+                # sheet reads like a plank attached to the skull.
+                front_x = (-3.99+.08*t +
+                           .62*t*(4.49-zz)/1.39 + relief)
+                xx = front_x if front else front_x+.54-.04*t-.70*relief
+                vertices.append((xx*scale_x, side*yy*scale_y, zz*scale_z))
+
+    def idx(row: int, col: int, front: bool) -> int:
+        return (0 if front else rows*cols)+row*cols+col
+
+    faces: list[tuple[int, ...]] = []
+    for row in range(rows-1):
+        for col in range(cols-1):
+            for front in (True, False):
+                a, b = idx(row, col, front), idx(row, col+1, front)
+                c, d = idx(row+1, col+1, front), idx(row+1, col, front)
+                quad = (a, b, c, d)
+                faces.append(tuple(reversed(quad)) if (front == (side == 1)) else quad)
+    # Top, bottom and inner/outer edges close the physically thick cloth.
+    border = ([(0, col) for col in range(cols)] +
+              [(row, cols-1) for row in range(1, rows)] +
+              [(rows-1, col) for col in range(cols-2, -1, -1)] +
+              [(row, 0) for row in range(rows-2, 0, -1)])
+    for index, (row, col) in enumerate(border):
+        next_row, next_col = border[(index+1) % len(border)]
+        a, b = idx(row, col, True), idx(next_row, next_col, True)
+        c, d = idx(next_row, next_col, False), idx(row, col, False)
+        faces.append((a, b, c, d) if side == 1 else (b, a, d, c))
+    return Mesh(tuple(vertices), tuple(faces))
+
+
+def _carve_nemes_crown(mesh: Mesh, *, scale_x: float, scale_y: float,
+                       scale_z: float) -> Mesh:
+    """Incise surviving linen-fold channels into the broad forehead/crown.
+
+    Royal nemes folds run roughly crown-to-brow over the front and then turn
+    into lateral bands on the wings. Recessed channels preserve a continuous
+    carved volume; no floating decorative stripes or shader-only grooves.
+    """
+    vertices = []
+    for px, py, pz in mesh.vertices:
+        xx, yy, zz = px/scale_x, py/scale_y, pz/scale_z
+        crown = max(0., min(1., (zz-4.17)/.22))
+        crown *= max(0., min(1., (4.60-zz)/.065))
+        front = max(0., min(1., (-xx-3.87)/.23))
+        front = front*front*(3-2*front)
+        channel = max(0., math.cos(yy*21.0+.34*math.sin(zz*7)))**8
+        fractured_band = math.exp(-((zz-4.31)/.025)**2)
+        relief = crown*front*(.030*channel + .014*fractured_band)
+        vertices.append((px+relief*scale_x, py, pz))
     return Mesh(tuple(vertices), mesh.faces)
 
 
@@ -428,8 +534,8 @@ def sphinx_assembly(*, prefix: str, length: float = 10.5,
                                   (2.43, -3.29, 0, .75, .81),
                                   (2.78, -3.45, 0, .61, .72),
                                   (3.13, -3.50, 0, .50, .64)),
-                                 roughness=.075, seed=49, exponent=2.55,
-                                 bedding=.020, pitting=.018))
+                                 roughness=.100, seed=49, exponent=2.55,
+                                 bedding=.042, pitting=.028))
     for side, sign in (("left", -1), ("right", 1)):
         side_y = sign*1.07
         part(f"{side}-forepaw", along_x(((-5.43, side_y, .32, .22, .19),
@@ -468,42 +574,41 @@ def sphinx_assembly(*, prefix: str, length: float = 10.5,
                                 (4.13, -1.12, .82, .09, .09)),
                                roughness=.025, seed=156, bedding=.012,
                                pitting=.009))
-    # Broad rounded nemes headdress sits behind a separate sculpted face.
-    part("nemes-hood", along_z(((2.70, -3.40, 0, .60, .79),
-                                (3.20, -3.49, 0, .70, .93),
-                                (3.74, -3.51, 0, .73, 1.04),
-                                (4.14, -3.47, 0, .69, .99),
-                                (4.43, -3.48, 0, .65, .88),
-                                (4.56, -3.50, 0, .53, .72),
-                                (4.60, -3.50, 0, .43, .61)),
-                               roughness=.028, seed=89, exponent=3.5), "casing-limestone")
-    # A broader, less convex facial plane fills the front of the nemes.
-    # Earlier .53 m front radii created a bulbous little mask surrounded by
-    # a huge helmet; distinct cheek and brow planes now define the face.
-    face = along_z(((2.93, -3.86, 0, .23, .25),
-                    (3.14, -3.93, 0, .32, .39),
-                    (3.43, -3.95, 0, .42, .48),
-                    (3.73, -3.94, 0, .45, .57),
-                    (4.00, -3.91, 0, .48, .61),
-                    (4.23, -3.90, 0, .44, .58),
-                    (4.38, -3.88, 0, .34, .48)),
-                   roughness=.012, seed=97, exponent=3.65,
-                   subdivisions=8, bedding=.002, pitting=.004)
+    # The surviving forehead/crown is closely fitted to a human face, while
+    # the wider triangular side flaps are distinct behind it. This avoids the
+    # huge egg-shaped helmet silhouette of the original parametric sculpt.
+    hood = along_z(((2.70, -3.40, 0, .58, .67),
+                    (3.20, -3.49, 0, .66, .76),
+                    (3.74, -3.51, 0, .70, .83),
+                    (4.14, -3.47, 0, .68, .82),
+                    (4.43, -3.48, 0, .64, .78),
+                    (4.56, -3.50, 0, .53, .69),
+                    (4.60, -3.50, 0, .43, .58)),
+                   roughness=.026, seed=89, exponent=3.65)
+    part("nemes-hood", _carve_nemes_crown(hood, scale_x=x, scale_y=y, scale_z=z),
+         "casing-limestone")
+    # A broad forehead and cheek plane tapers to a squared chin; photographs
+    # show a strong jaw shelf, not an upside-down teardrop/egg face.
+    face = along_z(((3.06, -3.89, 0, .32, .45),
+                    (3.18, -3.93, 0, .36, .48),
+                    (3.43, -3.95, 0, .42, .53),
+                    (3.73, -3.94, 0, .46, .61),
+                    (4.00, -3.91, 0, .48, .64),
+                    (4.23, -3.90, 0, .44, .61),
+                    (4.39, -3.88, 0, .35, .52)),
+                   roughness=.022, seed=97, exponent=4.15,
+                   subdivisions=8, bedding=.009, pitting=.012)
     part("face", _sculpt_face_relief(face, scale_x=x, scale_y=y, scale_z=z))
     for side, sign in (("left", -1), ("right", 1)):
-        part(f"nemes-{side}-lappet", along_z(((2.18, -3.43, sign*.74, .10, .20),
-                                             (2.60, -3.49, sign*.77, .12, .23),
-                                             (3.25, -3.53, sign*.80, .14, .24),
-                                             (3.88, -3.49, sign*.82, .15, .21)),
-                                            roughness=.022, seed=105, exponent=5.0),
+        part(f"nemes-{side}-lappet", _nemes_drapery_wing(
+             side=sign, scale_x=x, scale_y=y, scale_z=z),
              "casing-limestone")
-        part(f"{side}-ear", along_z(((3.56, -3.96, sign*.69, .10, .10),
-                                    (3.85, -4.00, sign*.76, .15, .14),
-                                    (4.12, -3.95, sign*.71, .10, .10)),
+        part(f"{side}-ear", along_z(((3.83, -3.98, sign*.64, .08, .10),
+                                    (4.01, -4.02, sign*.72, .13, .12),
+                                    (4.16, -3.97, sign*.69, .08, .08)),
                                    roughness=.023, seed=118))
-        # Eye/brow objects and oversized headdress collars looked like
-        # cartoon attachments. The facial details are now sculpted directly
-        # and natural bedding provides subtler grooves on both lappets.
+        # Ear relief is a small face-side feature; wing and crown grooves are
+        # directly carved in the same limestone before the Blender union.
     if restored_nose:
         part("optional-restored-nose", along_z(((3.52, -4.43, 0, .13, .17),
                                                 (3.82, -4.52, 0, .19, .13),

@@ -197,6 +197,52 @@ class EgyptianMonumentTests(unittest.TestCase):
         self.assertEqual((audit_mesh(carved).boundary_edges,
                           audit_mesh(carved).nonmanifold_edges), (0, 0))
 
+    def test_reference_nemes_wings_have_broad_swept_hem_and_closed_stone(self):
+        """Photo-based headdress cannot regress to two vertical baguettes."""
+        parts = {part.name: part.mesh for part in sphinx_assembly(prefix="sphinx")}
+        face = parts["sphinx-face"]
+        face_width = max(v[1] for v in face.vertices)-min(v[1] for v in face.vertices)
+        z_scale = 3.6/4.6
+        for side in ("left", "right"):
+            wing = parts[f"sphinx-nemes-{side}-lappet"]
+            report = audit_mesh(wing)
+            self.assertEqual((report.boundary_edges, report.nonmanifold_edges), (0, 0))
+            self.assertGreater(report.volume_m3, .25)
+            lateral = max(abs(v[1]) for v in wing.vertices)
+            self.assertGreater(lateral, face_width*.98)
+            self.assertGreater(lateral, 1.53)
+            self.assertLess(min(v[2] for v in wing.vertices), 3.12*z_scale)
+            self.assertGreater(max(v[2] for v in wing.vertices), 4.46*z_scale)
+            lower_hem = [v[0] for v in wing.vertices if 3.10*z_scale < v[2] < 3.25*z_scale
+                         and abs(v[1]) > 1.43]
+            upper_hem = [v[0] for v in wing.vertices if v[2] > 4.46*z_scale
+                         and abs(v[1]) > .60]
+            self.assertTrue(lower_hem and upper_hem)
+            # The wing sweeps backward as it descends, particularly at its
+            # outer edge; a constant-X panel looks like a rigid hanging rod.
+            self.assertGreater(sum(lower_hem)/len(lower_hem) -
+                               sum(upper_hem)/len(upper_hem), .24)
+        self.assertGreater(max(v[1] for v in parts["sphinx-nemes-right-lappet"].vertices)
+                           - min(v[1] for v in parts["sphinx-nemes-left-lappet"].vertices),
+                           3.05)
+
+    def test_nemes_forehead_has_physical_incised_folds(self):
+        from kumiki_blender.egyptian_monuments import _carve_nemes_crown
+        raw = loft_elliptical_sections(
+            ((4.14, -3.48, 0, .68, .82),
+             (4.43, -3.48, 0, .64, .78),
+             (4.60, -3.50, 0, .43, .58)),
+            radial_segments=96, subdivisions=8,
+            cross_section_exponent=3.65)
+        sculpted = _carve_nemes_crown(raw, scale_x=1, scale_y=1, scale_z=1)
+        incisions = [sculpted.vertices[i][0]-p[0]
+                     for i, p in enumerate(raw.vertices)
+                     if 4.32 < p[2] < 4.48 and p[0] < -3.95]
+        self.assertGreater(max(incisions), .020)
+        self.assertEqual(raw.vertices[-96:], sculpted.vertices[-96:])
+        self.assertEqual((audit_mesh(sculpted).boundary_edges,
+                          audit_mesh(sculpted).nonmanifold_edges), (0, 0))
+
     def test_sphinx_scaling_is_parametric(self):
         small = sphinx_assembly(prefix="small", length=10.5)
         large = sphinx_assembly(prefix="large", length=21)
@@ -248,12 +294,15 @@ class EgyptianMonumentTests(unittest.TestCase):
                 self.assertGreater(study.bounds_max[2], 3.4 if kind == "sphinx" else 4.0)
                 shots = plan_monument_shots(study)
                 self.assertEqual(shots[0].name, "hero")
-                self.assertEqual(len(shots), {"giza-study": 6, "sphinx": 5,
+                self.assertEqual(len(shots), {"giza-study": 7, "sphinx": 6,
                                               "pyramid": 3}[kind])
                 self.assertEqual(len({s.name for s in shots}), len(shots))
                 if kind != "pyramid":
                     self.assertIn("sphinx-profile", [s.name for s in shots])
                     self.assertIn("sphinx-face", [s.name for s in shots])
+                    self.assertIn("sphinx-frontal", [s.name for s in shots])
+                    frontal = next(s for s in shots if s.name == "sphinx-frontal")
+                    self.assertAlmostEqual(frontal.position[1], frontal.target[1])
                 self.assertGreater(shots[0].ortho_scale/1.6,
                                    (study.bounds_max[2]-study.bounds_min[2])*1.1)
 

@@ -18,7 +18,7 @@ the Great Sphinx.
 | `pyramid_assembly(prefix, base_width, height, courses, block_width, joint, casing_fraction)` | Recessed core, individually named alternating-course blocks, worn vacancies, light lower casing and capstone |
 | `petrie_course_tops_m(last_course=201)` | Historical corrected NE corner course-top elevations for Khufu: 203 observed levels, 201-course present-day cutoff |
 | `khufu_petrie_assembly(prefix, last_course=201)` | Full-sized Khufu study with measured course heights and multiple watertight masonry blocks batched per face/course |
-| `sphinx_assembly(prefix, length, width, height, restored_nose)` | Sculpted body/haunches/paws/toes/tail and hood/face/ears; recessed eye sockets, broken nose and mouth are carved directly into the face |
+| `sphinx_assembly(prefix, length, width, height, restored_nose)` | Sculpted body/haunches/paws/toes/tail, squared jaw/face and carved crown; broad swept nemes panels, almond eyes, broken nose and mouth are modeled as physical geometry |
 | `sphinx_integral_parts(parts)` | Identify the eight overlapping anatomical volumes for one visible carved lion body |
 | `sphinx_head_parts(parts)` | Identify the six closed hood/face/ear/lappet solids for one head sculpture without overlay eye/brow pieces |
 | `combine_sculpture_sources(parts)` | Flatten transformed closed body meshes into a world-space surface input for Blender's voxel union |
@@ -59,17 +59,27 @@ voxel size, source count and vertex count. This remains an original
 illustrative sculpt, not photogrammetry.
 
 The default procedural sculpt now uses a lower head-to-total-length ratio,
-rounded rather than rectangular lion torso/foreleg sections, a broader
-shoulder-to-neck transition, and narrower headdress lappets. A second
+rounded rather than rectangular lion torso/foreleg sections, and a broader
+shoulder-to-neck transition. Side and frontal photographs of the monument
+informed the replacement of two dangling tubular headdress lappets with
+**closed, triangular nemes drapery wings** that flare outward, follow a swept
+profile behind the face, and end in a broad shoulder-level hem. Geometry-level
+incised linen folds cross the crown, while finer horizontal stone/cloth
+banding runs through the flared side panels. The face now has a wider squared
+jaw, separated brow and almond-shaped eye relief, less prominent ears and
+additional restrained mineral wear. A second
 geometry-level weathering pass adds irregular undercut bedding planes and
 small concave mineral pockets to the lion's body and haunches, with much
 weaker wear on the harder head. The facial silhouette now includes a surviving
 nasal bridge and chipped lower tip, narrow recessed sockets, differentiated
 lids, cheek and jaw planes, and shallow carved lips. A rendered QA pass led
-to reduced nasal and eye recesses and a broader, less round nemes crown.
+to reduced nasal and eye recesses and a less round nemes crown. A dedicated
+straight-on `sphinx-frontal` quality shot joins the existing oblique face and
+side profile, allowing all three silhouettes to be checked in CI renders.
 
-The supplied side-profile concept image is used as an **art-direction and
-silhouette reference**, not a surveyed depth map. AERA documents why the
+The user's three frontal and side photographs are **visual proportion and
+wear references only**, not surveyed 3D depth maps; the photographs are not
+included or redistributed in the repository. AERA documents why the
 [Sphinx's body beds erode more strongly than the head](https://aeraweb.org/geology-of-the-sphinx/).
 This procedural interpretation emphasizes those differences; it is still an
 artistic approximation: these changes improve the *silhouette*, but do not
