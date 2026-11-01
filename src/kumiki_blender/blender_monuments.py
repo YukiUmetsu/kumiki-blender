@@ -159,6 +159,8 @@ def build_monument_scene(study: MonumentStudy, destination: Path, *,
         "casing-limestone": get_surface("natural-stone", color="#DFD5BC", roughness=0.68),
         "sphinx-limestone": get_surface("weathered-stone", color="#B9A98A", roughness=0.79,
                                         weathering_strength=0.62),
+        "sphinx-head-limestone": get_surface("weathered-stone", color="#C4B596", roughness=0.84,
+                                             weathering_strength=0.27),
         "bedrock-limestone": get_surface("weathered-stone", color="#A89576", roughness=0.91,
                                          weathering_strength=0.78),
     }
@@ -222,8 +224,8 @@ def build_monument_scene(study: MonumentStudy, destination: Path, *,
             bpy, scene, model, body_sources, objects, palette["sphinx-limestone"],
             label="body", voxel=max(.04, min(.095, .065*sculpt_scale))),
         "head": _integrate_sphinx_group(
-            bpy, scene, model, head_sources, objects, palette["sphinx-limestone"],
-            label="head", voxel=max(.02, min(.045, .028*sculpt_scale))),
+            bpy, scene, model, head_sources, objects, palette["sphinx-head-limestone"],
+            label="head", voxel=max(.018, min(.04, .024*sculpt_scale))),
     }
 
     span = study.bounds_max[0] - study.bounds_min[0]

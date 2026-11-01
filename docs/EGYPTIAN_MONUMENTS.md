@@ -41,8 +41,10 @@ Blender, a bounded-resolution voxel remesh produces a **single continuous
 limestone skin** from these intersecting body volumes. This removes the
 visible overlap seams while retaining real erosion across the statue. A
 second, finer-resolution union sculpts the face, hood, ears and lappets into
-one coherent head. The face's recessed eyes, damaged nose and mouth are
-geometry-level relief rather than floating decorative spheres or lines.
+one coherent head with a quieter, lighter stone material. The face's recessed
+eyes, surviving nasal bridge, damaged nose and mouth are geometry-level relief
+rather than floating decorative spheres or lines. Head weathering is reduced
+relative to the deeply stratified lion body to preserve readable anatomy.
 Toe reliefs and the rough bedrock remain separate so fine detail is preserved.
 
 The `source.blend` preserves every original anatomical solid in a hidden

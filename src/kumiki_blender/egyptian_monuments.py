@@ -215,11 +215,16 @@ def _sculpt_face_relief(mesh: Mesh, *, scale_x: float, scale_y: float,
         brow = math.exp(-((abs(yy)-.27)/.20)**2 - ((zz-4.19)/.085)**2)
         chin = math.exp(-(yy/.24)**2 - ((zz-3.14)/.13)**2)
         mouth = math.exp(-(yy/.285)**6 - ((zz-3.39)/.035)**2)
+        nose_bridge = math.exp(-(yy/.12)**2 - ((zz-3.96)/.20)**2)
         wear = rock_height_field(px*5.0, py*5.0, pz*5.0,
                                  seed=301, strata_spacing=.45)
         scar = broken_nose*(.015 + .027*wear)
-        relief = front*(.082*eye + .105*broken_nose - .028*cheek
-                        - .024*brow - .020*chin + .019*mouth + scar)
+        # A stronger but localized eye cavity, elevated upper lid/cheek plane,
+        # partial nasal bridge and incised lips read at actual camera distance.
+        # Negative displacement projects forward because the face looks -X.
+        relief = front*(.155*eye + .120*broken_nose - .043*cheek
+                        - .048*brow - .026*chin + .032*mouth
+                        - .070*nose_bridge + scar)
         vertices.append((px+relief*scale_x, py, pz))
     return Mesh(tuple(vertices), mesh.faces)
 
@@ -335,7 +340,7 @@ def sphinx_assembly(*, prefix: str, length: float = 10.5,
                                 (4.16, -3.46, 0, .74, 1.03),
                                 (4.47, -3.46, 0, .60, .84),
                                 (4.60, -3.50, 0, .40, .66)),
-                               roughness=.055, seed=89, exponent=3.8), "casing-limestone")
+                               roughness=.037, seed=89, exponent=3.8), "casing-limestone")
     face = along_z(((2.93, -3.86, 0, .23, .23),
                     (3.14, -3.93, 0, .34, .34),
                     (3.43, -3.95, 0, .46, .41),
@@ -343,7 +348,7 @@ def sphinx_assembly(*, prefix: str, length: float = 10.5,
                     (4.00, -3.91, 0, .53, .52),
                     (4.23, -3.90, 0, .46, .49),
                     (4.38, -3.88, 0, .35, .42)),
-                   roughness=.029, seed=97, exponent=2.45)
+                   roughness=.012, seed=97, exponent=2.45)
     part("face", _sculpt_face_relief(face, scale_x=x, scale_y=y, scale_z=z))
     for side, sign in (("left", -1), ("right", 1)):
         part(f"nemes-{side}-lappet", along_z(((2.18, -3.42, sign*.83, .20, .24),

@@ -76,6 +76,13 @@ class RockWeatheringTests(unittest.TestCase):
         # a tall pedestal and swollen triangular forelegs read like a toy.
         self.assertLess(max(v[2] for v in front_paw.vertices), 1.55)
         self.assertLess(max(v[2] for v in bedrock.vertices), .35)
+        eyes = [v[0] for v in head.vertices if abs(v[2]-4.04)<.065
+                and .21<abs(v[1])<.34 and v[0]<-4.0]
+        bridge = [v[0] for v in head.vertices if abs(v[2]-4.04)<.065
+                  and abs(v[1])<.07 and v[0]<-4.0]
+        # Eye sockets need actual inward depth relative to the surviving
+        # nasal bridge, not floating eyeball objects or shader-only darkness.
+        self.assertGreater(min(eyes)-min(bridge), .12)
         # No two adjacent strata share the precise same longitudinal profile.
         self.assertNotEqual(torso.vertices[96:192], torso.vertices[192:288])
 
