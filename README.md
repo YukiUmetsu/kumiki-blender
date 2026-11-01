@@ -4,6 +4,13 @@ A standalone, code-first Blender toolkit for reusable, cinematic 3D authoring. I
 
 The library separates testable Python geometry planning from Blender's `bpy` modeling and rendering. It includes a tapered lattice observation tower, a **modular architectural portico** built from closed arch stones and lathed columns, a **reusable stone building facade** with detailed windows/doors/roof, a **parametric Egyptian monument study** with pyramid casing blocks and a sculpted lion-bodied Sphinx figure, and a **rigged red vintage biplane** modeled from user-provided multiview artwork. All use a shared revision exporter for editable `.blend`, portable `.glb`, inspection views and a JSON manifest for Kumiki-UI and ContentGen consumers.
 
+The experimental [Christ the Redeemer procedural sculpture](docs/CHRIST_REDEEMER.md)
+adds a separately authored Art Deco landmark study: dimensioned outstretched
+arms, draped garment, individually shaped hair and facial features, hands, and
+an octagonal pedestal. Its standalone Blender script exports GLB/`.blend` and
+six front/profile/detail QA views with dimensional and mesh winding checks.
+It remains a sculptural study, not a photo-accurate model.
+
 ## Find models in the categorized asset catalog
 
 Every model family has one manifest in `src/kumiki_blender/assets/<category>/<subcategory>/<asset-id>/asset.json`. Existing geometry modules and CLI entry points remain compatible; discover assets by name, category, tags, or alternate names without knowing which Python module implements them:
