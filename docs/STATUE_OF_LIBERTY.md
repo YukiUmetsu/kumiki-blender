@@ -1,5 +1,71 @@
 # Statue of Liberty — scan-assisted detail rebuild
 
+## Blender Studio CC0 anatomical face checkpoint (r22, **visual gate failed**)
+
+The newest experiment takes a **different geometric foundation** after repeated
+non-improving sculpt attempts on a miniature scan with almost no usable eyelid
+or lip topology. It extracts Dan Ulrich's **realistic sculpting head and
+separate eye geometry** from Blender Studio's official *Human Base Meshes
+v1.2.0* (**CC0 1.0**), scales and reshapes it, and stages it against the
+licensed Jerryfisher bronze miniature. A carefully scoped cutter removes
+1,665 of the miniature's blurred facial polygons, leaving its forelock,
+crown, arm, neck and garment present. The donor has independent, subdivided
+eyelid rims, nostrils, lips and jaw—no freestanding decorative tubes.
+
+**This is a prototype, not yet a resemblance match.** The neutral-clay front,
+three-quarter and profile pictures demonstrate remaining failures. In
+particular, the donor's temple/jaw/neck boundary is visibly disconnected in
+profile, the forehead-to-hair edge is unnaturally straight, the eyes are too
+generic and open, and the lip separation and proportions lack Bartholdi's
+classical character. Thus the new donor has better **feature topology** but
+does **not** establish a better all-angle likeness than the r15 scan. It is
+kept as a separate face experiment rather than quietly replacing the main
+statue asset.
+
+### Reviewed source ledger
+
+| ID | Source | Evidence / rights | Use |
+|---|---|---|---|
+| F1 | User-supplied front, oblique and profile close-ups | Direct observed photographic reference; reconstruction reference | Gaze, nose, chin, hairline, eyebrow, cheek planes |
+| F2 | [Jerryfisher, bronze miniature](https://sketchfab.com/3d-models/statue-of-liberty-bronze-model-5b9aa58d51624f01b9009b52379bf18a) | CC BY 4.0, verified binary | Existing complete statue, clothing and hair mass; **not** a monument survey |
+| F3 | [Dan Ulrich / Blender Studio, Human Base Meshes](https://www.blender.org/download/demo-files/) | CC0 1.0, official Blender demo asset, verified bundle and extracted file SHA-256 | Anatomical head, sculptable topology, sclera and iris bases; **not** a statue likeness |
+| F4 | [NPS laser scanning documentation](https://www.nps.gov/articles/laser-scan-lady-liberty.htm) | Monument survey described, no reusable mesh authorized | Historical workflow context only; source not imported |
+| F5 | [Museum face replica by avredu](https://sketchfab.com/3d-models/statue-of-liberty-face-model-in-the-museum-1a09198686344d279a8220cb7bdb7573) | CC BY-NC-SA; different rights and capture subject | Public reference preview only; **not** imported or redistributed |
+
+The anatomy bundle's exact 49 MB ZIP and 48 MB `.blend` hashes, creator, URL
+and CC0 terms are locked in `anatomy_source.json`. Raw donor assets remain in
+the local cache rather than the git repository. Both artists' source details
+are also embedded in the exported GLB node metadata.
+
+### Generate the inspectable anatomy experiment
+
+```bash
+python3 scripts/fetch_liberty_scan.py --output .review/_sources/liberty-bronze.glb
+python3 scripts/fetch_liberty_anatomy.py --output .review/_sources/human-base-meshes.blend
+blender -b -t 6 --python-exit-code 1 \
+  --python scripts/blender_liberty_anatomy_review.py -- \
+  .review/_sources/liberty-bronze.glb \
+  .review/_sources/human-base-meshes.blend \
+  .review/landmarks/statues/statue-of-liberty/r22-anatomy-checkpoint \
+  --carve --export
+PYTHONPATH=src python3 -m kumiki_blender audit --model \
+  .review/landmarks/statues/statue-of-liberty/r22-anatomy-checkpoint/anatomy-checkpoint.glb
+```
+
+Use a fresh output directory on each run. The script also accepts `--patch`
+to experiment with a continuous scan-to-donor heightfield, but multi-angle
+QA rejected that alternative because ray-sampled eyelids and mouth produced
+visible sawtooth artifacts. `--quick` renders just front/three-quarter views.
+The current r22 build exports 10 named mesh nodes and one portable material,
+with zero external GLB references; no claim of watertight facial topology is
+made.
+
+**Next structural gate:** build a fully closed, sculpted face/head with
+photographic landmark calibration, resolve the eye and lip anatomy in neutral
+clay, and weld the side/head/neck seams in true topology. Do not add weathering,
+garment detailing or a final patina until the face passes front, three-quarter
+and profile reviews. The `.blend` remains an editable starting point.
+
 ## Face checkpoint: CC BY scan, not a finished likeness
 
 The first procedural model has recognizable outlines but substantially misses

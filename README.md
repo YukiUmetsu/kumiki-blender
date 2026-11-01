@@ -214,6 +214,18 @@ and retained in Blender/GLB metadata. The first checkpoint still requires
 human review of the eyes, brow, nose, lips and hair against the supplied photos
 before this scan becomes the basis for the full statue.
 
+A separate **anatomical face experiment** now tests a second foundation:
+Dan Ulrich / Blender Studio's official **CC0 Human Base Meshes** realistic
+sculpting head, with genuine eye/lip/nose geometry, paired with the licensed
+bronze-miniature body and crown. `scripts/fetch_liberty_anatomy.py` verifies
+the exact 49 MB CC0 archive, and
+`scripts/blender_liberty_anatomy_review.py -- ... --carve --export` produces
+an inspectable editable `.blend`, portable `.glb`, and neutral-clay front,
+three-quarter and profile renders. **Visual acceptance is still blocked**:
+the profile connection, brow/forehead integration and historic likeness are
+not finished. The main statue generator remains unchanged. See the
+[face graft review and source ledger](docs/STATUE_OF_LIBERTY.md).
+
 ### Earlier procedural prototype
 
 `liberty.py` creates a reference-guided, full 360° Statue of Liberty sculpture
