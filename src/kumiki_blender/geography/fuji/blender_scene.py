@@ -8,6 +8,7 @@ replacement of surveyed elevation.
 from __future__ import annotations
 
 import math
+from array import array
 from pathlib import Path
 from typing import Any
 
@@ -108,6 +109,51 @@ def terrain_color(height_m: float, slope: float, x: float, y: float) -> tuple[fl
     return (*c, 1.)
 
 
+def _stone_normal_image(bpy: Any, size: int) -> Any:
+    """Bake a unique, tileable synthetic weathering normal into a PNG image.
+
+    This adds *shading only*. DEM vertex locations remain survey samples.
+    Blender ships NumPy, so all image math can run vectorized in background
+    mode with no network requests, photos, custom render plugins or UV seams.
+    """
+    import numpy as np  # Available in Blender's bundled Python runtime.
+
+    if size < 128 or size > 2048 or size & (size-1):
+        raise ValueError("Fuji surface normal texture requires a 128..2048 power of two")
+    rng=np.random.default_rng(3776)
+    height=np.zeros((size,size),dtype=np.float32)
+    for cells,weight in ((12,.46),(32,.28),(96,.17),(256,.09)):
+        # Wrapped lattice values ensure no seam when the texture is repeated.
+        lattice=rng.random((cells,cells),dtype=np.float32)
+        coord=np.arange(size,dtype=np.float32)*cells/size
+        lower=np.floor(coord).astype(np.int32)
+        upper=(lower+1)%cells
+        transition=coord-lower
+        transition=transition*transition*(3-2*transition)
+        x0,y0=lower[None,:],lower[:,None]
+        x1,y1=upper[None,:],upper[:,None]
+        tx,ty=transition[None,:],transition[:,None]
+        a=lattice[y0,x0]*(1-tx)+lattice[y0,x1]*tx
+        b=lattice[y1,x0]*(1-tx)+lattice[y1,x1]*tx
+        height+=weight*(a*(1-ty)+b*ty)
+    dx=np.roll(height,-1,axis=1)-np.roll(height,1,axis=1)
+    dy=np.roll(height,-1,axis=0)-np.roll(height,1,axis=0)
+    nx,ny=-dx*5.5,-dy*5.5
+    length=np.sqrt(nx*nx+ny*ny+1)
+    rgba=np.empty((size,size,4),dtype=np.float32)
+    rgba[:,:,0]=.5+.5*nx/length
+    rgba[:,:,1]=.5+.5*ny/length
+    rgba[:,:,2]=.5+.5/length
+    rgba[:,:,3]=1
+    image=bpy.data.images.new("Fuji / original weathered-rock surface normals",
+                              width=size,height=size,alpha=True,float_buffer=False)
+    image.colorspace_settings.name="Non-Color"
+    image.pixels.foreach_set(rgba.ravel())
+    image.update()
+    image.pack()
+    return image
+
+
 def _terrain_object(bpy: Any, model: Any, dem: FujiDem, divisions: int) -> Any:
     spec = dem.spec
     if (divisions < 32 or divisions > spec.samples-1 or
@@ -146,6 +192,18 @@ def _terrain_object(bpy: Any, model: Any, dem: FujiDem, divisions: int) -> Any:
     attr = mesh.color_attributes.new(name="FujiAlbedo", type="FLOAT_COLOR", domain="POINT")
     for i, color in enumerate(colors):
         attr.data[i].color = color
+    # UV orientation follows geographic north-to-south DEM row order. All
+    # normals live in the GLB as a packed PNG, with zero external references.
+    uv_layer=mesh.uv_layers.new(name="FujiGeographicUV")
+    uv_coords=array("f")
+    for row in range(divisions):
+        v0=1-row/divisions
+        v1=1-(row+1)/divisions
+        for col in range(divisions):
+            u0=col/divisions
+            u1=(col+1)/divisions
+            uv_coords.extend((u0,v0,u0,v1,u1,v1,u1,v0))
+    uv_layer.data.foreach_set("uv",uv_coords)
     mat = bpy.data.materials.new("Fuji / alpine forest, basalt and seasonal snow")
     mat.use_nodes = True
     nodes = mat.node_tree.nodes
@@ -154,6 +212,16 @@ def _terrain_object(bpy: Any, model: Any, dem: FujiDem, divisions: int) -> Any:
     vertex = nodes.new("ShaderNodeVertexColor")
     vertex.layer_name = "FujiAlbedo"
     mat.node_tree.links.new(vertex.outputs["Color"], bsdf.inputs["Base Color"])
+    normal_texture=nodes.new("ShaderNodeTexImage")
+    normal_texture.image=_stone_normal_image(bpy,512 if divisions<1024 else 1024)
+    normal_texture.interpolation="Linear"
+    normal_texture.extension="REPEAT"
+    normal_node=nodes.new("ShaderNodeNormalMap")
+    normal_node.space="TANGENT"
+    normal_node.uv_map=uv_layer.name
+    normal_node.inputs["Strength"].default_value=.45
+    mat.node_tree.links.new(normal_texture.outputs["Color"],normal_node.inputs["Color"])
+    mat.node_tree.links.new(normal_node.outputs["Normal"],bsdf.inputs["Normal"])
     mesh.materials.append(mat)
     obj = bpy.data.objects.new("Mount Fuji / measured terrain surface", mesh)
     model.objects.link(obj)
@@ -248,7 +316,7 @@ def _studio(bpy: Any, scene: Any, stage: Any) -> Any:
 
 
 def build_fuji_scene(destination: Path, dem_path: Path, *, divisions: int = 512,
-                     bpy_module: Any = None, preview_resolution: int = 1000) -> dict[str, Any]:
+                     bpy_module: Any = None, preview_resolution: int = 1150) -> dict[str, Any]:
     if bpy_module is None:
         raise RuntimeError("Building Mount Fuji requires Blender bpy")
     bpy = bpy_module
@@ -270,12 +338,13 @@ def build_fuji_scene(destination: Path, dem_path: Path, *, divisions: int = 512,
     terrain = _terrain_object(bpy, model, dem, divisions)
     wall, base = _plinth(bpy, model, dem, divisions)
     return export_revision(bpy, scene, camera, (terrain,wall,base), plan_fuji_shots(), destination,
-                           samples=12, metadata={
+                           samples=32 if divisions>=1024 else 16, metadata={
                                "asset_id": "mount-fuji-survey-terrain",
                                "generator": "GSI elevation-mesh",
                                "vertical_exaggeration": 1.0,
                                "terrain_divisions": divisions,
                                "terrain_vertices": (divisions+1)**2,
+                               "baked_normal_texture_px": 512 if divisions<1024 else 1024,
                                "named_parts": {"terrain_surface": 1,
                                                "terrain_perimeter": 1,
                                                "terrain_pedestal": 1},

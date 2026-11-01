@@ -23,6 +23,7 @@ def plan_iconic_shots() -> tuple[QualityShot, ...]:
         QualityShot("front", (0, -18, 6.3), (0, 0, 2.05), 11.5),
         QualityShot("opposite", (-13, -11, 7.5), (0, .2, 1.95), 12.1),
         QualityShot("torii-and-sakura", (5.8, -8.8, 4.7), (1.55, -2.25, 1.55), 5.0),
+        QualityShot("sakura-botanical", (-6.4, -5.3, 3.7), (-3.1, -1.45, 2.0), 3.65),
         QualityShot("snow-crown", (6.5, -6, 8.2), (0, .65, 3.68), 4.2),
         QualityShot("footprint", (0, -1, 19), (0, 0, .35), 11.5),
     )
@@ -39,7 +40,7 @@ def iconic_spec(detail: str = "standard") -> dict[str, Any]:
         "vertical_scale": "intentionally exaggerated and non-geographic",
         "landmarks": ["Fuji snow crown", "vermillion torii", "flowering sakura"],
         "terrain_divisions": {"preview": 144, "standard": 240, "high": 360}[detail],
-        "sakura_blossom_target": {"preview": 260, "standard": 670, "high": 1250}[detail],
+        "sakura_blossom_target": {"preview": 1500, "standard": 3700, "high": 8500}[detail],
     }
 
 
@@ -331,46 +332,97 @@ def _sakura(bpy: Any, model: Any, mats: dict, *, origin: tuple[float,float],
     objects=[]
     def point(x,y,z):
         return (ox+x*scale,oy+y*scale,.56+z*scale)
-    root=[point(0,0,0),point(.065,.02,.43),point(.13,.055,.96),point(.09,.06,1.42)]
+    root=[point(0,0,0),point(.07,.015,.38),point(.15,.055,.82),
+          point(.14,.10,1.21),point(.09,.13,1.58)]
     objects.append(_tube(bpy,model,"Sakura / curved mature bark trunk",root,
-                         [r*scale for r in (.16,.142,.109,.067)],mats["bark"],sides=10))
+                         [r*scale for r in (.175,.159,.125,.083,.045)],mats["bark"],sides=12))
+    # Fissures follow the leaning trunk instead of a flat wood-grain texture.
+    for stripe in range(7):
+        angle=stripe*math.tau/7+.18
+        positions=[]
+        for k,location in enumerate(root[1:4]):
+            rad=(.161,.127,.087)[k]*scale
+            positions.append((location[0]+rad*math.cos(angle+k*.04),
+                              location[1]+rad*math.sin(angle+k*.04),location[2]))
+        objects.append(_tube(bpy,model,"Sakura / fine aged-bark vertical fissure",
+                            positions,[.006*scale,.007*scale,.003*scale],
+                            mats["bark_dark"],sides=5))
     tips=[]
-    for i in range(9):
-        a=i*math.tau/9 + rng.uniform(-.15,.15)
-        reach=rng.uniform(.68,1.35)
-        h=rng.uniform(1.76,2.28)
-        start=root[2] if i<6 else root[3]
-        via=point(.13+.31*math.cos(a), .06+.27*math.sin(a),1.52)
-        end=point(.12+reach*math.cos(a), .05+reach*math.sin(a),h)
+    angles=(.06,.69,1.27,1.95,2.67,3.35,4.07,4.77,5.56)
+    for i,base_angle in enumerate(angles):
+        a=base_angle+rng.uniform(-.19,.19)
+        reach=rng.uniform(.90,1.48)
+        h=rng.uniform(1.78,2.48)
+        start=root[2] if i%3==0 else (root[3] if i%3==1 else root[4])
+        via=point(.14+.29*math.cos(a-.14),.10+.27*math.sin(a-.14),1.47)
+        elbow=point(.12+.72*reach*math.cos(a+.05),
+                    .13+.68*reach*math.sin(a+.05),h-.08)
+        end=point(.09+reach*math.cos(a),.13+reach*math.sin(a),h)
         objects.append(_tube(bpy,model,"Sakura / tapering sculptural branch",
-                             [start,via,end],[.067*scale,.044*scale,.018*scale],
-                             mats["bark"],sides=7))
+                             [start,via,elbow,end],
+                             [r*scale for r in (.078,.060,.036,.018)],
+                             mats["bark"],sides=8))
         tips.append(end)
+        # Secondary limbs sag and then turn upward into flowering tips.
         for side in (-1,1):
-            x=.12+(reach*.82)*math.cos(a+side*.27)
-            y=.05+(reach*.82)*math.sin(a+side*.27)
-            tips.append(point(x,y,h+rng.uniform(-.15,.24)))
-    # Broad groups are deliberately fractured and varied, not a pink UV sphere.
+            angle=a+side*rng.uniform(.23,.58)
+            length=reach*rng.uniform(.79,1.14)
+            terminal=point(.09+length*math.cos(angle),
+                           .13+length*math.sin(angle),
+                           h+rng.uniform(-.22,.23))
+            bend=point(.10+(.88*length)*math.cos(angle),
+                       .13+(.88*length)*math.sin(angle),
+                       h-.17+rng.uniform(-.12,.09))
+            objects.append(_tube(bpy,model,"Sakura / graceful secondary flowering limb",
+                                 [elbow,bend,terminal],
+                                 [.035*scale,.019*scale,.007*scale],mats["bark"],sides=6))
+            tips.append(terminal)
+            if rng.random()<.72:
+                tips.append(point(.09+length*math.cos(angle+side*.16),
+                                  .13+length*math.sin(angle+side*.16),
+                                  h+rng.uniform(-.25,.17)))
+    # Broad umbrella growth resolves into many small, ragged blossom sprays.
     blobs=[]
     for tip in tips:
-        if rng.random()<.20: continue
-        radius=rng.uniform(.23,.40)*scale
-        center=(tip[0],tip[1],tip[2]+rng.uniform(-.06,.12)*scale)
+        if rng.random()<.075: continue
+        radius=rng.uniform(.17,.28)*scale
+        center=(tip[0]+rng.uniform(-.075,.075)*scale,
+                tip[1]+rng.uniform(-.075,.075)*scale,
+                tip[2]+rng.uniform(-.085,.09)*scale)
         blobs.append((center,radius))
+        if rng.random()<.38:
+            secondary=(center[0]+rng.uniform(-.24,.24)*scale,
+                       center[1]+rng.uniform(-.20,.20)*scale,
+                       center[2]+rng.uniform(-.10,.10)*scale)
+            blobs.append((secondary,radius*rng.uniform(.61,.83)))
+    if scale<.9:
+        # Smaller companion tree should have finer secondary flowering twigs,
+        # not a visibly hollow crown when viewed opposite the main hero.
+        for _ in range(16):
+            center,rad=blobs[rng.randrange(len(blobs))]
+            a=rng.uniform(0,math.tau)
+            shift=rng.uniform(.22,.73)*rad
+            blobs.append(((center[0]+shift*math.cos(a),
+                           center[1]+shift*math.sin(a),
+                           center[2]+rng.uniform(-.16,.16)*rad),
+                          rad*rng.uniform(.66,.89)))
     cloud_v=[];cloud_f=[];cloud_colors=[]
     palette=((.98,.59,.69),(.99,.75,.81),(.997,.87,.88),(.92,.46,.57),(.97,.78,.79))
     for index,(center,rad) in enumerate(blobs):
         base=len(cloud_v)
-        lat_count=7;lon_count=12
-        tone=palette[index%len(palette)]
+        lat_count=8;lon_count=13
+        tone=_blend(palette[index%len(palette)],(.63,.30,.39),.35)
         for k in range(lat_count+1):
             theta=math.pi*k/lat_count
             for j in range(lon_count):
                 phi=j*math.tau/lon_count
-                grain=1+.13*math.sin(5*phi+index)+.09*math.cos(4*theta+3*phi)
-                rx=rad*1.2*grain*math.sin(theta)*math.cos(phi)
-                ry=rad*.92*grain*math.sin(theta)*math.sin(phi)
-                rz=rad*.66*grain*math.cos(theta)
+                grain=(1+.18*math.sin(5*phi+index*.71)
+                       +.11*math.cos(4*theta+3*phi+index*.31))
+                # The solid core is small: hundreds of actual flower rosettes
+                # form the visible outer contour, not opaque cotton-like blobs.
+                rx=rad*.38*grain*math.sin(theta)*math.cos(phi)
+                ry=rad*.33*grain*math.sin(theta)*math.sin(phi)
+                rz=rad*.25*grain*math.cos(theta)
                 cloud_v.append((center[0]+rx,center[1]+ry,center[2]+rz))
                 m=.91+.08*math.sin(phi*4+theta*5)
                 cloud_colors.append(tuple(min(1,c*m) for c in tone))
@@ -379,7 +431,7 @@ def _sakura(bpy: Any, model: Any, mats: dict, *, origin: tuple[float,float],
                 next_j=(j+1)%lon_count
                 cloud_f.append((base+k*lon_count+j,base+k*lon_count+next_j,
                                 base+(k+1)*lon_count+next_j,base+(k+1)*lon_count+j))
-    objects.append(_mesh(bpy,model,"Sakura / overlapping rose and blush blossom clouds",
+    objects.append(_mesh(bpy,model,"Sakura / small concealed rosebud cores",
                          cloud_v,cloud_f,mats["blossom_vertex"],colors=cloud_colors,smooth=True))
     # Five actual lobed petals per blossom. Combined by color into only one mesh.
     flower_v=[];flower_f=[];flower_colors=[]
@@ -389,13 +441,16 @@ def _sakura(bpy: Any, model: Any, mats: dict, *, origin: tuple[float,float],
         h=rng.uniform(-.77,.96)
         spread=math.sqrt(1-h*h)
         nx,ny,nz=spread*math.cos(a),spread*math.sin(a),h
-        pos=(center[0]+rad*1.17*nx,center[1]+rad*.94*ny,center[2]+rad*.72*nz)
+        spread_radius=.26+.95*(rng.random()**.49)
+        pos=(center[0]+rad*1.16*spread_radius*nx,
+             center[1]+rad*1.02*spread_radius*ny,
+             center[2]+rad*.78*spread_radius*nz)
         # Tangent frame for tiny outward-facing flower with five scalloped petals.
         tx,ty,tz=(-ny,nx,0)
         norm=math.hypot(tx,ty)
         tx,ty=tx/max(.001,norm),ty/max(.001,norm)
         ux,uy,uz=(ny*tz-nz*ty,nz*tx-nx*tz,nx*ty-ny*tx)
-        rad_p=rng.uniform(.029,.051)*scale
+        rad_p=rng.uniform(.025,.045)*scale
         color=palette[rng.randrange(len(palette))]
         base=len(flower_v)
         flower_v.append(pos)
@@ -446,13 +501,25 @@ def _sakura(bpy: Any, model: Any, mats: dict, *, origin: tuple[float,float],
 def _path_and_rocks(bpy: Any, model: Any, mats: dict) -> list:
     rng=random.Random(236)
     objects=[]
-    # A disciplined, small-scale pilgrim stepping-stone route to the torii.
-    for i in range(7):
-        y=-3.88+i*.20
-        x=1.72+.055*math.sin(i*.8)
-        w=.48-.035*i
-        objects.append(_box(bpy,model,"Garden / hand-set shrine approach stone",
-                            (x,y,.596),(w,.155,.061),mats["stone"]))
+    # Individual polygonal flagstones, each with softened outline, irregular
+    # joint and height. Unlike identical boxes these read as hand-set slate.
+    for i in range(8):
+        y=-3.92+i*.17
+        x=1.72+.07*math.sin(i*.85)
+        rx=.23-.065*i/8
+        ry=.068+rng.uniform(-.006,.012)
+        stone_v=[];stone_f=[];count=10
+        for z in (.575+rng.uniform(0,.012),.623+rng.uniform(0,.012)):
+            for j in range(count):
+                a=j*math.tau/count
+                jitter=1+rng.uniform(-.10,.10)
+                stone_v.append((x+rx*math.cos(a)*jitter,
+                                y+ry*math.sin(a)*jitter,z))
+        stone_f.append(tuple(range(count,2*count)))
+        for j in range(count):
+            stone_f.append((j,(j+1)%count,count+(j+1)%count,count+j))
+        objects.append(_mesh(bpy,model,"Garden / individually shaped shrine flagstone",
+                             stone_v,stone_f,mats["stone"]))
     # Scatter deliberate small basalt accents beyond the path.
     for i in range(23):
         a=rng.uniform(0,math.tau)
@@ -542,6 +609,7 @@ def build_iconic_fuji_scene(destination: Path, *, detail: str = "standard",
         "charcoal":_material(bpy,"Japan / black polished kasagi",(.055,.045,.05),roughness=.32),
         "gold":_material(bpy,"Japan / burnished brass details",(.55,.35,.11),roughness=.35,metallic=.68),
         "bark":_material(bpy,"Japan / aged cherry-bark umber",(.21,.116,.082),roughness=.94),
+        "bark_dark":_material(bpy,"Japan / old cherry trunk bark fissures",(.095,.056,.051),roughness=.97),
         "blossom_vertex":_vertex_material(bpy,"Japan / multi-hue sakura petals"),
         "stone":_material(bpy,"Japan / moss-flecked granite",(.33,.33,.31),roughness=.95),
     }
@@ -551,9 +619,9 @@ def build_iconic_fuji_scene(destination: Path, *, detail: str = "standard",
     objects.extend(_torii(bpy,model,mats))
     flower_count=spec["sakura_blossom_target"]
     objects.extend(_sakura(bpy,model,mats,origin=(-3.1,-1.45),scale=1.05,seed=41,
-                           blossoms=int(flower_count*.63)))
+                           blossoms=int(flower_count*.56)))
     objects.extend(_sakura(bpy,model,mats,origin=(3.48,.35),scale=.79,seed=89,
-                           blossoms=flower_count-int(flower_count*.63)))
+                           blossoms=flower_count-int(flower_count*.56)))
     objects.extend(_path_and_rocks(bpy,model,mats))
     return export_revision(bpy,scene,camera,objects,plan_iconic_shots(),destination,
                            samples=12,metadata={

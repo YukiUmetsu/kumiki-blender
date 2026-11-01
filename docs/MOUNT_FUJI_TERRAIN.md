@@ -32,6 +32,17 @@ approach stones and a beveled obsidian display plinth. The floating photo studio
 is excluded from GLB. The result is art-directed and **must never be represented
 as survey-accurate Fuji**.
 
+The detailed spring revision replaces radial-looking cherry canopies with
+asymmetric main limbs, gravity-influenced secondary forks, modeled trunk bark
+fissures and smaller blossom sprays. The smaller tree is given additional
+flowering branchlets, and the shrine pathway uses individual irregular slate
+flagstones. Close-up botanical references inform the geometry, but no third-party
+plant mesh is copied. A dedicated seventh `sakura-botanical` QA camera now
+checks branch architecture and petal geometry at closer range.
+The high-detail variant uses **8,500 individual five-petal flowers** across
+both trees; small opaque rosebud cores sit beneath those sprays instead of
+forming an obviously spherical pink canopy.
+
 Iconic visual references (not copied or distributed as textures):
 
 - [Japan National Tourism Organization: Mount Fuji](https://www.japan.travel/en/fuji-guide/)
@@ -52,6 +63,13 @@ stock material or third-party texture is embedded or redistributed.
 
 Season, forest density and snow coverage are **art direction**, not a satellite
 or botanical claim; the realistic variant's elevations remain unchanged.
+
+For closer survey-terrain views, the Blender builder now also generates a
+deterministic, 512/1024-pixel **tangent-space rock micro-normal map**. It is
+packed into the editable Blender file and embedded directly into the GLB.
+The texture modifies surface *lighting*, **never the GSI vertex elevations**;
+the original 1:1 geometry stays unchanged. High-detail QA renders use more
+samples to retain close-up rock and crater structure.
 
 ## Realistic topographic relief
 
