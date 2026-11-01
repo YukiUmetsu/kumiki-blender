@@ -32,6 +32,8 @@ _SURFACES = {
     "studio-matte": PBRSurface("Neutral studio matte", "#777875", 0.0, 0.96),
     "painted-steel": PBRSurface("Painted structural steel", "#9F3D33", 0.04, 0.43, texture_kind="painted-steel"),
     "galvanized-steel": PBRSurface("Satin galvanized metal", "#ADB5BB", 0.88, 0.33, texture_kind="galvanized-steel"),
+    "verdigris-copper": PBRSurface("Weathered verdigris copper", "#658F82", 0.28, 0.79,
+                                   texture_kind="verdigris-copper", weathering_strength=0.72),
     "cast-concrete": PBRSurface("Cast architectural concrete", "#787B79", 0.0, 0.85, texture_kind="cast-concrete"),
     "natural-stone": PBRSurface("Architectural stone", "#BBB3A5", 0.0, 0.7, texture_kind="natural-stone"),
     "weathered-stone": PBRSurface("Weathered mineral masonry", "#A59F94", 0.0, 0.84,

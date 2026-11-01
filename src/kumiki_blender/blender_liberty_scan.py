@@ -17,9 +17,9 @@ from .blender_output import aim_at, create_model_scene, export_revision
 from .blender_scene import _create_box, _material
 from .blender_textures import ensure_metric_uvs
 from .render_profiles import select_render_profile
-from .liberty_scan import face_relief_offset
+from .liberty_face_sculpt import sculpt_relief_offset
 from .shots import QualityShot
-from .surfaces import PBRSurface, get_surface
+from .surfaces import get_surface
 
 
 def _world_bounds(objects: list[Any], vector_type: Any) -> tuple[Any, Any]:
@@ -35,8 +35,42 @@ def _world_bounds(objects: list[Any], vector_type: Any) -> tuple[Any, Any]:
     return vector_type(low), vector_type(high)
 
 
+def _refine_captured_face_topology(obj: Any) -> int:
+    """Add sculpt resolution only where the miniature's face/forelock lives.
+
+    The source is just ~2,300 vertices in the facial review volume. A crisp
+    millimetre-scale lid needs more local triangles, but subdividing the full
+    monument makes the GLB needlessly huge. BMesh splits connected polygon
+    edges consistently, so this does not create detached overlays or cracks.
+    """
+    import bmesh
+
+    mesh = obj.data
+    bm = bmesh.new()
+    try:
+        bm.from_mesh(mesh)
+        transform = obj.matrix_world
+        eligible = set()
+        for vert in bm.verts:
+            p = transform @ vert.co
+            if (-.95 < p.x < .24 and -.93 < p.y < -.15
+                    and 7.91 < p.z < 9.38):
+                eligible.add(vert)
+        edges = [edge for edge in bm.edges
+                 if edge.verts[0] in eligible and edge.verts[1] in eligible]
+        if not edges:
+            return 0
+        bmesh.ops.subdivide_edges(bm, edges=edges, cuts=2,
+                                  use_grid_fill=True, smooth=0.0)
+        bm.to_mesh(mesh)
+        mesh.update()
+        return len(edges)
+    finally:
+        bm.free()
+
+
 def plan_liberty_scan_face_shots(height: float) -> tuple[QualityShot, ...]:
-    """Actual study cameras: full reference, front, profiles, under-chin, hair."""
+    """Full study cameras, plus two anatomy-only near-macro quality views."""
     if not math.isfinite(height) or height <= 0:
         raise ValueError("Scan height must be positive")
     # The photogrammetry source is a standalone bronze miniature, Z-up. The
@@ -49,6 +83,10 @@ def plan_liberty_scan_face_shots(height: float) -> tuple[QualityShot, ...]:
         QualityShot("hero", (h*.72, -h*2.0, h*.96), (0, 0, h*.54), h*1.20),
         QualityShot("face-front", (face_x, -h*1.3, face_z),
                     (face_x, 0, face_z), h*.17),
+        QualityShot("eyes-macro", (face_x, -h*1.05, h*.705),
+                    (face_x, 0, h*.705), h*.078),
+        QualityShot("nose-mouth-macro", (face_x, -h*1.05, h*.665),
+                    (face_x, 0, h*.665), h*.072),
         QualityShot("face-left-threequarter", (face_x-h*.72, -h*.98, face_z+h*.03),
                     (face_x, 0, face_z), h*.20),
         QualityShot("face-right-threequarter", (face_x+h*.72, -h*.98, face_z+h*.03),
@@ -107,9 +145,7 @@ def build_liberty_scan_face_scene(source: Path, destination: Path,
 
     model = bpy.data.collections.new("Liberty / jerryfisher CC BY photogrammetry")
     scene.collection.children.link(model)
-    material = _material(bpy, PBRSurface(
-        "Liberty / copper sculpture study", "#719C90", .28, .79,
-        texture_kind="galvanized-steel"))
+    material = _material(bpy, get_surface("verdigris-copper"))
     for number, obj in enumerate(meshes):
         world_matrix = obj.matrix_world.copy()
         obj.parent = None
@@ -122,7 +158,8 @@ def build_liberty_scan_face_scene(source: Path, destination: Path,
         obj["kumiki_source_author"] = provenance["author"]
         obj["kumiki_source_url"] = provenance["original_url"]
         obj["kumiki_license"] = provenance["license"]
-        obj["kumiki_modifications"] = "Reoriented, localized eye/nose/lip surface relief, copper-material treatment, face cameras"
+        obj["kumiki_modifications"] = "Recentered, adaptive facial retessellation, sculpted eye/nose/lip/hair mesh relief, copper study material"
+        _refine_captured_face_topology(obj)
         ensure_metric_uvs(obj.data, tile_size_m=.56)
         obj.data.materials.clear()
         obj.data.materials.append(material)
@@ -132,7 +169,7 @@ def build_liberty_scan_face_scene(source: Path, destination: Path,
         to_local = obj.matrix_world.inverted()
         for vertex in obj.data.vertices:
             point = obj.matrix_world @ vertex.co
-            displacement = face_relief_offset(point.x, point.y, point.z)
+            displacement = sculpt_relief_offset(point.x, point.y, point.z)
             if displacement:
                 point.y += displacement
                 vertex.co = to_local @ point
@@ -151,8 +188,8 @@ def build_liberty_scan_face_scene(source: Path, destination: Path,
     world = bpy.data.worlds.new("Liberty / soft blue-grey studio")
     world.use_nodes = True
     background = next(node for node in world.node_tree.nodes if node.type == "BACKGROUND")
-    background.inputs["Color"].default_value = (.18, .22, .25, 1)
-    background.inputs["Strength"].default_value = .28
+    background.inputs["Color"].default_value = (.23, .28, .31, 1)
+    background.inputs["Strength"].default_value = .32
     scene.world = world
 
     def area(name: str, position: tuple[float, float, float], power: float,
@@ -167,14 +204,14 @@ def build_liberty_scan_face_scene(source: Path, destination: Path,
         obj.location = position
         aim_at(obj, (0, 0, height*.68))
 
-    area("Key / sculpt raking light", (-height*.9, -height*.55, height*1.01),
-         3500, (.91, .97, 1), height*.30)
-    area("Fill / face anatomy", (height*.7, -height*.8, height*.75),
-         850, (.73, .87, 1), height*.42)
+    area("Key / sculpt raking light", (-height*.65, -height*.76, height*1.01),
+         3600, (.91, .97, 1), height*.44)
+    area("Fill / face anatomy", (height*.34, -height*.90, height*.78),
+         1600, (.80, .91, 1), height*.60)
     area("Edge / crown and hair", (height*.4, height*.7, height*.90),
          2900, (1, .83, .64), height*.37)
 
-    camera_data = bpy.data.cameras.new("Liberty / nine photographic review angles")
+    camera_data = bpy.data.cameras.new("Liberty / eleven sculpt quality-review angles")
     camera_data.type = "ORTHO"
     camera = bpy.data.objects.new(camera_data.name, camera_data)
     stage.objects.link(camera)
@@ -191,8 +228,10 @@ def build_liberty_scan_face_scene(source: Path, destination: Path,
         "source_url": provenance["original_url"],
         "source_sha256": provenance["sha256"],
         "attribution": provenance["attribution"],
-        "changes": ["centered scan", "localized eye/nose/lip relief vertex refinement",
-                    "copper material treatment", "face-angle inspection cameras"],
+        "changes": ["centered scan", "adaptive face and hair mesh retessellation",
+                    "carved almond eyelid edges and iris rings", "nostril, lips and philtrum relief",
+                    "combed forelock striations", "copper material treatment",
+                    "face-angle inspection cameras"],
         "source_limitations": provenance["limitations"],
         "render_profile": {"name": profile.name, "width": profile.width,
                            "height": profile.height, "samples": profile.samples},

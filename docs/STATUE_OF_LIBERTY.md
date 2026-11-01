@@ -21,7 +21,13 @@ The rebuild reorients and centers the scan, deforms the scan's actual front-face
 vertices for localized brow, eye socket, eyelid, nose, lip and chin relief
 (rather than applying separate floating primitives), then applies a copper-patina study
 material, and stages head/crown geometry for front, both profiles, both three-
-quarter angles, low-angle, rear hair and high crown inspection. The source
+quarter angles, low-angle, rear hair and high crown inspection. The second
+detail pass adds **adaptive mesh subdivision only around face and forelock**,
+almond upper/lower eyelid carvings, iris relief, nasal alae and nostril seams,
+lip/philtrum shaping and swept hair striations. It also introduces a reusable
+tileable `verdigris-copper` PBR material with packed color/normal/roughness
+maps. Two macro views now isolate eyes and mouth for close quality inspection.
+The source
 remains recognizable in the output; creator attribution, license, and a
 modifications notice travel in the exported GLB node extras and manifest.
 The raw downloaded scan is **not committed** to the source repository.
@@ -40,11 +46,11 @@ reference match in these specific ways:
 
 | Requirement visible in the photographs | First scan-backed checkpoint |
 |---|---|
-| Deeply defined upper/lower eyelids, eyeballs and tear ducts | Sockets remain shallow and lack crisp eye anatomy |
-| Forelock with separated, swept strands and sculpted temple curls | Hair masses are present but strand detail is largely absent |
-| Wide, carved nostrils, sharply defined lips and chin planes | Bridge and mouth exist but their carved transitions are blurred |
+| Deeply defined upper/lower eyelids, eyeballs and tear ducts | Geometric lid creases and eye relief added; not yet a photo-matched sculpt |
+| Forelock with separated, swept strands and sculpted temple curls | Fine comb-direction relief added; major individual locks still missing |
+| Wide, carved nostrils, sharply defined lips and chin planes | More local topology and sculpted relief; miniature's anatomy still too simplified |
 | Perforated crown band and individually legible radial rays | Seven rays survive; the crown's window openings are not faithful |
-| Surface seams, tool marks and differentiated oxidation | Single study patina lacks survey-grade copper texture |
+| Surface seams, tool marks and differentiated oxidation | Tileable verdigris PBR improved; still missing authentic seams and erosion |
 
 We also reviewed **jerryfisher's alternate 4-million-triangle scan**
 (<https://sketchfab.com/3d-models/statue-of-liberty-6626abe1f3e8469a9d8f4b74d8aa2a71>,
@@ -52,11 +58,22 @@ CC BY 4.0). It scans a *different miniature* with more polygons but visibly
 noisier, less legible facial relief. Increasing tessellation alone cannot
 restore anatomical features absent from a scan, so it was rejected as the
 replacement source. Neither source is misrepresented as an NPS survey.
+We also reviewed Chris Mcardle's downloadable CC BY head-only photogrammetry
+(<https://sketchfab.com/3d-models/statue-of-liberty-head-f072ed04dcb14fb4b37e773f407ff603>).
+It has substantial reconstruction artifacts and low-resolution facial topology,
+so was rejected as a donor. No third-party asset besides the approved
+jerryfisher scan enters the export.
+
+The local QA iterations discarded an aggressive displacement attempt (it
+produced mechanical grooved hair and slit-like eyelids) and a depth-smoothing
+attempt (which created surface defects). The final sculpt uses restrained
+relief and continuous original scan mesh; it does **not** pass the definitive
+likeness gate.
 
 **Next sculpting gate:** landmark-align higher-resolution head references,
 retopologize the face and eyelids manually in Blender, add real engraved lip,
 nostril and hair geometry, then bake displacement/normal detail and compare
-the identical seven camera views. Preserve the source mesh and credits so
+the identical eleven camera views. Preserve the source mesh and credits so
 every new sculpted change remains auditable. Full robe/tablet/torch/pedestal
 reconstruction stays blocked on accepting the facial likeness.
 
@@ -67,13 +84,13 @@ python3 scripts/fetch_liberty_scan.py --output .review/_sources/liberty-bronze.g
 KUMIKI_RENDER_PROFILE=smoke blender --background --factory-startup --python-exit-code 1 \
   --python scripts/blender_entry.py -- \
   build-liberty-scan-face --source .review/_sources/liberty-bronze.glb \
-  --output .review/landmarks/statues/statue-of-liberty/r02
+  --output .review/landmarks/statues/statue-of-liberty/r14
 PYTHONPATH=src python3 -m kumiki_blender audit-revision \
-  --root .review/landmarks/statues/statue-of-liberty/r02
+  --root .review/landmarks/statues/statue-of-liberty/r14
 ```
 
 Remove `KUMIKI_RENDER_PROFILE=smoke` for full-resolution facial review. The
-revision is immutable and contains an editable `.blend`, GLB, nine views,
+revision is immutable and contains an editable `.blend`, GLB, eleven views,
 manifest and attribution metadata. Artist approval is required before any
 integration into the final full-body asset.
 

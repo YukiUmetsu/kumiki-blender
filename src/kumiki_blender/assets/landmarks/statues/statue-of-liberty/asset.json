@@ -8,7 +8,7 @@
   "aliases": ["lady liberty", "liberty enlightening the world", "statue of liberty", "new york harbor statue"],
   "rigged": false,
   "animated": false,
-  "sources": ["src/kumiki_blender/liberty.py", "src/kumiki_blender/blender_liberty.py", "src/kumiki_blender/liberty_scan.py", "src/kumiki_blender/blender_liberty_scan.py", "src/kumiki_blender/assets/landmarks/statues/statue-of-liberty/scan_source.json", "docs/STATUE_OF_LIBERTY.md"],
+  "sources": ["src/kumiki_blender/liberty.py", "src/kumiki_blender/blender_liberty.py", "src/kumiki_blender/liberty_scan.py", "src/kumiki_blender/liberty_face_sculpt.py", "src/kumiki_blender/blender_liberty_scan.py", "scripts/fetch_liberty_scan.py", "src/kumiki_blender/assets/landmarks/statues/statue-of-liberty/scan_source.json", "docs/STATUE_OF_LIBERTY.md"],
   "plan": ["plan-liberty"],
   "build": ["build-liberty"]
 }

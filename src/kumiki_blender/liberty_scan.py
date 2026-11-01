@@ -9,10 +9,11 @@ from __future__ import annotations
 
 import hashlib
 import json
-import math
 import re
 from pathlib import Path
 from typing import Any
+
+from .liberty_face_sculpt import face_relief_offset
 
 
 SOURCE_RECORD = (Path(__file__).resolve().parent / "assets" / "landmarks" /
@@ -64,36 +65,4 @@ def verify_scan_source(path: str | Path, record: dict[str, Any] | None = None) -
         raise ScanSourceError("Licensed scan SHA-256 differs from the reviewed source")
     return metadata
 
-
-def face_relief_offset(x: float, y: float, z: float) -> float:
-    """Subtle front-facing anatomical correction of this *specific* scan.
-
-    Coordinates are for the checksum-pinned 12.436-unit source, centered with
-    its base at Z=0 and photographed from -Y. Negative Y lifts the copper skin.
-    Unlike separate eye/nose tubes, this modifies the actual scan topology.
-    It is a first review pass, not photogrammetric registration of the photos.
-    """
-    if not all(math.isfinite(v) for v in (x, y, z)):
-        raise ValueError("Facial correction coordinates must be finite")
-    # No influence on the silhouette, rear hair, temple, crown or raised arm.
-    if not (-.83 < x < .16 and -.9 < y < -.18 and 7.96 < z < 8.98):
-        return 0.0
-
-    def g(value: float, center: float, spread: float) -> float:
-        return math.exp(-((value-center)/spread)**2)
-
-    mask = min(1.0, max(0.0, (-y-.18)/.24))
-    mask *= g(x, -.35, .46) * g(z, 8.49, .64)
-    offset = 0.0
-    for eye_x in (-.53, -.19):
-        offset += .024 * g(x, eye_x, .112) * g(z, 8.755, .062)  # recessed sockets
-        offset -= .023 * g(x, eye_x, .14) * g(z, 8.842, .053)  # bony eyebrows
-        offset -= .019 * g(x, eye_x, .116) * g(z, 8.794, .025)  # upper lids
-        offset -= .014 * g(x, eye_x, .101) * g(z, 8.689, .033)  # lower lids
-    offset -= .026 * g(x, -.355, .070) * g(z, 8.58, .20)  # continuous bridge
-    offset -= .022 * g(x, -.355, .128) * g(z, 8.415, .08)  # tip and alae
-    offset -= .019 * g(x, -.35, .185) * g(z, 8.285, .031)  # upper lip
-    offset += .014 * g(x, -.35, .19) * g(z, 8.246, .016)  # lip separation
-    offset -= .017 * g(x, -.35, .18) * g(z, 8.197, .035)  # lower lip
-    offset -= .010 * g(x, -.35, .21) * g(z, 8.081, .070)  # chin
-    return mask * offset
+__all__ = ("ScanSourceError", "load_scan_source", "verify_scan_source", "face_relief_offset")
