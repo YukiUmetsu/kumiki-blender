@@ -199,20 +199,27 @@ def pyramid_assembly(*, prefix: str, base_width: float = 36.0,
 
 def _sculpt_face_relief(mesh: Mesh, *, scale_x: float, scale_y: float,
                        scale_z: float) -> Mesh:
-    """Carve shallow eye sockets, cheekbones and a worn, nose-less face plane.
+    """Carve eye sockets, cheekbones, damaged nose and mouth into one face.
 
-    The original loft keeps its manifold faces. Local facial relief moves only
-    the front-facing X surface, so the head remains a continuous closed solid.
+    Relief is applied to the existing manifold face shell rather than layering
+    protruding eye/brow blobs onto it. The nose is an eroded recess in the
+    default present-day depiction; no standalone cartoon pupils are added.
     """
     vertices = []
     for px, py, pz in mesh.vertices:
         xx, yy, zz = px/scale_x, py/scale_y, pz/scale_z
-        front = max(0.0, min(1.0, (-xx-4.00)/0.33))
-        eye = math.exp(-((abs(yy)-.29)/.17)**2 - ((zz-4.035)/.115)**2)
-        cheek = math.exp(-((abs(yy)-.35)/.19)**2 - ((zz-3.61)/.24)**2)
-        broken_nose = math.exp(-(yy/.16)**2 - ((zz-3.72)/.16)**2)
-        brow = math.exp(-((abs(yy)-.27)/.22)**2 - ((zz-4.20)/.10)**2)
-        relief = front*(.085*eye + .028*broken_nose - .045*cheek - .023*brow)
+        front = max(0.0, min(1.0, (-xx-3.98)/.34))
+        eye = math.exp(-((abs(yy)-.255)/.155)**2 - ((zz-4.04)/.085)**2)
+        cheek = math.exp(-((abs(yy)-.33)/.195)**2 - ((zz-3.66)/.19)**2)
+        broken_nose = math.exp(-(yy/.145)**4 - ((zz-3.76)/.20)**2)
+        brow = math.exp(-((abs(yy)-.27)/.20)**2 - ((zz-4.19)/.085)**2)
+        chin = math.exp(-(yy/.24)**2 - ((zz-3.14)/.13)**2)
+        mouth = math.exp(-(yy/.285)**6 - ((zz-3.39)/.035)**2)
+        wear = rock_height_field(px*5.0, py*5.0, pz*5.0,
+                                 seed=301, strata_spacing=.45)
+        scar = broken_nose*(.015 + .027*wear)
+        relief = front*(.082*eye + .105*broken_nose - .028*cheek
+                        - .024*brow - .020*chin + .019*mouth + scar)
         vertices.append((px+relief*scale_x, py, pz))
     return Mesh(tuple(vertices), mesh.faces)
 
@@ -254,11 +261,6 @@ def sphinx_assembly(*, prefix: str, length: float = 10.5,
         return erode_loft(mesh, axis="z", radial_segments=96,
                           strength=roughness*min(x, y), seed=seed,
                           strata_spacing=.29*z)
-
-    def along_y(points: tuple[tuple[float, float, float, float, float], ...]) -> Mesh:
-        return loft_elliptical_sections(tuple((p*y, a*z, b*x, ra*z, rb*x)
-                                              for p, a, b, ra, rb in points), axis="y",
-                                        radial_segments=32, subdivisions=3)
 
     items: list[MeshInstance] = []
 
@@ -334,13 +336,14 @@ def sphinx_assembly(*, prefix: str, length: float = 10.5,
                                 (4.47, -3.46, 0, .60, .84),
                                 (4.60, -3.50, 0, .40, .66)),
                                roughness=.055, seed=89, exponent=3.8), "casing-limestone")
-    face = along_z(((2.92, -3.85, 0, .32, .28),
-                          (3.17, -3.90, 0, .47, .44),
-                          (3.58, -3.90, 0, .54, .52),
-                          (3.95, -3.86, 0, .54, .54),
-                          (4.31, -3.84, 0, .48, .52),
-                          (4.48, -3.85, 0, .35, .45)),
-                         roughness=.019, seed=97, exponent=2.7)
+    face = along_z(((2.93, -3.86, 0, .23, .23),
+                    (3.14, -3.93, 0, .34, .34),
+                    (3.43, -3.95, 0, .46, .41),
+                    (3.73, -3.94, 0, .49, .49),
+                    (4.00, -3.91, 0, .53, .52),
+                    (4.23, -3.90, 0, .46, .49),
+                    (4.38, -3.88, 0, .35, .42)),
+                   roughness=.029, seed=97, exponent=2.45)
     part("face", _sculpt_face_relief(face, scale_x=x, scale_y=y, scale_z=z))
     for side, sign in (("left", -1), ("right", 1)):
         part(f"nemes-{side}-lappet", along_z(((2.18, -3.42, sign*.83, .20, .24),
@@ -353,27 +356,9 @@ def sphinx_assembly(*, prefix: str, length: float = 10.5,
                                     (4.13, -3.80, sign*.62, .20, .18),
                                     (4.42, -3.79, sign*.61, .12, .10)),
                                    roughness=.023, seed=118))
-        eye_y = sign*.28
-        part(f"{side}-eye", along_y(((eye_y-.16, 4.015, -4.365, .016, .02),
-                                    (eye_y, 4.02, -4.39, .075, .058),
-                                    (eye_y+.16, 4.015, -4.365, .016, .02))),
-             "weathered-limestone")
-        part(f"{side}-brow", along_y(((eye_y-.20, 4.18, -4.35, .035, .025),
-                                     (eye_y, 4.20, -4.40, .07, .065),
-                                     (eye_y+.20, 4.18, -4.35, .035, .025))))
-        for stripe in range(5):
-            # Narrow relief collars follow the lappet's curved cross-section.
-            # Flat overlay boxes previously gave the headdress a toy look.
-            bottom = (2.43+stripe*.29)*z
-            collar = loft_elliptical_sections(
-                ((bottom, -3.48*x, sign*.87*y, .295*x, .302*y),
-                 (bottom+.042*z, -3.48*x, sign*.87*y, .295*x, .302*y)),
-                radial_segments=64, cross_section_exponent=3.5)
-            part(f"{side}-hood-stripe-{stripe}", collar, "weathered-limestone")
-    part("mouth-relief", along_y(((-.27, 3.40, -4.390, .015, .014),
-                                  (0, 3.37, -4.410, .025, .028),
-                                  (.27, 3.40, -4.390, .015, .014))),
-         "sphinx-shadow")
+        # Eye/brow objects and oversized headdress collars looked like
+        # cartoon attachments. The facial details are now sculpted directly
+        # and natural bedding provides subtler grooves on both lappets.
     if restored_nose:
         part("optional-restored-nose", along_z(((3.52, -4.43, 0, .13, .17),
                                                 (3.82, -4.52, 0, .19, .13),

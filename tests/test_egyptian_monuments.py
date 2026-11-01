@@ -74,11 +74,13 @@ class EgyptianMonumentTests(unittest.TestCase):
 
     def test_sphinx_is_organic_and_has_independent_anatomy(self):
         parts = sphinx_assembly(prefix="sphinx")
-        self.assertGreater(len(parts), 30)
+        self.assertGreater(len(parts), 20)
         names = {i.name for i in parts}
         for role in ("lion-torso", "left-forepaw", "right-forepaw", "face",
-                     "nemes-hood", "left-haunch", "right-haunch", "mouth-relief"):
+                     "nemes-hood", "left-haunch", "right-haunch", "carved-neck"):
             self.assertIn("sphinx-"+role, names)
+        self.assertFalse(any("-eye" in name or "-brow" in name or
+                             "hood-stripe" in name for name in names))
         self.assertFalse(any("restored-nose" in name for name in names))
         self.assertEqual(len(names), len(parts))
         self.assertGreater(sum(len(p.mesh.vertices) for p in parts), 12000)
@@ -141,7 +143,7 @@ class EgyptianMonumentTests(unittest.TestCase):
         self.assertEqual(status, 0)
         data = json.loads(stream.getvalue())
         self.assertGreater(data["named_parts"]["pyramid_parts"], 300)
-        self.assertGreater(data["named_parts"]["sphinx_parts"], 30)
+        self.assertGreater(data["named_parts"]["sphinx_parts"], 20)
         self.assertEqual(data["instances"], sum(data["named_parts"].values()))
         with tempfile.TemporaryDirectory() as directory:
             target = Path(directory)/"new"

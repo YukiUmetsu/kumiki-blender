@@ -7,7 +7,7 @@ from kumiki_blender.architecture_geometry import (
 )
 from kumiki_blender.egyptian_monuments import make_monument_study, sphinx_assembly
 from kumiki_blender.sphinx_sculpt import (
-    combine_sculpture_sources, sphinx_integral_parts,
+    combine_sculpture_sources, sphinx_head_parts, sphinx_integral_parts,
 )
 
 
@@ -35,12 +35,29 @@ class SphinxSculptTests(unittest.TestCase):
         self.assertGreater(report.volume_m3, 10)
         self.assertTrue(all(vertex[1] < -20 for vertex in combined.vertices[:96]))
 
+    def test_head_is_six_closed_sources_without_cartoon_eye_shapes(self):
+        parts = sphinx_assembly(prefix="sphinx")
+        head = sphinx_head_parts(parts)
+        self.assertEqual(len(head), 6)
+        self.assertEqual({part.name for part in head}, {
+            "sphinx-nemes-hood", "sphinx-face", "sphinx-nemes-left-lappet",
+            "sphinx-nemes-right-lappet", "sphinx-left-ear", "sphinx-right-ear",
+        })
+        self.assertNotIn("sphinx-mouth-relief", {part.name for part in parts})
+        combined = combine_sculpture_sources(head)
+        report = audit_mesh(combined)
+        self.assertEqual((report.boundary_edges, report.nonmanifold_edges), (0, 0))
+        self.assertGreater(report.volume_m3, .5)
+
     def test_malformed_or_incomplete_sculpture_inputs_fail_closed(self):
         parts = sphinx_assembly(prefix="sphinx")
         with self.assertRaisesRegex(GeometryError, "Incomplete Sphinx"):
             sphinx_integral_parts(parts[:-1] if parts[-1].name.endswith("curved-tail")
                                    else tuple(part for part in parts
                                               if part.name != "sphinx-carved-neck"))
+        with self.assertRaisesRegex(GeometryError, "Incomplete Sphinx head"):
+            sphinx_head_parts(tuple(part for part in parts
+                                    if part.name != "sphinx-nemes-hood"))
         with self.assertRaises(GeometryError):
             sphinx_integral_parts(parts, prefix="sphinx")
         with self.assertRaises(GeometryError):

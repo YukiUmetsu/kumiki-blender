@@ -16,8 +16,9 @@ the Great Sphinx.
 | `pyramid_frustum(bottom_width, top_width, height)` | Solid tapering square mass; positive volume and outward faces |
 | `pyramid_casing_stone(bottom_width, top_width, course_height, start, end, inset, joint, face_grid, erosion_strength, seed)` | One closed tapered masonry block facing +Y; tessellated worn surfaces have actual geometric relief, while polished casing can remain planar |
 | `pyramid_assembly(prefix, base_width, height, courses, block_width, joint, casing_fraction)` | Recessed core, individually named alternating-course blocks, worn vacancies, light lower casing and capstone |
-| `sphinx_assembly(prefix, length, width, height, restored_nose)` | Sculpted body/haunches/paws/toes/tail, hood, face, eye/brow/mouth relief and headdress stripes |
+| `sphinx_assembly(prefix, length, width, height, restored_nose)` | Sculpted body/haunches/paws/toes/tail and hood/face/ears; recessed eye sockets, broken nose and mouth are carved directly into the face |
 | `sphinx_integral_parts(parts)` | Identify the eight overlapping anatomical volumes for one visible carved lion body |
+| `sphinx_head_parts(parts)` | Identify the six closed hood/face/ear/lappet solids for one head sculpture without overlay eye/brow pieces |
 | `combine_sculpture_sources(parts)` | Flatten transformed closed body meshes into a world-space surface input for Blender's voxel union |
 | `make_monument_study(kind, ...)` | Scene-independent composition for `pyramid`, `sphinx`, or `giza-study` |
 
@@ -38,16 +39,19 @@ The pure-Python recipe deliberately keeps the torso, shoulder, neck, two
 forelegs, haunches and tail as **eight separate editable closed solids**. In
 Blender, a bounded-resolution voxel remesh produces a **single continuous
 limestone skin** from these intersecting body volumes. This removes the
-visible overlap seams while retaining real erosion across the statue.
-Toe reliefs, the damaged face, headdress, bedrock and carvings remain separate
-so their fine details are not lost in the body remesh.
+visible overlap seams while retaining real erosion across the statue. A
+second, finer-resolution union sculpts the face, hood, ears and lappets into
+one coherent head. The face's recessed eyes, damaged nose and mouth are
+geometry-level relief rather than floating decorative spheres or lines.
+Toe reliefs and the rough bedrock remain separate so fine detail is preserved.
 
 The `source.blend` preserves every original anatomical solid in a hidden
-`Sphinx / hidden editable body sources` collection alongside the visible
-unified body. The GLB exports only the latter and the other detail meshes:
-**387 visible model objects** for the default 394-part combined source study.
-The manifest records the union's voxel size, source count and generated vertex
-count. This remains an original illustrative sculpt, not photogrammetry.
+`Sphinx / hidden editable body sources` and `Sphinx / hidden editable head
+sources` collections alongside the two visible unified surfaces. The GLB
+exports those and the other detail meshes: **367 visible model objects** for
+the default 379-part combined source study. The manifest records each union's
+voxel size, source count and vertex count. This remains an original
+illustrative sculpt, not photogrammetry.
 
 ## Examples
 
@@ -68,7 +72,7 @@ blender --background --factory-startup --python-exit-code 1 \
 
 All dimensions are meters. Default combined plan uses a **36 m by 23 m
 illustrative pyramid**, a **10.5 m Sphinx-shaped study**, 18 stone courses,
-and 394 named components. It does **not** imply that the real landmarks have
+and 379 named components. It does **not** imply that the real landmarks have
 those measurements. `--restored-nose` is an explicitly optional sculptural
 interpretation, not archaeological evidence. Material color and stone erosion
 are procedural approximations, not scans of the site.
