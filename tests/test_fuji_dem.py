@@ -78,6 +78,21 @@ class FujiTerrainTests(unittest.TestCase):
         # A repeat-free local palette is essential at 26-km view scale.
         self.assertNotAlmostEqual(at_point,_value_noise(4.4321,-2.8719),places=2)
 
+    def test_photo_guided_palette_has_dark_scoria_not_a_uniform_brown_cone(self):
+        """Ministry of Environment: black scoria above Fuji's fifth station."""
+        trees=terrain_color(1450,.2,2,3)
+        other_trees=terrain_color(1450,.2,-5,3)
+        basalt=terrain_color(2780,.25,-1,2)
+        hoei=terrain_color(2660,.31,1.61,-2.18)
+        snow=terrain_color(3700,.12,0,0)
+        self.assertGreater(trees[1],trees[0]*1.6)
+        self.assertLess(trees[1],.15)  # Dense forest, not mint-green grass.
+        self.assertGreater(abs(trees[1]-other_trees[1]),.015)
+        self.assertLess(max(basalt[:3]),.16)  # Main cone is dark scoria.
+        self.assertLess(max(basalt[:3])-min(basalt[:3]),.035)
+        self.assertGreater(hoei[0],basalt[0]*1.2)  # Localized rusty Hōei deposits.
+        self.assertGreater(min(snow[:3]),.70)
+
     def test_geographic_samples_in_declared_bounds(self):
         spec = FujiSpec()
         for lon, lat in ((138.7274,35.3606), (138.7451,35.34098),

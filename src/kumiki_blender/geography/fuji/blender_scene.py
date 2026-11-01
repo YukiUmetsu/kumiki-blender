@@ -60,53 +60,71 @@ def _value_noise(x: float, y: float) -> float:
 
 
 def terrain_color(height_m: float, slope: float, x: float, y: float) -> tuple[float, float, float, float]:
-    """Elevation and exposure-dependent albedo inspired by actual Fuji photos.
+    """Photo-informed seasonal albedo; all elevation geometry remains GSI.
 
-    Rocky radial gullies expose darker basalt between winter snow tongues.
-    This is stylized albedo, not a claim of satellite/snow-cover accuracy.
+    Environment Ministry field photographs describe black scoria above the
+    fifth station; Fujinomiya and Hōei images show *localized* red cinders,
+    not an entire pastel brown cone. Lower woods are dense dark conifers.
+    This is an original winter/early-spring interpretation, not satellite data.
     """
-    # Shared gradients rather than hard rings; no flat-color cut at the tree line.
-    # In reference photographs: a near-black conifer belt, olive scrub near
-    # the tree line, warm oxidized scree, then slate basalt and snow. These
-    # are artistic reflectances, not seasonally exact satellite measurements.
-    forest = (.040, .126, .077)
-    forest_sun = (.135, .238, .120)
-    subalpine = (.215, .255, .137)
-    oxidized = (.295, .191, .150)
-    basalt = (.145, .143, .155)
-    snow = (.89, .935, .961)
-    woods = (.50*_value_noise(x*.74,y*.74)
-             + .32*_value_noise(x*2.2+11.3,y*2.2-8.1)
-             + .18*_value_noise(x*6.1-3.7,y*6.1+4.9))
-    c = _mix(forest, forest_sun, max(.05,min(.85,.08+.95*woods)))
-    c = _mix(c, subalpine, _smoothstep(1700,2350,height_m))
-    c = _mix(c, oxidized, _smoothstep(2140,2710,height_m))
-    c = _mix(c, basalt, _smoothstep(2610,3280,height_m)*.84)
+    clamp=lambda value: max(0.,min(1.,value))
+    large=_value_noise(x*.28+7.4,y*.28-4.1)
+    canopy=_value_noise(x*1.05-13.7,y*1.05+9.4)
+    woodland_detail=_value_noise(x*4.4+2.3,y*4.4-1.7)
+    woods=.46*large+.36*canopy+.18*woodland_detail
 
-    # First Hōei crater: exposed reddish-grey pyroclastic scree on steeper
-    # walls, not the vegetated tone of the surrounding lower flanks.
-    hoei_distance = math.hypot(x-1.61,y+2.18)
-    if hoei_distance < 1.9 and height_m > 2050:
-        influence = min(1., (1.9-hoei_distance)/.75)
-        scree = (.39,.245,.178)
-        c = _mix(c, scree, .56*influence*min(1.,slope*1.7+.20))
+    # Dark cedar/cypress forest. Broad pockets of olive mountain scrub are
+    # spatial, rather than one continuous sage-green elevation stripe.
+    dense_conifers=(.018,.052,.031)
+    sunlit_conifers=(.062,.119,.055)
+    c=_mix(dense_conifers,sunlit_conifers,clamp(.14+woods*.98))
+    scrub=(.093,.122,.055)
+    scrub_weight=.31*_smoothstep(1700,2070,height_m)*clamp((woods-.32)*2.1)
+    c=_mix(c,scrub,scrub_weight)
 
-    # Fine, deterministic pigmentation: small enough not to falsify geometry.
-    grain = (.34*(_value_noise(x*7.3+5.2,y*7.3-8.2)-.5)
-             + .22*(_value_noise(x*24.1,y*24.1)-.5))
-    c = tuple(max(.0, min(1., v*(1+grain))) for v in c)
-    # Gully-facing slopes tend to expose volcanic scree; irregular snow boundary
-    # has radial fingers instead of a flat painted white circular band.
-    bearing = math.atan2(y, x)
-    fingers = (math.sin(bearing*9 + math.sin(bearing*3.1)) * 110 +
-               math.sin(bearing*17 + y*.8)*65 + math.sin(x*2.2+y*2.7)*28)
-    snowline = 2820 + fingers + min(.45, slope)*260
-    coverage = max(0., min(1., (height_m-snowline)/390))
-    coverage *= max(.32, 1-slope*.7)
-    # Wind-exposed stone seams persist through the snow cover.
-    volcanic_seam = max(0.,math.sin(bearing*31+math.sin(bearing*7)+x*.38))**7
-    coverage *= (1-.34*volcanic_seam)
-    c = _mix(c, snow, coverage*.97)
+    # The real tree line varies by exposure, local gullies and elevation.
+    # 2,200–2,400m is a broad reference, not a perfectly circular contour.
+    tree_line=2230+125*(large-.5)+90*(canopy-.5)+55*clamp(y/6)
+    exposed=_smoothstep(tree_line-140,tree_line+155,height_m)
+    rock_pattern=_value_noise(x*.90-3.1,y*.90+8.4)
+    iron_pattern=_value_noise(x*3.8+21.2,y*3.8-7.6)
+    charcoal=(.064,.065,.068)
+    gray_scoria=(.116,.107,.103)
+    iron_scoria=(.186,.108,.086)
+    rock=_mix(charcoal,gray_scoria,.16+.59*rock_pattern)
+    oxidation=clamp((iron_pattern-.43)*1.25)*(.25+.40*rock_pattern)
+    rock=_mix(rock,iron_scoria,oxidation)
+    rock=_mix(rock,charcoal,.20*clamp(slope*1.5))
+    c=_mix(c,rock,exposed)
+
+    # Hōei 1707 pyroclastic deposits show rusty-grey grit distinct from the
+    # darker upper summit. Modulate by the measured crater wall steepness.
+    hoei_distance=math.hypot(x-1.61,y+2.18)
+    if hoei_distance<1.8 and height_m>2020:
+        influence=_smoothstep(1.8,.35,hoei_distance)
+        warm_scree=(.213,.122,.099)
+        c=_mix(c,warm_scree,exposed*influence*(.37+.32*clamp(slope*1.8)))
+
+    # Grain represents pigment variation only. It cannot create or erase any
+    # measured erosion grooves, cliffs or other DEM geometry.
+    grain=(.26*(_value_noise(x*7.3+5.2,y*7.3-8.2)-.5)
+           +.14*(_value_noise(x*24.1,y*24.1)-.5))
+    c=tuple(clamp(channel*(1+grain)) for channel in c)
+
+    # Seasonal snow accumulates in irregular fingers and sheltered northern
+    # gullies; steep crater cliffs retain exposed dark scoria.
+    bearing=math.atan2(y,x)
+    fingers=(math.sin(bearing*9+math.sin(bearing*3.1))*112
+             +math.sin(bearing*17+y*.8)*57
+             +math.sin(x*2.2+y*2.7)*24)
+    sheltered=clamp(y/6)
+    snowline=2885+fingers+min(.45,slope)*195-115*sheltered
+    coverage=_smoothstep(snowline-55,snowline+415,height_m)
+    coverage*=max(.31,1-slope*.57)
+    volcanic_seam=max(0.,math.sin(bearing*31+math.sin(bearing*7)+x*.38))**7
+    coverage*=1-.32*volcanic_seam
+    snow=(.86,.898,.918)
+    c=_mix(c,snow,coverage*.98)
     return (*c, 1.)
 
 

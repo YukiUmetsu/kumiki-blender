@@ -61,6 +61,22 @@ stock material or third-party texture is embedded or redistributed.
 | [JNTO / cherry blossoms](https://www.japan.travel/en/spot/1956/) | Mostly white/blush floral clusters, darker limbs, pink petals below trees | Five subtly different pink/ivory blossom shades, sparse green leaf buds and scattered petals |
 | [Fushimi Inari Taisha](https://inari.jp/en/) | Vivid vermilion shrine timber and contrasting dark beam | Warm red lacquer with softened edges, black curved kasagi and metallic details |
 
+The latest realistic color iteration corrects the earlier uniformly warm-brown
+volcanic cone and pale green lower plain. Four photographic observations guide
+the **original, vertex-baked albedo**, with no third-party photo pixels reused:
+
+| Source photograph / field observation (inspiration only) | Resulting palette change |
+| --- | --- |
+| [Japan Ministry of the Environment: *What color is Mount Fuji?*](https://kanto.env.go.jp/blog/2020/05/post-870.html) | Black porous scoria dominates exposed elevations above the fifth station; dark neutral basalt replaces the previous blanket pink-brown hue. The distant blue appearance is atmospheric scattering, not a blue rock pigment. |
+| [JNTO: Fujinomiya Trail](https://www.japan.travel/en/fuji-guide/guide-to-the-fujinomiya-trail/) | Sparse reddish volcanic scree is retained around exposed routes rather than blended evenly over the full cone. |
+| [NASA Earth Observatory: Mt Fuji from the ISS](https://science.nasa.gov/earth/earth-observatory/mount-fuji-japan-39099/) | Cool white snow against dark rock, with shadowed crater walls and forested lower flanks. |
+| [Fujisan Curator: Ochudo tree-line photograph](https://www.fujisancurator.com/tour-hiking/ochudo-uplift-guided-hiking-tour) | Much darker conifer green, pocketed scrub, and an irregular ~2.2–2.4 km transition instead of a pale sage-green stripe. |
+
+Snow remains an intentionally chosen late-winter / early-spring cover pattern;
+it cannot represent all seasons at once. The exposed Hōei crater has locally
+warmer iron-rich scoria, while the summit basalt stays dark in snow-free faces.
+All color work changes only PBR albedo, **not DEM elevations**.
+
 Season, forest density and snow coverage are **art direction**, not a satellite
 or botanical claim; the realistic variant's elevations remain unchanged.
 
