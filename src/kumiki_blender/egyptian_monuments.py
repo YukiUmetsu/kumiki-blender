@@ -327,13 +327,20 @@ def _sculpt_face_relief(mesh: Mesh, *, scale_x: float, scale_y: float,
         cheekbone = math.exp(-((lateral-.385)/.170)**2 - ((zz-3.800)/.170)**2)
         hollow = math.exp(-((lateral-.505)/.118)**2 - ((zz-3.963)/.174)**2)
         nose_root = math.exp(-(yy/.120)**2 - ((zz-4.056)/.156)**2)
-        bridge = math.exp(-(yy/.103)**2 - ((zz-3.923)/.202)**2)
+        bridge = math.exp(-(yy/.112)**2 - ((zz-3.923)/.202)**2)
         nose_flanks = math.exp(-((lateral-.128)/.067)**2
                                - ((zz-3.816)/.130)**2)
         broken_tip = math.exp(-(yy/.123)**4 - ((zz-3.727)/.082)**2)
-        upper_lip = math.exp(-(yy/.204)**4 - ((zz-3.431)/.042)**2)
-        mouth_cut = math.exp(-(yy/.216)**6 - ((zz-3.379)/.020)**2)
-        lower_lip = math.exp(-(yy/.202)**4 - ((zz-3.321)/.040)**2)
+        upper_lip = math.exp(-(yy/.204)**4 - ((zz-3.435)/.047)**2)
+        # The slightly bowed, asymmetrically chipped mouth line is narrower
+        # than the broad mineral bedding cuts. A .010 m cut disappeared in
+        # Blender's .019 m head-voxel union; this groove is true geometry.
+        mouth_height = 3.375+.019*(yy/.22)**2+.008*yy
+        mouth_cut = math.exp(-(yy/.226)**8
+                             - ((zz-mouth_height)/.022)**2)
+        lower_lip = math.exp(-(yy/.202)**4 - ((zz-3.325)/.044)**2)
+        philtrum = math.exp(-((lateral-.067)/.037)**2
+                             - ((zz-3.532)/.075)**2)
         chin = math.exp(-(yy/.262)**4 - ((zz-3.115)/.110)**2)
         jaw = math.exp(-((lateral-.347)/.158)**2 - ((zz-3.255)/.206)**2)
         # Subtle surviving vertical folds cross the exposed upper forehead.
@@ -344,16 +351,23 @@ def _sculpt_face_relief(mesh: Mesh, *, scale_x: float, scale_y: float,
         fold = max(0., math.cos(yy*26.5+.14*math.sin(zz*8)))**10
         wear = rock_height_field(px*4.7, py*4.7, pz*4.7,
                                  seed=301, strata_spacing=.42)
+        eye_chip = math.exp(-((yy+.315)/.116)**2
+                            - ((zz-4.109)/.085)**2)
+        broken_cheek = math.exp(-((yy-.418)/.132)**2
+                                - ((zz-3.801)/.118)**2)
         # X points toward the rear: negative means a projected cheek/nasal
         # bridge, positive means recesses. The bridge ends in an uneven,
         # visibly broken nasal scar rather than an intact spheroidal nose.
-        relief = front*(.031*eye - .026*upper_lid - .012*lower_lid
-                        - .042*brow - .035*cheekbone + .015*hollow
-                        - .021*nose_root - .094*bridge + .021*nose_flanks
+        relief = front*(.020*eye - .043*upper_lid - .025*lower_lid
+                        - .047*brow - .035*cheekbone + .015*hollow
+                        - .021*nose_root - .112*bridge + .027*nose_flanks
                         + (.011 + .009*wear)*broken_tip
-                        - .014*upper_lip + .010*mouth_cut
-                        - .014*lower_lip - .054*chin - .032*jaw
-                        + .024*forehead*fold + .013*wear*(1-.45*eye))
+                        - .029*upper_lip + .030*mouth_cut
+                        - .025*lower_lip - .025*philtrum
+                        - .058*chin - .035*jaw
+                        + .041*forehead*fold + .013*wear*(1-.45*eye)
+                        + (.035+.009*wear)*eye_chip
+                        + (.030+.011*wear)*broken_cheek)
         # Angular jaw and temporal narrowing break the toy-like oval facial
         # silhouette, while the back half of the head stays untouched.
         jaw_width = .022*jaw - .015*hollow
@@ -384,7 +398,7 @@ def _sculpt_ear_relief(mesh: Mesh, *, side: int, scale_x: float,
                          - ((outward-.745)/.081)**2)
         curved_rim = math.exp(-((zz-4.092)/.139)**2
                               - ((outward-.812)/.041)**2)
-        displacement = anterior*(.055*concha-.028*helix-.014*curved_rim)
+        displacement = anterior*(.094*concha-.046*helix-.023*curved_rim)
         vertices.append((px+displacement*scale_x, py, pz))
     return Mesh(tuple(vertices), mesh.faces)
 
