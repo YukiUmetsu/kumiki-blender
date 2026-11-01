@@ -20,6 +20,7 @@ from .glb_audit import AuditError, audit_glb
 from .lattice import make_lattice_tower
 from .landmark_scan import prepare_sphinx_scan
 from .liberty import LibertyError, make_liberty_study
+from .liberty_scan import ScanSourceError, verify_scan_source
 from .material_overrides import load_material_overrides, verify_material_overrides
 from .material_packs import load_texture_packs, verify_texture_targets
 from .portico import PorticoError, make_portico_study
@@ -100,6 +101,10 @@ def main(argv: list[str] | None = None) -> int:
         subcommand.add_argument("--no-pedestal", action="store_true")
         if command == "build-liberty":
             subcommand.add_argument("--output", type=Path, required=True)
+    scan_face_parser = subcommands.add_parser(
+        "build-liberty-scan-face", help="Licensed photogrammetry face-detail QA checkpoint")
+    scan_face_parser.add_argument("--source", type=Path, required=True)
+    scan_face_parser.add_argument("--output", type=Path, required=True)
     column_parser = subcommands.add_parser("plan-classical-column")
     column_parser.add_argument("--order", choices=("tuscan", "doric", "ionic"), default="ionic")
     column_parser.add_argument("--height", type=float, default=4.55)
@@ -220,6 +225,19 @@ def main(argv: list[str] | None = None) -> int:
                 raise RuntimeError("Building Liberty requires Blender 4.2+: run via scripts/blender_entry.py") from error
             from .blender_liberty import build_liberty_scene
             print(json.dumps(build_liberty_scene(study, output, bpy_module=bpy), indent=2))
+            return 0
+        if args.command == "build-liberty-scan-face":
+            provenance = verify_scan_source(args.source)
+            output = args.output.resolve()
+            if output.exists() or output.is_symlink():
+                raise ScanSourceError(f"Output already exists: {output}. Choose a new revision.")
+            try:
+                import bpy  # type: ignore[import-not-found]
+            except ImportError as error:
+                raise RuntimeError("Building the scan-assisted face requires Blender 4.2+") from error
+            from .blender_liberty_scan import build_liberty_scan_face_scene
+            print(json.dumps(build_liberty_scan_face_scene(
+                args.source.resolve(), output, provenance, bpy_module=bpy), indent=2))
             return 0
         if args.command == "audit":
             print(json.dumps(audit_glb(args.model, require_pbr_textures=args.require_pbr_textures), indent=2))
@@ -409,6 +427,7 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(manifest, indent=2))
         return 0
     except (CatalogError, RecipeError, PorticoError, FacadeError, MonumentError, LibertyError,
+            ScanSourceError,
             GeometryError, AssetImportError, RenderProfileError, RevisionAuditError, AuditError, ExportAuditError,
             SurfaceError, RuntimeError, OSError) as error:
         print(f"error: {error}", file=sys.stderr)

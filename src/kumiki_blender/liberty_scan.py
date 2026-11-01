@@ -1,0 +1,99 @@
+"""Item-level provenance and integrity checks for Liberty's licensed scan base.
+
+The photogrammetry was made from a nineteenth-century *miniature*, so it is an
+artistic geometry reference, not a measured scan of the New York monument.
+Nothing in this module quietly substitutes an unrelated or unlicensed model.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import math
+import re
+from pathlib import Path
+from typing import Any
+
+
+SOURCE_RECORD = (Path(__file__).resolve().parent / "assets" / "landmarks" /
+                 "statues" / "statue-of-liberty" / "scan_source.json")
+
+
+class ScanSourceError(ValueError):
+    """Missing, different, or incompletely attributed scan geometry."""
+
+
+def load_scan_source() -> dict[str, Any]:
+    """Load the reviewed source/licence record included with this project."""
+    try:
+        record = json.loads(SOURCE_RECORD.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        raise ScanSourceError(f"Scan provenance is unreadable: {error}") from error
+    if (not isinstance(record, dict) or record.get("schema_version") != 1
+            or record.get("license") != "CC-BY-4.0"
+            or record.get("author") != "jerryfisher"
+            or not str(record.get("original_url", "")).startswith("https://sketchfab.com/3d-models/")
+            or record.get("license_url") != "https://creativecommons.org/licenses/by/4.0/"
+            or not re.fullmatch(r"[a-f0-9]{64}", str(record.get("sha256", "")))
+            or type(record.get("size_bytes")) is not int
+            or record["size_bytes"] <= 0
+            or not record.get("attribution")):
+        raise ScanSourceError("Scan source record lacks confirmed CC BY 4.0 attribution or checksum")
+    return record
+
+
+def verify_scan_source(path: str | Path, record: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Refuse anonymous, truncated, or substituted GLB files before Blender runs."""
+    requested = Path(path)
+    if requested.is_symlink():
+        raise ScanSourceError(f"Licensed Liberty scan must not be a symlink: {requested}")
+    source = requested.resolve()
+    metadata = record if record is not None else load_scan_source()
+    if not source.is_file():
+        raise ScanSourceError(f"Licensed Liberty scan not found: {source}")
+    if source.stat().st_size != metadata["size_bytes"]:
+        raise ScanSourceError("Licensed scan size does not match the recorded source")
+    digest = hashlib.sha256()
+    with source.open("rb") as binary:
+        if binary.read(4) != b"glTF":
+            raise ScanSourceError("Licensed scan is not a GLB binary")
+        binary.seek(0)
+        for chunk in iter(lambda: binary.read(1024 * 1024), b""):
+            digest.update(chunk)
+    if digest.hexdigest() != metadata["sha256"]:
+        raise ScanSourceError("Licensed scan SHA-256 differs from the reviewed source")
+    return metadata
+
+
+def face_relief_offset(x: float, y: float, z: float) -> float:
+    """Subtle front-facing anatomical correction of this *specific* scan.
+
+    Coordinates are for the checksum-pinned 12.436-unit source, centered with
+    its base at Z=0 and photographed from -Y. Negative Y lifts the copper skin.
+    Unlike separate eye/nose tubes, this modifies the actual scan topology.
+    It is a first review pass, not photogrammetric registration of the photos.
+    """
+    if not all(math.isfinite(v) for v in (x, y, z)):
+        raise ValueError("Facial correction coordinates must be finite")
+    # No influence on the silhouette, rear hair, temple, crown or raised arm.
+    if not (-.83 < x < .16 and -.9 < y < -.18 and 7.96 < z < 8.98):
+        return 0.0
+
+    def g(value: float, center: float, spread: float) -> float:
+        return math.exp(-((value-center)/spread)**2)
+
+    mask = min(1.0, max(0.0, (-y-.18)/.24))
+    mask *= g(x, -.35, .46) * g(z, 8.49, .64)
+    offset = 0.0
+    for eye_x in (-.53, -.19):
+        offset += .024 * g(x, eye_x, .112) * g(z, 8.755, .062)  # recessed sockets
+        offset -= .023 * g(x, eye_x, .14) * g(z, 8.842, .053)  # bony eyebrows
+        offset -= .019 * g(x, eye_x, .116) * g(z, 8.794, .025)  # upper lids
+        offset -= .014 * g(x, eye_x, .101) * g(z, 8.689, .033)  # lower lids
+    offset -= .026 * g(x, -.355, .070) * g(z, 8.58, .20)  # continuous bridge
+    offset -= .022 * g(x, -.355, .128) * g(z, 8.415, .08)  # tip and alae
+    offset -= .019 * g(x, -.35, .185) * g(z, 8.285, .031)  # upper lip
+    offset += .014 * g(x, -.35, .19) * g(z, 8.246, .016)  # lip separation
+    offset -= .017 * g(x, -.35, .18) * g(z, 8.197, .035)  # lower lip
+    offset -= .010 * g(x, -.35, .21) * g(z, 8.081, .070)  # chin
+    return mask * offset

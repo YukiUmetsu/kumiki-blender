@@ -186,12 +186,39 @@ KUMIKI_RENDER_PROFILE=smoke blender --background --factory-startup --python-exit
 
 The dimensions are reference-derived estimates, not measurements of any known aircraft. See the [aircraft authoring and rig guide](docs/VINTAGE_BIPLANE.md) for design choices, surface specifications, controls and export verification.
 
-## Statue of Liberty procedural landmark
+## Statue of Liberty — licensed-scan face rebuild (in review)
+
+The original `plan-liberty` / `build-liberty` procedural model is a **stylized
+prototype**, not a convincing facial likeness. Its geometric primitives are
+inadequate for the photographed eyelids, hair, hands and drapery. The new
+scan-assisted **face checkpoint** is built from a checksum-verified, CC BY 4.0
+photogrammetry scan of a nineteenth-century bronze model by **jerryfisher**.
+It preserves scanned sculptural relief, adds localized continuous-surface
+eye/nose/lip refinement, applies copper study materials,
+and renders eight detailed views of the head/crown plus a full-body reference.
+The scanned miniature is not a measured capture of the full-size statue.
+
+```bash
+python3 scripts/fetch_liberty_scan.py --output .review/_sources/liberty-bronze.glb
+KUMIKI_RENDER_PROFILE=smoke blender --background --factory-startup \
+  --python-exit-code 1 --python scripts/blender_entry.py -- \
+  build-liberty-scan-face --source .review/_sources/liberty-bronze.glb \
+  --output .review/landmarks/statues/statue-of-liberty/r02
+```
+
+The binary source remains outside git. The origin, CC BY license, exact SHA-256,
+credit and modifications are documented in
+[`scan_source.json`](src/kumiki_blender/assets/landmarks/statues/statue-of-liberty/scan_source.json)
+and retained in Blender/GLB metadata. The first checkpoint still requires
+human review of the eyes, brow, nose, lips and hair against the supplied photos
+before this scan becomes the basis for the full statue.
+
+### Earlier procedural prototype
 
 `liberty.py` creates a reference-guided, full 360° Statue of Liberty sculpture
-using closed, semantic meshes: a densely shaped face with individual eye/lip/
+using closed, semantic meshes: a mathematically shaped face with individual eye/lip/
 nose/ear elements, swept textured coiffure, seven diadem rays, layered diagonal
-robe and deeply sculpted pleats, raised torch arm with individual curled fingers,
+robe and repeated synthetic pleats, raised torch arm with individual curled fingers,
 tilted 1776 tablet, gilded flame, and four-sided masonry pedestal. The Blender
 adapter adds a raised Roman numeral inscription, oxidized copper PBR colors,
 seven cinematic QA cameras and the normal immutable `.blend`/`.glb` export.

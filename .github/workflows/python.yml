@@ -33,6 +33,7 @@ jobs:
             tests.test_sphinx_sculpt \
             tests.test_egypt_map \
             tests.test_liberty \
+            tests.test_liberty_scan \
             tests.test_cli.CLITests.test_sphinx_scan_build_preflights_rights_and_pairs_without_blender \
             tests.test_cli.CLITests.test_sphinx_scan_build_passes_prepared_record_to_blender \
             tests.test_asset_catalog
