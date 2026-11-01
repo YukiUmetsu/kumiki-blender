@@ -5,13 +5,19 @@ from __future__ import annotations
 import hashlib
 import math
 from dataclasses import dataclass
-from typing import Callable
+from typing import TYPE_CHECKING, Callable
 
 from .architecture_details import box_mesh
-from .architecture_geometry import (MeshInstance, Vec3, audit_mesh, place_mesh,
+from .architecture_geometry import (Mesh, MeshInstance, Vec3, audit_mesh, place_mesh,
                                     revolve_profile, world_vertices)
-from .asset_spec import (AssetSpec, AssetSpecError, BoxComponent, LatheComponent,
-                         RodComponent, StudRingComponent)
+
+if TYPE_CHECKING:
+    from .asset_spec import (AssetSpec, BoxComponent, HollowLatheComponent, LatheComponent,
+                             RodComponent, StudRingComponent)
+
+
+class ComposerError(ValueError):
+    """A validated component could not be safely assembled."""
 
 
 @dataclass(frozen=True)
@@ -42,6 +48,36 @@ def _lathe(component: LatheComponent) -> tuple[MeshInstance, ...]:
                        material=component.material),)
 
 
+def _hollow_lathe(component: HollowLatheComponent) -> tuple[MeshInstance, ...]:
+    """Physically hollow shell with closed annular lips and a real inner wall."""
+    profile = component.profile_rz_m
+    n = component.radial_segments
+    section_count = len(profile)
+    vertices = tuple(
+        ((radius-thickness)*math.cos(math.tau*j/n),
+         (radius-thickness)*math.sin(math.tau*j/n), z)
+        for thickness in (0.0, component.wall_thickness_m)
+        for radius, z in profile
+        for j in range(n)
+    )
+    inner_offset = section_count*n
+    faces: list[tuple[int, ...]] = []
+    for ring in range(section_count-1):
+        for i in range(n):
+            j = (i+1) % n
+            a, b = ring*n+i, (ring+1)*n+i
+            faces.append((a, ring*n+j, (ring+1)*n+j, b))
+            faces.append((inner_offset+a, inner_offset+b,
+                          inner_offset+(ring+1)*n+j, inner_offset+ring*n+j))
+    last = (section_count-1)*n
+    for i in range(n):
+        j = (i+1) % n
+        faces.append((i, inner_offset+i, inner_offset+j, j))
+        faces.append((last+i, last+j, inner_offset+last+j, inner_offset+last+i))
+    return (place_mesh(Mesh(vertices, tuple(faces)), name=component.id,
+                       origin=component.origin_m, material=component.material),)
+
+
 def _cross(a: Vec3, b: Vec3) -> Vec3:
     return (a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0])
 
@@ -49,7 +85,7 @@ def _cross(a: Vec3, b: Vec3) -> Vec3:
 def _rod(component: RodComponent) -> tuple[MeshInstance, ...]:
     length = math.dist(component.start_m, component.end_m)
     if length < 1e-4:
-        raise AssetSpecError(f"{component.id}: rod is too short")
+        raise ComposerError(f"{component.id}: rod is too short")
     z: Vec3 = tuple((b-a)/length for a, b in zip(component.start_m, component.end_m))
     helper: Vec3 = (0, 0, 1) if abs(z[2]) < 0.9 else (1, 0, 0)
     x = _cross(helper, z)
@@ -79,6 +115,7 @@ COMPONENT_REGISTRY: dict[str, ComponentDefinition] = {
     item.kind: item for item in (
         ComponentDefinition("solid.box", "Centered closed rectangular solid", _box),
         ComponentDefinition("solid.lathe", "Capped radial profile for machined parts", _lathe),
+        ComponentDefinition("solid.hollow-lathe", "Open shade/shell with physical inner and outer walls", _hollow_lathe),
         ComponentDefinition("mechanical.rod", "Oriented cylindrical connector", _rod),
         ComponentDefinition("detail.radial-studs", "Instanced circular fastener detail", _stud_ring),
     )
@@ -93,16 +130,16 @@ def plan_assembly(spec: AssetSpec) -> AssemblyPlan:
         definition = COMPONENT_REGISTRY[component.type]
         parts = definition.builder(component)
         if len(result) + len(parts) > 4096:
-            raise AssetSpecError("AssetSpec exceeds the 4096-instance safety limit")
+            raise ComposerError("AssetSpec exceeds the 4096-instance safety limit")
         groups[component.type] = groups.get(component.type, 0) + len(parts)
         for part in parts:
             report = audit_mesh(part.mesh)
             if report.boundary_edges or report.nonmanifold_edges or report.volume_m3 <= 0:
-                raise AssetSpecError(f"{part.name}: component mesh is not a positive closed solid")
+                raise ComposerError(f"{part.name}: component mesh is not a positive closed solid")
         result.extend(parts)
     names = [part.name for part in result]
     if len(set(names)) != len(names):
-        raise AssetSpecError("Expanded component instance names collide")
+        raise ComposerError("Expanded component instance names collide")
     mins = [float("inf")] * 3
     maxs = [float("-inf")] * 3
     for part in result:

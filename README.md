@@ -1,5 +1,16 @@
 # Kumiki Blender
 
+## New: Agent-authored AssetSpec v2 composer
+
+The optional [AssetSpec v2 composer](docs/ASSET_SPEC_V2.md) adds one generic
+validated plan/build path for assemblies of reusable geometry. Start with
+`pip install -e '.[composer]'`, then run
+`kumiki-blender plan-asset --spec examples/desk-lamp-assembly-v2.json` or
+`kumiki-blender asset-schema` to inspect the machine-readable recipe contract.
+`build-asset` produces the usual editable Blender scene, GLB, inspection views
+and immutable manifest. Existing generator commands and the dependency-free
+kernel remain unchanged.
+
 A standalone, code-first Blender toolkit for reusable, cinematic 3D authoring. Its first milestone is a **generic lattice observation tower**: a deterministic architectural scaffold, **not** a photorealistic or dimensionally verified replica of Tokyo Tower or another real landmark.
 
 The library separates testable Python geometry planning from Blender's `bpy` modeling and rendering. It includes a tapered lattice observation tower, a **modular architectural portico** built from closed arch stones and lathed columns, a **reusable stone building facade** with detailed windows/doors/roof, a **parametric Egyptian monument study** with pyramid casing blocks and a sculpted lion-bodied Sphinx figure, and a **rigged red vintage biplane** modeled from user-provided multiview artwork. All use a shared revision exporter for editable `.blend`, portable `.glb`, inspection views and a JSON manifest for Kumiki-UI and ContentGen consumers.

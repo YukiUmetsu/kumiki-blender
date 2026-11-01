@@ -7,6 +7,7 @@ retain their standard-library-only import path unless AssetSpec is requested.
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
 from typing import Annotated, Literal, Union
 
@@ -54,6 +55,19 @@ class LatheComponent(StrictModel):
     radial_segments: Annotated[int, Field(ge=8, le=256)] = 48
 
 
+class HollowLatheComponent(LatheComponent):
+    type: Literal["solid.hollow-lathe"]
+    wall_thickness_m: Measure
+
+    @model_validator(mode="after")
+    def check_wall(self) -> "HollowLatheComponent":
+        if self.wall_thickness_m >= min(radius for radius, _ in self.profile_rz_m):
+            raise ValueError("wall_thickness_m must be smaller than every profile radius")
+        if any(b[1] - a[1] < 1e-5 for a, b in zip(self.profile_rz_m, self.profile_rz_m[1:])):
+            raise ValueError("hollow lathe profile heights must strictly increase")
+        return self
+
+
 class RodComponent(StrictModel):
     type: Literal["mechanical.rod"]
     id: Slug
@@ -77,7 +91,7 @@ class StudRingComponent(StrictModel):
 
 
 Component = Annotated[
-    Union[BoxComponent, LatheComponent, RodComponent, StudRingComponent],
+    Union[BoxComponent, LatheComponent, HollowLatheComponent, RodComponent, StudRingComponent],
     Field(discriminator="type"),
 ]
 
@@ -116,6 +130,10 @@ class AssetSpec(StrictModel):
                 raise ValueError(f"{component.id}: rod endpoints must differ")
             if isinstance(component, StudRingComponent) and component.stud_radius_m >= component.ring_radius_m:
                 raise ValueError(f"{component.id}: stud radius must be smaller than ring radius")
+            if (isinstance(component, StudRingComponent) and
+                    2*component.stud_radius_m >=
+                    2*component.ring_radius_m*math.sin(math.pi/component.count)):
+                raise ValueError(f"{component.id}: neighboring radial studs must not overlap")
         return self
 
 

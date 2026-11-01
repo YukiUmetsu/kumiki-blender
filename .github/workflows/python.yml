@@ -15,6 +15,12 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+      - name: Install optional composer schema dependency
+        run: python -m pip install -e '.[composer]'
+      - name: Test declarative component composer and compiled handoff
+        env:
+          PYTHONPATH: src
+        run: python -m unittest tests.test_composer tests.test_composer_cli tests.test_compiled_plan -v
       - name: Test measured Khufu masonry and Sphinx source intake
         env:
           PYTHONPATH: src
@@ -86,6 +92,17 @@ jobs:
           blender --background --factory-startup --threads 4 --python-exit-code 1 \
             --python scripts/blender_entry.py -- \
             build-egypt-map --output .review/ci/egypt-map
+      - name: Install optional AssetSpec authoring dependency (host Python only)
+        run: python -m pip install -e '.[composer]'
+      - name: Render AssetSpec v2 component assembly through dependency-free Blender worker
+        env:
+          KUMIKI_RENDER_PROFILE: smoke
+        run: |
+          python -m kumiki_blender build-asset \
+            --spec examples/desk-lamp-assembly-v2.json \
+            --output .review/ci/desk-lamp
+          python -m kumiki_blender audit --model .review/ci/desk-lamp/model.glb --require-pbr-textures
+          python -m kumiki_blender audit-revision --root .review/ci/desk-lamp
       - name: Audit portable GLB and immutable revision
         env:
           PYTHONPATH: src
@@ -100,12 +117,20 @@ jobs:
         run: |
           npm install --global @gltf-transform/cli@4.5.1
           gltf-transform validate .review/ci/egypt-map/model.glb
+          gltf-transform validate .review/ci/desk-lamp/model.glb
       - name: Upload editable map, GLB, manifest and visual QA previews
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: egypt-map-blender-qa
           path: .review/ci/egypt-map/
+          if-no-files-found: warn
+      - name: Upload composer desk lamp and multi-view QA
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: composer-desk-lamp-qa
+          path: .review/ci/desk-lamp/
           if-no-files-found: warn
 
   tests:
@@ -119,6 +144,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+      - name: Install optional composer authoring dependencies for full-suite tests
+        run: python -m pip install -e '.[composer]'
       - name: Run standard-library test suite
         env:
           PYTHONPATH: src

@@ -21,9 +21,10 @@
     {"type": "solid.lathe", "id": "joint-cover", "material": "fasteners",
       "profile_rz_m": [[0.021, 0], [0.021, 0.017]],
       "origin_m": [0, 0, 0.302]},
-    {"type": "solid.lathe", "id": "enameled-shade", "material": "enamel",
+    {"type": "solid.hollow-lathe", "id": "enameled-shade", "material": "enamel",
       "profile_rz_m": [[0.13, 0], [0.129, 0.014], [0.09, 0.072], [0.043, 0.12]],
-      "origin_m": [0.18, 0, 0.35], "radial_segments": 96}
+      "origin_m": [0.18, 0, 0.35], "radial_segments": 96,
+      "wall_thickness_m": 0.004}
   ],
   "quality": {"preset": "cinematic-hero", "views": ["hero", "front", "side", "detail"]}
 }
