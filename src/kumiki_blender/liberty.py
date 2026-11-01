@@ -110,20 +110,28 @@ def _cloth_panel(rows: list[tuple[float, float, float, float, float]],
     return Mesh(tuple(vertices), tuple(tuple(reversed(face)) for face in faces))
 
 
-def _face() -> Mesh:
-    """Anatomical cranial mesh: oval jaw, projecting brows, cheeks, lips, chin."""
+def _face(*, detailed: bool = False) -> Mesh:
+    """Closed cranial skin with an optional high-resolution continuous sculpt."""
     sections = []
-    for i in range(61):
-        z = 24.93+i*(3.52/60)
+    rows = 128 if detailed else 61
+    for i in range(rows):
+        z = 24.93+i*(3.52/(rows-1))
         t = (z-24.93)/3.52
         radius = (.70 + .52*math.sin(math.pi*t)**.6) * (1-.13*t)
         depth = .78+.18*math.sin(math.pi*t)
         sections.append((z, 0, .25, max(.06, radius), max(.06, depth)))
-    mesh = _loft(tuple(sections), sectors=96)
+    mesh = _loft(tuple(sections), sectors=128 if detailed else 96)
     sculpted = []
+    if detailed:
+        from .liberty_face_anatomy import face_projection
     for x, y, z in mesh.vertices:
         front = max(0., -y+.08)
         mask = min(1., front/.7)**2
+        if detailed:
+            y -= mask*face_projection(x, z)
+            x *= 1.-.045*_gauss(z, 25.05, .38)
+            sculpted.append((x, y, z))
+            continue
         cheek = sum(.13*_gauss(x, p, .43)*_gauss(z, 26.57, .40) for p in (-.66, .66))
         brows = sum(.18*_gauss(x, p, .43)*_gauss(z, 27.55, .16) for p in (-.45, .45))
         sockets = sum(.18*_gauss(x, p, .29)*_gauss(z, 27.22, .20) for p in (-.45, .45))
@@ -168,7 +176,8 @@ def _gown() -> Mesh:
 
 def make_liberty_study(*, scale: float = 1., include_pedestal: bool = True,
                        detailed_tablet: bool = False,
-                       detailed_crown: bool = False) -> LibertyStudy:
+                       detailed_crown: bool = False,
+                       detailed_face: bool = False) -> LibertyStudy:
     """Make the original, reference-guided statue and optional 8.9m pedestal."""
     if (isinstance(scale, bool) or not isinstance(scale, (int, float)) or
             not math.isfinite(scale) or not .05 <= scale <= 20):
@@ -179,6 +188,8 @@ def make_liberty_study(*, scale: float = 1., include_pedestal: bool = True,
         raise LibertyError("detailed_tablet must be a boolean")
     if type(detailed_crown) is not bool:
         raise LibertyError("detailed_crown must be a boolean")
+    if type(detailed_face) is not bool:
+        raise LibertyError("detailed_face must be a boolean")
     result: list[MeshInstance] = []
 
     def put(name: str, mesh: Mesh, material: str = "patina") -> None:
@@ -342,49 +353,58 @@ def make_liberty_study(*, scale: float = 1., include_pedestal: bool = True,
     # Neck, long classical face and rounded crown of hair.
     put("neck", _loft(((23.83, 0, .15, .67, .57), (24.66, 0, .20, .61, .52),
                        (25.44, 0, .22, .78, .62)), 48))
-    put("head-face", _face())
-    put("head-chin", _loft(((25.02, 0, -.33, .31, .22),
-                            (25.23, 0, -.42, .48, .29),
-                            (25.45, 0, -.35, .56, .29)), 36))
-    put("head-nose", _loft(((26.35, 0, -.99, .14, .22),
-                            (26.52, 0, -1.06, .24, .28),
-                            (26.70, 0, -1.03, .19, .23),
-                            (27.45, 0, -.80, .12, .10)), 48))
-    # Eyes: actual inset almond solids, upper/lower lid cords, brows and inner tear ducts.
+    put("head-face", _face(detailed=detailed_face))
+    if not detailed_face:
+        put("head-chin", _loft(((25.02, 0, -.33, .31, .22),
+                                (25.23, 0, -.42, .48, .29),
+                                (25.45, 0, -.35, .56, .29)), 36))
+        put("head-nose", _loft(((26.35, 0, -.99, .14, .22),
+                                (26.52, 0, -1.06, .24, .28),
+                                (26.70, 0, -1.03, .19, .23),
+                                (27.45, 0, -.80, .12, .10)), 48))
+    # Legacy face uses separate solids; detailed face carries its own relief.
+    if detailed_face:
+        from .liberty_face_anatomy import sculpted_ear
     for label, sign in (("left", -1), ("right", 1)):
         x = sign*.47
-        put(f"head-{label}-eye", _loft(((27.16, x, -.72, .24, .075),
-                                       (27.27, x, -.73, .27, .09),
-                                       (27.35, x, -.73, .22, .07)), 40))
-        for lid, z, height in (("upper", 27.36, .07), ("lower", 27.16, -.039)):
-            points = [(x-.32+j*.107, -.85-.035*math.sin(j*math.pi/6),
-                       z+height*math.sin(j*math.pi/6)) for j in range(7)]
-            put(f"head-{label}-{lid}-lid", _tube(points, [.034]*7, 10), "patina-shadow")
-        put(f"head-{label}-brow", _tube([
-            (x-.35, -.82, 27.55), (x-.19, -.89, 27.65),
-            (x+.10, -.89, 27.66), (x+.35, -.80, 27.56)
-        ], [.035, .062, .058, .026]), "patina-shadow")
-        put(f"head-{label}-ear", _loft(((26.34, sign*1.10, .10, .20, .18),
-                                       (26.88, sign*1.12, .11, .30, .27),
-                                       (27.33, sign*1.08, .12, .22, .17)), 32))
-        put(f"head-{label}-ear-helix", _tube([
-            (sign*1.20, -.11, 26.45), (sign*1.34, -.04, 26.72),
-            (sign*1.39, .01, 27.07), (sign*1.24, -.01, 27.31),
-        ], [.051, .077, .065, .035]), "patina-shadow")
-        put(f"head-{label}-nostril", _loft(((26.36, sign*.17, -1.22, .052, .05),
-                                           (26.44, sign*.17, -1.20, .064, .07)), 24), "patina-shadow")
-    # Lips are three distinct relief bands, not an expression texture.
-    put("head-upper-lip", _tube([
-        (-.43, -.79, 25.95), (-.22, -.89, 26.01), (0, -.92, 25.97),
-        (.20, -.89, 26.01), (.43, -.79, 25.95),
-    ], [.035, .053, .060, .053, .035], 12), "patina-light")
-    put("head-lower-lip", _tube([
-        (-.40, -.79, 25.85), (-.21, -.86, 25.81),
-        (0, -.91, 25.80), (.22, -.86, 25.81), (.40, -.79, 25.85),
-    ], [.029, .051, .063, .051, .029], 12), "patina-light")
-    put("head-mouth-crease", _tube([
-        (-.38, -.87, 25.91), (0, -.94, 25.89), (.38, -.87, 25.91),
-    ], [.012, .014, .012], 10), "patina-shadow")
+        if not detailed_face:
+            put(f"head-{label}-eye", _loft(((27.16, x, -.72, .24, .075),
+                                           (27.27, x, -.73, .27, .09),
+                                           (27.35, x, -.73, .22, .07)), 40))
+            for lid, z, height in (("upper", 27.36, .07), ("lower", 27.16, -.039)):
+                points = [(x-.32+j*.107, -.85-.035*math.sin(j*math.pi/6),
+                           z+height*math.sin(j*math.pi/6)) for j in range(7)]
+                put(f"head-{label}-{lid}-lid", _tube(points, [.034]*7, 10), "patina-shadow")
+            put(f"head-{label}-brow", _tube([
+                (x-.35, -.82, 27.55), (x-.19, -.89, 27.65),
+                (x+.10, -.89, 27.66), (x+.35, -.80, 27.56)
+            ], [.035, .062, .058, .026]), "patina-shadow")
+        if detailed_face:
+            put(f"head-{label}-ear", sculpted_ear(sign))
+        else:
+            put(f"head-{label}-ear", _loft(((26.34, sign*1.10, .10, .20, .18),
+                                           (26.88, sign*1.12, .11, .30, .27),
+                                           (27.33, sign*1.08, .12, .22, .17)), 32))
+            put(f"head-{label}-ear-helix", _tube([
+                (sign*1.20, -.11, 26.45), (sign*1.34, -.04, 26.72),
+                (sign*1.39, .01, 27.07), (sign*1.24, -.01, 27.31),
+            ], [.051, .077, .065, .035]), "patina-shadow")
+        if not detailed_face:
+            put(f"head-{label}-nostril", _loft(((26.36, sign*.17, -1.22, .052, .05),
+                                               (26.44, sign*.17, -1.20, .064, .07)), 24), "patina-shadow")
+    # Preserve the original separate lip geometry only for the default model.
+    if not detailed_face:
+        put("head-upper-lip", _tube([
+            (-.43, -.79, 25.95), (-.22, -.89, 26.01), (0, -.92, 25.97),
+            (.20, -.89, 26.01), (.43, -.79, 25.95),
+        ], [.035, .053, .060, .053, .035], 12), "patina-light")
+        put("head-lower-lip", _tube([
+            (-.40, -.79, 25.85), (-.21, -.86, 25.81),
+            (0, -.91, 25.80), (.22, -.86, 25.81), (.40, -.79, 25.85),
+        ], [.029, .051, .063, .051, .029], 12), "patina-light")
+        put("head-mouth-crease", _tube([
+            (-.38, -.87, 25.91), (0, -.94, 25.89), (.38, -.87, 25.91),
+        ], [.012, .014, .012], 10), "patina-shadow")
     put("hair-scalp", _loft(((27.54, 0, .31, 1.00, .78),
                              (28.20, 0, .28, 1.23, .90),
                              (28.78, 0, .28, 1.18, .93),
@@ -519,4 +539,5 @@ def make_liberty_study(*, scale: float = 1., include_pedestal: bool = True,
                         bounds_max, counts, (("scale", float(scale)),
                                              ("include_pedestal", include_pedestal),
                                              ("detailed_tablet", detailed_tablet),
-                                             ("detailed_crown", detailed_crown)))
+                                             ("detailed_crown", detailed_crown),
+                                             ("detailed_face", detailed_face)))

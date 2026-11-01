@@ -262,6 +262,18 @@ def build_liberty_scene(study: LibertyStudy, destination: Path, *,
             QualityShot("crown-ray-profile", crown_pos(8, -.75, 30.05),
                         crown_pos(0, 0, 30.0), 8.0*parameters["scale"]),
         )
+    if parameters.get("detailed_face"):
+        def face_pos(x: float, y: float, z: float) -> tuple[float, float, float]:
+            return (x*parameters["scale"], y*parameters["scale"],
+                    (z+offset)*parameters["scale"])
+        shots += (
+            QualityShot("face-detail-front", face_pos(0, -7.2, 26.67),
+                        face_pos(0, 0, 26.67), 3.7*parameters["scale"]),
+            QualityShot("face-detail-threequarter", face_pos(4.8, -6.7, 26.67),
+                        face_pos(0, 0, 26.67), 3.7*parameters["scale"]),
+            QualityShot("face-detail-profile", face_pos(7.2, -.3, 26.67),
+                        face_pos(0, 0, 26.67), 3.7*parameters["scale"]),
+        )
     metadata = {
         "asset_id": study.asset_id,
         "generator": "kumiki-blender/procedural-statue-of-liberty",

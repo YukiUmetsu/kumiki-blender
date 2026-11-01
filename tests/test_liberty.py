@@ -149,6 +149,38 @@ class LibertyTests(unittest.TestCase):
         with self.assertRaises(LibertyError):
             make_liberty_study(detailed_crown=1)
 
+    def test_detailed_face_is_one_closed_anatomical_skin_without_feature_rods(self):
+        from kumiki_blender.liberty_face_anatomy import face_projection, sculpted_ear
+
+        study = make_liberty_study(detailed_face=True, include_pedestal=False)
+        parts = {part.name: part for part in study.instances}
+        face = parts["liberty-head-face"].mesh
+        self.assertGreater(len(face.vertices), 48_000)
+        report = audit_mesh(face)
+        self.assertEqual((report.boundary_edges, report.nonmanifold_edges), (0, 0))
+        self.assertGreater(report.volume_m3, 0.)
+        for redundant in ("liberty-head-nose", "liberty-head-left-eye",
+                          "liberty-head-left-upper-lid", "liberty-head-upper-lip",
+                          "liberty-head-mouth-crease", "liberty-head-chin"):
+            self.assertNotIn(redundant, parts)
+        self.assertTrue(dict(study.parameters)["detailed_face"])
+        self.assertNotIn("liberty-head-right-ear-helix", parts)
+        for sign in (-1, 1):
+            ear = sculpted_ear(sign)
+            ear_report = audit_mesh(ear)
+            self.assertEqual((ear_report.boundary_edges, ear_report.nonmanifold_edges), (0, 0))
+            self.assertGreater(ear_report.volume_m3, 0.)
+        self.assertGreater(face_projection(0., 26.51), .27)
+        self.assertLess(face_projection(.46, 27.22), -.10)
+        self.assertGreater(face_projection(.46, 27.55), .07)
+        self.assertLess(face_projection(0., 25.92), 0.)
+        self.assertAlmostEqual(face_projection(.46, 27.22),
+                               face_projection(-.46, 27.22), places=5)
+        with self.assertRaises(ValueError):
+            face_projection(float("nan"), 27.)
+        with self.assertRaises(LibertyError):
+            make_liberty_study(detailed_face=1)
+
     def test_export_parts_are_closed_meshes_and_have_unique_semantic_names(self):
         study = make_liberty_study()
         self.assertLess(len(study.instances), 700)

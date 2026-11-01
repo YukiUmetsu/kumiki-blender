@@ -1,5 +1,36 @@
 # Statue of Liberty — scan-assisted detail rebuild
 
+## r53 — continuous relief head and sculpted pinnae (opt-in, **experimental**)
+
+The latest procedural trial replaces the separate nose lozenge, eyeball
+solids, brow/eyelid tubes, lip rods and auxiliary chin with a single,
+closed high-density copper head skin. Overlapping smooth relief fields form
+the orbital recesses, eyelid rims, bridge and alae, nostril grooves, mouth
+fissure, philtrum, cheek planes and chin. The two ears are now individually
+closed, side-facing pinnae with recessed conchae, curved outer helices and
+antihelix shelves, rather than an oval wedge and detached helix wire.
+
+The new `--detailed-face` flag is **off by default**. It is a geometric
+continuity experiment, **not** a likeness pass: the eyes remain stylized,
+the nose/ear proportions are estimated, and facial landmark positions have
+not been surveyed from reference photographs. Front, three-quarter and true
+profile close-ups are exported for manual rejection or further sculpting.
+The previous face remains unchanged in the ordinary `build-liberty` path.
+
+```bash
+KUMIKI_RENDER_PROFILE=smoke blender --background --factory-startup \
+  --threads 6 --python-exit-code 1 --python scripts/blender_entry.py -- \
+  build-liberty --detailed-torch --detailed-tablet --detailed-crown \
+  --detailed-face \
+  --output .review/landmarks/statues/statue-of-liberty/r53-sculpted-mask
+PYTHONPATH=src python3 -m kumiki_blender audit-revision \
+  --root .review/landmarks/statues/statue-of-liberty/r53-sculpted-mask
+```
+
+**Acceptance remains blocked** on matching the monument's eyes, cheeks,
+mandible, ear/hair overlap and head-to-neck transition. Continuous topology
+alone does not establish photographic accuracy.
+
 ## r48 — restrained crown copper joinery (opt-in, **ongoing**)
 
 The detailed 25-window diadem and seven folded sheet rays now include one
