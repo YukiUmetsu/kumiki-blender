@@ -160,6 +160,40 @@ class EgyptianMonumentTests(unittest.TestCase):
         self.assertEqual(len(restored), len(parts)+1)
         self.assertIn("sphinx-optional-restored-nose", [p.name for p in restored])
 
+    def test_sphinx_reference_has_four_distinct_toes_per_forepaw(self):
+        parts = {part.name: part for part in sphinx_assembly(prefix="sphinx")}
+        for side in ("left", "right"):
+            toes = [parts[f"sphinx-{side}-toe-{index}"] for index in range(4)]
+            centers = [sum(v[1] for v in toe.mesh.vertices)/len(toe.mesh.vertices)
+                       for toe in toes]
+            self.assertEqual(centers, sorted(centers))
+            self.assertGreater(centers[-1]-centers[0], .47)
+            self.assertLess(centers[-1]-centers[0], .61)
+            for toe in toes:
+                self.assertLess(min(v[0] for v in toe.mesh.vertices), -5.42)
+                self.assertGreater(max(v[0] for v in toe.mesh.vertices), -5.05)
+
+    def test_face_relief_preserves_smooth_back_of_head(self):
+        # Shape details belong on the anatomical anterior face, not repeated
+        # around the back of the nemes as a texture-like displacement.
+        from kumiki_blender.egyptian_monuments import _sculpt_face_relief
+        source = loft_elliptical_sections(
+            ((3.1, -3.9, 0, .34, .35),
+             (3.75, -3.9, 0, .5, .5),
+             (4.4, -3.9, 0, .33, .4)),
+            axis="z", radial_segments=96, subdivisions=8)
+        carved = _sculpt_face_relief(source, scale_x=1, scale_y=1, scale_z=1)
+        self.assertEqual(carved.faces, source.faces)
+        rear_indices = [i for i, v in enumerate(source.vertices) if v[0] > -3.85]
+        self.assertTrue(rear_indices)
+        self.assertTrue(all(carved.vertices[i] == source.vertices[i]
+                            for i in rear_indices))
+        anterior = [i for i, v in enumerate(source.vertices) if v[0] < -4.19]
+        self.assertGreater(max(abs(carved.vertices[i][0]-source.vertices[i][0])
+                               for i in anterior), .09)
+        self.assertEqual((audit_mesh(carved).boundary_edges,
+                          audit_mesh(carved).nonmanifold_edges), (0, 0))
+
     def test_sphinx_scaling_is_parametric(self):
         small = sphinx_assembly(prefix="small", length=10.5)
         large = sphinx_assembly(prefix="large", length=21)

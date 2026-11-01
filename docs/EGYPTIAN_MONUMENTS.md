@@ -11,7 +11,7 @@ the Great Sphinx.
 |---|---|
 | `loft_elliptical_sections(sections, axis, radial_segments, subdivisions, cross_section_exponent)` | Close and skin varying circular-to-angular superelliptical cross sections along X, Y or Z for anatomy, stonework, trunks, carved relief and terrain props |
 | `rock_height_field(x, y, z, seed, strata_spacing)` | Repeatable world-meter mineral bedding, broad erosion, chipped medium-scale detail and fine grain; shared across different stone types |
-| `erode_loft(mesh, axis, radial_segments, strength, seed, strata_spacing)` | Displace an existing closed loft's actual vertices to make worn, stratified rock surfaces without breaking its end caps |
+| `erode_loft(mesh, axis, radial_segments, strength, seed, strata_spacing, bedding_strength, pitting_strength)` | Displace actual vertices with multiscale weathering and optional physically recessed limestone bedding/pits without breaking end caps |
 | `rough_bedrock_slab(length, width, height, roughness, seed)` | Topographically varied, watertight limestone base with eroded perimeter and nonplanar top |
 | `pyramid_frustum(bottom_width, top_width, height)` | Solid tapering square mass; positive volume and outward faces |
 | `pyramid_casing_stone(bottom_width, top_width, course_height, start, end, inset, joint, face_grid, erosion_strength, seed)` | One closed tapered masonry block facing +Y; tessellated worn surfaces have actual geometric relief, while polished casing can remain planar |
@@ -44,22 +44,33 @@ limestone skin** from these intersecting body volumes. This removes the
 visible overlap seams while retaining real erosion across the statue. A
 second, finer-resolution union sculpts the face, hood, ears and lappets into
 one coherent head with a quieter, lighter stone material. The face's recessed
-eyes, surviving nasal bridge, damaged nose and mouth are geometry-level relief
+raked eye sockets, lids, cheekbones, jaw, surviving nasal bridge, damaged nose,
+lips and mouth are geometry-level relief
 rather than floating decorative spheres or lines. Head weathering is reduced
 relative to the deeply stratified lion body to preserve readable anatomy.
-Toe reliefs and the rough bedrock remain separate so fine detail is preserved.
+Four overlapping toe-relief sources per forepaw and the rough bedrock remain
+separate so fine detail is preserved.
 
 The `source.blend` preserves every original anatomical solid in a hidden
 `Sphinx / hidden editable body sources` and `Sphinx / hidden editable head
 sources` collections alongside the two visible unified surfaces. The GLB
-exports those and the other detail meshes: **367 visible model objects** for
-the default 379-part combined source study. The manifest records each union's
+exports those and the other detail meshes. The manifest records each union's
 voxel size, source count and vertex count. This remains an original
 illustrative sculpt, not photogrammetry.
 
 The default procedural sculpt now uses a lower head-to-total-length ratio,
 rounded rather than rectangular lion torso/foreleg sections, a broader
-shoulder-to-neck transition, and narrower headdress lappets. It is still an
+shoulder-to-neck transition, and narrower headdress lappets. A second
+geometry-level weathering pass adds irregular undercut bedding planes and
+small concave mineral pockets to the lion's body and haunches, with much
+weaker wear on the harder head. The facial silhouette now includes a surviving
+nasal bridge and chipped lower tip, recessed sockets, differentiated lids,
+cheek and jaw planes, and distinct lips instead of a smooth oval mask.
+
+The supplied side-profile concept image is used as an **art-direction and
+silhouette reference**, not a surveyed depth map. AERA documents why the
+[Sphinx's body beds erode more strongly than the head](https://aeraweb.org/geology-of-the-sphinx/).
+This procedural interpretation emphasizes those differences; it is still an
 artistic approximation: these changes improve the *silhouette*, but do not
 replace a surveyed statue mesh or guarantee authentic facial anatomy.
 
@@ -136,7 +147,7 @@ a **tightly cropped, static GLB photogrammetry or surveyed mesh**. The builder
 will replace the visible procedural Sphinx with the GLB while retaining the
 procedural pyramid, Cycles daylight, sand-colored stage, six camera views,
 scene-native `.blend` and portable exported `.glb`. Imported materials and
-texture UVs remain intact. The 21 procedural Sphinx source pieces remain in a
+texture UVs remain intact. The procedural Sphinx source pieces remain in a
 hidden editable authoring collection in `source.blend` for comparison, but do
 not appear in the render or exported GLB.
 
@@ -225,7 +236,7 @@ in a product listing is not evidence of monument authenticity.
 
 All dimensions are meters. Default combined plan uses a **36 m by 23 m
 illustrative pyramid**, a **10.5 m-long, roughly 3.6 m-tall Sphinx-shaped study**, 18 stone courses,
-and 379 named components. It does **not** imply that the real landmarks have
+and independently named components. It does **not** imply that the real landmarks have
 those measurements. `--restored-nose` is an explicitly optional sculptural
 interpretation, not archaeological evidence. Material color and stone erosion
 are procedural approximations, not scans of the site.

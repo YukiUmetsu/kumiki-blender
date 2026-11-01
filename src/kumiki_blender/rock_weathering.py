@@ -52,19 +52,28 @@ def rock_height_field(x: float, y: float, z: float, *, seed: int = 0,
 
 
 def erode_loft(mesh: Mesh, *, axis: str, radial_segments: int,
-               strength: float, seed: int = 0, strata_spacing: float = 0.35) -> Mesh:
+               strength: float, seed: int = 0, strata_spacing: float = 0.35,
+               bedding_strength: float = 0.0,
+               pitting_strength: float = 0.0) -> Mesh:
     """Perturb a closed loft's rings radially, leaving its end caps planar.
 
     Each vertex remains in the same manifold topology. Flat-cap rings stay
     fixed; interior rings are displaced according to local cross-section
     normals. Use a modest strength relative to the thinnest part radius.
+
+    ``bedding_strength`` introduces narrow, irregularly undercut limestone
+    seams, rather than merely painting sinusoidal stripes on a smooth shell.
+    ``pitting_strength`` carves sparse concave mineral pockets at a finer
+    scale. Both are opt-in so existing architectural profiles remain stable.
     """
     if axis not in ("x", "y", "z"):
         raise GeometryError("Eroded loft axis must be x, y or z")
     if type(radial_segments) is not int or not 8 <= radial_segments <= 128:
         raise GeometryError("radial_segments must be an integer in [8, 128]")
     amp = _finite_number(strength, "erosion strength", 0, 2)
-    _finite_number(strata_spacing, "strata_spacing", 0.03, 8)
+    spacing = _finite_number(strata_spacing, "strata_spacing", 0.03, 8)
+    bedding = _finite_number(bedding_strength, "bedding_strength", 0, .3)
+    pitting = _finite_number(pitting_strength, "pitting_strength", 0, .3)
     if not isinstance(mesh, Mesh) or len(mesh.vertices) % radial_segments:
         raise GeometryError("Erosion expects complete closed loft rings")
     count = len(mesh.vertices)//radial_segments
@@ -72,7 +81,7 @@ def erode_loft(mesh: Mesh, *, axis: str, radial_segments: int,
         raise GeometryError("Eroded loft requires at least three axial rings")
     if type(seed) is not int or not 0 <= seed <= 100000:
         raise GeometryError("Rock seed must be an integer from 0 to 100000")
-    if amp == 0:
+    if amp == 0 and bedding == 0 and pitting == 0:
         return mesh
 
     altered = []
@@ -93,9 +102,24 @@ def erode_loft(mesh: Mesh, *, axis: str, radial_segments: int,
                     (z, x) if axis == "y" else (x, y))
             va, vb = a-center_a, b-center_b
             magnitude = math.hypot(va, vb)
-            value = (amp * fade * rock_height_field(
-                x, y, z, seed=seed, strata_spacing=strata_spacing)
-                     / max(magnitude, 1e-6))
+            relief = amp * rock_height_field(x, y, z, seed=seed,
+                                             strata_spacing=spacing)
+            if bedding:
+                # Thin soft layers erode below the adjacent harder stone.
+                # Low-frequency lateral drift prevents mathematically level
+                # rings across an entire lion flank or carved wall.
+                drift = _noise3(x*.63, y*.63, z*.45, seed+47)
+                phase = math.pi * (z/spacing + drift*.23)
+                seam = math.exp(-(math.sin(phase)/.19)**2)
+                relief -= bedding*seam*(.72 + .28*_noise3(
+                    x*1.8, y*1.8, z*1.8, seed+53))
+            if pitting:
+                # The threshold leaves most stone intact. Concave cavities
+                # are geometry, not bump-map-only fake texture.
+                mineral = _noise3(x*7.4, y*7.4, z*7.4, seed+71)
+                cavity = max(0.0, (mineral-.13)/.87)
+                relief -= pitting*cavity*cavity
+            value = relief*fade/max(magnitude, 1e-6)
             aa, bb = a + va*value, b + vb*value
             altered.append(((x, aa, bb) if axis == "x" else
                             (bb, y, aa) if axis == "y" else (aa, bb, z)))

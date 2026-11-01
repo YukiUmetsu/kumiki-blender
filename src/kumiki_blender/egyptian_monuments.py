@@ -294,33 +294,48 @@ def khufu_petrie_assembly(*, prefix: str,
 
 def _sculpt_face_relief(mesh: Mesh, *, scale_x: float, scale_y: float,
                        scale_z: float) -> Mesh:
-    """Carve eye sockets, cheekbones, damaged nose and mouth into one face.
+    """Carve anatomical planes and surviving facial features into the head.
 
     Relief is applied to the existing manifold face shell rather than layering
-    protruding eye/brow blobs onto it. The nose is an eroded recess in the
-    default present-day depiction; no standalone cartoon pupils are added.
+    protruding eye/brow blobs onto it. The present-day nose has a preserved
+    bridge but a chipped, recessed lower tip; lips and chin project subtly
+    from the jaw. All displacements are in *normalized* statue coordinates.
     """
     vertices = []
     for px, py, pz in mesh.vertices:
         xx, yy, zz = px/scale_x, py/scale_y, pz/scale_z
-        front = max(0.0, min(1.0, (-xx-3.98)/.34))
-        eye = math.exp(-((abs(yy)-.255)/.155)**2 - ((zz-4.04)/.085)**2)
-        cheek = math.exp(-((abs(yy)-.33)/.195)**2 - ((zz-3.66)/.19)**2)
-        broken_nose = math.exp(-(yy/.145)**4 - ((zz-3.76)/.20)**2)
-        brow = math.exp(-((abs(yy)-.27)/.20)**2 - ((zz-4.19)/.085)**2)
-        chin = math.exp(-(yy/.24)**2 - ((zz-3.14)/.13)**2)
-        mouth = math.exp(-(yy/.285)**6 - ((zz-3.39)/.035)**2)
-        nose_bridge = math.exp(-(yy/.12)**2 - ((zz-3.96)/.20)**2)
-        wear = rock_height_field(px*5.0, py*5.0, pz*5.0,
-                                 seed=301, strata_spacing=.45)
-        scar = broken_nose*(.015 + .027*wear)
-        # A stronger but localized eye cavity, elevated upper lid/cheek plane,
-        # partial nasal bridge and incised lips read at actual camera distance.
-        # Negative displacement projects forward because the face looks -X.
-        relief = front*(.155*eye + .120*broken_nose - .043*cheek
-                        - .048*brow - .026*chin + .032*mouth
-                        - .070*nose_bridge + scar)
-        vertices.append((px+relief*scale_x, py, pz))
+        front = max(0.0, min(1.0, (-xx-3.96)/.31))
+        front = front*front*(3.0-2.0*front)
+        lateral = abs(yy)
+        eye = math.exp(-((lateral-.252)/.145)**2 - ((zz-4.047)/.090)**2)
+        upper_lid = math.exp(-((lateral-.259)/.172)**2 - ((zz-4.141)/.058)**2)
+        brow = math.exp(-((lateral-.28)/.192)**2 - ((zz-4.215)/.088)**2)
+        cheekbone = math.exp(-((lateral-.344)/.19)**2 - ((zz-3.771)/.168)**2)
+        hollow = math.exp(-((lateral-.485)/.134)**2 - ((zz-3.95)/.185)**2)
+        nose_root = math.exp(-(yy/.125)**2 - ((zz-4.085)/.153)**2)
+        bridge = math.exp(-(yy/.112)**2 - ((zz-3.920)/.195)**2)
+        broken_tip = math.exp(-(yy/.155)**4 - ((zz-3.727)/.105)**2)
+        upper_lip = math.exp(-(yy/.239)**4 - ((zz-3.494)/.058)**2)
+        mouth_cut = math.exp(-(yy/.285)**6 - ((zz-3.427)/.026)**2)
+        lower_lip = math.exp(-(yy/.252)**4 - ((zz-3.375)/.054)**2)
+        chin = math.exp(-(yy/.288)**4 - ((zz-3.238)/.119)**2)
+        jaw = math.exp(-((lateral-.343)/.166)**2 - ((zz-3.360)/.207)**2)
+        wear = rock_height_field(px*4.7, py*4.7, pz*4.7,
+                                 seed=301, strata_spacing=.42)
+        # X points toward the rear: negative means a projected cheek/nasal
+        # bridge, positive means recesses. The bridge ends in an uneven,
+        # visibly broken nasal scar rather than an intact spheroidal nose.
+        relief = front*(.145*eye - .052*upper_lid - .071*brow
+                        - .071*cheekbone + .039*hollow
+                        - .034*nose_root - .111*bridge
+                        + (.185 + .033*wear)*broken_tip
+                        - .052*upper_lip + .052*mouth_cut
+                        - .039*lower_lip - .079*chin - .040*jaw)
+        # Angular jaw and temporal narrowing break the toy-like oval facial
+        # silhouette, while the back half of the head stays untouched.
+        jaw_width = .024*jaw - .020*hollow
+        vertices.append((px+relief*scale_x,
+                         py + math.copysign(jaw_width*scale_y*front, yy), pz))
     return Mesh(tuple(vertices), mesh.faces)
 
 
@@ -344,25 +359,31 @@ def sphinx_assembly(*, prefix: str, length: float = 10.5,
 
     def along_x(points: tuple[tuple[float, float, float, float, float], ...], *,
                 roughness: float = .045, seed: int = 17,
-                exponent: float = 3.0) -> Mesh:
+                exponent: float = 3.0, bedding: float = .045,
+                pitting: float = .027) -> Mesh:
         mesh = loft_elliptical_sections(tuple((p*x, a*y, b*z, ra*y, rb*z)
                                               for p, a, b, ra, rb in points), axis="x",
                                         radial_segments=96, subdivisions=5,
                                         cross_section_exponent=exponent)
         return erode_loft(mesh, axis="x", radial_segments=96,
                           strength=roughness*min(y, z), seed=seed,
-                          strata_spacing=.31*z)
+                          strata_spacing=.31*z,
+                          bedding_strength=bedding*min(y, z),
+                          pitting_strength=pitting*min(y, z))
 
     def along_z(points: tuple[tuple[float, float, float, float, float], ...], *,
                 roughness: float = .025, seed: int = 19,
-                exponent: float = 2.6) -> Mesh:
+                exponent: float = 2.6, subdivisions: int = 5,
+                bedding: float = .009, pitting: float = .009) -> Mesh:
         mesh = loft_elliptical_sections(tuple((p*z, a*x, b*y, ra*x, rb*y)
                                               for p, a, b, ra, rb in points),
-                                        radial_segments=96, subdivisions=5,
+                                        radial_segments=96, subdivisions=subdivisions,
                                         cross_section_exponent=exponent)
         return erode_loft(mesh, axis="z", radial_segments=96,
                           strength=roughness*min(x, y), seed=seed,
-                          strata_spacing=.29*z)
+                          strata_spacing=.29*z,
+                          bedding_strength=bedding*min(x, y),
+                          pitting_strength=pitting*min(x, y))
 
     items: list[MeshInstance] = []
 
@@ -384,7 +405,8 @@ def sphinx_assembly(*, prefix: str, length: float = 10.5,
                                 (2.85, 0, 1.28, 1.13, .90),
                                 (3.67, 0, 1.10, .78, .69),
                                 (4.16, 0, .99, .22, .29)),
-                               roughness=.17, seed=211, exponent=2.35),
+                               roughness=.17, seed=211, exponent=2.25,
+                               bedding=.083, pitting=.061),
          "sphinx-limestone")
     # A forward shoulder mass merges with the lion torso; the narrower neck
     # connects it to the headdress. The old single upstanding spheroid made the
@@ -394,7 +416,8 @@ def sphinx_assembly(*, prefix: str, length: float = 10.5,
                             (-3.25, 0, 1.45, .92, .94),
                             (-2.80, 0, 1.36, 1.07, 1.02),
                             (-2.14, 0, 1.30, 1.21, .99)),
-                          roughness=.14, seed=43, exponent=2.55))
+                          roughness=.14, seed=43, exponent=2.38,
+                          bedding=.077, pitting=.051))
     # Broad, sloping royal breast/shoulder, not the former straight cylinder
     # carrying a disproportionately oversized helmet above a toy-like body.
     part("carved-neck", along_z(((1.68, -2.94, 0, 1.04, 1.00),
@@ -402,7 +425,8 @@ def sphinx_assembly(*, prefix: str, length: float = 10.5,
                                   (2.43, -3.29, 0, .75, .81),
                                   (2.78, -3.45, 0, .61, .72),
                                   (3.13, -3.50, 0, .50, .64)),
-                                 roughness=.075, seed=49, exponent=2.55))
+                                 roughness=.075, seed=49, exponent=2.55,
+                                 bedding=.020, pitting=.018))
     for side, sign in (("left", -1), ("right", 1)):
         side_y = sign*1.07
         part(f"{side}-forepaw", along_x(((-5.43, side_y, .32, .22, .19),
@@ -413,26 +437,34 @@ def sphinx_assembly(*, prefix: str, length: float = 10.5,
                                          (-2.75, side_y, .53, .45, .46),
                                          (-2.20, side_y, .74, .42, .61),
                                          (-1.90, side_y, .87, .37, .63)),
-                                        roughness=.145, seed=61, exponent=2.55))
-        for toe in range(3):
-            toe_y = side_y + (toe-1)*.22
-            part(f"{side}-toe-{toe}", along_x(((-5.49, toe_y, .24, .065, .095),
-                                                (-5.32, toe_y, .24, .12, .14),
-                                                (-4.94, toe_y, .25, .14, .15)),
-                                               roughness=.017, seed=73),
+                                        roughness=.145, seed=61, exponent=2.42,
+                                        bedding=.047, pitting=.031))
+        # Four shallow, closely spaced digits are recessed into each forepaw.
+        # Keeping them as individually editable relief sources retains the
+        # inter-toe shadow grooves at cinematic close-up distances.
+        for toe in range(4):
+            toe_y = side_y + (toe-1.5)*.177
+            part(f"{side}-toe-{toe}", along_x(((-5.51, toe_y, .225, .058, .085),
+                                                (-5.39, toe_y, .24, .105, .125),
+                                                (-5.17, toe_y, .25, .126, .139),
+                                                (-4.93, toe_y, .265, .129, .143)),
+                                               roughness=.015, seed=73+toe,
+                                               bedding=.004, pitting=.006),
                  "weathered-limestone")
         part(f"{side}-haunch", along_x(((1.90, sign*1.03, 1.03, .37, .56),
                                        (2.40, sign*1.04, 1.07, .62, .81),
                                        (3.14, sign*1.02, 1.03, .67, .84),
                                        (3.75, sign*.98, .84, .50, .65),
                                        (4.08, sign*.94, .60, .18, .31)),
-                                      roughness=.155, seed=151, exponent=2.25))
+                                      roughness=.155, seed=151, exponent=2.19,
+                                      bedding=.086, pitting=.057))
     part("curved-tail", along_x(((2.1, -1.04, .61, .14, .15),
                                 (2.7, -1.26, .58, .16, .17),
                                 (3.4, -1.38, .65, .15, .15),
                                 (3.86, -1.27, .74, .13, .12),
                                 (4.13, -1.12, .82, .09, .09)),
-                               roughness=.025, seed=156))
+                               roughness=.025, seed=156, bedding=.012,
+                               pitting=.009))
     # Broad rounded nemes headdress sits behind a separate sculpted face.
     part("nemes-hood", along_z(((2.70, -3.40, 0, .60, .79),
                                 (3.20, -3.49, 0, .70, .93),
@@ -449,7 +481,8 @@ def sphinx_assembly(*, prefix: str, length: float = 10.5,
                     (4.00, -3.91, 0, .53, .52),
                     (4.23, -3.90, 0, .46, .49),
                     (4.38, -3.88, 0, .35, .42)),
-                   roughness=.012, seed=97, exponent=2.45)
+                   roughness=.012, seed=97, exponent=2.45,
+                   subdivisions=8, bedding=.002, pitting=.004)
     part("face", _sculpt_face_relief(face, scale_x=x, scale_y=y, scale_z=z))
     for side, sign in (("left", -1), ("right", 1)):
         part(f"nemes-{side}-lappet", along_z(((2.18, -3.43, sign*.74, .10, .20),

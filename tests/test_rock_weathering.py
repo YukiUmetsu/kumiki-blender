@@ -47,6 +47,29 @@ class RockWeatheringTests(unittest.TestCase):
                                  (0, 0))
                 self.assertGreater(report.volume_m3, 0)
 
+    def test_differential_bedding_and_mineral_pits_are_real_closed_relief(self):
+        source = loft_elliptical_sections(
+            ((0, 0, 1.1, 1.1, .78), (.8, 0, 1.1, 1.1, .78),
+             (1.6, 0, 1.1, 1.1, .78), (2.4, 0, 1.1, 1.1, .78)),
+            axis="x", radial_segments=64, subdivisions=8)
+        kwargs = dict(axis="x", radial_segments=64, strength=.025,
+                      seed=40, strata_spacing=.27)
+        gentle = erode_loft(source, **kwargs)
+        fractured = erode_loft(source, bedding_strength=.075,
+                               pitting_strength=.045, **kwargs)
+        self.assertEqual(fractured,
+                         erode_loft(source, bedding_strength=.075,
+                                    pitting_strength=.045, **kwargs))
+        self.assertEqual(fractured.vertices[:64], source.vertices[:64])
+        self.assertEqual(fractured.vertices[-64:], source.vertices[-64:])
+        differences = [math.dist(a, b) for a, b in zip(
+            gentle.vertices[64:-64], fractured.vertices[64:-64])]
+        self.assertGreater(max(differences), .045)
+        self.assertGreater(sum(d > .004 for d in differences), 80)
+        report = audit_mesh(fractured)
+        self.assertEqual((report.boundary_edges, report.nonmanifold_edges), (0, 0))
+        self.assertGreater(report.volume_m3, 0)
+
     def test_topographic_bedrock_and_chipped_casing_are_watertight(self):
         rock = rough_bedrock_slab(12, 4, .6, roughness=.16, seed=31)
         self.assertGreater(len(rock.vertices), 500)
@@ -113,7 +136,11 @@ class RockWeatheringTests(unittest.TestCase):
                        {"axis": "z", "radial_segments": 7, "strength": .1},
                        {"axis": "z", "radial_segments": 16, "strength": -1},
                        {"axis": "z", "radial_segments": 16,
-                        "strength": float("nan")}):
+                        "strength": float("nan")},
+                       {"axis": "z", "radial_segments": 16,
+                        "strength": .1, "bedding_strength": -.01},
+                       {"axis": "z", "radial_segments": 16,
+                        "strength": .1, "pitting_strength": float("inf")}):
             with self.subTest(kwargs=kwargs), self.assertRaises(GeometryError):
                 erode_loft(loft, **kwargs)
         for kwargs in ({"roughness": -.1}, {"roughness": .4},

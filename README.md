@@ -123,7 +123,7 @@ The demonstration is **an original architectural detail study**, not a measured 
 
 - `pyramid_frustum()` and `pyramid_casing_stone()` create **closed tapered volumes**, with a recessed limestone core, real staggered vertical/horizontal mortar joints, individually selectable casing stones and a capstone. `pyramid_assembly()` exposes dimensions, course count, stone width, casing fraction and gaps.
 - `loft_elliptical_sections()` sculpts organic solids along X/Y/Z using independently adjustable radii, offsets and cubic interpolation; it is reusable for statuary, carved rock, animal anatomy and terrain features.
-- `sphinx_assembly()` composes smooth lion torso, chest, forepaws/toes, haunches, curled tail, royal face and nemes-style headdress into named editable components. An **optional** `restored_nose=True` allows an interpretive reconstruction variant.
+- `sphinx_assembly()` composes an anatomically shaped, differentially eroded lion torso, chest, four digits per forepaw, haunches, curled tail, carved face and nemes-style headdress into named editable components. An **optional** `restored_nose=True` allows an interpretive reconstruction variant.
 
 Preview the miniature combined study without Blender:
 
