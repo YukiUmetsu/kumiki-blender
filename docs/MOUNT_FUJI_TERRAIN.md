@@ -38,6 +38,21 @@ Iconic visual references (not copied or distributed as textures):
 - [Japan National Tourism Organization: cherry blossoms](https://www.japan.travel/en/see-and-do/cherry-blossom/)
 - [Fushimi Inari Taisha: shrine and torii](https://inari.jp/en/)
 
+### Photo-led color and material pass
+
+The color system is **hand-authored and baked into mesh color attributes** so it
+is retained in the portable GLBs, even in offline viewers. No photograph,
+stock material or third-party texture is embedded or redistributed.
+
+| Reference (inspiration only) | Observed treatment | Model interpretation |
+| --- | --- | --- |
+| [JNTO / Fuji-Hakone-Izu National Park, Ochudo](https://www.japan.travel/national-parks/parks/fuji-hakone-izu/see-and-do/ochudo-trek-between-heaven-earth-mtfuji-pilgrimage-trail/) | Dense conifer green below exposed dark volcanic scree | Green lower forest belt, oxidized warm-brown rock seams, cool basalt gullies |
+| [JNTO / cherry blossoms](https://www.japan.travel/en/spot/1956/) | Mostly white/blush floral clusters, darker limbs, pink petals below trees | Five subtly different pink/ivory blossom shades, sparse green leaf buds and scattered petals |
+| [Fushimi Inari Taisha](https://inari.jp/en/) | Vivid vermilion shrine timber and contrasting dark beam | Warm red lacquer with softened edges, black curved kasagi and metallic details |
+
+Season, forest density and snow coverage are **art direction**, not a satellite
+or botanical claim; the realistic variant's elevations remain unchanged.
+
 ## Realistic topographic relief
 
 This asset is a geographically measured **relief mesh**, not an idealized cone.

@@ -55,6 +55,16 @@ def _material(bpy: Any, name: str, rgb: tuple[float, float, float], *,
     return mat
 
 
+def _blend(a: tuple[float,float,float], b: tuple[float,float,float], t: float) -> tuple[float,float,float]:
+    t=max(0.,min(1.,t))
+    return tuple(a[i]*(1-t)+b[i]*t for i in range(3))
+
+
+def _ease(start: float, end: float, value: float) -> float:
+    t=max(0.,min(1.,(value-start)/(end-start)))
+    return t*t*(3-2*t)
+
+
 def _mesh(bpy: Any, collection: Any, name: str, vertices: list, faces: list,
           material: Any, *, colors: list | None = None, smooth: bool = False) -> Any:
     mesh = bpy.data.meshes.new(name)
@@ -110,12 +120,34 @@ def _plinth(bpy: Any, model: Any, mats: dict) -> list:
     faces += [tuple(reversed(tuple(range(n)))), tuple((len(levels)-1)*n+j for j in range(n))]
     plaque = _mesh(bpy, model, "Pedestal / beveled smoked basalt display plaque",
                    verts, faces, mats["obsidian"])
-    # Top is rough mossy spring ground; thin inset leaves a dark lacquer rim.
-    ground_verts = [(0, 0, .565)]
-    ground_verts.extend((*_rounded_rectangle(j/n, 9.62, 8.02, 1.0), .565)
-                        for j in range(n))
-    ground = _mesh(bpy, model, "Ground / Japanese spring-green diorama floor",
-                   ground_verts, [(0,j+1, (j+1)%n+1) for j in range(n)], mats["ground"])
+    # Multiple inset contour rings support a dappled, vertex-painted ground.
+    # The upper plane is flat; only its albedo is heterogeneous.
+    def spring_color(x: float, y: float) -> tuple[float,float,float]:
+        moss=.45+.19*math.sin(x*1.8+y*2.5)*math.sin(y*2.7-x*1.9)
+        moss+=.13*math.sin(x*5.7+y*4.2)
+        base=_blend((.145,.267,.142),(.30,.328,.16),moss)
+        leaf_litter=.18+.16*math.sin(x*2.3+y*.5)
+        base=_blend(base,(.34,.242,.14),max(0,leaf_litter)*.50)
+        path=math.exp(-((x-1.76-.08*math.sin(y*1.5))/.43)**2)
+        path*=_ease(-4.0,-3.15,y)*(1-_ease(-1.7,-.75,y))
+        return _blend(base,(.39,.322,.226),path*.76)
+    bands=8
+    ground_verts=[(0,0,.565)]
+    ground_colors=[spring_color(0,0)]
+    for k in range(1,bands+1):
+        fraction=k/bands
+        for j in range(n):
+            x,y=_rounded_rectangle(j/n,9.62*fraction,8.02*fraction,1.0*fraction)
+            ground_verts.append((x,y,.565))
+            ground_colors.append(spring_color(x,y))
+    ground_faces=[(0,j+1,(j+1)%n+1) for j in range(n)]
+    for k in range(bands-1):
+        inner=1+k*n;outer=inner+n
+        for j in range(n):
+            neighbor=(j+1)%n
+            ground_faces.append((inner+j,outer+j,outer+neighbor,inner+neighbor))
+    ground = _mesh(bpy, model, "Ground / dappled moss, ochre earth and pilgrim approach",
+                   ground_verts,ground_faces,mats["ground_vertex"],colors=ground_colors)
     return [plaque, ground]
 
 
@@ -154,13 +186,16 @@ def _mountain(bpy: Any, model: Any, mats: dict, divisions: int) -> list:
             radius = _fuji_radius(a)*u
             h = _fuji_height(u, a)
             verts.append((radius*math.cos(a), .65+radius*.89*math.sin(a), h))
-            value = math.sin(a*13+u*24)*math.sin(a*27-u*15)
-            if u > .75:
-                base = (.205,.266,.232)
-            else:
-                base = (.215,.243,.282)
-            t = .8 + .13*value + .07*math.sin(a*7+u*11)
-            colors.append(tuple(min(.9,max(0.,v*t)) for v in base))
+            value=math.sin(a*13+u*24)*math.sin(a*27-u*15)
+            # Muted blue basalt near the crest; rust-brown scree and exposed
+            # gullies at middle altitudes; conifer green at the foot.
+            base=_blend((.17,.196,.238),(.305,.245,.205),_ease(.24,.64,u))
+            tree_line=(.70+.053*math.sin(7*a+.6)+.03*math.sin(17*a-1.4)
+                       +.024*math.sin(4*a+.7))
+            base=_blend(base,(.10,.225,.135),_ease(tree_line,tree_line+.15,u))
+            groove=max(0.,math.sin(23*a+2*math.sin(3*a)+u*2.8))**8
+            t=.88+.20*value+.09*math.sin(7*a+u*11)-.20*groove
+            colors.append(tuple(min(.93,max(.018,v*t)) for v in base))
     for k in range(radial):
         for j in range(n):
             nx = (j+1)%n
@@ -182,8 +217,9 @@ def _mountain(bpy: Any, model: Any, mats: dict, divisions: int) -> list:
             radius = _fuji_radius(a)*u
             z = _fuji_height(u,a)+.015
             cap_verts.append((radius*math.cos(a), .65+radius*.89*math.sin(a), z))
-            shade = .96-.14*v + .065*math.sin(7*a+v*3) + .025*math.sin(23*a)
-            cap_colors.append((min(1.,shade),min(1.,shade*.979),min(1.,shade*1.01)))
+            shade=.97-.11*v+.047*math.sin(7*a+v*3)+.018*math.sin(23*a)
+            ice=_blend((.83,.90,.96),(.96,.96,.925),.55+.25*math.sin(a*4.2+v*6))
+            cap_colors.append(tuple(min(1.,max(.4,c*shade)) for c in ice))
     for k in range(snow_rows):
         for j in range(n):
             nx=(j+1)%n
@@ -211,7 +247,12 @@ def _box(bpy: Any, model: Any, name: str, center: tuple, size: tuple, mat: Any) 
        for dz in (-1,1) for dy in (-1,1) for dx in (-1,1)]
     f=[(0,1,3,2),(4,6,7,5),(0,4,5,1),
        (2,3,7,6),(0,2,6,4),(1,5,7,3)]
-    return _mesh(bpy,model,name,v,f,mat)
+    obj=_mesh(bpy,model,name,v,f,mat)
+    if name.startswith("Torii / ") and "insignia" not in name:
+        bevel=obj.modifiers.new("Softly rounded lacquer and timber edges", "BEVEL")
+        bevel.width=.014
+        bevel.segments=2
+    return obj
 
 
 def _tube(bpy: Any, collection: Any, name: str, points: list[tuple],
@@ -317,7 +358,7 @@ def _sakura(bpy: Any, model: Any, mats: dict, *, origin: tuple[float,float],
         center=(tip[0],tip[1],tip[2]+rng.uniform(-.06,.12)*scale)
         blobs.append((center,radius))
     cloud_v=[];cloud_f=[];cloud_colors=[]
-    palette=((.99,.52,.66),(.98,.69,.78),(.99,.81,.86),(.93,.44,.59),(.96,.72,.79))
+    palette=((.98,.59,.69),(.99,.75,.81),(.997,.87,.88),(.92,.46,.57),(.97,.78,.79))
     for index,(center,rad) in enumerate(blobs):
         base=len(cloud_v)
         lat_count=7;lon_count=12
@@ -375,6 +416,30 @@ def _sakura(bpy: Any, model: Any, mats: dict, *, origin: tuple[float,float],
             flower_f.append((base,j0+3,base+1+((j+1)%5)*4))
     objects.append(_mesh(bpy,model,"Sakura / hundreds of individually modelled five-petal flowers",
                          flower_v,flower_f,mats["blossom_vertex"],colors=flower_colors))
+    # A few young leaf-buds behind blossom clusters bring spring tree color
+    # and the characteristic serrated, lanceolate leaf silhouette.
+    leaf_v=[];leaf_f=[];leaf_colors=[]
+    for k in range(105):
+        center,rad=blobs[rng.randrange(len(blobs))]
+        a=rng.uniform(0,math.tau)
+        z=rng.uniform(-.38,.38)
+        x=center[0]+rad*1.03*math.cos(a)
+        y=center[1]+rad*.80*math.sin(a)
+        z=center[2]+rad*.60*z
+        leaf_len=rng.uniform(.045,.11)*scale
+        direction=(math.cos(a),math.sin(a),rng.uniform(-.4,.5))
+        side=(-direction[1],direction[0],0)
+        base=len(leaf_v)
+        leaf_v.extend([(x,y,z),
+                       (x+side[0]*leaf_len*.29,y+side[1]*leaf_len*.29,z+.016*scale),
+                       (x+direction[0]*leaf_len,y+direction[1]*leaf_len,
+                        z+direction[2]*leaf_len),
+                       (x-side[0]*leaf_len*.29,y-side[1]*leaf_len*.29,z+.016*scale)])
+        hue=.85+.18*rng.random()
+        leaf_colors.extend([(.11*hue,.28*hue,.09*hue)]*4)
+        leaf_f.extend([(base,base+1,base+2),(base,base+2,base+3)])
+    objects.append(_mesh(bpy,model,"Sakura / scattered olive spring leaf buds",
+                         leaf_v,leaf_f,mats["ground_vertex"],colors=leaf_colors))
     return objects
 
 
@@ -397,6 +462,45 @@ def _path_and_rocks(bpy: Any, model: Any, mats: dict) -> list:
         s=rng.uniform(.07,.18)
         objects.append(_box(bpy,model,"Garden / weathered volcanic stone",
                             (x,y,.591),(s*1.7,s*1.2,s*.45),mats["stone"]))
+    # Fallen petals are individually modelled as two triangular planes and
+    # scattered around the two flowering trees, not baked into a photograph.
+    pinks=((.95,.63,.71),(.97,.79,.81),(.85,.42,.53),(.99,.86,.84))
+    v=[];f=[];colors=[]
+    for i in range(280):
+        ox,oy=((-3.1,-1.45) if i%2==0 else (3.48,.35))
+        a=rng.uniform(0,math.tau)
+        r=rng.uniform(.12,1.28)
+        x,y=ox+r*math.cos(a),oy+.72*r*math.sin(a)
+        if abs(x)>4.4 or abs(y)>3.7:continue
+        length=rng.uniform(.022,.066)
+        nx,ny=math.cos(a),math.sin(a)
+        b=len(v)
+        v.extend([(x,y,.576),(x+length*nx,y+length*ny,.577),
+                  (x+.32*length*ny,y-.32*length*nx,.578),
+                  (x-.32*length*ny,y+.32*length*nx,.578)])
+        colors.extend([pinks[rng.randrange(len(pinks))]]*4)
+        f.extend([(b,b+2,b+1),(b,b+1,b+3)])
+    objects.append(_mesh(bpy,model,"Garden / fallen blush and ivory sakura petals",
+                         v,f,mats["blossom_vertex"],colors=colors))
+    # Small grass tufts are shaded tapered geometry, balanced away from the
+    # shrine path; their close-range profile breaks the tabletop flatness.
+    stems=[];stemfaces=[];stemcolors=[]
+    for i in range(170):
+        a=rng.uniform(0,math.tau)
+        r=rng.uniform(3.4,4.35)
+        x,y=r*math.cos(a),r*.83*math.sin(a)
+        if abs(x)>4.5 or abs(y)>3.7 or (abs(x-1.75)<1 and y< -2.7):continue
+        s=rng.uniform(.055,.16)
+        for j in range(3):
+            direction=a+j*math.tau/3
+            b=len(stems)
+            stems.extend([(x,y,.578),(x+.14*s*math.cos(direction),y+.14*s*math.sin(direction),.58),
+                          (x+.9*s*math.cos(direction),y+.9*s*math.sin(direction),.58+s*.85)])
+            stemfaces.append((b,b+1,b+2))
+            hue=rng.uniform(.8,1.15)
+            stemcolors.extend([(.15*hue,.28*hue,.09*hue)]*3)
+    objects.append(_mesh(bpy,model,"Garden / low alpine-grass tufts and dry sedges",
+                         stems,stemfaces,mats["ground_vertex"],colors=stemcolors))
     return objects
 
 
@@ -423,18 +527,21 @@ def build_iconic_fuji_scene(destination: Path, *, detail: str = "standard",
     camera=_studio(bpy,scene,studio)
     # Softer warm spring daylight rather than the survey model's cold winter.
     sun=next(o for o in studio.objects if o.type=="LIGHT")
-    sun.data.energy=2.7
+    sun.data.energy=3.0
     sun.rotation_euler=(math.radians(28),math.radians(-28),math.radians(-25))
+    bg=next(n for n in scene.world.node_tree.nodes if n.type=="BACKGROUND")
+    bg.inputs["Color"].default_value=(.37,.52,.68,1)
+    bg.inputs["Strength"].default_value=.70
     mats={
         "obsidian":_material(bpy,"Japan / dark basalt and lacquer",(.055,.067,.077),roughness=.55,metallic=.16),
-        "ground":_material(bpy,"Japan / warm moss and pale grass",(.22,.29,.20),roughness=.94),
+        "ground_vertex":_vertex_material(bpy,"Japan / moss, volcanic scree and spring garden"),
         "flank_vertex":_vertex_material(bpy,"Japan / blue-grey volcanic Fuji ridges"),
         "snow_vertex":_vertex_material(bpy,"Japan / alpine snow ivory and blue"),
         "crater":_material(bpy,"Japan / hollow summit scree",(.19,.23,.26)),
-        "vermilion":_material(bpy,"Japan / shuiro vermilion lacquer",(.73,.085,.052),roughness=.33),
+        "vermilion":_material(bpy,"Japan / warm vermilion painted timber",(.83,.115,.062),roughness=.40),
         "charcoal":_material(bpy,"Japan / black polished kasagi",(.055,.045,.05),roughness=.32),
         "gold":_material(bpy,"Japan / burnished brass details",(.55,.35,.11),roughness=.35,metallic=.68),
-        "bark":_material(bpy,"Japan / aged cherry-bark umber",(.205,.114,.119),roughness=.94),
+        "bark":_material(bpy,"Japan / aged cherry-bark umber",(.21,.116,.082),roughness=.94),
         "blossom_vertex":_vertex_material(bpy,"Japan / multi-hue sakura petals"),
         "stone":_material(bpy,"Japan / moss-flecked granite",(.33,.33,.31),roughness=.95),
     }

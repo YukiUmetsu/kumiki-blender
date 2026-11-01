@@ -9,7 +9,7 @@ import unittest
 
 from kumiki_blender.cli import main
 from kumiki_blender.geography.fuji.dem import FujiDem, FujiSpec, load_dem, save_dem
-from kumiki_blender.geography.fuji.blender_scene import plan_fuji_shots, terrain_color
+from kumiki_blender.geography.fuji.blender_scene import _value_noise, plan_fuji_shots, terrain_color
 from kumiki_blender.geography.fuji.iconic_scene import iconic_spec, plan_iconic_shots, _snow_limit
 
 
@@ -57,6 +57,22 @@ class FujiTerrainTests(unittest.TestCase):
         dark = terrain_color(2300, .35, 0, 1)
         white = terrain_color(3750, .12, 0, 0)
         self.assertGreater(sum(white[:3]), sum(dark[:3])*2)
+        forest = terrain_color(1350, .12, 3, 4)
+        self.assertGreater(forest[1], forest[0])
+        self.assertGreater(forest[1], forest[2])
+        scree = terrain_color(2660, .31, 2, -2)
+        self.assertGreater(scree[0], forest[0])
+        self.assertGreater(scree[0], scree[2])
+        self.assertTrue(all(0<=channel<=1 for channel in white))
+
+    def test_forest_noise_deterministic_and_continuous(self):
+        at_point = _value_noise(3.4321, -2.8719)
+        self.assertAlmostEqual(at_point, _value_noise(3.4321, -2.8719))
+        self.assertGreaterEqual(at_point, 0)
+        self.assertLessEqual(at_point, 1)
+        self.assertLess(abs(at_point-_value_noise(3.4322,-2.8718)),.002)
+        # A repeat-free local palette is essential at 26-km view scale.
+        self.assertNotAlmostEqual(at_point,_value_noise(4.4321,-2.8719),places=2)
 
     def test_geographic_samples_in_declared_bounds(self):
         spec = FujiSpec()

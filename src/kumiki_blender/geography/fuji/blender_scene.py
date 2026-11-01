@@ -32,6 +32,31 @@ def _mix(a: tuple[float, float, float], b: tuple[float, float, float], t: float)
     return tuple(a[i]*(1-t)+b[i]*t for i in range(3))
 
 
+def _smoothstep(start: float, end: float, value: float) -> float:
+    t = max(0., min(1., (value-start)/(end-start)))
+    return t*t*(3-2*t)
+
+
+def _value_noise(x: float, y: float) -> float:
+    """Smooth deterministic 2-D noise, avoiding visible trigonometric grids.
+
+    A small procedural albedo texture, never an elevation perturbation. It is
+    evaluated into vertices so GLBs need no external texture or shader nodes.
+    """
+    ix, iy = math.floor(x), math.floor(y)
+    u, v = x-ix, y-iy
+    u, v = u*u*(3-2*u), v*v*(3-2*v)
+
+    def corner(a: int, b: int) -> float:
+        n = (a*374761393+b*668265263+1442695041) & 0xFFFFFFFF
+        n = ((n ^ (n >> 13))*1274126177) & 0xFFFFFFFF
+        return (n ^ (n >> 16))/4294967295
+
+    north=corner(ix,iy)*(1-u)+corner(ix+1,iy)*u
+    south=corner(ix,iy+1)*(1-u)+corner(ix+1,iy+1)*u
+    return north*(1-v)+south*v
+
+
 def terrain_color(height_m: float, slope: float, x: float, y: float) -> tuple[float, float, float, float]:
     """Elevation and exposure-dependent albedo inspired by actual Fuji photos.
 
@@ -39,29 +64,34 @@ def terrain_color(height_m: float, slope: float, x: float, y: float) -> tuple[fl
     This is stylized albedo, not a claim of satellite/snow-cover accuracy.
     """
     # Shared gradients rather than hard rings; no flat-color cut at the tree line.
-    forest = (.078, .148, .114)
-    subalpine = (.21, .245, .18)
-    basalt = (.115, .123, .137)
-    oxidized = (.305, .258, .245)
-    snow = (.84, .88, .91)
-    if height_m < 1800:
-        shade = max(0, min(1, (height_m-1000)/800))
-        c = _mix(forest, subalpine, shade)
-    elif height_m < 2750:
-        c = _mix(subalpine, basalt, min(1, (height_m-1800)/950))
-    else:
-        c = _mix(basalt, oxidized, min(1, (height_m-2750)/1050)*.45)
+    # In reference photographs: a near-black conifer belt, olive scrub near
+    # the tree line, warm oxidized scree, then slate basalt and snow. These
+    # are artistic reflectances, not seasonally exact satellite measurements.
+    forest = (.040, .126, .077)
+    forest_sun = (.135, .238, .120)
+    subalpine = (.215, .255, .137)
+    oxidized = (.295, .191, .150)
+    basalt = (.145, .143, .155)
+    snow = (.89, .935, .961)
+    woods = (.50*_value_noise(x*.74,y*.74)
+             + .32*_value_noise(x*2.2+11.3,y*2.2-8.1)
+             + .18*_value_noise(x*6.1-3.7,y*6.1+4.9))
+    c = _mix(forest, forest_sun, max(.05,min(.85,.08+.95*woods)))
+    c = _mix(c, subalpine, _smoothstep(1700,2350,height_m))
+    c = _mix(c, oxidized, _smoothstep(2140,2710,height_m))
+    c = _mix(c, basalt, _smoothstep(2610,3280,height_m)*.84)
 
     # First Hōei crater: exposed reddish-grey pyroclastic scree on steeper
     # walls, not the vegetated tone of the surrounding lower flanks.
     hoei_distance = math.hypot(x-1.61,y+2.18)
     if hoei_distance < 1.9 and height_m > 2050:
         influence = min(1., (1.9-hoei_distance)/.75)
-        scree = (.235,.196,.183)
-        c = _mix(c, scree, .35*influence*min(1.,slope*1.7+.20))
+        scree = (.39,.245,.178)
+        c = _mix(c, scree, .56*influence*min(1.,slope*1.7+.20))
 
     # Fine, deterministic pigmentation: small enough not to falsify geometry.
-    grain = (math.sin(x*31.3+y*13.1)*math.sin(y*37.2-x*19.1))*.05
+    grain = (.34*(_value_noise(x*7.3+5.2,y*7.3-8.2)-.5)
+             + .22*(_value_noise(x*24.1,y*24.1)-.5))
     c = tuple(max(.0, min(1., v*(1+grain))) for v in c)
     # Gully-facing slopes tend to expose volcanic scree; irregular snow boundary
     # has radial fingers instead of a flat painted white circular band.
@@ -70,8 +100,11 @@ def terrain_color(height_m: float, slope: float, x: float, y: float) -> tuple[fl
                math.sin(bearing*17 + y*.8)*65 + math.sin(x*2.2+y*2.7)*28)
     snowline = 2820 + fingers + min(.45, slope)*260
     coverage = max(0., min(1., (height_m-snowline)/390))
-    coverage *= max(.25, 1-slope*.7)
-    c = _mix(c, snow, coverage*.95)
+    coverage *= max(.32, 1-slope*.7)
+    # Wind-exposed stone seams persist through the snow cover.
+    volcanic_seam = max(0.,math.sin(bearing*31+math.sin(bearing*7)+x*.38))**7
+    coverage *= (1-.34*volcanic_seam)
+    c = _mix(c, snow, coverage*.97)
     return (*c, 1.)
 
 
