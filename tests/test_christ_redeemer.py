@@ -24,8 +24,25 @@ class ChristRedeemerTests(unittest.TestCase):
         syntax = ast.parse(SCRIPT.read_text(encoding="utf-8"))
         definitions = {node.name for node in syntax.body
                        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))}
-        self.assertTrue({"build", "face", "robe", "arms", "verify",
+        self.assertTrue({"build", "build_head_study", "face", "robe", "arms", "verify",
                          "views", "export", "main"} <= definitions)
+
+    @unittest.skipUnless(os.environ.get("KUMIKI_BLENDER_BINARY"),
+                         "Set KUMIKI_BLENDER_BINARY for the Blender-only face study")
+    def test_head_anatomy_clay_study_is_independent_of_full_body(self):
+        with tempfile.TemporaryDirectory() as directory:
+            metrics = Path(directory) / "head-study.json"
+            cmd = [os.environ["KUMIKI_BLENDER_BINARY"], "--background",
+                   "--factory-startup", "--python-exit-code", "1",
+                   "--python", str(SCRIPT), "--", "--head-study",
+                   "--verify", "--metrics", str(metrics)]
+            process = subprocess.run(cmd, capture_output=True, text=True, timeout=75)
+            self.assertEqual(process.returncode, 0, process.stdout[-1800:] +
+                             process.stderr[-1800:])
+            report = json.loads(metrics.read_text())
+            self.assertEqual(report["study"], "head")
+            self.assertGreater(report["head_surface_vertices"], 30000)
+            self.assertLess(report["mesh_count"], 30)
 
     @unittest.skipUnless(os.environ.get("KUMIKI_BLENDER_BINARY"),
                          "Set KUMIKI_BLENDER_BINARY for the live Blender QA test")
@@ -61,7 +78,8 @@ class ChristRedeemerTests(unittest.TestCase):
             self.assertGreater(report["vertex_count"], 15000)
             self.assertEqual(report["pedestal_sides"], 8)
             self.assertEqual(report["mosaic_images"], 3)
-            self.assertGreater(report["uv_mesh_count"], 70)
+            self.assertGreaterEqual(report["uv_mesh_count"], 60)
+            self.assertEqual(report["uv_mesh_count"], report["mesh_count"])
             portable = audit_glb(output, require_pbr_textures=True)
             self.assertEqual(portable["external_references"], 0)
             self.assertGreater(portable["meshes"], 60)

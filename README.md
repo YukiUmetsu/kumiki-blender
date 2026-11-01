@@ -9,7 +9,7 @@ adds a separately authored Art Deco landmark study: surveyed 29.4 m outstretched
 span, layered draped garment, integrated facial relief, fused stone-sculpted
 hands, a chamfered-square chapel pedestal, and embedded soapstone PBR textures. Its
 standalone Blender script exports GLB/`.blend` and
-seven front/profile/detail QA views with dimensional and mesh winding checks.
+eight front/profile/detail QA views with dimensional and mesh winding checks.
 It remains a sculptural study, not a photo-accurate model.
 
 ## Find models in the categorized asset catalog

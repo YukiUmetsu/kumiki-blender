@@ -54,7 +54,23 @@ detail, UV coverage, and fully portable PBR texture embedding.
 
 For a fast close-up iteration, append `--shot head_front --shot head_low`
 to render just those views. Other choices are `front`, `profile`,
-`three_quarter`, `head_profile`, and `hand_detail`.
+`three_quarter`, `head_profile`, `head_three_quarter`, and `hand_detail`.
+
+For fast anatomy-first experimentation, render the **independent neutral clay
+head**, before spending time on the full-scale textured scene:
+
+```bash
+blender --background --factory-startup --python-exit-code 1 \
+  --python scripts/landmarks/christ_redeemer.py -- \
+  --head-study --verify --views .review/christ/head-clay \
+  --shot head_front --shot head_profile --shot head_three_quarter \
+  --shot head_low --size 850 --samples 24
+```
+
+These camera angles expose different faults: straight-on symmetry, nose/forehead
+profile, three-quarter facial volume, and a low-angle view closer to the
+monument photographs. The clay proof shares the exact same head geometry and
+pose as the full build. The generated QA folder is excluded from git.
 
 Run the live integration test with:
 
@@ -74,16 +90,22 @@ surface**, with continuous upper eyelid contours and finer incised detailing.
 The torso's lower robe was widened against photo/mesh silhouettes, and the
 hands use high-resolution volumetric unions with the artist-documented 3.20 m
 reach, while the fingers stay fused rather than forming separate rods. The
-latest facial sculpt uses a denser 38,560-vertex surface, refined nostril
-separation, and a gentler eyelid contour. It also softens the
-chin/cheek beard masses, narrows the nose, and removes floating forehead and
-cheek incisions. The head and hands can be examined separately using the
-close-up QA cameras, including a low-angle face view matched to reference photos.
+latest facial sculpt uses a dense 38,560-vertex unified head surface. A smooth
+cubic cage now removes visible piecewise-linear bands around temples and jaw;
+the narrowed lower-face silhouette is framed by a fuller hair curtain, and the
+mouth follows a downturned carved contour. The latest reference review removed
+unsupported beard ridges, artificial chin grain, and exposed separate ear
+primitives, and simplified the nose and closed eyelids. A clay-only head study
+and dedicated three-quarter camera make regressions inexpensive to see before
+full export. The head and hands can also be examined separately using the
+close-up QA cameras, including a low-angle face view based on reference photos.
 The soapstone color-map variation was increased to reveal its triangular
 tesserae at close viewing distance without exaggerating grout depth.
 
-This remains an original parametric reconstruction. Its stylized anatomical
-geometry is not a photogrammetric replica, and the script deliberately does not
-redistribute a third-party scan. Photo-fidelity at macro face, hair, fingers,
-and textile creases would still require a dedicated sculpting and multi-angle
-reference-matching pass with human approval.
+This remains an original parametric reconstruction, **not an approved
+photo-faithful sculpt**. Its anatomical geometry is not a photogrammetric
+replica, and the script deliberately does not redistribute a third-party scan.
+Photoreal facial likeness, strands/hairline, digits, and textile creases still
+require more sculpting against licensed, consistently oriented multi-view images
+and human acceptance. The clay QA workflow is deliberately retained to expose
+those remaining discrepancies rather than hiding them under materials.

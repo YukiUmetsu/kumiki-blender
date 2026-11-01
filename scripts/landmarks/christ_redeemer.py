@@ -542,32 +542,53 @@ def hands(side):
 
 
 HEAD = [
-    (34.02,.25,.27,-.03),(34.23,.68,.59,-.05),(34.47,.98,.78,-.08),
-    (34.82,1.07,.96,-.10),(35.30,1.24,1.12,-.08),
-    (35.85,1.47,1.22,0),(36.50,1.52,1.24,.05),
+    (34.02,.20,.27,-.03),(34.23,.48,.59,-.05),(34.47,.71,.78,-.08),
+    (34.82,.91,.96,-.10),(35.30,1.09,1.12,-.08),
+    (35.85,1.37,1.22,0),(36.50,1.52,1.24,.05),
     (37.15,1.43,1.18,.10),(37.65,1.03,.91,.11),
     (37.95,.38,.40,.12),(38.0,.045,.07,.12),
 ]
 
 
 def head_profile(z):
-    for low,high in zip(HEAD[:-1],HEAD[1:]):
+    # A piecewise-linear loft left visible facet bands around the jaw and
+    # temples despite a dense vertex mesh. Interpolate a C1-continuous cage:
+    # both the face and its framing hair share this anatomical silhouette.
+    for i,(low,high) in enumerate(zip(HEAD[:-1],HEAD[1:])):
         if low[0]<=z<=high[0]:
-            t=(z-low[0])/(high[0]-low[0])
-            return tuple(low[k]*(1-t)+high[k]*t for k in (1,2,3))
+            span=high[0]-low[0]
+            t=(z-low[0])/span
+            t2,t3=t*t,t*t*t
+            h00=2*t3-3*t2+1
+            h10=t3-2*t2+t
+            h01=-2*t3+3*t2
+            h11=t3-t2
+            def slope(j,k):
+                before=HEAD[max(0,j-1)]
+                after=HEAD[min(len(HEAD)-1,j+1)]
+                return (after[k]-before[k])/(after[0]-before[0])
+            return tuple(h00*low[k]+h10*span*slope(i,k)+
+                         h01*high[k]+h11*span*slope(i+1,k)
+                         for k in (1,2,3))
     raise ValueError(z)
 
 
+def mouth_contour_z(x):
+    """Landowski's downturned, arched closed mouth: calm, not smiling."""
+    u=min(1.,abs(x)/.56)
+    return 35.64-.125*u**1.55
+
+
 def face():
-    sphere("Head | broad tendinous neck",(0,.20,33.52),(.93,.79,1.34))
+    sphere("Head | broad tendinous neck",(0,.20,33.52),(.87,.79,1.29))
     # Densify the face loft to sculpt cheekbones, chin and jaw as one surface.
     # Surface folds are smooth Gaussian volumes, not glued-on primitive cheeks.
     sampled=[]
     for low,high in zip(HEAD[:-1],HEAD[1:]):
         for j in range(24):
-            t=j/24
-            sampled.append(tuple(low[k]*(1-t)+high[k]*t for k in range(4)))
-    sampled.append(HEAD[-1])
+            z=low[0]+(high[0]-low[0])*j/24
+            sampled.append((z,*head_profile(z)))
+    sampled.append((HEAD[-1][0],*head_profile(HEAD[-1][0])))
     rings=[]
     for z,rx,ry,cy in sampled:
         ring=[]
@@ -579,32 +600,44 @@ def face():
                 # Integrate the full facial relief into the head surface.
                 # Features are smooth local displacements of the same manifold,
                 # eliminating the stacked cylinder/ball appearance in profile.
-                cheek=.24*math.exp(-((abs(x)-.83)/.43)**2-((z-35.97)/.54)**2)
-                jaw=.19*math.exp(-((abs(x)-.82)/.42)**2-((z-35.24)/.52)**2)
-                cheek_hollow=.12*math.exp(-((abs(x)-.82)/.32)**2-((z-35.48)/.31)**2)
-                chin=.31*math.exp(-(x/.77)**4-((z-34.73)/.36)**2)
-                brow=.28*math.exp(-((abs(x)-.67)/.46)**2-((z-37.18)/.14)**2)
-                upper_lid=.11*math.exp(-((abs(x)-.69)/.35)**2-((z-36.98)/.080)**2)
-                lower_lid=.063*math.exp(-((abs(x)-.68)/.35)**2-((z-36.77)/.08)**2)
-                eye_socket=.27*math.exp(-((abs(x)-.69)/.41)**2-((z-36.91)/.22)**2)
-                nose_bridge=.34*math.exp(-(x/.21)**2-((z-36.65)/.50)**2)
-                nose_tip=.39*math.exp(-(x/.235)**2-((z-36.16)/.165)**2)
-                nostril_wing=.16*math.exp(-((abs(x)-.26)/.13)**2-((z-36.07)/.12)**2)
-                nostril_cavity=.145*math.exp(-((abs(x)-.25)/.075)**2-((z-36.012)/.049)**2)
-                septum=.095*math.exp(-(x/.095)**2-((z-35.99)/.074)**2)
-                philtrum=.043*math.exp(-((abs(x)-.135)/.08)**2-((z-35.88)/.16)**2)
-                top_lip=.12*math.exp(-(x/.49)**2-((z-35.76)/.095)**2)
-                bottom_lip=.115*math.exp(-(x/.47)**2-((z-35.56)/.11)**2)
-                mouth_crease=.09*math.exp(-(x/.49)**2-((z-35.66)/.047)**2)
-                jaw_beard=.080*math.exp(-((z-35.13)/.43)**2)*math.exp(-(x/.95)**6)
-                side_beard=.092*math.exp(-((abs(x)-1.00)/.26)**2-((z-35.44)/.55)**2)
-                beard_tip=.094*math.exp(-(x/.44)**2-((z-34.54)/.26)**2)
-                beard_mask=min(1.,(jaw_beard+side_beard+beard_tip)/.22)
-                carved_grain=.009*beard_mask*(.6*math.cos(33*x+8*z)+
-                                                .4*math.cos(21*x-12*z))
+                cheek=.24*math.exp(-((abs(x)-.83)/.47)**2-((z-35.97)/.64)**2)
+                jaw=.13*math.exp(-((abs(x)-.82)/.46)**2-((z-35.24)/.57)**2)
+                cheek_hollow=.085*math.exp(-((abs(x)-.82)/.33)**2-((z-35.48)/.36)**2)
+                chin=.25*math.exp(-(x/.74)**4-((z-34.73)/.40)**2)
+                # Broad eyebrow planes and a shallow closed-eye sculpt. A
+                # separate arch-relative brow band was tested in clay but
+                # read like floating eyebrows, so the mass stays integrated.
+                brow=.18*math.exp(-((abs(x)-.70)/.53)**4-((z-37.18)/.23)**2)
+                upper_lid=.055*math.exp(-((abs(x)-.68)/.40)**4-((z-36.985)/.095)**2)
+                lower_lid=.035*math.exp(-((abs(x)-.68)/.39)**4-((z-36.75)/.115)**2)
+                eye_socket=.21*math.exp(-((abs(x)-.69)/.44)**4-((z-36.915)/.18)**2)
+                closed_eye=.065*math.exp(-((abs(x)-.69)/.43)**4-((z-36.805)/.12)**2)
+                # A tapered nasal ridge flows into the alae. The previous
+                # narrow Gaussian tip looked like a hooked, glued-on beak.
+                bridge_width=.20+.08*max(0.,min(1.,(36.8-z)/.65))
+                nose_bridge=.33*math.exp(-(x/bridge_width)**2-((z-36.59)/.56)**2)
+                nose_tip=.25*math.exp(-(x/.28)**2-((z-36.17)/.27)**2)
+                nostril_wing=.125*math.exp(-((abs(x)-.29)/.17)**2-((z-36.065)/.15)**2)
+                nostril_cavity=.045*math.exp(-((abs(x)-.28)/.075)**2-((z-36.015)/.065)**2)
+                septum=.070*math.exp(-(x/.11)**2-((z-36.005)/.085)**2)
+                philtrum=.032*math.exp(-((abs(x)-.145)/.10)**2-((z-35.86)/.16)**2)
+                # Sculpt both lips around one shared anatomical mouth contour.
+                # Independent horizontal Gaussians produced a pasted-on smile
+                # even when the actual carved mouth groove curved downward.
+                mouth_z=mouth_contour_z(x)
+                lip_weight=max(0.,1-(abs(x)/.58)**4)
+                top_lip=(.070*lip_weight*
+                         math.exp(-((z-(mouth_z+.085))/.10)**2))
+                bottom_lip=(.047*lip_weight*
+                            math.exp(-((z-(mouth_z-.115))/.115)**2))
+                mouth_crease=(.063*lip_weight*
+                              math.exp(-((z-mouth_z)/.045)**2))
+                # Reference close-ups show a clean, uninterrupted smooth
+                # Art Deco chin. Old beard ridges generated a false combed
+                # texture and a moustache-shaped shadow below the nostrils.
                 y-= (cheek+jaw+chin+brow+upper_lid+lower_lid+
                      nose_bridge+nose_tip+nostril_wing+septum+philtrum+top_lip+bottom_lip+
-                     jaw_beard+side_beard+beard_tip+carved_grain)
+                     closed_eye)
                 y+=eye_socket+mouth_crease+nostril_cavity+cheek_hollow
             ring.append((x,y,z))
         rings.append(ring)
@@ -631,15 +664,12 @@ def face():
             widths.append(.003+.014*math.sin(math.pi*t)**.7)
         shaped_path("Face | %s | upper eyelid contour"%side,
                     top,widths,CARVING,sides=9)
-        # Tuck the outer ear behind the temple plane and hair curtain. Three
-        # separate ellipsoids previously read as stacked beads in profile.
-        sphere("Ear | %s | subtle helix"%side,(side*1.46,.08,36.26),(.092,.11,.28))
-        sphere("Ear | %s | recessed concha"%side,
-               (side*1.535,-.003,36.27),(.022,.035,.115),CARVING)
-    lip=[(-.52,35.53),(-.29,35.64),(0,35.67),(.29,35.64),(.52,35.53)]
+        # The temple and ear are hidden by the stone hair curtain in the
+        # original. Isolated ear spheres read as buttons in profile.
+    lip=[(x,mouth_contour_z(x)) for x in (-.55,-.30,0,.30,.55)]
     shaped_path("Face | carved closed mouth",
                 [(x,face_y(x,z,-.003),z) for x,z in lip],
-                (.003,.009,.012,.009,.003),CARVING)
+                (.002,.006,.008,.006,.002),CARVING)
     # The real monument has a nearly continuous, heavy hair mantle, not
     # individual dangling tubular strands. Construct an open-front shell
     # wrapping the crown and back of the skull, with variable length at the
@@ -648,10 +678,12 @@ def face():
         base=33.16+.30*max(0,math.sin(a))**2+.08*math.sin(5*a+.5)
         z=base+(37.98-base)*t
         rx,ry,cy=head_profile(max(34.02,z))
-        gap=.020+.12*(1-t)**1.4
-        extent=max(rx+gap,1.41*(1-t))
+        # Hair is a substantial curtain framing the cheeks and jaw. Its
+        # earlier edge nearly coincided with the skin, giving a bare egg head.
+        gap=.10+.18*(1-t)**1.4
+        extent=max(rx+gap,1.53*(1-t))
         wave=(.060+.06*(1-t))*math.cos(10*a+2.3*t)+.036*math.sin(17*a-1.2*t)
-        return (extent*math.cos(a),cy+(ry-.025+.49*(1-t)+wave)*math.sin(a),z)
+        return (extent*math.cos(a),cy+(ry-.025+.69*(1-t)+wave)*math.sin(a),z)
 
     nz,na=120,128
     vertices=[]
@@ -763,6 +795,31 @@ def pedestal():
                     (.022,.022),gate,sides=8)
 
 
+def orient_head(head_objects):
+    """Apply one measured gaze transform to every sculpt and hair detail."""
+    pivot=Matrix.Translation((0,0,34.20))
+    tilt=pivot @ Matrix.Rotation(math.radians(22),4,'X') @ pivot.inverted()
+    for obj in head_objects:
+        obj.matrix_world=tilt @ obj.matrix_world
+    peak=max((obj.matrix_world@v.co).z
+             for obj in head_objects for v in obj.data.vertices)
+    height_correction=Matrix.Translation((0,0,38.0-peak))
+    for obj in head_objects:
+        obj.matrix_world=height_correction @ obj.matrix_world
+
+
+def build_head_study():
+    """Fast, neutral clay anatomy proof with no pedestal, body or PBR noise."""
+    global STONE,CARVING
+    bpy.ops.object.select_all(action="SELECT")
+    bpy.ops.object.delete(use_global=False)
+    STONE=mat("Clay | head-only anatomy study",(.68,.68,.66))
+    CARVING=mat("Clay | recessed facial carving",(.65,.65,.63))
+    existing=set(bpy.data.objects)
+    face()
+    orient_head(set(bpy.data.objects)-existing)
+
+
 def build():
     global STONE,CARVING,GRANITE
     bpy.ops.object.select_all(action="SELECT")
@@ -770,7 +827,7 @@ def build():
     mosaic_color,mosaic_roughness,mosaic_normal=soapstone_mosaic()
     STONE=mat("Warm light grey soapstone | 3 cm tesserae",(.665,.67,.635),
               mosaic_color,mosaic_roughness,mosaic_normal)
-    CARVING=mat("Subtle tonal shifts in carved stone recesses",(.56,.57,.55))
+    CARVING=mat("Subtle tonal shifts in carved stone recesses",(.64,.65,.63))
     GRANITE=mat("Pedestal | weathered granite ashlar",(.30,.31,.30),granite_blocks())
     pedestal()
     robe()
@@ -789,16 +846,7 @@ def build():
     face()
     # Side photographs show the gaze tilted downward. Apply one rigid
     # anatomical transform to face, neck, and the complete hair mantle.
-    pivot=Matrix.Translation((0,0,34.20))
-    tilt=pivot @ Matrix.Rotation(math.radians(22),4,'X') @ pivot.inverted()
-    head_objects=set(bpy.data.objects)-existing
-    for obj in head_objects:
-        obj.matrix_world=tilt @ obj.matrix_world
-    peak=max((obj.matrix_world@v.co).z
-             for obj in head_objects for v in obj.data.vertices)
-    height_correction=Matrix.Translation((0,0,38.0-peak))
-    for obj in head_objects:
-        obj.matrix_world=height_correction @ obj.matrix_world
+    orient_head(set(bpy.data.objects)-existing)
 
 
 def verify():
@@ -865,7 +913,9 @@ def verify():
     assert all(3.10 < reach < 3.30 for reach in hand_reach_m.values()), (
         "Each sculpted hand should match Landowski's recorded 3.20 m length")
     assert len(head_ob.data.vertices)>5000,"Face needs a dense sculptable surface"
-    assert result["mosaic_images"]==3 and result["uv_mesh_count"]>70, "PBR mosaic needs glTF UVs"
+    assert (result["mosaic_images"]==3 and result["uv_mesh_count"]>=60 and
+            result["uv_mesh_count"]==result["mesh_count"]), (
+        "Every exported mesh must carry metric UVs for the PBR mosaic")
     return result
 
 
@@ -893,7 +943,10 @@ def views(path,size,samples,selected=None):
     background.inputs["Color"].default_value=(.12,.145,.18,1)
     background.inputs["Strength"].default_value=.7
     scene.eevee.taa_render_samples=samples
-    lights=[((8,-15,43),4800,9),((-10,3,36),5600,8),((9,12,25),2600,7)]
+    # Balanced front key/fill make anatomical asymmetries visible without
+    # throwing the left nostril into the nearly black rear-lit shadow that
+    # obscured our earlier comparisons. A separate rim keeps the silhouette.
+    lights=[((8,-15,43),4800,9),((-10,-11,39),3300,10),((9,12,25),2600,7)]
     for i,(position,energy,width) in enumerate(lights):
         bpy.ops.object.light_add(type="AREA",location=position)
         light=bpy.context.object
@@ -909,6 +962,7 @@ def views(path,size,samples,selected=None):
         ("head_front",(0,-19,36),(0,0,36),6.4),
         ("head_low",(0,-18,32.5),(0,0,36),6.4),
         ("head_profile",(19,0,36),(0,0,36),6.4),
+        ("head_three_quarter",(14,-15,36),(0,0,36),6.4),
         ("hand_detail",(16,-13,30),(12.5,0,29.7),5.5),
     ]
     for name,position,target,scale in shots:
@@ -943,14 +997,25 @@ def main():
     p.add_argument("--views")
     p.add_argument("--metrics")
     p.add_argument("--verify",action="store_true")
+    p.add_argument("--head-study",action="store_true",
+                   help="Clay-only head study for rapid multi-view anatomical QA")
     p.add_argument("--samples",type=int,default=16)
     p.add_argument("--size",type=int,default=720)
     p.add_argument("--shot",action="append",choices=("front","profile","three_quarter",
-                                                   "head_front","head_low","head_profile","hand_detail"),
+                                                   "head_front","head_low","head_profile",
+                                                   "head_three_quarter","hand_detail"),
                    help="Render only selected camera(s); repeat for multiple shots")
     args=p.parse_args(argv)
-    build()
-    metrics=verify()
+    if args.head_study:
+        build_head_study()
+        head=next(ob for ob in bpy.data.objects
+                  if ob.name.startswith("Head | integrated cheekbone"))
+        metrics={"study":"head","head_surface_vertices":len(head.data.vertices),
+                 "mesh_count":sum(ob.type=="MESH" for ob in bpy.data.objects)}
+        assert metrics["head_surface_vertices"]>15000
+    else:
+        build()
+        metrics=verify()
     if args.verify:
         print("SCULPTURE_AUDIT "+json.dumps(metrics,sort_keys=True))
     if args.metrics:
