@@ -125,7 +125,7 @@ The demonstration is **an original architectural detail study**, not a measured 
 - `loft_elliptical_sections()` sculpts organic solids along X/Y/Z using independently adjustable radii, offsets and cubic interpolation; it is reusable for statuary, carved rock, animal anatomy and terrain features.
 - `sphinx_assembly()` composes smooth lion torso, chest, forepaws/toes, haunches, curled tail, royal face and nemes-style headdress into named editable components. An **optional** `restored_nose=True` allows an interpretive reconstruction variant.
 
-Preview the **393-piece** combined study without Blender:
+Preview the miniature combined study without Blender:
 
 ```bash
 PYTHONPATH=src python3 -m kumiki_blender plan-monument --kind giza-study
@@ -139,7 +139,13 @@ blender --background --factory-startup --python-exit-code 1 \
   build-monument --kind giza-study --output .review/egyptian/r01
 ```
 
-`--kind pyramid` and `--kind sphinx` build each model independently. This is **original illustrative geometry**, not a measured Giza reconstruction or a production-quality scan. See [Egyptian monument kit guide](docs/EGYPTIAN_MONUMENTS.md) for parameter controls, archaeological constraints and next steps toward reference accuracy.
+`--kind pyramid` and `--kind sphinx` build each model independently. For a **historically scaled Great Pyramid course study**, the `khufu-petrie` preset uses 201 measured course elevations rather than the miniature's evenly spaced courses. It leaves the apex missing and batches thousands of stone blocks into 805 Blender objects:
+
+```bash
+PYTHONPATH=src python3 -m kumiki_blender plan-monument --kind pyramid --pyramid-preset khufu-petrie
+```
+
+This is **measured course-height geometry, not a fully surveyed pyramid surface**: stone layouts, damage and repairs are procedural. The Sphinx remains an **illustrative sculpture** unless replaced by a separately licensed monument scan. Imported Sphinx models now receive a non-authoritative proportion review against published monument bounds; a human still needs to verify facial and paw fidelity. See the [Egyptian monument kit guide](docs/EGYPTIAN_MONUMENTS.md) for source licensing, evaluated candidate meshes and archaeological accuracy limits.
 
 ## Reusable PBR surfaces
 

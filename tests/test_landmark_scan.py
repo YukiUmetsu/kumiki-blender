@@ -5,7 +5,9 @@ import unittest
 from pathlib import Path
 
 from kumiki_blender.asset_import import AssetImportError
-from kumiki_blender.landmark_scan import fit_sphinx_scan, prepare_sphinx_scan
+from kumiki_blender.landmark_scan import (
+    fit_sphinx_scan, prepare_sphinx_scan, sphinx_proportion_review,
+)
 from tests.test_asset_import import fixture_glb, provenance_json
 
 
@@ -38,6 +40,26 @@ class LandmarkScanTests(unittest.TestCase):
         self.assertAlmostEqual((lo[0]+hi[0])/2, 2)
         self.assertAlmostEqual((lo[1]+hi[1])/2, -11)
         self.assertAlmostEqual(lo[2], .02)
+
+    def test_source_geometry_review_detects_replica_like_wrong_ratios(self):
+        real_ratio = fit_sphinx_scan(
+            (0, 0, 0), (73.5, 19.3, 20.0),
+            front_axis="-X", target_length_m=10.5, target_center_xy=(0, 0))
+        reviewed = sphinx_proportion_review(real_ratio)
+        self.assertTrue(reviewed["passes_bounding_envelope_screen"])
+        self.assertIn("anatomical", reviewed["status"])
+        self.assertIn("replica", reviewed["unverified_details"][-1])
+
+        # Identical scan length, but an over-wide headdress or extensive site
+        # mesh raises the bbox ratio. This screen does not certify details.
+        inflated = fit_sphinx_scan(
+            (0, 0, 0), (73.5, 35.0, 28.0),
+            front_axis="-X", target_length_m=10.5, target_center_xy=(0, 0))
+        warning = sphinx_proportion_review(inflated)
+        self.assertFalse(warning["passes_bounding_envelope_screen"])
+        self.assertGreater(warning["relative_deviation"]["width"], .5)
+        with self.assertRaises(AssetImportError):
+            sphinx_proportion_review(real_ratio, tolerance=float("nan"))
 
     def test_bad_axis_dims_and_silhouette_are_rejected(self):
         arguments = dict(bounds_min=(-5., -1., 0.), bounds_max=(5., 1., 4.),

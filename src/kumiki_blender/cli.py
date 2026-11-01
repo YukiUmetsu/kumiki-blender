@@ -51,6 +51,8 @@ def main(argv: list[str] | None = None) -> int:
         subcommand = subcommands.add_parser(command)
         subcommand.add_argument("--kind", choices=("pyramid", "sphinx", "giza-study"),
                                 default="giza-study")
+        subcommand.add_argument("--pyramid-preset", choices=("illustrative", "khufu-petrie"),
+                                default="illustrative")
         subcommand.add_argument("--pyramid-base", type=float, default=36.0)
         subcommand.add_argument("--pyramid-height", type=float, default=23.0)
         subcommand.add_argument("--pyramid-courses", type=int, default=18)
@@ -186,7 +188,7 @@ def main(argv: list[str] | None = None) -> int:
                 kind=args.kind, pyramid_base=args.pyramid_base,
                 pyramid_height=args.pyramid_height, pyramid_courses=args.pyramid_courses,
                 casing_fraction=args.casing_fraction, sphinx_length=args.sphinx_length,
-                restored_nose=args.restored_nose)
+                restored_nose=args.restored_nose, pyramid_preset=args.pyramid_preset)
             if args.command == "plan-monument":
                 print(json.dumps({
                     "asset_id": study.asset_id,

@@ -16,6 +16,8 @@ the Great Sphinx.
 | `pyramid_frustum(bottom_width, top_width, height)` | Solid tapering square mass; positive volume and outward faces |
 | `pyramid_casing_stone(bottom_width, top_width, course_height, start, end, inset, joint, face_grid, erosion_strength, seed)` | One closed tapered masonry block facing +Y; tessellated worn surfaces have actual geometric relief, while polished casing can remain planar |
 | `pyramid_assembly(prefix, base_width, height, courses, block_width, joint, casing_fraction)` | Recessed core, individually named alternating-course blocks, worn vacancies, light lower casing and capstone |
+| `petrie_course_tops_m(last_course=201)` | Historical corrected NE corner course-top elevations for Khufu: 203 observed levels, 201-course present-day cutoff |
+| `khufu_petrie_assembly(prefix, last_course=201)` | Full-sized Khufu study with measured course heights and multiple watertight masonry blocks batched per face/course |
 | `sphinx_assembly(prefix, length, width, height, restored_nose)` | Sculpted body/haunches/paws/toes/tail and hood/face/ears; recessed eye sockets, broken nose and mouth are carved directly into the face |
 | `sphinx_integral_parts(parts)` | Identify the eight overlapping anatomical volumes for one visible carved lion body |
 | `sphinx_head_parts(parts)` | Identify the six closed hood/face/ear/lappet solids for one head sculpture without overlay eye/brow pieces |
@@ -91,6 +93,42 @@ blender --background --factory-startup --python-exit-code 1 \
   build-monument --kind giza-study --output .review/egyptian/r01
 ```
 
+### Historically scaled Khufu course-height preset
+
+The `--pyramid-preset khufu-petrie` option uses [Petrie's 1883 measurements
+as corrected/transcribed by Ronald Birdsall](https://www.ronaldbirdsall.com/gizeh/errata/levels.html).
+The source lists 203 historical northeast-corner course-top levels in inches.
+The model converts them to meters, retaining their **nonuniform course heights**.
+It defaults to **201 modeled courses**: Birdsall notes that the recorded
+upper remnants numbered 202 and 203 no longer exist.
+
+The full-sized study has an approximately **230.4 m base** and a historical
+**146.5 m original-design apex**, but deliberately ends at the measured top
+of course 201 (**137.36 m**), not a fictional capstone. Each block is a
+closed masonry wedge with real mortar joints. Four compact, editable mesh
+batches per course retain thousands of visible block seams in only **805
+Blender mesh objects** including the recessed core. Lower courses get
+vertex-level chips, while higher courses use lower-cost geometry and
+weathered limestone textures.
+
+```bash
+# Plan without Blender
+PYTHONPATH=src python3 -m kumiki_blender plan-monument --kind pyramid --pyramid-preset khufu-petrie
+
+# Build an immutable revision with Blender 4.2+
+blender --background --factory-startup --python-exit-code 1 \
+  --python scripts/blender_entry.py -- \
+  build-monument --kind pyramid --pyramid-preset khufu-petrie \
+  --output .review/egyptian/khufu-petrie-r01
+```
+
+**Measured:** northeast course elevations only. **Illustrative:** each
+block's footprint, quarry cuts, fractures, joint widths, condition, core
+inset, and nominal continuous pyramid slope. The surviving present-day
+stone configuration is not fully surveyed by this data. To avoid fabricating
+the site's real relative positions, this preset requires `--kind pyramid`
+and cannot be added to the miniature `giza-study` composition.
+
 ### Place your own licensed Sphinx scan
 
 If the stylized Sphinx anatomy is not sufficient for a cinematic shot, supply
@@ -146,9 +184,32 @@ its center with the procedural statue's center, and puts its lowest point at
 Z=0.02 m. A loosely cropped landscape scan or an implausible width/height
 ratio is rejected: crop the statue in Blender first. The manifest includes
 source URL, attribution, SHA-256, material and mesh counts, and the placement
-transform/bounds. **This does not make an arbitrary low-quality scan accurate
-or photorealistic**; geometry fidelity, source rights and historical quality
-still require human review.
+transform/bounds. Its `sphinx_scan.source_geometry_review` compares the
+actual post-import width/length and height/length ratios against the
+[Egyptian State Information Service's 73.5 m × 19.3 m × 20 m monument
+envelope](https://sis.gov.eg/en/egypt/tourism/landmarks/sphinx/). Deviations
+over 25% are flagged for review. Passing the ratio screen **does not certify**
+the nemes, face, paws, hindquarters or repaired stone. A miniaturized replica
+could have perfectly plausible overall dimensions but the wrong anatomy.
+
+### Sphinx source-geometry shortlist
+
+Only a validated capture of the **actual Giza monument**, or a reconstruction
+constrained to survey drawings, should replace the illustrative procedural
+geometry in a documentary-grade shot. Candidates researched in November
+2026; **no third-party model is bundled**:
+
+| Candidate | Role | Source-fidelity and rights caution |
+|---|---|---|
+| [ARCE Sphinx Project / Open Context](https://opencontext.org/projects/141e814a-ba2d-4560-879f-80f1afb019e9) | Primary 1:50 plans/elevations and repair cross sections; CC BY 4.0 metadata | Archaeological reference drawings, **not** a ready-to-render 3D mesh |
+| [Chenzoss Great Sphinx / Sketchfab](https://sketchfab.com/3d-models/the-great-sphinx-of-giza-egypt-f169dbe7974648babe327179091e0ee3) | CC BY, roughly 40k-triangle model for visual assessment | Listing does not prove original monument capture or true facial geometry |
+| [Watt Institution / Sketchfab](https://sketchfab.com/3d-models/the-great-sphinx-of-giza-c126509af31142a9a0d116e264e7b629) | **Reject** as historical ground truth | Photogrammetry depicts a *1903 bronze miniature*, not the monument |
+| [Scan the World / Zenodo](https://zenodo.org/records/21647117) | Pending rights review | GLB listing exists; commercial redistribution and actual survey origin unverified |
+| [TurboSquid Great Sphinx scan](https://www.turbosquid.com/3d-models/great-sphinx-giza-scan-3d-model-1302443) | Optional paid production reference | Payment does not grant the right to redistribute the mesh in an open-source GLB |
+
+Verify the exact asset's current rights, original capture evidence and visual
+fit against survey plans before use. A high polygon count or the word “scan”
+in a product listing is not evidence of monument authenticity.
 
 All dimensions are meters. Default combined plan uses a **36 m by 23 m
 illustrative pyramid**, a **10.5 m-long, roughly 3.6 m-tall Sphinx-shaped study**, 18 stone courses,

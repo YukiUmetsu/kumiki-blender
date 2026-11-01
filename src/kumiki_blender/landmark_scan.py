@@ -17,6 +17,12 @@ from .asset_import import (
 
 
 FRONT_ANGLES = {"-X": 0.0, "+X": math.pi, "-Y": -math.pi / 2, "+Y": math.pi / 2}
+# Egyptian State Information Service's published full monument envelope.
+# Bounds are only an initial screening signal: a bronze replica can pass
+# these ratios while its facial anatomy is still entirely inaccurate.
+SPHINX_SURVEY_LENGTH_M = 73.5
+SPHINX_SURVEY_WIDTH_M = 19.3
+SPHINX_SURVEY_HEIGHT_M = 20.0
 
 
 @dataclass(frozen=True)
@@ -43,6 +49,54 @@ class ScanAlignment:
             "source_bounds_m": self.source_bounds_m,
             "aligned_bounds_m": self.aligned_bounds_m,
         }
+
+
+def sphinx_proportion_review(alignment: ScanAlignment, *,
+                             tolerance: float = 0.25) -> dict[str, Any]:
+    """Surface a reproducible geometry-fidelity *warning*, not an approval.
+
+    Bounding-box dimensions cannot verify nose, head, nemes, paws, flank or
+    repair geometry. This report is intentionally distinct from asset safety
+    and watertightness checks and never claims archaeological certification.
+    """
+    if not isinstance(alignment, ScanAlignment):
+        raise AssetImportError("Sphinx proportion review requires an aligned GLB scan")
+    if type(tolerance) not in (float, int) or not math.isfinite(tolerance) or not 0 < tolerance < 1:
+        raise AssetImportError("Sphinx tolerance must be between 0 and 1")
+    lo, hi = alignment.aligned_bounds_m
+    length, width, height = (hi[axis]-lo[axis] for axis in range(3))
+    observed = (width/length, height/length)
+    reference = (SPHINX_SURVEY_WIDTH_M/SPHINX_SURVEY_LENGTH_M,
+                 SPHINX_SURVEY_HEIGHT_M/SPHINX_SURVEY_LENGTH_M)
+    delta = tuple((actual/expected)-1 for actual, expected in zip(observed, reference))
+    plausible = all(abs(difference) <= tolerance for difference in delta)
+    return {
+        "reference": "Egyptian State Information Service, Great Sphinx dimensional envelope",
+        "reference_dimensions_m": {
+            "length": SPHINX_SURVEY_LENGTH_M,
+            "width": SPHINX_SURVEY_WIDTH_M,
+            "height": SPHINX_SURVEY_HEIGHT_M,
+        },
+        "ratios": {
+            "width_to_length": round(observed[0], 5),
+            "height_to_length": round(observed[1], 5),
+            "reference_width_to_length": round(reference[0], 5),
+            "reference_height_to_length": round(reference[1], 5),
+        },
+        "relative_deviation": {
+            "width": round(delta[0], 5),
+            "height": round(delta[1], 5),
+        },
+        "passes_bounding_envelope_screen": plausible,
+        "status": ("bounds-plausible / anatomical source verification still required"
+                   if plausible else
+                   "review-required / bbox deviates from real monument proportions"),
+        "unverified_details": [
+            "head and nemes morphology", "face anatomy and missing nose",
+            "foreleg/paw geometry", "hindquarters and damaged masonry repairs",
+            "provenance as an actual monument scan rather than a replica",
+        ],
+    }
 
 
 def prepare_sphinx_scan(source: str | Path, record: str | Path, *, front_axis: str = "-X") -> SphinxScan:

@@ -12,7 +12,7 @@ from .blender_import import imported_bounds
 from .blender_scene import _create_box, _material
 from .blender_textures import ensure_metric_uvs
 from .egyptian_monuments import MonumentStudy
-from .landmark_scan import SphinxScan, fit_sphinx_scan
+from .landmark_scan import SphinxScan, fit_sphinx_scan, sphinx_proportion_review
 from .asset_import import AssetImportError
 from .render_profiles import select_render_profile
 from .shots import QualityShot
@@ -190,6 +190,7 @@ def _place_sphinx_scan(bpy: Any, scene: Any, model: Any, scan: SphinxScan,
         "mesh_objects": len(meshes), "source_materials": len(materials),
         "placement": alignment.to_manifest(),
         "verified_bounds_m": actual,
+        "source_geometry_review": sphinx_proportion_review(alignment),
         "geometry_origin": "external scan / visually and historically unverified",
     }
 
@@ -360,11 +361,20 @@ def build_monument_scene(study: MonumentStudy, destination: Path, *,
     camera = bpy.data.objects.new(camera_data.name, camera_data)
     stage.objects.link(camera)
     params = dict(study.parameters)
+    measured_course_preset = params["pyramid_preset"] == "khufu-petrie"
+    fidelity_label = ("historic Petrie course elevations / masonry and surface review pending"
+                      if measured_course_preset else
+                      "illustrative architecture / artistic review pending")
     metadata = {
         "asset_id": study.asset_id,
         "generator": "kumiki-blender/egyptian-monument-detail-kit",
-        "status": "scan-assisted illustrative architecture / artistic review pending" if sphinx_scan else "illustrative architecture / artistic review pending",
-        "provenance": "Original parametric pyramid/site; external Sphinx scan with separate declared provenance" if sphinx_scan else "Original parametric study; not a surveyed reconstruction of Giza",
+        "status": ("scan-assisted / anatomical review pending" if sphinx_scan else fidelity_label),
+        "provenance": ("Petrie 1883 measured NE course elevations (Ronald Birdsall 2003 transcription); "
+                       "approximate pyramid width and block positions, no surveyed stone damage"
+                       if measured_course_preset else
+                       "Original parametric pyramid/site; external Sphinx scan with separate declared provenance"
+                       if sphinx_scan else
+                       "Original parametric study; not a surveyed reconstruction of Giza"),
         "recipe_sha256": hashlib.sha256(repr((study.kind, study.parameters)).encode()).hexdigest(),
         "render_profile": {"name": profile.name, "width": profile.width,
                            "height": profile.height, "samples": profile.samples},

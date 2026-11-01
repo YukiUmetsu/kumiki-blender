@@ -14,8 +14,12 @@ from kumiki_blender.architecture_geometry import (
 from kumiki_blender.blender_monuments import plan_monument_shots
 from kumiki_blender.cli import main
 from kumiki_blender.egyptian_monuments import (
-    MonumentError, make_monument_study, pyramid_assembly, pyramid_casing_stone,
+    MonumentError, khufu_petrie_assembly, make_monument_study, pyramid_assembly, pyramid_casing_stone,
     pyramid_frustum, sphinx_assembly,
+)
+from kumiki_blender.pyramid_survey import (
+    KHUFU_ORIGINAL_BASE_M, KHUFU_ORIGINAL_HEIGHT_M,
+    PETRIE_NE_COURSE_TOP_IN, petrie_course_tops_m,
 )
 
 
@@ -78,6 +82,61 @@ class EgyptianMonumentTests(unittest.TestCase):
         polished = [part for part in outer if part.material == "casing-limestone"]
         self.assertLess(len(polished)/len(outer), .10)
         self.assertGreater(len(outer)-len(polished), 300)
+
+    def test_petrie_survey_has_203_measured_levels_and_observed_course_height_variation(self):
+        levels = petrie_course_tops_m()
+        self.assertEqual(len(PETRIE_NE_COURSE_TOP_IN), 203)
+        self.assertEqual(len(levels), 201)
+        self.assertAlmostEqual(levels[0], 58.6 * .0254)
+        self.assertAlmostEqual(levels[-1], 5407.9 * .0254)
+        self.assertAlmostEqual(petrie_course_tops_m(last_course=203)[-1], 5451.8 * .0254)
+        heights = [levels[0], *(b-a for a, b in zip(levels, levels[1:]))]
+        self.assertGreater(max(heights)/min(heights), 2.5)
+        for invalid in (True, 0, 204, 5.0):
+            with self.subTest(invalid=invalid), self.assertRaises(GeometryError):
+                petrie_course_tops_m(last_course=invalid)
+
+    def test_khufu_petrie_preset_batches_real_course_heights_and_open_stone_joints(self):
+        parts = khufu_petrie_assembly(prefix="khufu")
+        self.assertEqual(len(parts), 1+201*4)
+        self.assertEqual(parts[0].name, "khufu-core")
+        self.assertNotIn("capstone", {part.name for part in parts})
+        first = parts[1]
+        last = parts[-1]
+        self.assertEqual(first.name, "khufu-course-001-face-0-batch")
+        self.assertEqual(last.name, "khufu-course-201-face-3-batch")
+        self.assertGreater(len(first.mesh.vertices), 1000)
+        for item in (first, last):
+            report = audit_mesh(item.mesh)
+            self.assertEqual(report.boundary_edges, 0)
+            self.assertEqual(report.nonmanifold_edges, 0)
+            self.assertGreater(report.volume_m3, 0)
+        second_course = parts[5]
+        self.assertLess(max(vertex[2] for vertex in world_vertices(first)),
+                        min(vertex[2] for vertex in world_vertices(second_course)))
+
+        study = make_monument_study(kind="pyramid", pyramid_preset="khufu-petrie")
+        self.assertEqual(dict(study.part_counts)["pyramid_parts"], 805)
+        self.assertEqual(dict(study.parameters)["pyramid_courses"], 201)
+        self.assertEqual(dict(study.parameters)["pyramid_preset"], "khufu-petrie")
+        self.assertAlmostEqual(study.bounds_max[2], petrie_course_tops_m()[-1])
+        self.assertAlmostEqual(dict(study.parameters)["pyramid_base_m"], KHUFU_ORIGINAL_BASE_M)
+        self.assertAlmostEqual(dict(study.parameters)["pyramid_height_m"], KHUFU_ORIGINAL_HEIGHT_M)
+
+    def test_khufu_petrie_rejects_misleading_custom_parameters_or_unsurveyed_site_layout(self):
+        for changes in ({"kind": "giza-study"}, {"kind": "sphinx"},
+                        {"kind": "pyramid", "pyramid_courses": 201},
+                        {"kind": "pyramid", "pyramid_height": 138.0}):
+            with self.subTest(changes=changes), self.assertRaises(MonumentError):
+                make_monument_study(pyramid_preset="khufu-petrie", **changes)
+
+        stream = io.StringIO()
+        with contextlib.redirect_stdout(stream):
+            status = main(["plan-monument", "--kind", "pyramid",
+                           "--pyramid-preset", "khufu-petrie"])
+        self.assertEqual(status, 0)
+        report = json.loads(stream.getvalue())
+        self.assertEqual(report["named_parts"], {"pyramid_parts": 805, "sphinx_parts": 0})
 
     def test_sphinx_is_organic_and_has_independent_anatomy(self):
         parts = sphinx_assembly(prefix="sphinx")

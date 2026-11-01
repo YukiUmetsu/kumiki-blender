@@ -16,6 +16,10 @@ from .architecture_geometry import (
     loft_elliptical_sections, place_mesh, world_vertices,
 )
 from .rock_weathering import erode_loft, rock_height_field, rough_bedrock_slab
+from .pyramid_survey import (
+    KHUFU_ORIGINAL_BASE_M, KHUFU_ORIGINAL_HEIGHT_M,
+    PETRIE_LAST_PRESERVED_COURSE, petrie_course_tops_m,
+)
 
 
 class MonumentError(ValueError):
@@ -30,7 +34,7 @@ class MonumentStudy:
     part_counts: tuple[tuple[str, int], ...]
     bounds_min: Vec3
     bounds_max: Vec3
-    parameters: tuple[tuple[str, float | int | bool], ...]
+    parameters: tuple[tuple[str, float | int | bool | str], ...]
 
 
 def pyramid_frustum(bottom_width: float, top_width: float, height: float) -> Mesh:
@@ -213,6 +217,78 @@ def pyramid_assembly(*, prefix: str, base_width: float = 36.0,
     cap = pyramid_frustum(cap_base, 0.045, cap_h)
     items.append(place_mesh(cap, name=f"{prefix}-capstone", origin=(0, 0, work_h),
                             material="casing-limestone"))
+    return tuple(items)
+
+
+def khufu_petrie_assembly(*, prefix: str,
+                          last_course: int = PETRIE_LAST_PRESERVED_COURSE,
+                          target_block_width: float = 4.2) -> tuple[MeshInstance, ...]:
+    """Measured course-height study, with scalable batched exterior masonry.
+
+    Course elevations come from Petrie's 1883 NE measurements. Course widths
+    follow a *nominal* 230.4 m base / 146.5 m original apex envelope, so block
+    positions, counts, erosion and individual cuts are illustrative, not a
+    measured archaeological plan. The model ends in a flat damaged top,
+    without the invented pristine capstone of the miniature preset.
+
+    Four batches per course (one per cardinal face) keep the Blender scene
+    below ~810 objects instead of tens of thousands of loose stone objects.
+    Each batch is an ordinary mesh holding separate watertight stone wedges,
+    with open mortar joints and physically chipped close-range stones.
+    """
+    tops = petrie_course_tops_m(last_course=last_course)
+    target = _finite_number(target_block_width, "target_block_width", 1.5, 12)
+    base = KHUFU_ORIGINAL_BASE_M
+    apex = KHUFU_ORIGINAL_HEIGHT_M
+    top_height = tops[-1]
+    inset, joint = 0.42, 0.028
+    top_width = base*(1-top_height/apex)
+    core = pyramid_frustum(base-2*inset, top_width-2*inset, top_height)
+    items: list[MeshInstance] = [
+        place_mesh(core, name=f"{prefix}-core", material="core-limestone")
+    ]
+
+    previous_top = 0.0
+    for course, course_top in enumerate(tops):
+        # A level represents the *top* of one measured course. We retain a
+        # narrow physical gap at both horizontal stone-bed joints.
+        lower = previous_top + (joint/2 if course else 0.0)
+        upper = course_top - (joint/2 if course < len(tops)-1 else 0.0)
+        previous_top = course_top
+        bottom_w = base*(1-lower/apex)
+        upper_w = base*(1-upper/apex)
+        count = max(2, math.ceil(upper_w/target))
+        if course % 2:
+            intervals = [0.0] + [(i+0.5)/count for i in range(count)] + [1.0]
+        else:
+            intervals = [i/count for i in range(count+1)]
+        # Close masonry is physically roughened, but distant upper courses
+        # retain real mortar joints with cheaper watertight wedge geometry.
+        grid = 4 if course < 12 else (2 if course < 42 or course % 11 == 0 else 1)
+        erosion = min(0.19, inset*.72, (upper-lower)*.23) if grid > 1 else 0.0
+        for face in range(4):
+            offset = face*math.pi/2
+            axes = {
+                "axis_x": (round(math.cos(offset)), round(math.sin(offset)), 0),
+                "axis_y": (-round(math.sin(offset)), round(math.cos(offset)), 0),
+                "axis_z": (0, 0, 1),
+            }
+            vertices: list[Vec3] = []
+            faces: list[tuple[int, ...]] = []
+            for stone_no, (start, end) in enumerate(zip(intervals, intervals[1:])):
+                block = pyramid_casing_stone(
+                    bottom_w, upper_w, upper-lower, start, end,
+                    inset=inset, joint=joint, face_grid=grid,
+                    erosion_strength=erosion, height_offset=lower,
+                    seed=(course*71+face*19+stone_no*7) % 100000)
+                index_offset = len(vertices)
+                vertices.extend(block.vertices)
+                faces.extend(tuple(i+index_offset for i in polygon) for polygon in block.faces)
+            material = ("weathered-limestone" if course % 5 else "core-limestone")
+            items.append(place_mesh(
+                Mesh(tuple(vertices), tuple(faces)),
+                name=f"{prefix}-course-{course+1:03d}-face-{face}-batch",
+                origin=(0, 0, lower), material=material, **axes))
     return tuple(items)
 
 
@@ -399,10 +475,19 @@ def sphinx_assembly(*, prefix: str, length: float = 10.5,
 def make_monument_study(*, kind: str = "giza-study",
                         pyramid_base: float = 36.0, pyramid_height: float = 23.0,
                         pyramid_courses: int = 18, casing_fraction: float = 0.04,
-                        sphinx_length: float = 10.5, restored_nose: bool = False) -> MonumentStudy:
+                        sphinx_length: float = 10.5, restored_nose: bool = False,
+                        pyramid_preset: str = "illustrative") -> MonumentStudy:
     """Compose a pyramid, a lion-bodied royal figure or a staged pair."""
     if kind not in ("pyramid", "sphinx", "giza-study"):
         raise MonumentError("kind must be pyramid, sphinx or giza-study")
+    if pyramid_preset not in ("illustrative", "khufu-petrie"):
+        raise MonumentError("pyramid_preset must be illustrative or khufu-petrie")
+    if pyramid_preset == "khufu-petrie":
+        if kind != "pyramid":
+            raise MonumentError("khufu-petrie currently requires kind=pyramid: the combined Giza site layout is not surveyed")
+        if (pyramid_base != 36.0 or pyramid_height != 23.0 or
+                pyramid_courses != 18 or casing_fraction != 0.04):
+            raise MonumentError("khufu-petrie uses fixed historic geometry; omit the illustrative pyramid dimension/course/casing options")
     # Validate the whole exposed recipe even if an unused optional model is
     # disabled. Otherwise a sphinx-only plan could emit non-finite JSON in
     # its manifest, or accept an unsafe setting that changes behavior later.
@@ -417,9 +502,18 @@ def make_monument_study(*, kind: str = "giza-study",
     parts: list[MeshInstance] = []
     if kind in ("pyramid", "giza-study"):
         shift_y = 8.0 if kind == "giza-study" else 0.0
-        for part in pyramid_assembly(prefix="pyramid", base_width=pyramid_base,
-                                     height=pyramid_height, courses=pyramid_courses,
-                                     casing_fraction=casing_fraction):
+        if pyramid_preset == "khufu-petrie":
+            pyramid_base = KHUFU_ORIGINAL_BASE_M
+            pyramid_height = KHUFU_ORIGINAL_HEIGHT_M
+            pyramid_courses = PETRIE_LAST_PRESERVED_COURSE
+            casing_fraction = 0.0
+            pyramid_parts = khufu_petrie_assembly(prefix="pyramid")
+        else:
+            pyramid_parts = pyramid_assembly(
+                prefix="pyramid", base_width=pyramid_base,
+                height=pyramid_height, courses=pyramid_courses,
+                casing_fraction=casing_fraction)
+        for part in pyramid_parts:
             parts.append(replace(part, origin=(part.origin[0], part.origin[1]+shift_y,
                                                part.origin[2])))
     if kind in ("sphinx", "giza-study"):
@@ -436,12 +530,14 @@ def make_monument_study(*, kind: str = "giza-study",
                 mins[axis] = min(mins[axis], vertex[axis])
                 maxs[axis] = max(maxs[axis], vertex[axis])
     return MonumentStudy(
-        asset_id=f"egyptian-{kind}-detail-study", kind=kind,
+        asset_id=(f"egyptian-{kind}-khufu-petrie-course-study" if pyramid_preset == "khufu-petrie"
+                  else f"egyptian-{kind}-detail-study"), kind=kind,
         instances=tuple(parts),
         part_counts=(("pyramid_parts", sum(p.name.startswith("pyramid-") for p in parts)),
                      ("sphinx_parts", sum(p.name.startswith("sphinx-") for p in parts))),
         bounds_min=tuple(mins), bounds_max=tuple(maxs),
         parameters=(("pyramid_base_m", pyramid_base), ("pyramid_height_m", pyramid_height),
                     ("pyramid_courses", pyramid_courses), ("casing_fraction", casing_fraction),
-                    ("sphinx_length_m", sphinx_length), ("restored_nose", restored_nose)),
+                    ("sphinx_length_m", sphinx_length), ("restored_nose", restored_nose),
+                    ("pyramid_preset", pyramid_preset)),
     )

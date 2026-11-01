@@ -96,6 +96,14 @@ jobs:
             --python scripts/blender_entry.py -- \
             build-monument --kind giza-study --pyramid-courses 18 \
             --output .review/ci/egyptian-monuments
+      - name: Render historic Khufu course-height masonry study
+        env:
+          KUMIKI_RENDER_PROFILE: smoke
+        run: |
+          blender --background --factory-startup --threads 1 --python-exit-code 1 \
+            --python scripts/blender_entry.py -- \
+            build-monument --kind pyramid --pyramid-preset khufu-petrie \
+            --output .review/ci/khufu-petrie
       - name: Create a first-party Sphinx replacement GLB fixture
         run: |
           blender --background --factory-startup --threads 1 --python-exit-code 1 \
@@ -182,6 +190,7 @@ jobs:
           python -m kumiki_blender audit --model .review/ci/doric-portico/model.glb --require-pbr-textures
           python -m kumiki_blender audit --model .review/ci/pointed-balustrade-portico/model.glb --require-pbr-textures
           python -m kumiki_blender audit --model .review/ci/egyptian-monuments/model.glb --require-pbr-textures
+          python -m kumiki_blender audit --model .review/ci/khufu-petrie/model.glb --require-pbr-textures
           python -m kumiki_blender audit --model .review/ci/sphinx-scan-integration/model.glb --require-pbr-textures
           python -m kumiki_blender audit --model .review/ci/facade/model.glb --require-pbr-textures
           python -m kumiki_blender audit --model .review/ci/imported-portico/model.glb --require-pbr-textures
@@ -193,6 +202,7 @@ jobs:
           python -m kumiki_blender audit-revision --root .review/ci/doric-portico
           python -m kumiki_blender audit-revision --root .review/ci/pointed-balustrade-portico
           python -m kumiki_blender audit-revision --root .review/ci/egyptian-monuments
+          python -m kumiki_blender audit-revision --root .review/ci/khufu-petrie
           python -m kumiki_blender audit-revision --root .review/ci/sphinx-scan-integration
           python -m kumiki_blender audit-revision --root .review/ci/facade
           python -m kumiki_blender audit-revision --root .review/ci/imported-portico
@@ -204,6 +214,7 @@ jobs:
           gltf-transform validate .review/ci/doric-portico/model.glb
           gltf-transform validate .review/ci/pointed-balustrade-portico/model.glb
           gltf-transform validate .review/ci/egyptian-monuments/model.glb
+          gltf-transform validate .review/ci/khufu-petrie/model.glb
           gltf-transform validate .review/ci/sphinx-scan-integration/model.glb
           gltf-transform validate .review/ci/facade/model.glb
           gltf-transform validate .review/ci/imported-portico/model.glb
@@ -214,6 +225,7 @@ jobs:
           python -c 'import json; m=json.load(open(".review/ci/scanned-facade/manifest.json")); assert len(m["texture_packs"]) == 2 and all(v["pack"]["maps"]["normal"]["sha256"] for v in m["texture_packs"])'
           python -c 'import json; m=json.load(open(".review/ci/scanned-portico/manifest.json")); assert len(m["texture_packs"]) == 1 and m["texture_packs"][0]["target"] == "Architectural stone.004"'
           python -c 'import json; m=json.load(open(".review/ci/sphinx-scan-integration/manifest.json")); assert m["sphinx_scan"]["mesh_objects"] == 4 and m["sphinx_scan"]["provenance"]["commercial_use_allowed"] and m["sphinx_sculpt_union"]["mode"] == "external-scan" and m["sphinx_scan"]["source_materials"] >= 1'
+          python -c 'import json; m=json.load(open(".review/ci/khufu-petrie/manifest.json")); assert m["parameters"]["pyramid_courses"] == 201 and m["parameters"]["pyramid_preset"] == "khufu-petrie" and m["named_parts"]["pyramid_parts"] == 805'
           python -m unittest tests.test_export_audit tests.test_glb_audit -v
           test -s .review/ci/lattice-tower/previews/detail.png
           test -s .review/ci/portico/previews/detail.png
@@ -223,6 +235,7 @@ jobs:
           test -s .review/ci/pointed-balustrade-portico/previews/detail.png
           test -s .review/ci/pointed-balustrade-portico/previews/capital.png
           test -s .review/ci/egyptian-monuments/previews/masonry.png
+          test -s .review/ci/khufu-petrie/previews/masonry.png
           test -s .review/ci/egyptian-monuments/previews/sphinx.png
           test -s .review/ci/egyptian-monuments/previews/sphinx-profile.png
           test -s .review/ci/egyptian-monuments/previews/sphinx-face.png
@@ -272,6 +285,8 @@ jobs:
         run: |
           python scripts/emit_qa_jpegs.py \
             .review/ci/egyptian-monuments/preview.png \
+            .review/ci/khufu-petrie/preview.png \
+            .review/ci/khufu-petrie/previews/masonry.png \
             .review/ci/egyptian-monuments/previews/sphinx.png \
             .review/ci/egyptian-monuments/previews/sphinx-profile.png \
             .review/ci/egyptian-monuments/previews/sphinx-face.png \
