@@ -1,5 +1,37 @@
 # Statue of Liberty — scan-assisted detail rebuild
 
+## r41 — temple/neck anatomical wrap (**experimental, not approved**)
+
+The front-only donor patch from r23 had a vertical cheek incision and a hard
+rectangular neck slab. A separate `--wrap` review now retains more of the CC0
+donor's cheek/temple surface, removes the lower flared donor-neck geometry,
+registers its exterior depth against the verified bronze capture, and retains
+the original scan neck below the chin instead of carving away its polygons.
+This is an **anatomical prototype**, not enabled in `build-liberty`.
+
+```bash
+blender --background --factory-startup --threads 6 --python-exit-code 1 \
+  --python scripts/blender_liberty_anatomy_review.py -- \
+  .review/_sources/liberty-bronze.glb \
+  .review/_sources/human-base-meshes.blend \
+  .review/landmarks/statues/statue-of-liberty/r41-anatomy-wrap \
+  --wrap --export
+```
+
+The front and three-quarter clay views show a cleaner neck silhouette without
+the r23 donor's floating lower flap. However the face/temple edge is still
+geometrically obvious in profile, the upper scan neck has some visible facet
+transitions, and the donor's eyes, mouth and brow remain generic rather than
+reference-matched. **Visual acceptance remains failed.** An independent
+3D-nearest-surface projection and a boundary-skirt prototype were compared
+and rejected after they introduced forehead/chin spikes; neither was added to
+the production generator. This review remains reproducible and reversible.
+
+**Next:** reference-calibrated facial landmarks and continuous head-to-neck
+retopology, including proper ear/hair occlusion. Do not promote the donor
+surface based on a front view alone; inspect front, three-quarter, and true
+profile at the same orthographic scale.
+
 ## Perforated copper crown (opt-in, **ongoing**)
 
 `--detailed-crown` rebuilds the headgear as a continuous annular wall with

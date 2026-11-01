@@ -50,3 +50,34 @@ def sculpt_classical_face(x: float, y: float, z: float) -> tuple[float, float, f
     aperture = horizontal * math.exp(-(((z - 8.76) / .16) ** 4))
     brow = horizontal * math.exp(-(((z - 8.92) / .07) ** 2))
     return x, y - .044 * brow, 8.76 + (z - 8.76) * (1.0 - .34 * aperture)
+
+
+def wrap_limits(x: float) -> tuple[float, float]:
+    """Trim the donor at the chin/upper neck rather than its flared shoulders."""
+    lateral = min(1., abs(x + .30) / .80)
+    return 8.13 + .17*lateral*lateral, 9.24 - .10*lateral*lateral
+
+
+def keep_wrap_vertex(x: float, y: float, z: float) -> bool:
+    """Keep cheeks and temples; discard lower neck, rear skull and top slab."""
+    bottom, top = wrap_limits(x)
+    return abs(x + .30) < .80 and y < .18 and bottom < z < top
+
+
+def wrap_donor_weight(x: float, z: float) -> float:
+    """Smoothly move the expanded donor border toward the scanned skin.
+
+    Unlike the original front-only ellipse, the extended side surface carries
+    the anatomic cheek through to the hair. Near the lower neck, scalp and
+    extreme temples, captured geometry takes over gradually.
+    """
+    bottom, top = wrap_limits(x)
+
+    def ease(value: float) -> float:
+        t = min(1., max(0., value))
+        return t*t*(3.-2.*t)
+
+    lateral = ease((.80-abs(x+.30))/.27)
+    lower = ease((z-bottom)/.33)
+    upper = ease((top-z)/.24)
+    return lateral*lower*upper

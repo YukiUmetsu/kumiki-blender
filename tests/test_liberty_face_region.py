@@ -4,7 +4,7 @@ import unittest
 
 from kumiki_blender.liberty_face_region import (
     face_radius, face_weight, face_jawline_z, keep_face_vertex, conform_depth,
-    sculpt_classical_face,
+    sculpt_classical_face, wrap_limits, keep_wrap_vertex, wrap_donor_weight,
 )
 
 
@@ -44,6 +44,19 @@ class LibertyFaceRegionTests(unittest.TestCase):
         self.assertLess(brow[1], -.50)
         self.assertAlmostEqual(upper[2], sculpt_classical_face(-.05, -.62, 8.82)[2])
         self.assertEqual(sculpt_classical_face(-1.1, -.6, 8.72), (-1.1, -.6, 8.72))
+
+    def test_wrap_keeps_cheeks_and_trims_neck_without_flat_flaps(self):
+        self.assertTrue(keep_wrap_vertex(.26, -.18, 8.57))
+        self.assertFalse(keep_face_vertex(.26, -.18, 8.57))
+        self.assertFalse(keep_wrap_vertex(.26, .29, 8.57))
+        self.assertFalse(keep_wrap_vertex(-.30, -.65, 9.30))
+        self.assertFalse(keep_wrap_vertex(-.30, -.65, 7.70))
+        self.assertLess(wrap_limits(.45)[1], wrap_limits(-.30)[1])
+        self.assertAlmostEqual(wrap_donor_weight(-.30, 8.64), 1.)
+        self.assertLess(wrap_donor_weight(-.30, 8.14), .15)
+        self.assertFalse(keep_wrap_vertex(-.30, -.45, 8.10))
+        self.assertLess(wrap_donor_weight(.43, 8.64), .5)
+        self.assertAlmostEqual(wrap_donor_weight(-.30, 9.24), 0.)
 
 
 if __name__ == "__main__":

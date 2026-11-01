@@ -27,7 +27,7 @@ from kumiki_blender.liberty_anatomy_source import verify_anatomy_source
 from kumiki_blender.liberty_scan import verify_scan_source
 from kumiki_blender.liberty_face_region import (
     conform_depth, face_jawline_z, face_radius, keep_face_vertex,
-    sculpt_classical_face,
+    sculpt_classical_face, keep_wrap_vertex, wrap_donor_weight,
 )
 
 
@@ -127,18 +127,8 @@ def load_head(donor_blend: Path, *, target_origin=(-.30, .0, 7.42), scale=4.8,
     return objects
 
 
-def conform_anatomical_face(source_meshes, donor_head):
-    """Remove the CC0 donor's slab-like scalp/neck and register its border.
-
-    Unlike the radial heightfield experiment, the original anatomical mesh's
-    eyelids and philtrum stay intact. The outer 30% is eased toward the actual
-    scan front, at matching image-space X/Z coordinates. Only the front facial
-    surface is retained; the source scan provides the temples, hair and neck.
-    This is a non-destructive *review* of two separate meshes, not a welded
-    production retopology.
-    """
-    import bmesh
-
+def _scan_depth_sampler(source_meshes):
+    """Return a closest-front-depth sampler for the verified bronze scan."""
     depsgraph = bpy.context.evaluated_depsgraph_get()
     targets = []
     for obj in source_meshes:
@@ -159,6 +149,22 @@ def conform_anatomical_face(source_meshes, donor_head):
                     candidates.append(value)
         return min(candidates, key=lambda y: abs(y-original_y)) if candidates else None
 
+    return sampled_depth
+
+
+def conform_anatomical_face(source_meshes, donor_head):
+    """Remove the CC0 donor's slab-like scalp/neck and register its border.
+
+    Unlike the radial heightfield experiment, the original anatomical mesh's
+    eyelids and philtrum stay intact. The outer 30% is eased toward the actual
+    scan front, at matching image-space X/Z coordinates. Only the front facial
+    surface is retained; the source scan provides the temples, hair and neck.
+    This is a non-destructive *review* of two separate meshes, not a welded
+    production retopology.
+    """
+    import bmesh
+
+    sampled_depth = _scan_depth_sampler(source_meshes)
     world = donor_head.matrix_world
     inverse = world.inverted()
     bm = bmesh.new()
@@ -184,6 +190,50 @@ def conform_anatomical_face(source_meshes, donor_head):
         bm.to_mesh(donor_head.data)
         donor_head.data.update()
         donor_head["facial_border_registration"] = "image-aligned sampled scan depth, smooth outer feather"
+        donor_head["source_registration_samples"] = fitted
+        return {"deleted_faces": len(outside), "conformed_vertices": fitted,
+                "remaining_vertices": len(donor_head.data.vertices)}
+    finally:
+        bm.free()
+
+
+def wrap_anatomical_face(source_meshes, donor_head):
+    """Retain the donor cheek through the temple with a cropped neck.
+
+    This is a separate candidate from the front-oval crop. Both experiments
+    preserve the donor's real eyelid, philtrum, cheek and jaw topology. The
+    broader crop aims to move the lateral border under captured hair and
+    feathers lower-neck vertices to the bronze surface before clipping.
+    """
+    import bmesh
+
+    sampled_depth = _scan_depth_sampler(source_meshes)
+    world = donor_head.matrix_world
+    inverse = world.inverted()
+    bm = bmesh.new()
+    try:
+        bm.from_mesh(donor_head.data)
+        keep = set()
+        fitted = 0
+        for vertex in bm.verts:
+            point = world @ vertex.co
+            if not keep_wrap_vertex(point.x, point.y, point.z):
+                continue
+            keep.add(vertex)
+            if point.y < -.10:
+                captured_depth = sampled_depth(point.x, point.z, point.y)
+                if captured_depth is not None:
+                    weight = wrap_donor_weight(point.x, point.z)
+                    point.y = point.y*weight + (captured_depth+.035)*(1.-weight)
+                    vertex.co = inverse @ point
+                    fitted += 1
+        outside = [face for face in bm.faces if any(v not in keep for v in face.verts)]
+        bmesh.ops.delete(bm, geom=outside, context="FACES")
+        orphans = [v for v in bm.verts if not v.link_faces]
+        bmesh.ops.delete(bm, geom=orphans, context="VERTS")
+        bm.to_mesh(donor_head.data)
+        donor_head.data.update()
+        donor_head["facial_border_registration"] = "expanded temple and neck surface wrap"
         donor_head["source_registration_samples"] = fitted
         return {"deleted_faces": len(outside), "conformed_vertices": fitted,
                 "remaining_vertices": len(donor_head.data.vertices)}
@@ -272,7 +322,7 @@ def graft_clay_face(scan_meshes, head_meshes, *, rings=150, segments=320):
     return graft
 
 
-def carve_blurred_scan_face(meshes, *, conform=False):
+def carve_blurred_scan_face(meshes, *, conform=False, preserve_neck=False):
     """Remove the miniature's featureless skin, preserving crown/robe/hair.
 
     This separate review approach replaces anatomical topology instead of
@@ -292,6 +342,11 @@ def carve_blurred_scan_face(meshes, *, conform=False):
                 if conform:
                     radius = face_radius(point.x, point.z)
                     remove = radius < .69 and point.z > face_jawline_z(point.x) - .015
+                    if preserve_neck:
+                        # The scan's neck bridges beneath the high-definition
+                        # donor chin. Removing its upper triangles leaves an
+                        # exposed, serrated gap in 3/4 and frontal views.
+                        remove = remove and point.z > 8.28
                 else:
                     radius = (((point.x + .30) / .42) ** 2
                               + ((point.z - 8.56) / .50) ** 2)
@@ -332,19 +387,25 @@ def build(source: Path, donor: Path, directory: Path):
     patch_mode = "--patch" in sys.argv
     carve_mode = "--carve" in sys.argv
     conform_mode = "--conform" in sys.argv
-    donors = load_head(donor, patch=patch_mode, conform=conform_mode)
-    if conform_mode and (patch_mode or carve_mode):
-        raise ValueError("--conform is a separate candidate; omit --patch and --carve")
+    wrap_mode = "--wrap" in sys.argv
+    if sum((patch_mode, carve_mode, conform_mode, wrap_mode)) > 1:
+        raise ValueError("Choose exactly one anatomy review mode")
+    donors = load_head(donor, patch=patch_mode, conform=conform_mode or wrap_mode)
     fitted = None
     if conform_mode:
         fitted = conform_anatomical_face(source_meshes, donors[0])
         print("LIBERTY_FITTED_FACE", fitted)
+    if wrap_mode:
+        fitted = wrap_anatomical_face(source_meshes, donors[0])
+        print("LIBERTY_WRAPPED_FACE", fitted)
     if patch_mode:
         graft = graft_clay_face(source_meshes, donors)
         for obj in donors:
             obj.hide_render = True
-    if carve_mode or conform_mode:
-        print("LIBERTY_CARVED_SCAN_FACES", carve_blurred_scan_face(source_meshes, conform=conform_mode))
+    if carve_mode or conform_mode or wrap_mode:
+        print("LIBERTY_CARVED_SCAN_FACES", carve_blurred_scan_face(
+            source_meshes, conform=conform_mode or wrap_mode,
+            preserve_neck=wrap_mode))
 
     # The mesh's normal glTF skin material is intentionally hidden: single-
     # color cavity shading makes undercuts and silhouette defects apparent.
@@ -420,7 +481,8 @@ def build(source: Path, donor: Path, directory: Path):
         "acceptance": "Unapproved anatomy prototype: compare all three angles with original photos",
         "quality_gate": "FAIL / distinct eyes and lips, but facial likeness and seams are not approved",
         "fitted_face": fitted,
-        "method": ("source-registered anatomically retained face" if conform_mode else
+        "method": ("expanded temple and neck wrap prototype" if wrap_mode else
+                   "source-registered anatomically retained face" if conform_mode else
                    "surface-registered facial graft" if patch_mode else
                    "source face excavation and anatomical insertion" if carve_mode else
                    "transitional head overlap"),
