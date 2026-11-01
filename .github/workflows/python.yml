@@ -15,12 +15,12 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - name: Install optional composer schema dependency
-        run: python -m pip install -e '.[composer]'
+      - name: Install optional composer and visual QA dependencies
+        run: python -m pip install -e '.[composer,qa]'
       - name: Test declarative component composer and compiled handoff
         env:
           PYTHONPATH: src
-        run: python -m unittest tests.test_composer tests.test_composer_cli tests.test_compiled_plan -v
+        run: python -m unittest tests.test_composer tests.test_composer_cli tests.test_compiled_plan tests.test_visual_qa -v
       - name: Test measured Khufu masonry and Sphinx source intake
         env:
           PYTHONPATH: src
@@ -92,8 +92,8 @@ jobs:
           blender --background --factory-startup --threads 4 --python-exit-code 1 \
             --python scripts/blender_entry.py -- \
             build-egypt-map --output .review/ci/egypt-map
-      - name: Install optional AssetSpec authoring dependency (host Python only)
-        run: python -m pip install -e '.[composer]'
+      - name: Install optional AssetSpec and image QA dependencies (host Python only)
+        run: python -m pip install -e '.[composer,qa]'
       - name: Render AssetSpec v2 component assembly through dependency-free Blender worker
         env:
           KUMIKI_RENDER_PROFILE: smoke
@@ -103,6 +103,9 @@ jobs:
             --output .review/ci/desk-lamp
           python -m kumiki_blender audit --model .review/ci/desk-lamp/model.glb --require-pbr-textures
           python -m kumiki_blender audit-revision --root .review/ci/desk-lamp
+          python -m kumiki_blender visual-qa \
+            --revision .review/ci/desk-lamp --output .review/ci/desk-lamp-visual-qa
+          test -s .review/ci/desk-lamp-visual-qa/contact-sheet.png
       - name: Audit portable GLB and immutable revision
         env:
           PYTHONPATH: src
@@ -130,7 +133,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: composer-desk-lamp-qa
-          path: .review/ci/desk-lamp/
+          path: |
+            .review/ci/desk-lamp/
+            .review/ci/desk-lamp-visual-qa/
           if-no-files-found: warn
 
   tests:
@@ -144,8 +149,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - name: Install optional composer authoring dependencies for full-suite tests
-        run: python -m pip install -e '.[composer]'
+      - name: Install optional composer and image QA dependencies for full-suite tests
+        run: python -m pip install -e '.[composer,qa]'
       - name: Run standard-library test suite
         env:
           PYTHONPATH: src

@@ -117,6 +117,14 @@ def main(argv: list[str] | None = None) -> int:
     audit_parser.add_argument("--require-pbr-textures", action="store_true")
     revision_parser = subcommands.add_parser("audit-revision")
     revision_parser.add_argument("--root", type=Path, required=True)
+    visual_parser = subcommands.add_parser("visual-qa", help="Contact sheet and optional render regression")
+    visual_parser.add_argument("--revision", type=Path, required=True)
+    visual_parser.add_argument("--baseline", type=Path, help="Verified prior revision of the same asset")
+    visual_parser.add_argument("--output", type=Path, required=True)
+    visual_parser.add_argument("--max-rms", type=float, default=0.02)
+    visual_parser.add_argument("--max-changed", type=float, default=0.05)
+    visual_parser.add_argument("--pixel-threshold", type=int, default=16)
+    visual_parser.add_argument("--idiff", action="store_true", help="Also run optional OpenImageIO idiff")
     source_parser = subcommands.add_parser("inspect-asset")
     source_parser.add_argument("--input", type=Path, required=True)
     texture_parser = subcommands.add_parser("inspect-texture-packs")
@@ -130,6 +138,18 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     try:
+        if args.command == "visual-qa":
+            from .visual_qa import VisualQAError, inspect_visual_revision
+            try:
+                report = inspect_visual_revision(
+                    args.revision, args.output, baseline=args.baseline,
+                    max_rms=args.max_rms, max_changed=args.max_changed,
+                    pixel_threshold=args.pixel_threshold, use_idiff=args.idiff,
+                )
+            except VisualQAError as error:
+                raise RecipeError(str(error)) from error
+            print(json.dumps(report, indent=2))
+            return 3 if report["status"] == "review-required" else 0
         if args.command in ("plan-asset", "compile-asset", "build-asset", "asset-schema"):
             if args.command == "build-asset" and args.plan is not None:
                 # This branch is intentionally safe inside Blender 4.5's

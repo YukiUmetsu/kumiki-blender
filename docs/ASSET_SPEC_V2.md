@@ -15,7 +15,7 @@ a valid topology or cinematic render preset does not certify photorealism.
 Existing core planning stays dependency-free. For the new schema compiler:
 
 ```bash
-python3 -m pip install -e '.[composer]'
+python3 -m pip install -e '.[composer,qa]'
 ```
 
 The composer runs from ordinary Python without loading `bpy`. Blender's
@@ -79,6 +79,41 @@ materials and named transforms inside Blender before it creates an output.
 4. Run `build-asset` into a fresh revision. Review hero/front/side/detail PNGs.
 5. Add human-reviewed detail/reference passes when the asset must resemble a
    specific object. Do not use a successful build as visual acceptance.
+
+## Multi-view visual QA (Pillow + optional OpenImageIO)
+
+Once Blender finishes a revision, create a labeled contact sheet and a JSON
+exposure report for artistic review. This runs in ordinary host Python, not
+Blender's embedded interpreter:
+
+```bash
+python3 -m kumiki_blender visual-qa \
+  --revision .review/desk-lamp/r01 \
+  --output .review/desk-lamp/r01-inspection
+```
+
+For a new revision with **the same asset ID and ordered camera views**,
+compare images with a known-good baseline. The command emits a per-view
+normalized RMS difference, changed-pixel fraction, and highlighted difference
+PNGs for regressions:
+
+```bash
+python3 -m kumiki_blender visual-qa \
+  --revision .review/desk-lamp/r02 \
+  --baseline .review/desk-lamp/r01 \
+  --output .review/desk-lamp/r02-inspection \
+  --max-rms 0.02 --max-changed 0.05 --pixel-threshold 16
+```
+
+Exit statuses: `0` for a generated inspection report or a passing comparison,
+`3` for a regression needing review, `2` for invalid inputs. The output is a
+new directory and must stay outside the immutable source revisions.
+
+For independent OpenImageIO perceptual comparisons, install its `idiff`
+executable and add `--idiff` with `--baseline`. Differences may then require
+human review even when the Pillow thresholds pass. A pixel test can detect
+render changes, but cannot judge shape craftsmanship, photorealism, historical
+fidelity, or whether the composition is aesthetically compelling.
 
 ## Extension boundaries
 

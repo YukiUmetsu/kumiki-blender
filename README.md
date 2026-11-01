@@ -4,12 +4,17 @@
 
 The optional [AssetSpec v2 composer](docs/ASSET_SPEC_V2.md) adds one generic
 validated plan/build path for assemblies of reusable geometry. Start with
-`pip install -e '.[composer]'`, then run
+`pip install -e '.[composer,qa]'`, then run
 `kumiki-blender plan-asset --spec examples/desk-lamp-assembly-v2.json` or
 `kumiki-blender asset-schema` to inspect the machine-readable recipe contract.
 `build-asset` produces the usual editable Blender scene, GLB, inspection views
 and immutable manifest. Existing generator commands and the dependency-free
 kernel remain unchanged.
+
+`visual-qa --revision .review/desk-lamp/r01 --output .review/desk-lamp/r01-inspection`
+generates a labeled multi-view contact sheet and exposure metrics. Adding
+`--baseline` compares revisions and highlights pixel-level regressions; artistic
+quality still requires a human review. See [the visual QA guide](docs/ASSET_SPEC_V2.md#multi-view-visual-qa-pillow--optional-openimageio).
 
 A standalone, code-first Blender toolkit for reusable, cinematic 3D authoring. Its first milestone is a **generic lattice observation tower**: a deterministic architectural scaffold, **not** a photorealistic or dimensionally verified replica of Tokyo Tower or another real landmark.
 
