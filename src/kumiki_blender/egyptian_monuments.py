@@ -299,14 +299,14 @@ def sphinx_assembly(*, prefix: str, length: float = 10.5,
                                        roughness=.10*min(x, y, z), seed=271),
          "bedrock-limestone")
     # Long recumbent lion back, tapering rump and forward shoulder masses.
-    part("lion-torso", along_x(((-3.30, 0, 1.50, .68, .76),
-                                (-2.86, 0, 1.55, 1.00, .88),
-                                (-2.28, 0, 1.45, 1.16, .96),
-                                (-1.20, 0, 1.33, 1.22, .96),
-                                (0.25, 0, 1.25, 1.29, .95),
-                                (1.65, 0, 1.24, 1.29, .90),
-                                (2.85, 0, 1.20, 1.13, .83),
-                                (3.67, 0, 1.08, .78, .66),
+    part("lion-torso", along_x(((-3.30, 0, 1.57, .68, .76),
+                                (-2.86, 0, 1.80, 1.00, 1.00),
+                                (-2.28, 0, 1.64, 1.16, 1.00),
+                                (-1.20, 0, 1.28, 1.22, .94),
+                                (0.25, 0, 1.17, 1.29, .90),
+                                (1.65, 0, 1.18, 1.29, .89),
+                                (2.85, 0, 1.28, 1.13, .90),
+                                (3.67, 0, 1.10, .78, .69),
                                 (4.16, 0, .99, .22, .29)),
                                roughness=.17, seed=211, exponent=2.35),
          "sphinx-limestone")
@@ -321,11 +321,11 @@ def sphinx_assembly(*, prefix: str, length: float = 10.5,
                           roughness=.14, seed=43, exponent=2.55))
     # Broad, sloping royal breast/shoulder, not the former straight cylinder
     # carrying a disproportionately oversized helmet above a toy-like body.
-    part("carved-neck", along_z(((1.68, -3.19, 0, .83, .94),
-                                  (2.03, -3.25, 0, .79, .87),
-                                  (2.43, -3.35, 0, .69, .78),
-                                  (2.78, -3.43, 0, .59, .71),
-                                  (3.13, -3.47, 0, .50, .64)),
+    part("carved-neck", along_z(((1.68, -2.94, 0, 1.04, 1.00),
+                                  (2.03, -3.08, 0, .94, .93),
+                                  (2.43, -3.29, 0, .75, .81),
+                                  (2.78, -3.45, 0, .61, .72),
+                                  (3.13, -3.50, 0, .50, .64)),
                                  roughness=.075, seed=49, exponent=2.55))
     for side, sign in (("left", -1), ("right", 1)):
         side_y = sign*1.07
@@ -362,9 +362,10 @@ def sphinx_assembly(*, prefix: str, length: float = 10.5,
                                 (3.20, -3.49, 0, .70, .93),
                                 (3.74, -3.51, 0, .73, 1.04),
                                 (4.14, -3.47, 0, .69, .99),
-                                (4.43, -3.48, 0, .57, .79),
-                                (4.60, -3.50, 0, .43, .57)),
-                               roughness=.040, seed=89, exponent=3.15), "casing-limestone")
+                                (4.43, -3.48, 0, .61, .83),
+                                (4.56, -3.50, 0, .57, .77),
+                                (4.60, -3.50, 0, .56, .76)),
+                               roughness=.028, seed=89, exponent=3.5), "casing-limestone")
     face = along_z(((2.93, -3.86, 0, .23, .23),
                     (3.14, -3.93, 0, .34, .34),
                     (3.43, -3.95, 0, .46, .41),
@@ -375,11 +376,11 @@ def sphinx_assembly(*, prefix: str, length: float = 10.5,
                    roughness=.012, seed=97, exponent=2.45)
     part("face", _sculpt_face_relief(face, scale_x=x, scale_y=y, scale_z=z))
     for side, sign in (("left", -1), ("right", 1)):
-        part(f"nemes-{side}-lappet", along_z(((2.18, -3.43, sign*.83, .15, .24),
-                                             (2.60, -3.49, sign*.85, .17, .27),
-                                             (3.25, -3.53, sign*.87, .19, .28),
-                                             (3.88, -3.49, sign*.90, .21, .25)),
-                                            roughness=.025, seed=105, exponent=2.8),
+        part(f"nemes-{side}-lappet", along_z(((2.18, -3.43, sign*.80, .10, .25),
+                                             (2.60, -3.49, sign*.89, .12, .28),
+                                             (3.25, -3.53, sign*.98, .15, .27),
+                                             (3.88, -3.49, sign*1.01, .16, .22)),
+                                            roughness=.022, seed=105, exponent=3.45),
              "casing-limestone")
         part(f"{side}-ear", along_z(((3.81, -3.83, sign*.58, .16, .10),
                                     (4.13, -3.80, sign*.62, .20, .18),

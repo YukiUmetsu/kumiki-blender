@@ -120,6 +120,22 @@ class EgyptianMonumentTests(unittest.TestCase):
         # A rectangular superellipse once had diagonal ratio >.83: its
         # planar side read as a giant sandstone beam even after voxel union.
         self.assertLess(abs(ring[12][1]-y_mid)/radius_y, .80)
+        # The back cannot be an even-height slab: a large shoulder crest,
+        # slightly lower saddle and raised hindquarters form a feline profile.
+        shoulder_top = max(point[2] for point in torso.vertices[5*96:6*96])
+        mid_back_top = max(point[2] for point in torso.vertices[20*96:21*96])
+        self.assertGreater(shoulder_top-mid_back_top, .45)
+        neck = parts["sphinx-carved-neck"]
+        lower_neck = neck.vertices[:96]
+        upper_neck = neck.vertices[-96:]
+        self.assertGreater(sum(point[0] for point in lower_neck)/96 -
+                           sum(point[0] for point in upper_neck)/96, .45)
+        hood = parts["sphinx-nemes-hood"]
+        high_ring = hood.vertices[-96:]
+        previous_ring = hood.vertices[-192:-96]
+        width = lambda points: max(point[1] for point in points)-min(point[1] for point in points)
+        # A nearly planar crown instead of an egg-shaped round cap.
+        self.assertGreater(width(high_ring)/width(previous_ring), .94)
         total_x = [point[0] for part in parts.values() for point in part.vertices]
         top_z = max(point[2] for part in parts.values() for point in part.vertices)
         self.assertLess(top_z/(max(total_x)-min(total_x)), .34)
