@@ -12,6 +12,9 @@ license = "MIT"
 authors = [{name = "Yuki Umetsu"}]
 dependencies = []
 
+[project.optional-dependencies]
+composer = ["pydantic>=2.10,<3"]
+
 [project.scripts]
 kumiki-blender = "kumiki_blender.cli:main"
 
