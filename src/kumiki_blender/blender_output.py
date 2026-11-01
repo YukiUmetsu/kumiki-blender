@@ -80,6 +80,7 @@ def export_revision(
     *,
     samples: int,
     metadata: dict[str, Any],
+    rig_objects: Sequence[Any] = (),
 ) -> dict[str, Any]:
     """Write one immutable revision of an existing staged Blender scene."""
     destination = Path(destination).resolve()
@@ -105,13 +106,15 @@ def export_revision(
 
         bake_export_meshes(bpy, objects)
 
-        # Explicit model selection excludes all studio-only lights and ground.
+        # Explicit model/rig selection excludes all studio-only lights/ground.
+        # Empty controls are source-editable and exported with their parented
+        # meshes and sampled animation when requested by a rigged asset.
         bpy.ops.object.select_all(action="DESELECT")
-        for obj in objects:
+        for obj in (*objects, *rig_objects):
             obj.select_set(True, view_layer=scene.view_layers[0])
         bpy.ops.export_scene.gltf(
             filepath=str(destination / "model.glb"), export_format="GLB",
-            use_selection=True, export_materials="EXPORT", export_animations=False,
+            use_selection=True, export_materials="EXPORT", export_animations=bool(rig_objects),
             export_cameras=False, export_lights=False, export_extras=True,
             export_apply=False,  # Explicitly baked above; avoid the global modifier exporter path.
         )

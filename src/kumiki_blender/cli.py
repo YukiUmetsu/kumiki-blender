@@ -23,6 +23,7 @@ from .recipe import RecipeError, load_recipe
 from .render_profiles import RenderProfileError
 from .revision_audit import RevisionAuditError, audit_revision
 from .surfaces import SurfaceError
+from .vintage_biplane import make_biplane
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -64,6 +65,9 @@ def main(argv: list[str] | None = None) -> int:
             subcommand.add_argument("--sphinx-source", type=Path)
             subcommand.add_argument("--sphinx-provenance", type=Path)
             subcommand.add_argument("--sphinx-front-axis", choices=("-X", "+X", "-Y", "+Y"), default="-X")
+    subcommands.add_parser("plan-biplane")
+    airplane_parser = subcommands.add_parser("build-biplane")
+    airplane_parser.add_argument("--output", type=Path, required=True)
     column_parser = subcommands.add_parser("plan-classical-column")
     column_parser.add_argument("--order", choices=("tuscan", "doric", "ionic"), default="ionic")
     column_parser.add_argument("--height", type=float, default=4.55)
@@ -86,6 +90,27 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     try:
+        if args.command in ("plan-biplane", "build-biplane"):
+            model = make_biplane()
+            if args.command == "plan-biplane":
+                print(json.dumps({
+                    "asset_id": model.asset_id, "generator": "red-vintage-biplane",
+                    "named_parts": model.part_counts, "instances": len(model.parts),
+                    "bounds_m": [model.bounds_min, model.bounds_max],
+                    "rig_controls": dict(model.pivots),
+                    "geometry_origin": "original procedural interpretation of user reference",
+                }, indent=2))
+                return 0
+            output = args.output.resolve()
+            if output.exists() or output.is_symlink():
+                raise RecipeError(f"Output already exists: {output}. Choose a new revision directory.")
+            try:
+                import bpy  # type: ignore[import-not-found]
+            except ImportError as error:
+                raise RuntimeError("Building the airplane requires Blender: blender --background --factory-startup --python-exit-code 1 --python scripts/blender_entry.py -- build-biplane --output <new-directory>") from error
+            from .blender_biplane import build_biplane_scene
+            print(json.dumps(build_biplane_scene(model, output, bpy_module=bpy), indent=2))
+            return 0
         if args.command == "audit":
             print(json.dumps(audit_glb(args.model, require_pbr_textures=args.require_pbr_textures), indent=2))
             return 0
