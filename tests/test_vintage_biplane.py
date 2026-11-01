@@ -33,6 +33,10 @@ class VintageBiplaneTests(unittest.TestCase):
         self.assertGreater(min(v[2] for v in fuselage.mesh.vertices), .90)
         upper = next(p for p in model.parts if p.name == "upper-left-wing")
         lower = next(p for p in model.parts if p.name == "lower-left-wing")
+        for wing in (upper, lower):
+            used_vertices = {index for face in wing.mesh.faces for index in face}
+            self.assertEqual(len(used_vertices), len(wing.mesh.vertices),
+                             "all rounded wingtip stations must be stitched into the surface")
         self.assertLess(min(v[0] for v in upper.mesh.vertices), -4.65,
                         "fixed leading edge must run continuously to the rounded tip")
         self.assertLess(min(v[0] for v in lower.mesh.vertices), -4.55)
