@@ -1,9 +1,10 @@
 """Refit *original* Sphinx facial geometry from corresponding frontal landmarks.
 
 The photo remains external. Fitting uses a uniform camera alignment, then a
-regularized radial-basis displacement field on the continuous front face.
-This is an intentionally reversible intermediate step toward survey-based 3D
-reconstruction: a single image cannot recover profile depth or fine anatomy.
+monotone vertical map on the continuous facial surface. Horizontal
+corrections are *reported but not applied*: uncalibrated photographic cameras
+can suggest physically impossible eye/cheek displacements. This is an
+intentionally reversible step toward survey-based 3D reconstruction.
 """
 
 from __future__ import annotations
@@ -103,34 +104,15 @@ def prepare_sphinx_face_fit(reference: LandmarkView, candidate: LandmarkView, *,
         tuple(controls), hashlib.sha256(serialized).hexdigest(), max_shift_m)
 
 
-def _solve_dense(matrix: list[list[float]], right: list[float]) -> list[float]:
-    """Pivoted Gauss-Jordan solve for a small Gaussian-RBF interpolant."""
-    n = len(right)
-    a = [row[:] + [value] for row, value in zip(matrix, right)]
-    for col in range(n):
-        pivot = max(range(col, n), key=lambda row: abs(a[row][col]))
-        if abs(a[pivot][col]) < 1e-10:
-            raise LandmarkError("Facial landmark warp is ill-conditioned")
-        a[pivot], a[col] = a[col], a[pivot]
-        inv = 1./a[col][col]
-        for j in range(col, n+1):
-            a[col][j] *= inv
-        for row in range(n):
-            if row == col:
-                continue
-            factor = a[row][col]
-            if factor:
-                for j in range(col, n+1):
-                    a[row][j] -= factor*a[col][j]
-    return [row[n] for row in a]
-
-
 def deform_sphinx_face(mesh: Mesh, fit: SphinxFaceFit, *,
                        scale_y: float = 1., scale_z: float = 3.6/4.6) -> Mesh:
-    """Move features on one watertight facial skin, fixing peripheral points.
+    """Monotone vertical face refit that cannot fold the modeled Y/Z grid.
 
-    Rear vertices stay unchanged. The rear face and side-wall topology remain
-    intact so Blender can voxel-union this head with the hood as before.
+    Unlike a free 2D radial-basis warp, interpolation here is strictly
+    order-preserving from chin to mouth to nose to eyes to crown. Modelers can
+    inspect untrusted horizontal measurements without using them to invert
+    the facial surface. Both front and rear surfaces follow the same vertical
+    deformation so their watertight side walls remain physically coherent.
     """
     if not isinstance(fit, SphinxFaceFit) or not fit.controls:
         raise LandmarkError("Face deformation requires a prepared SphinxFaceFit")
@@ -139,36 +121,71 @@ def deform_sphinx_face(mesh: Mesh, fit: SphinxFaceFit, *,
     if any(type(v) not in (int, float) or not math.isfinite(v) or v <= 0
            for v in (scale_y, scale_z)):
         raise LandmarkError("Face mesh scales must be positive and finite")
-    # Pin nearby points on upper, lower, and lateral margins so the face
-    # still joins the royal headdress and neck after voxel remeshing.
-    boundary = [
-        (0., 2.69*scale_z), (0., 4.51*scale_z),
-        (-.30*scale_y, 2.69*scale_z), (.30*scale_y, 2.69*scale_z),
-        (-.47*scale_y, 4.51*scale_z), (.47*scale_y, 4.51*scale_z),
+    controls = {control.name: control for control in fit.controls}
+    required = ("chin-bottom", "mouth-midline", "nose-break", "left-eye", "right-eye")
+    if any(name not in controls for name in required):
+        raise LandmarkError("Vertical face refit requires chin, mouth, nose and both eyes")
+    left, right = controls["left-eye"], controls["right-eye"]
+    if abs(left.delta_z_m-right.delta_z_m) > .10*scale_z:
+        raise LandmarkError("Eye line differs too much across the two reference images")
+    if all(abs(control.delta_z_m) < 1e-12 for control in fit.controls):
+        return mesh
+    # Fixed crown and lower edge prevent headcloth/neck disconnection.
+    nodes = [
+        (2.69*scale_z, 2.69*scale_z),
+        (controls["chin-bottom"].z_m,
+         controls["chin-bottom"].z_m+controls["chin-bottom"].delta_z_m),
+        (controls["mouth-midline"].z_m,
+         controls["mouth-midline"].z_m+controls["mouth-midline"].delta_z_m),
+        (controls["nose-break"].z_m,
+         controls["nose-break"].z_m+controls["nose-break"].delta_z_m),
+        ((left.z_m+right.z_m)/2.,
+         (left.z_m+right.z_m+left.delta_z_m+right.delta_z_m)/2.),
+        (4.51*scale_z, 4.51*scale_z),
     ]
-    for z, width in ((3.31, .465), (3.61, .525), (3.91, .559), (4.14, .551)):
-        boundary.extend([(-width*scale_y, z*scale_z), (width*scale_y, z*scale_z)])
-    knots = [(p.y_m, p.z_m, p.delta_y_m, p.delta_z_m) for p in fit.controls]
-    knots.extend((y, z, 0., 0.) for y, z in boundary)
-    # Scaled to model dimensions, not raw user-image pixels.
-    radius_y = .30*scale_y
-    radius_z = .31*scale_z
+    if any(b[0] <= a[0] or b[1] <= a[1]
+           for a, b in zip(nodes, nodes[1:])):
+        raise LandmarkError(
+            "Reference would invert chin/mouth/nose/eyes; recalibrate cameras")
+    xs = [node[0] for node in nodes]
+    ys = [node[1] for node in nodes]
+    hs = [b-a for a, b in zip(xs, xs[1:])]
+    ds = [(b-a)/h for a, b, h in zip(ys, ys[1:], hs)]
+    # Shape-preserving Fritsch-Carlson derivatives; all secants are positive.
+    slopes = [0.]*len(xs)
+    for i in range(1, len(xs)-1):
+        w1, w2 = 2*hs[i]+hs[i-1], hs[i]+2*hs[i-1]
+        slopes[i] = (w1+w2)/(w1/ds[i-1]+w2/ds[i])
 
-    def kernel(a: tuple[float, ...], b: tuple[float, ...]) -> float:
-        return math.exp(-.5*((a[0]-b[0])/radius_y)**2 -
-                        .5*((a[1]-b[1])/radius_z)**2)
+    def endpoint(h0: float, h1: float, d0: float, d1: float) -> float:
+        value = ((2*h0+h1)*d0-h0*d1)/(h0+h1)
+        return max(0., min(3*d0, value))
 
-    matrix = [[kernel(a, b) + (1e-5 if i == j else 0.)
-               for j, b in enumerate(knots)] for i, a in enumerate(knots)]
-    weights_y = _solve_dense(matrix, [knot[2] for knot in knots])
-    weights_z = _solve_dense(matrix, [knot[3] for knot in knots])
-    count_front = len(mesh.vertices)//2
-    vertices = []
-    for vertex in mesh.vertices[:count_front]:
-        x, y, z = vertex
-        k_values = [kernel(vertex[1:], knot) for knot in knots]
-        delta_y = sum(k*w for k, w in zip(k_values, weights_y))
-        delta_z = sum(k*w for k, w in zip(k_values, weights_z))
-        vertices.append((x, y+delta_y, z+delta_z))
-    vertices.extend(mesh.vertices[count_front:])
-    return Mesh(tuple(vertices), mesh.faces)
+    slopes[0] = endpoint(hs[0], hs[1], ds[0], ds[1])
+    slopes[-1] = endpoint(hs[-1], hs[-2], ds[-1], ds[-2])
+
+    def remap(z: float) -> float:
+        if z <= xs[0] or z >= xs[-1]:
+            return z
+        index = next(i for i in range(len(hs)) if z <= xs[i+1])
+        t = (z-xs[index])/hs[index]
+        t2, t3 = t*t, t*t*t
+        return ((2*t3-3*t2+1)*ys[index] +
+                (t3-2*t2+t)*hs[index]*slopes[index] +
+                (-2*t3+3*t2)*ys[index+1] +
+                (t3-t2)*hs[index]*slopes[index+1])
+
+    warped = Mesh(tuple((x, y, remap(z)) for x, y, z in mesh.vertices), mesh.faces)
+    # A monotone 1D mapping preserves the row ordering by construction.
+    # Still verify it explicitly: future changes to face topology or control
+    # placement must not quietly reintroduce the inverted grid seen in QA.
+    cols = 97
+    if len(mesh.vertices)//2 % cols:
+        raise LandmarkError("Face topology changed; refit row layout must be reviewed")
+    rows = len(mesh.vertices)//(2*cols)
+    for row in range(rows-1):
+        for col in range(cols):
+            i = row*cols+col
+            if warped.vertices[i+cols][2] <= warped.vertices[i][2]:
+                raise LandmarkError("Photographic warp folded the facial surface")
+    return warped

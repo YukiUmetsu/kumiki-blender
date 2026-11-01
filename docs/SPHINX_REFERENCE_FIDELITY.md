@@ -20,8 +20,9 @@ is made for the existing generator.
 ## Repeatable face-to-reference comparison
 
 The original manually annotated JSON records in `examples/` illustrate
-point correspondences in a user-provided photographic frontal view and a
-previous Blender render. The photograph itself is **not redistributed**.
+point correspondences in a user-provided photographic frontal view and the
+**latest procedural Blender frontal QA render**. The photograph itself is
+**not redistributed**.
 Coordinates are rough visual placements, **not survey measurements** and
 must be refined for serious modeling. In particular, photographic perspective,
 camera pitch, differing headcloth orientation and shadows limit comparisons.
@@ -59,17 +60,19 @@ passes manifold checks or has a large vertex count.
 ## Experimental front-image-constrained geometry
 
 An **opt-in** sculpt pass now takes exactly the two annotated frontal JSON
-records above and refits seven named areas of the *original* continuous face
-mesh. The camera alignment is isotropic (same scaling in X and Y). The
+records above and aligns **vertical** landmarks on the *original* continuous
+face mesh. The camera alignment is isotropic (same scaling in X and Y). The
 procedural headcloth wing-tip separation establishes the image-to-model
 scale; it does **not** assert the original Sphinx is 3.14 meters wide.
 
-The deformer interpolates eye height, cheek contour, damaged nasal bridge,
-mouth height and chin placement with a regularized radial-basis field.
-Peripheral anchor points stay fixed near the hood and neck, and the mesh's
-rear surface and polygon topology are preserved. Unlike changing individual
-Gaussian feature coefficients, the correction is explicitly tied to
-the *difference between two annotated observations*.
+The first 2D radial-basis experiment **failed visual QA**: it folded the
+face's parametric grid, producing a long nasal spike and distorted mouth
+despite manifold/GLB tests passing. It was rejected. The safer revision uses
+order-preserving cubic interpolation of chin, mouth, nose, eyes and crown
+heights. It does **not** apply suggested horizontal eye/cheek movements, since
+uncalibrated camera differences can require impossible crossing of anatomical
+feature positions. Both front and back of the face follow the same vertical
+map, preserving coherent thickness and a watertight head source.
 
 ```bash
 PYTHONPATH=src python3 -m kumiki_blender plan-monument --kind sphinx \
@@ -85,11 +88,11 @@ blender --background --factory-startup --python-exit-code 1 \
 ```
 
 The same inputs reproduce the same face and their SHA-256 appears in the
-scene manifest. The CLI rejects missing records, viewpoint mismatch, or
-landmark shifts larger than 29 cm at the default study scale. Without these
-flags the original illustrative generator is unchanged. The focused Blender
-CI now builds and renders both versions to evaluate whether the correction
-actually improves the result.
+scene manifest. The CLI rejects missing records, viewpoint mismatch,
+inverted landmark height ordering or landmark shifts larger than 29 cm at
+the default study scale. Without these flags the original illustrative
+generator is unchanged. Blender CI builds and renders both versions so
+**real visual QA decides whether to use the result**.
 
 **Still missing:** true side-profile fitting, 3D survey point coordinates,
 an anatomically sculpted eye/ear/lip surface, calibrated camera perspective,

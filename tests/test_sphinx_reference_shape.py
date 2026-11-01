@@ -7,6 +7,7 @@ import io
 import json
 import math
 import unittest
+from dataclasses import replace
 from pathlib import Path
 
 from kumiki_blender.architecture_geometry import audit_mesh
@@ -36,12 +37,14 @@ class SphinxReferenceShapeTests(unittest.TestCase):
         self.assertEqual(len(fit.reference_sha256), 64)
         # User's photo places eyes higher, mouth lower and chin higher than
         # the previously rendered procedural head when nemes/crown are aligned.
-        self.assertGreater(controls["left-eye"].delta_z_m, .12)
-        self.assertLess(controls["mouth-midline"].delta_z_m, -.07)
-        self.assertGreater(controls["chin-bottom"].delta_z_m, .10)
-        self.assertAlmostEqual(controls["nose-break"].delta_z_m, 0., delta=.025)
-        self.assertLess(abs(controls["left-eye"].delta_y_m), .10)
-        self.assertLess(abs(controls["right-eye"].delta_y_m), .10)
+        self.assertGreater(controls["left-eye"].delta_z_m, .06)
+        self.assertLess(controls["mouth-midline"].delta_z_m, -.04)
+        self.assertGreater(controls["chin-bottom"].delta_z_m, .05)
+        self.assertGreater(controls["nose-break"].delta_z_m, .03)
+        # Horizontal suggestions remain diagnostic: without camera
+        # calibration they would push eyes outside the cheek outlines.
+        self.assertGreater(controls["left-eye"].delta_y_m, .15)
+        self.assertLess(controls["right-eye"].delta_y_m, -.10)
 
     def test_warp_preserves_closed_surface_rear_face_and_local_controls(self):
         face = _anatomical_sphinx_face(scale_x=1., scale_y=1., scale_z=Z_SCALE)
@@ -49,23 +52,25 @@ class SphinxReferenceShapeTests(unittest.TestCase):
         warped = deform_sphinx_face(face, fit)
         self.assertEqual(warped.faces, face.faces)
         half = len(face.vertices)//2
-        self.assertEqual(warped.vertices[half:], face.vertices[half:])
+        self.assertTrue(all(old[:2] == new[:2]
+                            for old, new in zip(face.vertices, warped.vertices)))
+        self.assertNotEqual(warped.vertices[half:], face.vertices[half:])
         report = audit_mesh(warped)
         self.assertEqual((report.boundary_edges, report.nonmanifold_edges), (0, 0))
         self.assertGreater(report.volume_m3, .5)
         max_delta = max(math.dist(a, b) for a, b in zip(face.vertices, warped.vertices))
-        self.assertGreater(max_delta, .13)
+        self.assertGreater(max_delta, .06)
         self.assertLess(max_delta, .30)
-        # The RBF must actually match every named control at a nearby mesh
-        # vertex, rather than merely changing unrelated facial coordinates.
-        for control in fit.controls:
+        # Monotone vertical fit should match independently annotated heights
+        # while refusing to shift lateral geometry into implausible positions.
+        for control in (c for c in fit.controls
+                        if c.name not in ("left-cheek-outline", "right-cheek-outline")):
             index = min(range(half), key=lambda i:
                         (face.vertices[i][1]-control.y_m)**2 +
                         (face.vertices[i][2]-control.z_m)**2)
             old, new = face.vertices[index], warped.vertices[index]
-            self.assertAlmostEqual(new[1]-old[1], control.delta_y_m, delta=.012,
-                                   msg=control.name)
-            self.assertAlmostEqual(new[2]-old[2], control.delta_z_m, delta=.015,
+            self.assertEqual(new[1], old[1])
+            self.assertAlmostEqual(new[2]-old[2], control.delta_z_m, delta=.012,
                                    msg=control.name)
         # The top crown and lower neck boundaries are pinned near original.
         crown_index = min(range(half), key=lambda i:
@@ -73,6 +78,26 @@ class SphinxReferenceShapeTests(unittest.TestCase):
                           (face.vertices[i][2]-4.51*Z_SCALE)**2)
         self.assertLess(math.dist(face.vertices[crown_index],
                                   warped.vertices[crown_index]), .012)
+        # The old unconstrained 2D RBF created *inverted* face quads and a
+        # long nose spike despite passing manifold/nonmanifold checks.
+        cols, rows = 97, 129
+        self.assertGreater(min(
+            warped.vertices[(row+1)*cols+col][2] -
+            warped.vertices[row*cols+col][2]
+            for row in range(rows-1) for col in range(cols)), .0)
+        self.assertGreater(min(
+            warped.vertices[row*cols+col+1][1] -
+            warped.vertices[row*cols+col][1]
+            for row in range(rows) for col in range(cols-1)), .0)
+
+    def test_rejects_a_vertically_inverted_reference_fit(self):
+        fit = self.fit()
+        broken = replace(fit, controls=tuple(
+            replace(c, delta_z_m=.8) if c.name == "chin-bottom" else c
+            for c in fit.controls))
+        face = _anatomical_sphinx_face(scale_x=1., scale_y=1., scale_z=Z_SCALE)
+        with self.assertRaisesRegex(LandmarkError, "invert"):
+            deform_sphinx_face(face, broken)
 
     def test_identity_landmarks_leave_original_surface_unchanged(self):
         a = load_landmark_view(REFERENCE)

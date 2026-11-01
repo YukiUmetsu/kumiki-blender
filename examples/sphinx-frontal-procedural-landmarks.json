@@ -1,19 +1,19 @@
 {
   "view": "frontal",
-  "image_size": [576, 374],
+  "image_size": [576, 360],
   "anchors": ["crown-top", "left-nemes-wing-tip", "right-nemes-wing-tip"],
   "landmarks": {
-    "crown-top": [287, 75],
-    "left-nemes-wing-tip": [12, 280],
-    "right-nemes-wing-tip": [564, 280],
-    "left-eye": [223, 198],
-    "right-eye": [350, 198],
-    "nose-break": [286, 227],
-    "mouth-midline": [288, 260],
-    "chin-bottom": [288, 360],
-    "left-ear-center": [161, 183],
-    "right-ear-center": [411, 183],
-    "left-cheek-outline": [153, 236],
-    "right-cheek-outline": [419, 234]
+    "crown-top": [288, 65],
+    "left-nemes-wing-tip": [28, 259],
+    "right-nemes-wing-tip": [548, 259],
+    "left-eye": [246, 165],
+    "right-eye": [327, 164],
+    "nose-break": [287, 215],
+    "mouth-midline": [289, 248],
+    "chin-bottom": [287, 321],
+    "left-ear-center": [162, 183],
+    "right-ear-center": [413, 183],
+    "left-cheek-outline": [171, 236],
+    "right-cheek-outline": [413, 237]
   }
 }
