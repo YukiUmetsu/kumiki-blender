@@ -8,9 +8,12 @@ from pathlib import Path
 from typing import Any
 
 from .blender_output import aim_at, create_model_scene, export_revision
+from .blender_import import imported_bounds
 from .blender_scene import _create_box, _material
 from .blender_textures import ensure_metric_uvs
 from .egyptian_monuments import MonumentStudy
+from .landmark_scan import SphinxScan, fit_sphinx_scan
+from .asset_import import AssetImportError
 from .render_profiles import select_render_profile
 from .shots import QualityShot
 from .sphinx_sculpt import combine_sculpture_sources, sphinx_head_parts, sphinx_integral_parts
@@ -125,7 +128,73 @@ def _integrate_sphinx_group(bpy: Any, scene: Any, model: Any,
             "unified_vertices": len(skin.vertices)}
 
 
+def _place_sphinx_scan(bpy: Any, scene: Any, model: Any, scan: SphinxScan,
+                       study: MonumentStudy) -> tuple[list[Any], dict[str, Any]]:
+    """Import and normalize a licensed scan, keeping original PBR and hierarchy."""
+    from mathutils import Matrix
+
+    known = {obj.as_pointer() for obj in bpy.data.objects}
+    result = bpy.ops.import_scene.gltf(
+        filepath=str(scan.source), import_pack_images=True,
+        import_scene_extras=True, import_scene_as_collection=True,
+        import_select_created_objects=True,
+    )
+    if "FINISHED" not in result:
+        raise AssetImportError("Blender could not import the Sphinx scan")
+    imported = [obj for obj in bpy.data.objects if obj.as_pointer() not in known]
+    meshes = [obj for obj in imported if obj.type == "MESH"]
+    if not meshes or any(not obj.data.vertices or not obj.data.polygons for obj in meshes):
+        raise AssetImportError("Sphinx scan imported without usable mesh surfaces")
+    if any(image.source == "FILE" and image.filepath and not image.packed_file
+           for image in bpy.data.images):
+        raise AssetImportError("Sphinx scan texture was not packed into the scene")
+    materials = {slot.material.name for obj in meshes for slot in obj.material_slots
+                 if slot.material is not None}
+    if scan.inspection["glb_audit"]["materials"] and not materials:
+        raise AssetImportError("Blender lost the Sphinx scan's PBR materials")
+    # Move newly imported meshes and hierarchy empties into the intended model
+    # collection. Parent transforms remain intact and are applied just once.
+    for obj in imported:
+        if model not in obj.users_collection:
+            model.objects.link(obj)
+        for prior in tuple(obj.users_collection):
+            if prior != model:
+                prior.objects.unlink(obj)
+    bpy.context.view_layer.update()
+    source_bounds = imported_bounds(meshes)
+    params = dict(study.parameters)
+    sy = -(params["pyramid_base_m"]/2+8) if study.kind == "giza-study" else 0.0
+    alignment = fit_sphinx_scan(
+        *source_bounds, front_axis=scan.front_axis,
+        target_length_m=params["sphinx_length_m"], target_center_xy=(0.0, sy))
+    transform = (Matrix.Translation(alignment.translation_m)
+                 @ Matrix.Rotation(alignment.rotation_z_rad, 4, "Z")
+                 @ Matrix.Scale(alignment.uniform_scale, 4))
+    imported_ids = {obj.as_pointer() for obj in imported}
+    for obj in imported:
+        if obj.parent is None or obj.parent.as_pointer() not in imported_ids:
+            obj.matrix_world = transform @ obj.matrix_world
+    for obj in meshes:
+        obj["kumiki_part"] = "sphinx-scan"
+        obj["kumiki_source_asset"] = scan.provenance.asset_id
+    bpy.context.view_layer.update()
+    actual = imported_bounds(meshes)
+    if any(abs(actual[side][axis] - alignment.aligned_bounds_m[side][axis]) > 1e-3
+           for side in range(2) for axis in range(3)):
+        raise AssetImportError("Sphinx scan hierarchy did not preserve its fitted bounds")
+    return meshes, {
+        "provenance": scan.provenance.to_manifest(scan.inspection["input_sha256"]),
+        "source_glb_bytes": scan.inspection["input_bytes"],
+        "source_front_axis": scan.front_axis,
+        "mesh_objects": len(meshes), "source_materials": len(materials),
+        "placement": alignment.to_manifest(),
+        "verified_bounds_m": actual,
+        "geometry_origin": "external scan / visually and historically unverified",
+    }
+
+
 def build_monument_scene(study: MonumentStudy, destination: Path, *,
+                         sphinx_scan: SphinxScan | None = None,
                          bpy_module: Any = None) -> dict[str, Any]:
     """Stage warm limestone lighting, save editable scene and audit portable GLB."""
     if bpy_module is None:
@@ -149,6 +218,13 @@ def build_monument_scene(study: MonumentStudy, destination: Path, *,
 
     model = bpy.data.collections.new("Egyptian monuments / portable GLB")
     scene.collection.children.link(model)
+    hidden_sphinx = None
+    if sphinx_scan:
+        if study.kind == "pyramid":
+            raise AssetImportError("Cannot replace a Sphinx in a pyramid-only scene")
+        hidden_sphinx = bpy.data.collections.new("Sphinx / hidden parametric authoring alternative")
+        scene.collection.children.link(hidden_sphinx)
+        hidden_sphinx.hide_render = True
     stage = bpy.data.collections.new("Warm limestone studio / excluded from GLB")
     scene.collection.children.link(stage)
     materials = {
@@ -194,7 +270,7 @@ def build_monument_scene(study: MonumentStudy, destination: Path, *,
                         poly.use_smooth = True
             cache[key] = mesh
         obj = bpy.data.objects.new(part.name, cache[key])
-        model.objects.link(obj)
+        (hidden_sphinx if part.name.startswith("sphinx-") and hidden_sphinx else model).objects.link(obj)
         obj.matrix_world = Matrix((
             (part.axis_x[0], part.axis_y[0], part.axis_z[0], part.origin[0]),
             (part.axis_x[1], part.axis_y[1], part.axis_z[1], part.origin[1]),
@@ -202,6 +278,8 @@ def build_monument_scene(study: MonumentStudy, destination: Path, *,
             (0, 0, 0, 1),
         ))
         obj["kumiki_part"] = "pyramid" if part.name.startswith("pyramid-") else "sphinx"
+        if hidden_sphinx and part.name.startswith("sphinx-"):
+            obj.hide_render = True
         # Organic silhouette lofts are already smooth; small bevels are only
         # needed on cut/exposed stone blocks and the terrain edge.
         if part.name.startswith("pyramid-") and "-core" not in part.name:
@@ -214,19 +292,27 @@ def build_monument_scene(study: MonumentStudy, destination: Path, *,
             bevel.width = 0.012
             bevel.segments = 2
             obj.modifiers.new("Stone weighted normals", "WEIGHTED_NORMAL")
-        objects.append(obj)
+        if not (hidden_sphinx and part.name.startswith("sphinx-")):
+            objects.append(obj)
 
-    sculpt_scale = dict(study.parameters)["sphinx_length_m"] / 10.5
-    body_sources = sphinx_integral_parts(study.instances)
-    head_sources = sphinx_head_parts(study.instances)
-    sculpt_report = {
-        "body": _integrate_sphinx_group(
-            bpy, scene, model, body_sources, objects, palette["sphinx-limestone"],
-            label="body", voxel=max(.04, min(.095, .065*sculpt_scale))),
-        "head": _integrate_sphinx_group(
-            bpy, scene, model, head_sources, objects, palette["sphinx-head-limestone"],
-            label="head", voxel=max(.018, min(.04, .024*sculpt_scale))),
-    }
+    if sphinx_scan:
+        imported_meshes, scan_metadata = _place_sphinx_scan(bpy, scene, model, sphinx_scan, study)
+        objects.extend(imported_meshes)
+        sculpt_report: dict[str, Any] = {"mode": "external-scan", "source_parts_hidden":
+                                        sum(p.name.startswith("sphinx-") for p in study.instances)}
+    else:
+        scan_metadata = None
+        sculpt_scale = dict(study.parameters)["sphinx_length_m"] / 10.5
+        body_sources = sphinx_integral_parts(study.instances)
+        head_sources = sphinx_head_parts(study.instances)
+        sculpt_report = {
+            "body": _integrate_sphinx_group(
+                bpy, scene, model, body_sources, objects, palette["sphinx-limestone"],
+                label="body", voxel=max(.04, min(.095, .065*sculpt_scale))),
+            "head": _integrate_sphinx_group(
+                bpy, scene, model, head_sources, objects, palette["sphinx-head-limestone"],
+                label="head", voxel=max(.018, min(.04, .024*sculpt_scale))),
+        }
 
     span = study.bounds_max[0] - study.bounds_min[0]
     depth = study.bounds_max[1] - study.bounds_min[1]
@@ -264,8 +350,8 @@ def build_monument_scene(study: MonumentStudy, destination: Path, *,
     metadata = {
         "asset_id": study.asset_id,
         "generator": "kumiki-blender/egyptian-monument-detail-kit",
-        "status": "illustrative architecture / artistic review pending",
-        "provenance": "Original parametric study; not a surveyed reconstruction of Giza",
+        "status": "scan-assisted illustrative architecture / artistic review pending" if sphinx_scan else "illustrative architecture / artistic review pending",
+        "provenance": "Original parametric pyramid/site; external Sphinx scan with separate declared provenance" if sphinx_scan else "Original parametric study; not a surveyed reconstruction of Giza",
         "recipe_sha256": hashlib.sha256(repr((study.kind, study.parameters)).encode()).hexdigest(),
         "render_profile": {"name": profile.name, "width": profile.width,
                            "height": profile.height, "samples": profile.samples},
@@ -276,6 +362,7 @@ def build_monument_scene(study: MonumentStudy, destination: Path, *,
         "mesh_data_blocks": len(cache),
         "visible_mesh_objects": len(objects),
         "sphinx_sculpt_union": sculpt_report,
+        "sphinx_scan": scan_metadata,
         "bounds_m": [study.bounds_min, study.bounds_max],
     }
     return export_revision(bpy, scene, camera, objects, plan_monument_shots(study),

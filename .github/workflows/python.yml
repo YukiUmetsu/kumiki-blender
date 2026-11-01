@@ -96,6 +96,20 @@ jobs:
             --python scripts/blender_entry.py -- \
             build-monument --kind giza-study --pyramid-courses 18 \
             --output .review/ci/egyptian-monuments
+      - name: Create a first-party Sphinx replacement GLB fixture
+        run: |
+          blender --background --factory-startup --threads 1 --python-exit-code 1 \
+            --python scripts/blender_sphinx_scan_fixture.py
+      - name: Render combined pyramid scene with imported Sphinx proxy
+        env:
+          KUMIKI_RENDER_PROFILE: smoke
+        run: |
+          blender --background --factory-startup --threads 1 --python-exit-code 1 \
+            --python scripts/blender_entry.py -- \
+            build-monument --kind giza-study \
+            --sphinx-source .review/ci/first-party-sphinx-proxy.glb \
+            --sphinx-provenance examples/first-party-sphinx-scan.json \
+            --output .review/ci/sphinx-scan-integration
       - name: Render reusable architectural facade detail kit
         env:
           KUMIKI_RENDER_PROFILE: smoke
@@ -168,6 +182,7 @@ jobs:
           python -m kumiki_blender audit --model .review/ci/doric-portico/model.glb --require-pbr-textures
           python -m kumiki_blender audit --model .review/ci/pointed-balustrade-portico/model.glb --require-pbr-textures
           python -m kumiki_blender audit --model .review/ci/egyptian-monuments/model.glb --require-pbr-textures
+          python -m kumiki_blender audit --model .review/ci/sphinx-scan-integration/model.glb --require-pbr-textures
           python -m kumiki_blender audit --model .review/ci/facade/model.glb --require-pbr-textures
           python -m kumiki_blender audit --model .review/ci/imported-portico/model.glb --require-pbr-textures
           python -m kumiki_blender audit --model .review/ci/restyled-portico/model.glb --require-pbr-textures
@@ -178,6 +193,7 @@ jobs:
           python -m kumiki_blender audit-revision --root .review/ci/doric-portico
           python -m kumiki_blender audit-revision --root .review/ci/pointed-balustrade-portico
           python -m kumiki_blender audit-revision --root .review/ci/egyptian-monuments
+          python -m kumiki_blender audit-revision --root .review/ci/sphinx-scan-integration
           python -m kumiki_blender audit-revision --root .review/ci/facade
           python -m kumiki_blender audit-revision --root .review/ci/imported-portico
           python -m kumiki_blender audit-revision --root .review/ci/restyled-portico
@@ -188,6 +204,7 @@ jobs:
           gltf-transform validate .review/ci/doric-portico/model.glb
           gltf-transform validate .review/ci/pointed-balustrade-portico/model.glb
           gltf-transform validate .review/ci/egyptian-monuments/model.glb
+          gltf-transform validate .review/ci/sphinx-scan-integration/model.glb
           gltf-transform validate .review/ci/facade/model.glb
           gltf-transform validate .review/ci/imported-portico/model.glb
           gltf-transform validate .review/ci/restyled-portico/model.glb
@@ -196,6 +213,7 @@ jobs:
           python -c 'import json; m=json.load(open(".review/ci/restyled-portico/manifest.json")); assert len(m["material_overrides"]) == 1 and m["material_overrides"][0]["preset"] == "natural-stone"'
           python -c 'import json; m=json.load(open(".review/ci/scanned-facade/manifest.json")); assert len(m["texture_packs"]) == 2 and all(v["pack"]["maps"]["normal"]["sha256"] for v in m["texture_packs"])'
           python -c 'import json; m=json.load(open(".review/ci/scanned-portico/manifest.json")); assert len(m["texture_packs"]) == 1 and m["texture_packs"][0]["target"] == "Architectural stone.004"'
+          python -c 'import json; m=json.load(open(".review/ci/sphinx-scan-integration/manifest.json")); assert m["sphinx_scan"]["mesh_objects"] == 4 and m["sphinx_scan"]["provenance"]["commercial_use_allowed"] and m["sphinx_sculpt_union"]["mode"] == "external-scan" and m["sphinx_scan"]["source_materials"] >= 1'
           python -m unittest tests.test_export_audit tests.test_glb_audit -v
           test -s .review/ci/lattice-tower/previews/detail.png
           test -s .review/ci/portico/previews/detail.png
@@ -208,6 +226,7 @@ jobs:
           test -s .review/ci/egyptian-monuments/previews/sphinx.png
           test -s .review/ci/egyptian-monuments/previews/sphinx-profile.png
           test -s .review/ci/egyptian-monuments/previews/sphinx-face.png
+          test -s .review/ci/sphinx-scan-integration/previews/sphinx-face.png
           test -s .review/ci/facade/previews/detail.png
           test -s .review/ci/imported-portico/previews/detail.png
           test -s .review/ci/restyled-portico/previews/detail.png
@@ -256,4 +275,5 @@ jobs:
             .review/ci/egyptian-monuments/previews/sphinx.png \
             .review/ci/egyptian-monuments/previews/sphinx-profile.png \
             .review/ci/egyptian-monuments/previews/sphinx-face.png \
-            .review/ci/egyptian-monuments/previews/masonry.png
+            .review/ci/egyptian-monuments/previews/masonry.png \
+            .review/ci/sphinx-scan-integration/previews/sphinx.png

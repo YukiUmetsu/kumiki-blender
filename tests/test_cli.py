@@ -88,6 +88,43 @@ class CLITests(unittest.TestCase):
             self.assertIn("redistribution", stream.getvalue())
             self.assertFalse(destination.exists())
 
+    def test_sphinx_scan_build_preflights_rights_and_pairs_without_blender(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source, record, destination = root / "scan.glb", root / "source.json", root / "revision"
+            fixture_glb(source)
+            record.write_text(json.dumps(provenance_json()))
+            for arguments, expected in (
+                (["--sphinx-source", str(source)], "together"),
+                (["--sphinx-source", str(source), "--sphinx-provenance", str(record)], "commercial_use_allowed"),
+                (["--kind", "pyramid", "--sphinx-source", str(source),
+                  "--sphinx-provenance", str(record)], "only available"),
+            ):
+                errors = io.StringIO()
+                with contextlib.redirect_stderr(errors):
+                    code = main(["build-monument", "--output", str(destination), *arguments])
+                self.assertEqual(code, 2)
+                self.assertIn(expected, errors.getvalue())
+                self.assertFalse(destination.exists())
+
+    def test_sphinx_scan_build_passes_prepared_record_to_blender(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source, record, destination = root / "scan.glb", root / "source.json", root / "revision"
+            fixture_glb(source)
+            record.write_text(json.dumps(provenance_json(commercial_use_allowed=True)))
+            manifest = {"generator": "test-scan"}
+            output = io.StringIO()
+            with patch.dict("sys.modules", {"bpy": object()}), \
+                    patch("kumiki_blender.blender_monuments.build_monument_scene", return_value=manifest) as adapter, \
+                    contextlib.redirect_stdout(output):
+                code = main(["build-monument", "--kind", "sphinx", "--sphinx-front-axis=+Y",
+                             "--sphinx-source", str(source), "--sphinx-provenance", str(record),
+                             "--output", str(destination)])
+            self.assertEqual(code, 0)
+            self.assertEqual(json.loads(output.getvalue()), manifest)
+            self.assertEqual(adapter.call_args.kwargs["sphinx_scan"].front_axis, "+Y")
+
     def test_import_asset_hands_verified_source_to_blender_adapter(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

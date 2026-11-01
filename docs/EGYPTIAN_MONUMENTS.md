@@ -72,6 +72,65 @@ blender --background --factory-startup --python-exit-code 1 \
   build-monument --kind giza-study --output .review/egyptian/r01
 ```
 
+### Place your own licensed Sphinx scan
+
+If the stylized Sphinx anatomy is not sufficient for a cinematic shot, supply
+a **tightly cropped, static GLB photogrammetry or surveyed mesh**. The builder
+will replace the visible procedural Sphinx with the GLB while retaining the
+procedural pyramid, Cycles daylight, sand-colored stage, six camera views,
+scene-native `.blend` and portable exported `.glb`. Imported materials and
+texture UVs remain intact. The 21 procedural Sphinx source pieces remain in a
+hidden editable authoring collection in `source.blend` for comparison, but do
+not appear in the render or exported GLB.
+
+Prepare a JSON record alongside the *local* GLB (example for format only):
+
+```json
+{
+  "schema_version": 1,
+  "asset_id": "my-licensed-sphinx-scan",
+  "creator": "Actual scan creator or institution",
+  "source_url": "https://example.org/actual-stable-asset-page",
+  "license": "CC-BY-4.0",
+  "attribution": "Actual creator, title, source, and license as required",
+  "redistribution_allowed": true,
+  "commercial_use_allowed": true,
+  "expected_sha256": "REPLACE_WITH_ACTUAL_64_CHARACTER_LOWERCASE_SHA256"
+}
+```
+
+Replace the sample values with the asset's verified rights and real digest;
+`expected_sha256` can be omitted while evaluating a first-party source. Only
+declare redistribution and commercial use allowed when your rights permit both
+**exporting the incorporated GLB** and its intended use. An incompatible
+license (including noncommercial/no-derivatives clauses), missing permission,
+animation/rigging, malformed GLB, or hash mismatch is rejected before scene
+construction. This is a declaration and technical preflight, **not automatic
+license verification**. No third-party scan is bundled or downloaded.
+
+```bash
+blender --background --factory-startup --python-exit-code 1 \
+  --python scripts/blender_entry.py -- \
+  build-monument --kind giza-study \
+  --sphinx-source /path/to/reviewed-sphinx.glb \
+  --sphinx-provenance /path/to/verified-rights.json \
+  --sphinx-front-axis=-X \
+  --output .review/egyptian/scanned-r01
+```
+
+The front-axis choices are `-X`, `+X`, `-Y`, and `+Y`, interpreted in **Blender
+Z-up world coordinates after glTF import**; the front/face is placed toward
+`-X` in the scene. The scanner may export a different axis convention, so
+verify a preview first. Scan normalization preserves its proportions: it
+rotates about Z, scales all dimensions equally to `--sphinx-length`, aligns
+its center with the procedural statue's center, and puts its lowest point at
+Z=0.02 m. A loosely cropped landscape scan or an implausible width/height
+ratio is rejected: crop the statue in Blender first. The manifest includes
+source URL, attribution, SHA-256, material and mesh counts, and the placement
+transform/bounds. **This does not make an arbitrary low-quality scan accurate
+or photorealistic**; geometry fidelity, source rights and historical quality
+still require human review.
+
 All dimensions are meters. Default combined plan uses a **36 m by 23 m
 illustrative pyramid**, a **10.5 m Sphinx-shaped study**, 18 stone courses,
 and 379 named components. It does **not** imply that the real landmarks have

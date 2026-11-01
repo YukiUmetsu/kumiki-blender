@@ -39,9 +39,10 @@ class AssetProvenance:
     attribution: str
     redistribution_allowed: bool
     expected_sha256: str | None = None
+    commercial_use_allowed: bool | None = None
 
     def to_manifest(self, sha256: str) -> dict[str, Any]:
-        return {
+        record = {
             "creator": self.creator,
             "source_url": self.source_url,
             "license": self.license,
@@ -49,6 +50,9 @@ class AssetProvenance:
             "redistribution_allowed": self.redistribution_allowed,
             "source_glb_sha256": sha256,
         }
+        if self.commercial_use_allowed is not None:
+            record["commercial_use_allowed"] = self.commercial_use_allowed
+        return record
 
 
 def _label(value: Any, field: str, *, limit: int) -> str:
@@ -73,7 +77,7 @@ def load_asset_provenance(path: str | Path) -> AssetProvenance:
         raise AssetImportError("Provenance must be a JSON object")
     required = {"schema_version", "asset_id", "creator", "source_url", "license", "attribution",
                 "redistribution_allowed"}
-    optional = {"expected_sha256"}
+    optional = {"expected_sha256", "commercial_use_allowed"}
     if set(raw) - optional != required or set(raw) - (required | optional):
         raise AssetImportError("Provenance has missing or unexpected fields")
     if type(raw["schema_version"]) is not int or raw["schema_version"] != 1:
@@ -102,8 +106,11 @@ def load_asset_provenance(path: str | Path) -> AssetProvenance:
     if expected_sha256 is not None and (not isinstance(expected_sha256, str)
                                         or not _SHA256.fullmatch(expected_sha256)):
         raise AssetImportError("expected_sha256 must be a lowercase SHA-256 digest")
+    commercial_use_allowed = raw.get("commercial_use_allowed")
+    if "commercial_use_allowed" in raw and type(commercial_use_allowed) is not bool:
+        raise AssetImportError("commercial_use_allowed must be a boolean when provided")
     return AssetProvenance(asset_id, creator, source_url, license_name, attribution.strip(),
-                           True, expected_sha256)
+                           True, expected_sha256, commercial_use_allowed)
 
 
 def inspect_source_glb(path: str | Path, provenance: AssetProvenance | None = None) -> dict[str, Any]:

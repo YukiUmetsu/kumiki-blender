@@ -15,6 +15,7 @@ from .facade import FacadeError, make_facade_study
 from .egyptian_monuments import MonumentError, make_monument_study
 from .glb_audit import AuditError, audit_glb
 from .lattice import make_lattice_tower
+from .landmark_scan import prepare_sphinx_scan
 from .material_overrides import load_material_overrides, verify_material_overrides
 from .material_packs import load_texture_packs, verify_texture_targets
 from .portico import PorticoError, make_portico_study
@@ -58,6 +59,9 @@ def main(argv: list[str] | None = None) -> int:
         subcommand.add_argument("--restored-nose", action="store_true")
         if command == "build-monument":
             subcommand.add_argument("--output", type=Path, required=True)
+            subcommand.add_argument("--sphinx-source", type=Path)
+            subcommand.add_argument("--sphinx-provenance", type=Path)
+            subcommand.add_argument("--sphinx-front-axis", choices=("-X", "+X", "-Y", "+Y"), default="-X")
     column_parser = subcommands.add_parser("plan-classical-column")
     column_parser.add_argument("--order", choices=("tuscan", "doric", "ionic"), default="ionic")
     column_parser.add_argument("--height", type=float, default=4.55)
@@ -196,13 +200,21 @@ def main(argv: list[str] | None = None) -> int:
             output = args.output.resolve()
             if output.exists() or output.is_symlink():
                 raise MonumentError(f"Output already exists: {output}. Choose a new revision directory.")
+            if bool(args.sphinx_source) != bool(args.sphinx_provenance):
+                raise MonumentError("--sphinx-source and --sphinx-provenance must be supplied together")
+            if args.sphinx_source and args.kind == "pyramid":
+                raise MonumentError("Sphinx scans are only available for sphinx and giza-study builds")
+            scan = (prepare_sphinx_scan(args.sphinx_source, args.sphinx_provenance,
+                                       front_axis=args.sphinx_front_axis)
+                    if args.sphinx_source else None)
             try:
                 import bpy  # type: ignore[import-not-found]
             except ImportError as error:
                 raise RuntimeError("Building monuments requires Blender. Run via: blender --background --factory-startup --python-exit-code 1 --python scripts/blender_entry.py -- build-monument --kind giza-study --output <new-directory>") from error
             from .blender_monuments import build_monument_scene
 
-            print(json.dumps(build_monument_scene(study, output, bpy_module=bpy), indent=2))
+            print(json.dumps(build_monument_scene(study, output, sphinx_scan=scan,
+                                                  bpy_module=bpy), indent=2))
             return 0
         recipe = load_recipe(args.recipe)
         plan = make_lattice_tower(recipe)
