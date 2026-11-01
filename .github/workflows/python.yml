@@ -28,6 +28,7 @@ jobs:
             tests.test_egyptian_monuments.EgyptianMonumentTests.test_sphinx_reference_has_four_distinct_toes_per_forepaw \
             tests.test_egyptian_monuments.EgyptianMonumentTests.test_face_relief_preserves_smooth_back_of_head \
             tests.test_egyptian_monuments.EgyptianMonumentTests.test_reference_face_proportions_and_carved_human_ears \
+            tests.test_egyptian_monuments.EgyptianMonumentTests.test_sphinx_anatomical_face_has_sculpted_lids_nose_lips_and_chin \
             tests.test_egyptian_monuments.EgyptianMonumentTests.test_reference_nemes_wings_have_broad_swept_hem_and_closed_stone \
             tests.test_egyptian_monuments.EgyptianMonumentTests.test_nemes_forehead_has_physical_incised_folds \
             tests.test_rock_weathering.RockWeatheringTests.test_differential_bedding_and_mineral_pits_are_real_closed_relief \

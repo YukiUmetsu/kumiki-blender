@@ -405,6 +405,131 @@ def _elongate_anatomical_face(mesh: Mesh, *, scale_y: float,
     return Mesh(tuple(vertices), mesh.faces)
 
 
+def _anatomical_sphinx_face(*, scale_x: float, scale_y: float,
+                           scale_z: float) -> Mesh:
+    """Closed landmark-shaped facial surface, not an elliptical loft mask.
+
+    Front-face vertices are sampled across a height-dependent trapezoidal
+    silhouette. Brow ridges, orbital cavities, paired eyelids, nasal bridge,
+    cheekbone planes, mouth and chin are continuous *surface geometry* in the
+    same mesh. A joined rear and capped sides give Blender a watertight solid
+    for the existing voxel sculpt workflow. The landmarks are interpretive
+    proportions informed by frontal/profile photographs, not survey points.
+    """
+    profile = (
+        (2.69, .30), (2.81, .36), (3.02, .41), (3.31, .465),
+        (3.61, .525), (3.91, .559), (4.14, .551),
+        (4.34, .519), (4.51, .473),
+    )
+
+    def half_width(z: float) -> float:
+        for (low_z, low_w), (high_z, high_w) in zip(profile, profile[1:]):
+            if z <= high_z:
+                t = max(0., min(1., (z-low_z)/(high_z-low_z)))
+                return low_w+(high_w-low_w)*t
+        return profile[-1][1]
+
+    def blob(y: float, z: float, cy: float, cz: float,
+             ry: float, rz: float, *, exponent: float = 2.) -> float:
+        return math.exp(-(abs((y-cy)/ry)**exponent)
+                        -(abs((z-cz)/rz)**exponent))
+
+    def anterior_depth(y: float, z: float, width: float) -> float:
+        lateral = abs(y)
+        u = lateral/width
+        # Broad cheek and forehead planes slope gently back at the temples;
+        # the actual front is not an elliptical cross-section.
+        xx = -4.235+.206*u*u+.025*((z-3.75)/.8)**2
+        interior = (1.-min(1., u)**6)**2
+        # Bony orbital rims are projected ahead of the tapered almond eye
+        # cavities. The two rim curves converge at each eye corner instead
+        # of forming the old flat, dark, super-Gaussian horizontal slots.
+        for sign in (-1, 1):
+            cy = sign*.292
+            aperture_u = (y-cy)/.177
+            if abs(aperture_u) < 1.:
+                half_open = .047*(max(0., 1.-aperture_u**2))**.72
+                eye_center = 4.121+.013*aperture_u*sign
+                xx += .063*blob(y, z, cy, eye_center,
+                                 .154, max(.017, half_open), exponent=2.5)
+                xx -= .068*blob(y, z, cy, eye_center+half_open+.022,
+                                 .167, .027, exponent=2.)
+                xx -= .037*blob(y, z, cy, eye_center-half_open-.022,
+                                 .158, .030, exponent=2.)
+            xx -= .081*blob(y, z, sign*.305, 4.237,
+                             .191, .065, exponent=2.)
+            xx -= .074*blob(y, z, sign*.397, 3.841,
+                             .169, .203, exponent=2.)
+            # Subtle nasolabial transition separates the lower cheek from
+            # the surviving nasal scar without pasted-on spheres.
+            xx += .026*blob(y, z, sign*.198, 3.620,
+                             .049, .169, exponent=2.)
+        # Vertical nasal root/bridge and interrupted broken tip. Leave a
+        # proud surviving bridge, NOT a triangular hole at the nose's end.
+        xx -= .181*blob(y, z, 0., 3.990, .121, .197, exponent=2.)
+        xx -= .062*blob(y, z, 0., 3.758, .133, .093, exponent=2.)
+        xx += .019*blob(y, z, -.055, 3.727, .075, .052)
+        # Central philtrum, irregular bowed mouth cut, paired lip volumes.
+        mouth_z = 3.275+.020*(y/.24)**2+.005*y
+        xx -= .035*(blob(y, z, -.062, 3.450, .033, .097) +
+                    blob(y, z, .068, 3.449, .033, .097))
+        xx -= .061*blob(y, z, 0., 3.339, .240, .063, exponent=4.)
+        xx += .039*blob(y, z, 0., mouth_z, .233, .019, exponent=4.)
+        xx -= .048*blob(y, z, 0., 3.223, .216, .051, exponent=4.)
+        xx -= .104*blob(y, z, 0., 2.934, .302, .145, exponent=3.)
+        xx += .036*blob(y, z, 0., 2.725, .272, .069, exponent=2.)
+        # Physically incised crown pleats and differential mineral wear.
+        fold_mask = max(0., min(1., (z-4.29)/.055, (4.54-z)/.075))
+        xx += .036*fold_mask*max(0., math.cos(y*28.))**12
+        wear = rock_height_field(xx*3.7, y*4.6, z*5.1,
+                                 seed=319, strata_spacing=.31)
+        xx += .019*wear
+        xx += .037*blob(y, z, -.332, 4.183, .099, .086)*max(0., .65+.25*wear)
+        xx += .024*blob(y, z, .426, 3.784, .119, .128)*max(0., .65+.25*wear)
+        # At the border, facial relief smoothly vanishes so the thick side
+        # surface joins the hood without floating anatomy or hard seams.
+        return (-4.235+.206*u*u+.025*((z-3.75)/.8)**2 +
+                (xx-(-4.235+.206*u*u+.025*((z-3.75)/.8)**2))*interior)
+
+    rows, cols = 129, 97
+    front_count = rows*cols
+    vertices: list[tuple[float, float, float]] = []
+    for front in (True, False):
+        for row in range(rows):
+            z = profile[0][0]+(profile[-1][0]-profile[0][0])*row/(rows-1)
+            width = half_width(z)
+            for col in range(cols):
+                y = width*(2.*col/(cols-1)-1.)
+                x = (anterior_depth(y, z, width) if front
+                     else -3.39+.065*(abs(y)/width)**2)
+                vertices.append((x*scale_x, y*scale_y, z*scale_z))
+
+    def index(row: int, col: int, front: bool) -> int:
+        return (0 if front else front_count)+row*cols+col
+
+    faces: list[tuple[int, ...]] = []
+    for row in range(rows-1):
+        for col in range(cols-1):
+            a, b = index(row, col, True), index(row, col+1, True)
+            c, d = index(row+1, col+1, True), index(row+1, col, True)
+            faces.append((d, c, b, a))
+            a, b = index(row, col, False), index(row, col+1, False)
+            c, d = index(row+1, col+1, False), index(row+1, col, False)
+            faces.append((a, b, c, d))
+    # Stitch all four perimeter edges. Separate front/back grids remain
+    # editable in one watertight solid, with no unowned boundary vertices.
+    border = ([(0, col) for col in range(cols)] +
+              [(row, cols-1) for row in range(1, rows)] +
+              [(rows-1, col) for col in range(cols-2, -1, -1)] +
+              [(row, 0) for row in range(rows-2, 0, -1)])
+    for i, (row, col) in enumerate(border):
+        next_row, next_col = border[(i+1) % len(border)]
+        a, b = index(row, col, True), index(next_row, next_col, True)
+        c, d = index(next_row, next_col, False), index(row, col, False)
+        faces.append((a, b, c, d))
+    return Mesh(tuple(vertices), tuple(faces))
+
+
 def _sculpt_ear_relief(mesh: Mesh, *, side: int, scale_x: float,
                       scale_y: float, scale_z: float) -> Mesh:
     """Carve a raised outer helix and recessed concha in each embedded ear.
@@ -696,8 +821,9 @@ def sphinx_assembly(*, prefix: str, length: float = 10.5,
                     (4.49, -3.87, 0, .35, .48)),
                    roughness=.025, seed=97, exponent=4.35,
                    subdivisions=8, bedding=.006, pitting=.012)
-    sculpted_face = _sculpt_face_relief(face, scale_x=x, scale_y=y, scale_z=z)
-    part("face", _elongate_anatomical_face(sculpted_face, scale_y=y, scale_z=z))
+    # Keep the original loft sculpt helper for backward compatibility and
+    # geometry tests, but production uses the landmark-shaped closed patch.
+    part("face", _anatomical_sphinx_face(scale_x=x, scale_y=y, scale_z=z))
     for side, sign in (("left", -1), ("right", 1)):
         part(f"nemes-{side}-lappet", _nemes_drapery_wing(
              side=sign, scale_x=x, scale_y=y, scale_z=z),

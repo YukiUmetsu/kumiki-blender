@@ -105,6 +105,17 @@ to reduced nasal and eye recesses and a less round nemes crown. A dedicated
 straight-on `sphinx-frontal` quality shot joins the existing oblique face and
 side profile, allowing all three silhouettes to be checked in CI renders.
 
+The newest procedural revision **replaces the loft-derived facial mask** with
+a closed, front/back **anatomical surface mesh** with a height-varying jaw
+outline and direct 3D relief at the upper/lower eyelids, orbital rims, broken
+nasal bridge, cheek planes, philtrum, lips, lower jaw, chin and crown pleats.
+It is a single 25,026-vertex watertight mesh, still editable among the hidden
+head sources, rather than individual decorative facial objects pasted over a
+flat head. Source-level tests check nose/lid/lip/chin depth separation is
+large enough to survive the 0.019 m Blender head voxel union. The landmarks
+and damage remain *inferred from photographs*, so neither the facial features
+nor the stone microstructure should be mistaken for an archaeological scan.
+
 The user's three frontal and side photographs are **visual proportion and
 wear references only**, not surveyed 3D depth maps; the photographs are not
 included or redistributed in the repository. AERA documents why the

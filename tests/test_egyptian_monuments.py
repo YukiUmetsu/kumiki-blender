@@ -287,6 +287,34 @@ class EgyptianMonumentTests(unittest.TestCase):
             self.assertEqual((audit_mesh(carved).boundary_edges,
                               audit_mesh(carved).nonmanifold_edges), (0, 0))
 
+    def test_sphinx_anatomical_face_has_sculpted_lids_nose_lips_and_chin(self):
+        """Photo-derived facial landmarks must exist in the source mesh.
+
+        In particular, voxel union cannot invent depth if the source is only
+        a tall planar mask with the old horizontal eye incisions.
+        """
+        face = next(part.mesh for part in sphinx_assembly(prefix="sphinx")
+                    if part.name == "sphinx-face")
+        report = audit_mesh(face)
+        self.assertEqual((report.boundary_edges, report.nonmanifold_edges),
+                         (0, 0))
+        self.assertGreater(report.volume_m3, .5)
+        self.assertGreater(len(face.vertices), 20_000)
+
+        front = face.vertices[:len(face.vertices)//2]
+        z_scale = 3.6/4.6
+
+        def depth(y: float, z: float) -> float:
+            point = min(front, key=lambda v: (v[1]-y)**2 +
+                        (v[2]-z*z_scale)**2)
+            return point[0]
+
+        # All projection is actual -X surface geometry, not normal/bump maps.
+        self.assertLess(depth(.29, 4.24), depth(.29, 4.12)-.07)
+        self.assertLess(depth(0., 3.99), depth(.29, 3.99)-.11)
+        self.assertLess(depth(0., 3.34), depth(0., 3.26)-.025)
+        self.assertLess(depth(0., 2.93), depth(0., 2.74)-.09)
+
     def test_sphinx_scaling_is_parametric(self):
         small = sphinx_assembly(prefix="small", length=10.5)
         large = sphinx_assembly(prefix="large", length=21)
