@@ -31,8 +31,26 @@ def verify(source: Path) -> None:
     assert all(image.packed_file is not None for image in bpy.data.images
                if image.source == "FILE")
 
+    def world_vertex(name: str):
+        mesh = bpy.data.objects[name]
+        # The first propeller vertex is close to its hub; sample the farthest
+        # local vertex so half a rotation produces a clearly measurable arc.
+        tip = max(mesh.data.vertices, key=lambda vertex: vertex.co.length)
+        return mesh.matrix_world @ tip.co
+
     scene.frame_set(1)
     original = {name: obj.rotation_euler.copy() for name, obj in controls.items()}
+    prop_start = world_vertex("propeller-upper-blade")
+    left_weight_start = world_vertex("left-wheel-balance-weight")
+    right_weight_start = world_vertex("right-wheel-balance-weight")
+    axle_start = world_vertex("landing-axle-crossbar")
+    scene.frame_set(7)
+    # A propeller at the exact end of a revolution looks motionless; sample a
+    # half-turn and verify its actual blade mesh changed world position.
+    assert (world_vertex("propeller-upper-blade") - prop_start).length > .4
+    assert (world_vertex("left-wheel-balance-weight") - left_weight_start).length > .08
+    assert (world_vertex("right-wheel-balance-weight") - right_weight_start).length > .08
+    assert (world_vertex("landing-axle-crossbar") - axle_start).length < 1e-6
     scene.frame_set(25)
     for name, obj in controls.items():
         axis = 1 if name == "propeller" else 2 if name == "rudder" else 0
