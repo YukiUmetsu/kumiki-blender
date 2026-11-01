@@ -102,14 +102,60 @@ def head():
     for side in (-1,1):
         ellipsoid("Hair crown "+str(side),(side*.34,.13,12.74),(.42,.37,.32))
 
+def add_surface_details():
+    """Sculptural secondary forms: flowing chest drape, robe hems and hair grooves."""
+    for i in range(9):
+        x=-1.05+i*.255
+        z=7.7-.28*math.cos(i*.47)
+        ellipsoid("Chest drapery ridge %02d"%i,(x,-.715,z),(.12,.055,.36),STONE,24,12)
+    for i in range(7):
+        z=6.6+i*.42
+        ellipsoid("Diagonal chest fold %02d"%i,(-.25+i*.10,-.73,z),(.72-i*.055,.055,.065),STONE,32,12)
+    for side in (-1,1):
+        for i in range(5):
+            z=11.0+i*.32
+            ellipsoid("Hair carved groove %s %s"%(side,i),(side*(.77-.027*i),-.16,z),(.035,.055,.30),SHADOW,20,12)
+    for i in range(8):
+        x=-.72+i*.20
+        ellipsoid("Vertical robe channel %02d"%i,(x,-.55,4.65),(.028,.043,1.35),SHADOW,20,12)
+
+def make_camera(name, location, target, ortho):
+    bpy.ops.object.camera_add(location=location)
+    cam=bpy.context.object;cam.name=name
+    direction=Vector(target)-cam.location
+    cam.rotation_euler=direction.to_track_quat('-Z','Y').to_euler()
+    cam.data.type='ORTHO';cam.data.ortho_scale=ortho
+    return cam
+
+def inspection_views(output_dir):
+    """Render orthographic front/profile and head crops for human review."""
+    import os
+    os.makedirs(output_dir,exist_ok=True)
+    scene=bpy.context.scene
+    scene.render.engine='BLENDER_EEVEE_NEXT'
+    scene.render.resolution_x=900;scene.render.resolution_y=1100
+    scene.render.resolution_percentage=100
+    scene.world.color=(.17,.19,.22)
+    for name,loc,target,scale in [
+        ('front',(0,-38,8),(0,0,7.0),22.0),
+        ('profile',(38,0,8),(0,0,7.0),22.0),
+        ('head_front',(0,-18,11.7),(0,0,11.65),3.5),
+        ('head_profile',(18,0,11.7),(0,0,11.65),3.5),
+    ]:
+        cam=make_camera('QA camera '+name,loc,target,scale)
+        scene.camera=cam
+        scene.render.filepath=os.path.join(output_dir,name+'.png')
+        bpy.ops.render.render(write_still=True)
+        bpy.data.objects.remove(cam,do_unlink=True)
+
 def main():
     bpy.ops.object.select_all(action='SELECT');bpy.ops.object.delete(use_global=False)
-    torso();head()
+    torso();head();add_surface_details()
     # Flat octagonal pedestal, kept separate from statue.
     bpy.ops.mesh.primitive_cylinder_add(vertices=8,radius=2.4,depth=2.7,location=(0,0,1.35))
     o=bpy.context.object;o.name="Pedestal";o.data.materials.append(mat("Dark granite",(.25,.26,.25)))
     args=sys.argv[sys.argv.index('--')+1:] if '--' in sys.argv else []
-    if '--output' in args:
+    if '--views' in args:\n        inspection_views(args[args.index('--views')+1])\n    if '--output' in args:
         path=args[args.index('--output')+1]
         bpy.ops.export_scene.gltf(filepath=path,export_format='GLB')
     if '--blend' in args:
