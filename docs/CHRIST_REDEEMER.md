@@ -75,8 +75,27 @@ blender --background --factory-startup --python-exit-code 1 \
 
 These camera angles expose different faults: straight-on symmetry, nose/forehead
 profile, three-quarter facial volume, and a low-angle view closer to the
-monument photographs. The clay proof shares the exact same head geometry and
-pose as the full build. The generated QA folder is excluded from git.
+monument photographs. The default clay proof shares the exact same head geometry
+and pose as the full build. The generated QA folder is excluded from git.
+
+For the ongoing **face-foundation reconstruction**, use the rights-cleared
+Blender Studio human quad-topology scaffold instead of the old procedural
+face relief. It is a separate, anatomical clay-only experiment, **not an
+accepted replacement in the full GLB**:
+
+```bash
+blender --background --factory-startup --python-exit-code 1 \
+  --python scripts/landmarks/christ_redeemer.py -- \
+  --head-study --face-method anatomical --verify \
+  --views .review/christ/anatomy-clay \
+  --shot head_front --shot head_profile --shot head_three_quarter \
+  --shot head_low --size 850 --samples 24
+```
+
+The original CC0 control mesh and extraction provenance are recorded in the
+[scan/source intake](CHRIST_REDEEMER_SCAN_INTAKE.md). The older
+`--face-method landmark` relief proof is retained for regression comparison;
+it failed the eye/nose likeness gate and is not the default.
 
 For an experimental alternate head bow, add `--head-tilt 34`; the default is
 22 degrees. The alternate pose is **not** yet accepted as the monument's true
@@ -124,6 +143,9 @@ tesserae at close viewing distance without exaggerating grout depth.
 This remains an original parametric reconstruction, **not an approved
 photo-faithful sculpt**. Its anatomical geometry is not a photogrammetric
 replica, and the script deliberately does not redistribute a third-party scan.
+The separate anatomical proof uses a declared CC0 donor mesh with actual face
+topology; neither it nor its sculpt edits establish the monument's unique
+facial likeness without registered, subject-specific reference views.
 Photoreal facial likeness, strands/hairline, digits, and textile creases still
 require more sculpting against licensed, consistently oriented multi-view images
 and human acceptance. The clay QA workflow is deliberately retained to expose

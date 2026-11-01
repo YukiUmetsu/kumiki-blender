@@ -26,6 +26,18 @@ identified as of November 2026. A high triangle count, free download, or CC0
 label alone does not establish anatomical or historical accuracy. Do not
 silently substitute replicas for the surveyed monument.
 
+## Reusable *anatomical donor*, not target evidence
+
+| ID | Producer and original source | Reuse decision | What it can and cannot prove |
+| --- | --- | --- | --- |
+| A1 | [Blender Studio / community, Human Base Meshes v1.4.1](https://www.blender.org/download/demo-files/) · [official archive](https://download.blender.org/demo/asset-bundles/human-base-meshes/human-base-meshes-bundle-v1.4.1.zip) | **CC0**, as marked by Blender's official asset page. The repository contains a gzip-compressed, 3-part OBJ extraction of its realistic sculpting head and two sclera objects in `assets/landmarks/christ_redeemer/head_anatomical_base_cc0.obj.gz`. | Quad-topology eyelids, nose, cheeks, mouth, ears and cervical forms provide a sculptable *human anatomical scaffold*. **It is not Christ the Redeemer, does not prove the monument's geometry, and must be resculpted against real-subject evidence.** |
+
+The extraction was made from Blender Studio's `GEO-head_sculpting_realistic`
+and its paired `.sclera.L` / `.sclera.R` meshes. It does not include iris
+geometry, textures, or third-party viewer data. The original Blender asset's
+CC0 license applies to this extracted geometry. This donor remains optional
+and separate from the published procedural GLB.
+
 ## Measured geometry and current uncertainty
 
 | Evidence | Value | Class | Intended use |
@@ -64,3 +76,38 @@ Reference-driven priorities:
 Use `scripts/reference_compare.py` for labeled, unaligned comparison sheets.
 Only use `--aligned` when the cameras were genuinely registered. Local reference
 screenshots are inspection-only and must not enter GLB, PR media or source code.
+
+## Updated craftsmanship hold — November 2026
+
+The repeated landmark/heightfield prototypes `landmark_r56` through `r59`
+could not recover coherent eye-socket, nasal-alar and lip planes across front
+and oblique views. Per the method-switch gate, **that representation is frozen**:
+it remains an optional technical comparison, not the accepted face.
+
+A distinct `--face-method anatomical` clay workflow now uses A1's **real
+3D quad topology**, subdivided to a sculptable surface, with author-directed
+mandible/chin expansion, upper-eyelid closure and mouth-corner shaping. This
+is a geometry-foundation change, not extra Gaussians on the old ellipsoid.
+It can be regenerated from the CC0 OBJ bundled in the repository:
+
+```bash
+blender --background --factory-startup --python-exit-code 1 \
+  --python scripts/landmarks/christ_redeemer.py -- \
+  --head-study --face-method anatomical --verify \
+  --views .review/christ_redeemer/anatomy-study \
+  --shot head_front --shot head_profile --shot head_three_quarter \
+  --shot head_low --size 850 --samples 24
+```
+
+| Reconstruction gate | Decision | Evidence / unresolved work |
+| --- | --- | --- |
+| Authentic subject foundation | **HOLD** | S1/S2 clearly depict the monument, but no authorized high-detail scan mesh is available; A1 is only a generic donor. |
+| Front/profile/oblique camera registration | **HOLD** | Scan-viewer screenshots and real photographs are unregistered. No focal-length/camera solve or valid numerical landmark residual exists. |
+| Primary face geometry | **HOLD — improving** | Anatomical quad mesh and 3D jaw/chin sculpt resolve the earlier featureless mask, but donor eye openings, nose, ear/hairline and lips remain noticeably unlike Landowski's head. |
+| Multi-view clay acceptance | **HOLD** | Actual front, profile, oblique and low-angle renders are required after each distinct sculpt change; the last render does not yet justify release. |
+| Photo-faithful GLB publication | **BLOCKED** | No new anatomical head has passed the visual or camera gate. The existing exported GLB remains labeled an approximation. |
+
+Next required work is to calibrate **actual monument** front/profile/oblique
+reference cameras or secure authorized high-detail survey data, then fit the
+source-specific facial planes and close the eyelid anatomy. Neither the donor
+license nor a 52k-vertex sculpt is evidence of target likeness.

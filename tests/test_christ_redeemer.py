@@ -17,6 +17,8 @@ from kumiki_blender.glb_audit import audit_glb
 
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts/landmarks/christ_redeemer.py"
+ANATOMY_BASE = (Path(__file__).resolve().parents[1] /
+                "assets/landmarks/christ_redeemer/head_anatomical_base_cc0.obj.gz")
 
 
 class ChristRedeemerTests(unittest.TestCase):
@@ -44,6 +46,28 @@ class ChristRedeemerTests(unittest.TestCase):
             self.assertEqual(report["head_tilt_deg"], 34)
             self.assertGreater(report["head_surface_vertices"], 30000)
             self.assertLess(report["mesh_count"], 30)
+
+    @unittest.skipUnless(os.environ.get("KUMIKI_BLENDER_BINARY"),
+                         "Set KUMIKI_BLENDER_BINARY for the Blender anatomical sculpt")
+    def test_cc0_anatomical_quad_sculpt_stays_clay_only_and_multiview_ready(self):
+        self.assertTrue(ANATOMY_BASE.is_file())
+        with tempfile.TemporaryDirectory() as directory:
+            metrics = Path(directory) / "anatomical-study.json"
+            command = [os.environ["KUMIKI_BLENDER_BINARY"], "--background",
+                       "--factory-startup", "--python-exit-code", "1",
+                       "--python", str(SCRIPT), "--", "--head-study",
+                       "--face-method", "anatomical", "--verify",
+                       "--metrics", str(metrics)]
+            process = subprocess.run(command, capture_output=True, text=True, timeout=75)
+            self.assertEqual(process.returncode, 0, process.stdout[-1800:] +
+                             process.stderr[-1800:])
+            report = json.loads(metrics.read_text())
+            self.assertEqual(report["study"], "head")
+            self.assertEqual(report["face_method"], "anatomical")
+            self.assertGreater(report["head_surface_vertices"], 50000)
+            self.assertGreater(report["head_width_m"], 2.5)
+            self.assertGreater(report["head_depth_m"], 1.0)
+            self.assertEqual(report["mesh_count"], 3)
 
     @unittest.skipUnless(os.environ.get("KUMIKI_BLENDER_BINARY"),
                          "Set KUMIKI_BLENDER_BINARY for the live Blender QA test")

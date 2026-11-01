@@ -1,16 +1,21 @@
 """Christ the Redeemer: original procedural, dimensioned Art Deco sculpture.
 
 30 m figure / 29.4 m surveyed arm span / 8 m pedestal.
-Original geometry only; no external scan or mesh is incorporated.
+The default export uses original geometry. Optional anatomy-clay studies can
+use a separately identified, rights-cleared generic sculpt base, never an
+authentic scan or a claim of target-specific facial likeness.
 Run: blender -b --python-exit-code 1 --python scripts/landmarks/christ_redeemer.py --
      --output .review/christ.glb --views .review/christ --verify
 """
 import argparse
 from array import array
+import gzip
 import json
 import math
 import os
+import shutil
 import sys
+import tempfile
 from pathlib import Path
 
 import bpy
@@ -21,6 +26,9 @@ STONE = None
 CARVING = None
 GRANITE = None
 HEAD_TILT_DEG = 22.0  # Measured against authentic side-view scan previews.
+FACE_METHOD = "gaussian"  # Approved approximation; alternative studies held.
+ANATOMY_BASE = (Path(__file__).resolve().parents[2] /
+                "assets/landmarks/christ_redeemer/head_anatomical_base_cc0.obj.gz")
 MOSAIC_PITCH = .72 / 24  # 3 cm squares split into ~4.2 cm triangular tesserae.
 
 
@@ -580,6 +588,56 @@ def mouth_contour_z(x):
     return 35.64-.125*u**1.55
 
 
+# Signed front-of-face depth and half-width at key anatomical levels. This
+# original cage is based on observed facial planes, not geometry copied from
+# an unavailable/rights-unverified photogrammetric scan. Its visible accuracy
+# must be checked from three views before becoming the default export.
+NOSE_CAGE = [
+    (35.95,.00,.11), (36.035,.115,.18), (36.10,.31,.30),
+    (36.195,.49,.335), (36.275,.49,.28), (36.42,.43,.20),
+    (36.68,.39,.17), (36.95,.15,.20), (37.25,.005,.23),
+]
+
+
+def nasal_cage_relief(x,z):
+    """Shape a triangular nasal ridge via anatomical z/depth/width landmarks."""
+    if z < NOSE_CAGE[0][0] or z > NOSE_CAGE[-1][0]:
+        return 0.
+    for index,(lo,hi) in enumerate(zip(NOSE_CAGE[:-1],NOSE_CAGE[1:])):
+        if lo[0] <= z <= hi[0]:
+            span=hi[0]-lo[0]
+            t=(z-lo[0])/span
+            # Continuous Hermite tangents avoid the stationary terraces at
+            # every profile landmark caused by independent smoothstep spans.
+            def sample(component):
+                prev=NOSE_CAGE[max(0,index-1)]
+                nxt=NOSE_CAGE[min(len(NOSE_CAGE)-1,index+2)]
+                d0=(hi[component]-prev[component])/(hi[0]-prev[0])
+                d1=(nxt[component]-lo[component])/(nxt[0]-lo[0])
+                return ((2*t**3-3*t*t+1)*lo[component]+
+                        (t**3-2*t*t+t)*span*d0+
+                        (-2*t**3+3*t*t)*hi[component]+
+                        (t**3-t*t)*span*d1)
+            depth=sample(1)
+            width=sample(2)
+            u=abs(x)/width
+            return max(0.,depth)*max(0.,1-u*u)**1.25
+    return 0.
+
+
+def orbital_cage_relief(x,z):
+    """A recessed orbital bowl bounded below by its integrated upper eyelid."""
+    u=(abs(x)-.30)/.80
+    if u <= 0 or u >= 1:
+        return 0.
+    influence=math.sin(math.pi*u)**.65
+    arch=36.79+.17*math.sin(math.pi*u)**.83-.07*u
+    ridge=.23*math.exp(-((z-(arch-.02))/.045)**2)
+    lower=.065*math.exp(-((z-(arch-.14))/.19)**2)
+    cavity=.36*math.exp(-((z-(arch+.10))/.20)**2)
+    return influence*(ridge+lower-cavity)
+
+
 def face():
     sphere("Head | broad tendinous neck",(0,.20,33.52),(.87,.79,1.29))
     # Densify the face loft to sculpt cheekbones, chin and jaw as one surface.
@@ -601,9 +659,11 @@ def face():
                 # Integrate the full facial relief into the head surface.
                 # Features are smooth local displacements of the same manifold,
                 # eliminating the stacked cylinder/ball appearance in profile.
-                cheek=.24*math.exp(-((abs(x)-.83)/.47)**2-((z-35.97)/.64)**2)
+                cheek_strength=.28 if FACE_METHOD == "landmark" else .24
+                cheek=cheek_strength*math.exp(-((abs(x)-.83)/.47)**2-((z-35.97)/.64)**2)
                 jaw=.13*math.exp(-((abs(x)-.82)/.46)**2-((z-35.24)/.57)**2)
-                cheek_hollow=.085*math.exp(-((abs(x)-.82)/.33)**2-((z-35.48)/.36)**2)
+                hollow_strength=.11 if FACE_METHOD == "landmark" else .085
+                cheek_hollow=hollow_strength*math.exp(-((abs(x)-.82)/.33)**2-((z-35.48)/.36)**2)
                 chin=.25*math.exp(-(x/.74)**4-((z-34.73)/.40)**2)
                 # Broad eyebrow planes and a shallow closed-eye sculpt. A
                 # separate arch-relative brow band was tested in clay but
@@ -627,18 +687,33 @@ def face():
                 # even when the actual carved mouth groove curved downward.
                 mouth_z=mouth_contour_z(x)
                 lip_weight=max(0.,1-(abs(x)/.58)**4)
-                top_lip=(.070*lip_weight*
+                upper_strength=.105 if FACE_METHOD == "landmark" else .070
+                lower_strength=.076 if FACE_METHOD == "landmark" else .047
+                crease_strength=.087 if FACE_METHOD == "landmark" else .063
+                top_lip=(upper_strength*lip_weight*
                          math.exp(-((z-(mouth_z+.085))/.10)**2))
-                bottom_lip=(.047*lip_weight*
+                bottom_lip=(lower_strength*lip_weight*
                             math.exp(-((z-(mouth_z-.115))/.115)**2))
-                mouth_crease=(.063*lip_weight*
+                mouth_crease=(crease_strength*lip_weight*
                               math.exp(-((z-mouth_z)/.045)**2))
+                landmark_relief=0.
+                if FACE_METHOD == "landmark":
+                    # Substitution, not a second layer over old spheres:
+                    # eye and nasal geometry follows explicit guide curves.
+                    brow=upper_lid=lower_lid=eye_socket=closed_eye=0.
+                    nose_bridge=nose_tip=septum=0.
+                    nostril_wing=.17*math.exp(
+                        -((abs(x)-.29)/.12)**2-((z-36.13)/.095)**2)
+                    nostril_cavity=.14*math.exp(
+                        -((abs(x)-.23)/.078)**2-((z-36.055)/.052)**2)
+                    landmark_relief=(nasal_cage_relief(x,z)+
+                                     orbital_cage_relief(x,z))
                 # Reference close-ups show a clean, uninterrupted smooth
                 # Art Deco chin. Old beard ridges generated a false combed
                 # texture and a moustache-shaped shadow below the nostrils.
                 y-= (cheek+jaw+chin+brow+upper_lid+lower_lid+
                      nose_bridge+nose_tip+nostril_wing+septum+philtrum+top_lip+bottom_lip+
-                     closed_eye)
+                     closed_eye+landmark_relief)
                 y+=eye_socket+mouth_crease+nostril_cavity+cheek_hollow
             ring.append((x,y,z))
         rings.append(ring)
@@ -652,21 +727,20 @@ def face():
         assert hit, "Facial detail must project onto the sculpted surface"
         return point.y-lift
 
-    for side in (-1,1):
-        # Reference photographs show a continuous semicircular upper lid
-        # set into a recessed almond-shaped eye, not an angular dark slit.
-        top=[]
-        widths=[]
-        for j in range(29):
-            t=j/28
-            x=side*(.30+.80*t)
-            z=36.80+.215*math.sin(math.pi*t)**.83-.015*t
-            top.append((x,face_y(x,z,-.006),z))
-            widths.append(.003+.014*math.sin(math.pi*t)**.7)
-        shaped_path("Face | %s | upper eyelid contour"%side,
-                    top,widths,CARVING,sides=9)
-        # The temple and ear are hidden by the stone hair curtain in the
-        # original. Isolated ear spheres read as buttons in profile.
+    if FACE_METHOD == "gaussian":
+        for side in (-1,1):
+            # Retain original removable guides only on the legacy variant;
+            # landmark eyelids are part of the continuous head surface.
+            top=[]
+            widths=[]
+            for j in range(29):
+                t=j/28
+                x=side*(.30+.80*t)
+                z=36.80+.215*math.sin(math.pi*t)**.83-.015*t
+                top.append((x,face_y(x,z,-.006),z))
+                widths.append(.003+.014*math.sin(math.pi*t)**.7)
+            shaped_path("Face | %s | upper eyelid contour"%side,
+                        top,widths,CARVING,sides=9)
     lip=[(x,mouth_contour_z(x)) for x in (-.55,-.30,0,.30,.55)]
     shaped_path("Face | carved closed mouth",
                 [(x,face_y(x,z,-.003),z) for x,z in lip],
@@ -821,6 +895,106 @@ def build_head_study():
     orient_head(set(bpy.data.objects)-existing)
 
 
+def build_anatomical_head_study(path):
+    """Prototype a real quad-topology head instead of more 2D face relief.
+
+    The selected path must be a rights-cleared anatomical OBJ with one
+    head and optionally two sclera meshes, all centered as one anatomical
+    assembly. This is a *donor anatomy scaffold*, not the monument's scan.
+    No OBJ is downloaded or imported into the accepted full-body export.
+    """
+    if path is None or not path.is_file():
+        raise FileNotFoundError("--face-method anatomical requires --anatomy-base OBJ")
+    global STONE,CARVING
+    bpy.ops.object.select_all(action="SELECT")
+    bpy.ops.object.delete(use_global=False)
+    STONE=mat("Clay | anatomical reconstruction study",(.68,.68,.66))
+    CARVING=STONE
+    if path.suffix == ".gz":
+        # Keep the CC0 anatomy asset small in the repository. Use a scoped
+        # temporary OBJ for Blender's native importer and discard it safely.
+        with tempfile.TemporaryDirectory(prefix="christ-anatomy-") as folder:
+            extracted=Path(folder)/"anatomical_head.obj"
+            with gzip.open(path,"rb") as source, extracted.open("wb") as target:
+                shutil.copyfileobj(source,target)
+            bpy.ops.wm.obj_import(filepath=str(extracted))
+    else:
+        bpy.ops.wm.obj_import(filepath=str(path))
+    parts=[obj for obj in bpy.context.selected_objects if obj.type=="MESH"]
+    if not parts:
+        raise ValueError("The anatomy base OBJ must contain actual mesh geometry")
+    # OBJ uses a Y-up convention; Blender imports with a 90-degree X object
+    # rotation while vertices remain in OBJ-local axes. Bake this for *all*
+    # components before using anatomical X/lateral, Y/depth, Z/height guides.
+    # Without this, an apparent jaw-width sculpt mistakenly modifies the
+    # sagittal coordinate, a failure visible only in multi-view clay renders.
+    for obj in parts:
+        bpy.ops.object.select_all(action="DESELECT")
+        obj.select_set(True)
+        bpy.context.view_layer.objects.active=obj
+        bpy.ops.object.transform_apply(location=False,rotation=True,scale=False)
+    heads=[obj for obj in parts if "head_sculpting_realistic" in obj.name and
+           "sclera" not in obj.name and "iris" not in obj.name]
+    if len(heads)!=1:
+        raise ValueError("Expected one Blender Studio realistic-head scaffold")
+
+    # Broad-form sculpt on a continuous, anatomically organized quad mesh.
+    # Coordinates are from the actual CC0 head control cage (metres), before
+    # enlarging it to monument scale. Unlike the old face-heightfield this
+    # alters skull, mandible, chin and three-dimensional neck transitions.
+    # All edits remain *artist inferred* until camera/scan fitting is solved.
+    head=heads[0]
+    for vertex in head.data.vertices:
+        p=vertex.co
+        source_x,source_y,source_z=p.x,p.y,p.z
+        # The reference sculpture has a heavier, wider Art Deco cranium and
+        # mandible than this contemporary human donor. Keep the shoulder
+        # root narrower and transition to the full head above the neck.
+        neck_blend=max(0.,min(1.,(source_z-.075)/.105))
+        neck_blend=neck_blend*neck_blend*(3-2*neck_blend)
+        p.x=source_x*(.88+.39*neck_blend)
+        # Lengthen the lower-face planes below the eye line; extend the chin
+        # in real 3D, while the posterior cervical column stays attached.
+        anterior=max(0.,min(1.,(-source_y+.015)/.115))
+        lower_face=max(0.,min(1.,(.278-source_z)/.17))
+        chin_join=max(0.,min(1.,(source_z-.035)/.055))
+        p.z-=.046*anterior*lower_face*chin_join
+        # Lift the lower cheek and project the jaw as a single substantial
+        # anatomical plane, without gluing on an independent chin sphere.
+        jaw_zone=max(0.,1.-((source_z-.137)/.079)**2)
+        if jaw_zone>0:
+            p.y-=.009*jaw_zone*anterior
+        # Sculpt the anatomical upper eyelid downward into the physical eye
+        # aperture and lift the lower edge a little. This moves the eyelid
+        # topology itself, not a detached black arc placed on an ellipsoid.
+        eye_lateral=max(0.,1.-((abs(source_x)-.0316)/.033)**4)
+        eye_front=max(0.,min(1.,(-source_y-.065)/.064))
+        upper=max(0.,1.-((source_z-.282)/.017)**2)
+        lower=max(0.,1.-((source_z-.257)/.014)**2)
+        p.z+=eye_lateral*eye_front*(-.0085*upper+.0025*lower)
+        # The monument's mouth turns down through both commissures; moving
+        # the lip/jaw vertices gives a real three-dimensional curve.
+        corner=max(0.,1.-((abs(source_x)-.050)/.021)**2)
+        lip_level=max(0.,1.-((source_z-.168)/.023)**2)
+        p.z-=.009*corner*lip_level*anterior
+    for obj in parts:
+        obj.name=("Head | anatomical quad-topology clay sculpt" if obj == heads[0]
+                  else "Head | stone eyeball reference %s"%obj.name)
+        obj.scale=(11.,11.,11.)
+        obj.location=(0,0,34.03)
+        obj.data.materials.clear()
+        obj.data.materials.append(STONE)
+        if obj == heads[0]:
+            subdiv=obj.modifiers.new("Editable anatomical sculpt density","SUBSURF")
+            subdiv.levels=2
+            subdiv.render_levels=2
+            bpy.context.view_layer.objects.active=obj
+            bpy.ops.object.modifier_apply(modifier=subdiv.name)
+        for polygon in obj.data.polygons:
+            polygon.use_smooth=True
+    orient_head(parts)
+
+
 def build():
     global STONE,CARVING,GRANITE
     bpy.ops.object.select_all(action="SELECT")
@@ -903,7 +1077,7 @@ def verify():
             "mosaic_images":len([im for im in bpy.data.images if im.name.startswith("Soapstone |")]),
             "uv_mesh_count":sum(bool(ob.data.uv_layers) for ob in objs),
             "head_surface_vertices":len(head_ob.data.vertices),
-            "head_tilt_deg":HEAD_TILT_DEG,
+            "head_tilt_deg":HEAD_TILT_DEG,"face_method":FACE_METHOD,
             "mesh_count":len(objs),"vertex_count":sum(len(ob.data.vertices) for ob in objs)}
     assert abs(ptop-rbot)<.001,"Statue must meet pedestal without floating"
     assert abs(maximum[0]-minimum[0]-29.40)<.015,"Survey fingertip span should be 29.4 m"
@@ -992,7 +1166,7 @@ def export(path):
 
 
 def main():
-    global HEAD_TILT_DEG
+    global HEAD_TILT_DEG,FACE_METHOD
     argv=sys.argv[sys.argv.index("--")+1:] if "--" in sys.argv else []
     p=argparse.ArgumentParser()
     p.add_argument("--output")
@@ -1004,6 +1178,12 @@ def main():
                    help="Clay-only head study for rapid multi-view anatomical QA")
     p.add_argument("--head-tilt",type=float,default=22.,
                    help="Head bow angle in degrees for scan/profile comparison")
+    p.add_argument("--face-method",choices=("gaussian","landmark","anatomical"),
+                   default="gaussian",
+                   help="Select old export, relief experiment, or 3D anatomy scaffold")
+    p.add_argument("--anatomy-base",type=Path,
+                   default=ANATOMY_BASE,
+                   help="CC0 anatomical OBJ, used only in --head-study anatomical mode")
     p.add_argument("--samples",type=int,default=16)
     p.add_argument("--size",type=int,default=720)
     p.add_argument("--shot",action="append",choices=("front","profile","three_quarter",
@@ -1014,12 +1194,24 @@ def main():
     if not 0 <= args.head_tilt <= 50:
         p.error("--head-tilt must be between 0 and 50 degrees")
     HEAD_TILT_DEG=args.head_tilt
+    FACE_METHOD=args.face_method
+    if FACE_METHOD == "anatomical" and not args.head_study:
+        p.error("Anatomical mode is a clay-only reconstruction HOLD, not a full export")
     if args.head_study:
-        build_head_study()
+        if FACE_METHOD == "anatomical":
+            build_anatomical_head_study(args.anatomy_base)
+        else:
+            build_head_study()
         head=next(ob for ob in bpy.data.objects
-                  if ob.name.startswith("Head | integrated cheekbone"))
+                  if ob.name.startswith(("Head | integrated cheekbone",
+                                          "Head | anatomical quad-topology")))
+        head_points=[head.matrix_world @ vertex.co for vertex in head.data.vertices]
         metrics={"study":"head","head_surface_vertices":len(head.data.vertices),
-                 "head_tilt_deg":HEAD_TILT_DEG,
+                 "head_tilt_deg":HEAD_TILT_DEG,"face_method":FACE_METHOD,
+                 "head_width_m":round(max(p.x for p in head_points)-
+                                      min(p.x for p in head_points),3),
+                 "head_depth_m":round(max(p.y for p in head_points)-
+                                      min(p.y for p in head_points),3),
                  "mesh_count":sum(ob.type=="MESH" for ob in bpy.data.objects)}
         assert metrics["head_surface_vertices"]>15000
     else:
