@@ -358,7 +358,9 @@ jobs:
           python -m kumiki_blender audit-revision --root .review/ci/khufu-petrie
           python -m kumiki_blender audit-revision --root .review/ci/sphinx-scan-integration
           python -m kumiki_blender audit --model .review/ci/khufu-petrie/model.glb --require-pbr-textures
-          python -m kumiki_blender audit --model .review/ci/sphinx-scan-integration/model.glb --require-pbr-textures
+          # This first-party geometry fixture has one plain material, not a
+          # licensed photogrammetry texture set. Verify its static GLB/provenance.
+          python -m kumiki_blender audit --model .review/ci/sphinx-scan-integration/model.glb
           python -c 'import json; m=json.load(open(".review/ci/khufu-petrie/manifest.json")); assert m["parameters"]["pyramid_courses"] == 201 and m["named_parts"]["pyramid_parts"] == 805'
           python -c 'import json; m=json.load(open(".review/ci/sphinx-scan-integration/manifest.json")); assert m["sphinx_scan"]["provenance"]["commercial_use_allowed"] and "passes_bounding_envelope_screen" in m["sphinx_scan"]["source_geometry_review"]'
           test -s .review/ci/khufu-petrie/previews/masonry.png
