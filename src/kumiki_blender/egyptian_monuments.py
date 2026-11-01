@@ -271,6 +271,17 @@ def make_monument_study(*, kind: str = "giza-study",
     """Compose a pyramid, a lion-bodied royal figure or a staged pair."""
     if kind not in ("pyramid", "sphinx", "giza-study"):
         raise MonumentError("kind must be pyramid, sphinx or giza-study")
+    # Validate the whole exposed recipe even if an unused optional model is
+    # disabled. Otherwise a sphinx-only plan could emit non-finite JSON in
+    # its manifest, or accept an unsafe setting that changes behavior later.
+    pyramid_base = _finite_number(pyramid_base, "pyramid_base", 8, 1000)
+    pyramid_height = _finite_number(pyramid_height, "pyramid_height", 5, 700)
+    casing_fraction = _finite_number(casing_fraction, "casing_fraction", 0, 1)
+    sphinx_length = _finite_number(sphinx_length, "sphinx_length", 3, 150)
+    if type(pyramid_courses) is not int or not 6 <= pyramid_courses <= 128:
+        raise MonumentError("pyramid_courses must be an integer from 6 to 128")
+    if type(restored_nose) is not bool:
+        raise MonumentError("restored_nose must be boolean")
     parts: list[MeshInstance] = []
     if kind in ("pyramid", "giza-study"):
         shift_y = 8.0 if kind == "giza-study" else 0.0

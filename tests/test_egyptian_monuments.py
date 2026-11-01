@@ -120,6 +120,12 @@ class EgyptianMonumentTests(unittest.TestCase):
                        {"sphinx_length": float("nan")}, {"restored_nose": 1}):
             with self.subTest(kwargs=kwargs), self.assertRaises((MonumentError, GeometryError)):
                 make_monument_study(**kwargs)
+        for kwargs in ({"kind": "sphinx", "pyramid_base": float("nan")},
+                       {"kind": "sphinx", "pyramid_courses": True},
+                       {"kind": "pyramid", "sphinx_length": float("inf")},
+                       {"kind": "pyramid", "restored_nose": "yes"}):
+            with self.subTest(kwargs=kwargs), self.assertRaises((MonumentError, GeometryError)):
+                make_monument_study(**kwargs)
 
     def test_plan_cli_runs_without_blender_and_build_is_non_destructive(self):
         stream = io.StringIO()
