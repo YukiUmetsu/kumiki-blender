@@ -136,6 +136,9 @@ def inspection_views(output_dir):
     scene.render.resolution_x=900;scene.render.resolution_y=1100
     scene.render.resolution_percentage=100
     scene.world.color=(.17,.19,.22)
+    bpy.ops.object.light_add(type='AREA', location=(4,-9,17))
+    light=bpy.context.object;light.name='QA softbox';light.data.energy=2300;light.data.shape='DISK';light.data.size=9
+    light.rotation_euler=(Vector((0,0,10))-light.location).to_track_quat('-Z','Y').to_euler()
     for name,loc,target,scale in [
         ('front',(0,-38,8),(0,0,7.0),22.0),
         ('profile',(38,0,8),(0,0,7.0),22.0),
@@ -155,7 +158,9 @@ def main():
     bpy.ops.mesh.primitive_cylinder_add(vertices=8,radius=2.4,depth=2.7,location=(0,0,1.35))
     o=bpy.context.object;o.name="Pedestal";o.data.materials.append(mat("Dark granite",(.25,.26,.25)))
     args=sys.argv[sys.argv.index('--')+1:] if '--' in sys.argv else []
-    if '--views' in args:\n        inspection_views(args[args.index('--views')+1])\n    if '--output' in args:
+    if '--views' in args:
+        inspection_views(args[args.index('--views')+1])
+    if '--output' in args:
         path=args[args.index('--output')+1]
         bpy.ops.export_scene.gltf(filepath=path,export_format='GLB')
     if '--blend' in args:
