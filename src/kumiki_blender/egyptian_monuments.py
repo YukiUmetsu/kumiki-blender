@@ -265,8 +265,10 @@ def sphinx_assembly(*, prefix: str, length: float = 10.5,
     def part(name: str, mesh: Mesh, material: str = "sphinx-limestone") -> None:
         items.append(place_mesh(mesh, name=f"{prefix}-{name}", material=material))
 
-    part("bedrock", rough_bedrock_slab(length*1.06, width*1.35, height*0.13,
-                                       roughness=.12*min(x, y, z), seed=271),
+    # The statue is hewn from a bedrock ridge, not perched on a tall plinth.
+    # A low irregular terrain seam keeps the paws grounded in site material.
+    part("bedrock", rough_bedrock_slab(length*1.065, width*1.37, height*.058,
+                                       roughness=.10*min(x, y, z), seed=271),
          "bedrock-limestone")
     # Long recumbent lion back, tapering rump and forward shoulder masses.
     part("lion-torso", along_x(((-3.0, 0, 1.43, 0.73, 0.72),
@@ -279,21 +281,32 @@ def sphinx_assembly(*, prefix: str, length: float = 10.5,
                                 (4.15, 0, 1.04, 0.20, 0.28)),
                                roughness=.16, seed=211, exponent=3.9),
          "sphinx-limestone")
-    part("chest", along_z(((0.45, -2.95, 0, 0.68, 0.85),
-                           (0.85, -2.96, 0, 0.87, 1.03),
-                           (1.50, -2.95, 0, 0.85, 0.99),
-                           (2.20, -2.85, 0, 0.72, 0.85),
-                           (2.72, -2.86, 0, 0.45, 0.61)),
-                          roughness=.095, seed=43, exponent=3.5))
+    # A forward shoulder mass merges with the lion torso; the narrower neck
+    # connects it to the headdress. The old single upstanding spheroid made the
+    # figure read like a bust standing on a pedestal.
+    part("chest", along_x(((-3.85, 0, 1.43, .48, .56),
+                            (-3.54, 0, 1.43, .67, .72),
+                            (-3.22, 0, 1.40, .83, .81),
+                            (-2.76, 0, 1.32, 1.02, .94),
+                            (-2.16, 0, 1.25, 1.17, .97)),
+                          roughness=.13, seed=43, exponent=3.9))
+    part("carved-neck", along_z(((1.77, -3.23, 0, .49, .70),
+                                  (2.09, -3.28, 0, .48, .68),
+                                  (2.44, -3.34, 0, .45, .60),
+                                  (2.79, -3.38, 0, .43, .58),
+                                  (3.07, -3.44, 0, .41, .60)),
+                                 roughness=.073, seed=49, exponent=3.4))
     for side, sign in (("left", -1), ("right", 1)):
         side_y = sign*1.07
-        part(f"{side}-forepaw", along_x(((-5.35, side_y, .35, .22, .21),
-                                         (-5.10, side_y, .34, .35, .26),
-                                         (-4.70, side_y, .37, .41, .30),
-                                         (-3.8, side_y, .42, .42, .34),
-                                         (-2.6, side_y, .61, .46, .50),
-                                         (-1.85, side_y, 1.00, .38, .80)),
-                                        roughness=.105, seed=61, exponent=4.0))
+        part(f"{side}-forepaw", along_x(((-5.43, side_y, .32, .22, .19),
+                                         (-5.12, side_y, .33, .33, .26),
+                                         (-4.70, side_y, .35, .39, .30),
+                                         (-4.03, side_y, .38, .43, .34),
+                                         (-3.34, side_y, .43, .45, .37),
+                                         (-2.75, side_y, .53, .45, .46),
+                                         (-2.20, side_y, .74, .42, .61),
+                                         (-1.90, side_y, .87, .37, .63)),
+                                        roughness=.13, seed=61, exponent=4.1))
         for toe in range(3):
             toe_y = side_y + (toe-1)*.22
             part(f"{side}-toe-{toe}", along_x(((-5.49, toe_y, .24, .065, .095),
@@ -307,11 +320,11 @@ def sphinx_assembly(*, prefix: str, length: float = 10.5,
                                        (3.75, sign*.98, .84, .50, .65),
                                        (4.08, sign*.94, .60, .18, .31)),
                                       roughness=.135, seed=151, exponent=3.6))
-    part("curved-tail", along_x(((2.1, -1.06, .65, .16, .17),
-                                (2.8, -1.42, .60, .18, .18),
-                                (3.7, -1.50, .67, .17, .16),
-                                (4.4, -1.35, .82, .14, .12),
-                                (4.75, -1.12, .97, .12, .12)),
+    part("curved-tail", along_x(((2.1, -1.04, .61, .14, .15),
+                                (2.7, -1.26, .58, .16, .17),
+                                (3.4, -1.38, .65, .15, .15),
+                                (3.86, -1.27, .74, .13, .12),
+                                (4.13, -1.12, .82, .09, .09)),
                                roughness=.025, seed=156))
     # Broad rounded nemes headdress sits behind a separate sculpted face.
     part("nemes-hood", along_z(((2.70, -3.38, 0, .65, .80),
@@ -399,7 +412,7 @@ def make_monument_study(*, kind: str = "giza-study",
         for part in sphinx_assembly(prefix="sphinx", length=sphinx_length,
                                     restored_nose=restored_nose):
             parts.append(replace(part, origin=(part.origin[0], part.origin[1]+shift_y,
-                                               part.origin[2]+0.30)))
+                                               part.origin[2]+0.02)))
     mins = [float("inf")]*3
     maxs = [float("-inf")]*3
     for part in parts:

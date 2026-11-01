@@ -137,9 +137,9 @@ def rough_bedrock_slab(length: float, width: float, height: float, *,
                 at_x_edge = i == 0 or i == x_segments
                 at_y_edge = j == 0 or j == y_segments
                 if at_x_edge:
-                    x += roughness*.48*_noise3(x*1.7, y*1.7, .33, seed+44)
+                    x += roughness*1.10*_noise3(x*1.7, y*1.7, .33, seed+44)
                 if at_y_edge:
-                    y += roughness*.48*_noise3(x*1.7, y*1.7, .71, seed+45)
+                    y += roughness*1.10*_noise3(x*1.7, y*1.7, .71, seed+45)
                 relief = roughness*(.55*_noise3(x*1.1, y*1.1, 1.1, seed) +
                                     .28*_noise3(x*4.2, y*4.2, 2.3, seed+9) +
                                     .17*_noise3(x*12, y*12, 3.1, seed+19))
@@ -163,6 +163,22 @@ def rough_bedrock_slab(length: float, width: float, height: float, *,
                  [idx(x_segments, j, False) for j in range(1, count_y)] +
                  [idx(i, y_segments, False) for i in range(x_segments-1, -1, -1)] +
                  [idx(0, j, False) for j in range(y_segments-1, 0, -1)])
-    for a, b in zip(perimeter, (*perimeter[1:], perimeter[0])):
-        faces.append((a, b, b+count, a+count))
+    # A separate middle side ring interrupts smooth vertical plinth walls.
+    # It allows an irregular limestone break along every exposed edge without
+    # touching top/bottom triangulation or opening the watertight perimeter.
+    mid_ring: list[int] = []
+    for base in perimeter:
+        bx, by, _ = vertices[base]
+        tx, ty, tz = vertices[base+count]
+        mid_ring.append(len(vertices))
+        vertices.append((
+            (bx+tx)/2 + roughness*.64*_noise3(bx*2.6, by*2.6, height*.55, seed+61),
+            (by+ty)/2 + roughness*.64*_noise3(bx*2.6, by*2.6, height*.55, seed+63),
+            tz*.54 + roughness*.16*_noise3(bx*3.1, by*3.1, height*.55, seed+67),
+        ))
+    for index, (a, b) in enumerate(zip(perimeter,
+                                        (*perimeter[1:], perimeter[0]))):
+        mid_a, mid_b = mid_ring[index], mid_ring[(index+1) % len(mid_ring)]
+        faces.append((a, b, mid_b, mid_a))
+        faces.append((mid_a, mid_b, b+count, a+count))
     return Mesh(tuple(vertices), tuple(faces))

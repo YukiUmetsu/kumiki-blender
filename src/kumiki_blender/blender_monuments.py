@@ -39,8 +39,10 @@ def plan_monument_shots(study: MonumentStudy) -> tuple[QualityShot, ...]:
     if study.kind in ("sphinx", "giza-study"):
         sy = -(dict(study.parameters)["pyramid_base_m"]/2+8) if study.kind == "giza-study" else 0
         length = dict(study.parameters)["sphinx_length_m"]
-        shots.append(QualityShot("sphinx", (-length*.85, sy-length*.75, 5.8),
-                                 (-length*.28, sy, 2.8), length*1.3))
+        # A side-biased three-quarter view keeps the whole recumbent lion and
+        # front paws in frame; the former head-centered framing cropped its rump.
+        shots.append(QualityShot("sphinx", (-length*.63, sy-length*.97, 5.5),
+                                 (-length*.025, sy, 2.08), length*1.48))
     return tuple(shots)
 
 
@@ -84,6 +86,13 @@ def build_monument_scene(study: MonumentStudy, destination: Path, *,
                                      weathering_strength=0.62),
     }
     palette = {name: _material(bpy, spec) for name, spec in materials.items()}
+    # The packed maps remain portable glTF normal textures. Their shallow
+    # relief needs stronger raking-light response on the weathered statue than
+    # on generic polished architectural stone.
+    for name in ("sphinx-limestone", "bedrock-limestone", "weathered-limestone"):
+        for node in palette[name].node_tree.nodes:
+            if node.type == "NORMAL_MAP":
+                node.inputs["Strength"].default_value = 0.82
     from mathutils import Matrix
 
     cache: dict[tuple[int, str], Any] = {}
@@ -98,7 +107,11 @@ def build_monument_scene(study: MonumentStudy, destination: Path, *,
             mesh.materials.append(palette[part.material])
             if part.name.startswith("sphinx-"):
                 for poly in mesh.polygons:
-                    if len(poly.vertices) == 4:
+                    # Preserve rock's low-frequency chipped facets on the
+                    # torso and site while smoothing the head and small detail.
+                    if len(poly.vertices) == 4 and not any(
+                        role in part.name for role in
+                        ("lion-torso", "chest", "forepaw", "haunch", "bedrock")):
                         poly.use_smooth = True
             cache[key] = mesh
         obj = bpy.data.objects.new(part.name, cache[key])

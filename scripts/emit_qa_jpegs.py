@@ -28,7 +28,9 @@ def main(argv: list[str]) -> int:
         with Image.open(path) as source:
             source.verify()
         with Image.open(path) as source:
-            source.thumbnail((480, 300), Image.Resampling.LANCZOS)
+            # Large enough to inspect paw anatomy and erosion facets while
+            # staying small enough for GitHub's job-log transport.
+            source.thumbnail((720, 450), Image.Resampling.LANCZOS)
             frame = source.convert("RGB")
             output = io.BytesIO()
             frame.save(output, format="JPEG", quality=79, optimize=True)

@@ -67,9 +67,15 @@ class RockWeatheringTests(unittest.TestCase):
         torso = parts["rock-lion-torso"]
         head = parts["rock-face"]
         bedrock = parts["rock-bedrock"]
+        front_paw = parts["rock-left-forepaw"]
         self.assertGreater(len(torso.vertices), 3000)
         self.assertGreater(len(head.vertices), 2000)
         self.assertGreater(len(bedrock.vertices), 600)
+        self.assertIn("rock-carved-neck", parts)
+        # Keep the recumbent forelegs horizontal and the rock grounding low:
+        # a tall pedestal and swollen triangular forelegs read like a toy.
+        self.assertLess(max(v[2] for v in front_paw.vertices), 1.55)
+        self.assertLess(max(v[2] for v in bedrock.vertices), .35)
         # No two adjacent strata share the precise same longitudinal profile.
         self.assertNotEqual(torso.vertices[96:192], torso.vertices[192:288])
 

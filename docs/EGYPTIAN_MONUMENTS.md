@@ -49,7 +49,7 @@ blender --background --factory-startup --python-exit-code 1 \
 
 All dimensions are meters. Default combined plan uses a **36 m by 23 m
 illustrative pyramid**, a **10.5 m Sphinx-shaped study**, 18 stone courses,
-and 393 named components. It does **not** imply that the real landmarks have
+and 394 named components. It does **not** imply that the real landmarks have
 those measurements. `--restored-nose` is an explicitly optional sculptural
 interpretation, not archaeological evidence. Material color and stone erosion
 are procedural approximations, not scans of the site.
