@@ -1,5 +1,21 @@
 # Statue of Liberty — scan-assisted detail rebuild
 
+## r54–r55 — measured face QA and reconstruction-method gate
+
+The updated face workflow now uses independent **NPS measured feature ratios**
+and **public-domain HAER frontal/profile photographs** for fixed-camera
+comparison. Two control-cage and iris/lip experiments did **not** pass
+photographic QA and were intentionally rejected. The r53 detailed face
+remains the latest opt-in model; no replacement GLB was promoted from the
+failed trials. Added a quick three-view neutral-clay Blender renderer,
+reproducible side-by-side reference comparison script and a source/rights
+ledger with specific geometry defects and next acceptance criteria.
+
+See [facial QA and reference ledger](STATUE_OF_LIBERTY_FACE_QA.md). The next
+meaningful step is a genuine anatomical sculpt/retopology or a suitable
+authorized real-face scan; another round of additive facial blobs is not an
+adequate reconstruction method.
+
 ## r53 — continuous relief head and sculpted pinnae (opt-in, **experimental**)
 
 The latest procedural trial replaces the separate nose lozenge, eyeball
