@@ -123,3 +123,72 @@ def compare_landmark_views(reference: LandmarkView, candidate: LandmarkView) -> 
         "measurement_type": "uncalibrated image-space proportions only",
         "survey_accuracy_claimed": False,
     }
+
+
+def compare_landmark_revisions(
+    reference: LandmarkView,
+    baseline: LandmarkView,
+    revised: LandmarkView,
+    *,
+    minimum_mean_improvement: float = 0.10,
+    maximum_feature_regression: float = 0.02,
+) -> dict[str, Any]:
+    """Hold a revised sculpt to a measurable, multi-feature promotion gate.
+
+    Both rendered images are aligned *independently* to the same reference
+    using only the declared anchors. A lower mean error can hide a disastrous
+    eye/ear/chin regression, so also reject any single feature that gets
+    substantially worse. Passing says nothing about source authenticity,
+    3D depth, or materials; it is only a 2D proportion checkpoint.
+
+    The caller must annotate the actual newly rendered image: old annotation
+    coordinates copied into a new candidate would invalidate the review.
+    """
+    for name, value, lower, upper in (
+        ("minimum_mean_improvement", minimum_mean_improvement, 0.0, 1.0),
+        ("maximum_feature_regression", maximum_feature_regression, 0.0, 1.0),
+    ):
+        if type(value) not in (float, int) or not math.isfinite(value) or not lower <= value < upper:
+            raise LandmarkError(f"{name} must be a finite fraction in [{lower}, {upper})")
+    previous = compare_landmark_views(reference, baseline)
+    current = compare_landmark_views(reference, revised)
+    previous_by_feature = {item["feature"]: item for item in previous["largest_mismatches"]}
+    current_by_feature = {item["feature"]: item for item in current["largest_mismatches"]}
+    comparisons = []
+    for feature in sorted(previous_by_feature):
+        old = previous_by_feature[feature]["distance_fraction"]
+        new = current_by_feature[feature]["distance_fraction"]
+        comparisons.append({
+            "feature": feature,
+            "baseline_error_fraction": old,
+            "revised_error_fraction": new,
+            "error_change_fraction": round(new-old, 5),
+        })
+    comparisons.sort(key=lambda item: item["error_change_fraction"], reverse=True)
+    old_mean = previous["mean_distance_fraction"]
+    new_mean = current["mean_distance_fraction"]
+    mean_improved = (old_mean > 0 and
+                     new_mean <= old_mean*(1.0-minimum_mean_improvement))
+    regressed = [entry["feature"] for entry in comparisons
+                 if entry["error_change_fraction"] > maximum_feature_regression]
+    promoted = mean_improved and not regressed
+    return {
+        "view": reference.view,
+        "reference_size_px": list(reference.size),
+        "baseline_size_px": list(baseline.size),
+        "revised_size_px": list(revised.size),
+        "baseline_mean_distance_fraction": old_mean,
+        "revised_mean_distance_fraction": new_mean,
+        "relative_mean_improvement": (round((old_mean-new_mean)/old_mean, 5)
+                                      if old_mean else None),
+        "required_relative_mean_improvement": minimum_mean_improvement,
+        "maximum_allowed_feature_regression_fraction": maximum_feature_regression,
+        "features_regressed_beyond_limit": regressed,
+        "feature_changes": comparisons,
+        "candidate_is_measured_improvement": promoted,
+        "status": ("proportion-check-passed / multi-view visual review still required"
+                   if promoted else "hold / image-space anatomy did not improve safely"),
+        "measurement_type": "uncalibrated image-space proportions only",
+        "new_render_annotations_required": True,
+        "depth_or_source_authenticity_verified": False,
+    }

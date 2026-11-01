@@ -50,6 +50,25 @@ images. Never compare opposite profiles as if mirrored anatomy were identical.
 Pick matching, identifiable three-point anchors and include the chin and nasal
 profile as independent evaluation landmarks.
 
+For a **before/after decision**, use three independently marked image records:
+
+```bash
+PYTHONPATH=src python3 -m kumiki_blender compare-sphinx-revisions \
+  --reference examples/sphinx-frontal-photo-landmarks.json \
+  --baseline examples/sphinx-frontal-procedural-landmarks.json \
+  --revised /path/to/annotations-from-the-new-frontal-render.json
+```
+
+The gate requires **at least 10% less mean image-space landmark error** and
+**no feature more than 0.02 normalized units worse**. Even a substantially
+better average fails if one eye, ear or chin has regressed. The `status` is a
+**hold** unless both requirements pass. Always annotate the actual image from
+the current Blender build: using the old coordinates on a new render creates
+fictitious progress. A passing frontal report still needs an independently
+annotated **side/profile** review, anatomical inspection, and authentic source
+evidence. This gate does not automatically score pixels, scan provenance, 3D
+depth, or material fidelity.
+
 The useful new **production path** is to trace the ARCE front/side elevation
 and 3D head control points, fit a new original continuous face surface to
 those constraints, then sculpt missing small-scale damage under photo review.
@@ -93,6 +112,29 @@ inverted landmark height ordering or landmark shifts larger than 29 cm at
 the default study scale. Without these flags the original illustrative
 generator is unchanged. Blender CI builds and renders both versions so
 **real visual QA decides whether to use the result**.
+
+The fresh Blender frontal, three-quarter and profile renders from the
+monotone revision were inspected. The warped nose spike is gone, but the
+face remains a **flat, generic mask with inadequate eyes/ears, a weak mouth
+and poor chin/side depth**. It is therefore **not promoted over the baseline**.
+The `--sphinx-face-reference` path remains experimental and opt-in.
+
+### Reject title-matched models that depict the wrong object
+
+The [Zenodo / Scan-the-World record labeled *The Great Sphinx of Giza,
+Egypt*](https://zenodo.org/records/21647117) initially appeared to offer
+downloadable GLB geometry. Its five public orthogonal preview images were
+inspected in November 2026: the object is an upright decorative/figurative
+sphinx sculpture with a different head and body, **not a scan of the
+recumbent Giza monument**. Reject it for geometry fitting even though it
+has usable GLB files. The record also does not establish production rights.
+
+The [AERA Return to the Sphinx](https://aeraweb.org/projects/sphinx/)
+documents actual-monument drone photogrammetry and laser scanning in 2018–19,
+which is much more promising. Public documentation of that capture is **not
+the same as a downloadable, rights-cleared mesh**. Until one can be obtained
+or survey contours digitized, do not silently substitute a mislabeled statue
+or a miniature; use them only as explicitly labeled historical inspiration.
 
 **Still missing:** true side-profile fitting, 3D survey point coordinates,
 an anatomically sculpted eye/ear/lip surface, calibrated camera perspective,

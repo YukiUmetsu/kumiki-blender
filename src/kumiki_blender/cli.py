@@ -26,7 +26,9 @@ from .recipe import RecipeError, load_recipe
 from .render_profiles import RenderProfileError
 from .revision_audit import RevisionAuditError, audit_revision
 from .sphinx_scan_review import prepare_sphinx_review
-from .sphinx_landmarks import LandmarkError, compare_landmark_views, load_landmark_view
+from .sphinx_landmarks import (
+    LandmarkError, compare_landmark_revisions, compare_landmark_views, load_landmark_view,
+)
 from .sphinx_reference_shape import prepare_sphinx_face_fit
 from .surfaces import SurfaceError
 from .vintage_biplane import make_biplane
@@ -117,6 +119,10 @@ def main(argv: list[str] | None = None) -> int:
     landmark_parser = subcommands.add_parser("compare-sphinx-landmarks")
     landmark_parser.add_argument("--reference", type=Path, required=True)
     landmark_parser.add_argument("--candidate", type=Path, required=True)
+    revision_landmarks = subcommands.add_parser("compare-sphinx-revisions")
+    revision_landmarks.add_argument("--reference", type=Path, required=True)
+    revision_landmarks.add_argument("--baseline", type=Path, required=True)
+    revision_landmarks.add_argument("--revised", type=Path, required=True)
     texture_parser = subcommands.add_parser("inspect-texture-packs")
     texture_parser.add_argument("--input", type=Path, required=True)
     import_parser = subcommands.add_parser("import-asset")
@@ -235,6 +241,12 @@ def main(argv: list[str] | None = None) -> int:
             reference = load_landmark_view(args.reference)
             candidate = load_landmark_view(args.candidate)
             print(json.dumps(compare_landmark_views(reference, candidate), indent=2))
+            return 0
+        if args.command == "compare-sphinx-revisions":
+            reference = load_landmark_view(args.reference)
+            baseline = load_landmark_view(args.baseline)
+            revised = load_landmark_view(args.revised)
+            print(json.dumps(compare_landmark_revisions(reference, baseline, revised), indent=2))
             return 0
         if args.command == "inspect-texture-packs":
             print(json.dumps({"assignments": [entry.to_manifest() for entry in
