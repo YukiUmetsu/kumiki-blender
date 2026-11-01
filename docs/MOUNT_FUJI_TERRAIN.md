@@ -77,6 +77,35 @@ it cannot represent all seasons at once. The exposed Hōei crater has locally
 warmer iron-rich scoria, while the summit basalt stays dark in snow-free faces.
 All color work changes only PBR albedo, **not DEM elevations**.
 
+### Separate snow-free late-summer export
+
+Choose `--season summer` on **realistic** builds for the August–September
+appearance: absolutely no snow remains on the top crater lip, north-facing
+gullies or Hōei walls. The snow-free material reveals charcoal-to-iron scoria,
+mineral-ash pigment variation, erosion grooves and the survey-refined rim.
+Birch/scrub near the irregular treeline is marginally greener than in winter;
+the lower cedar forest and all GSI elevations are unchanged. The default
+`--season winter` keeps the original snowy model; **this option does not modify
+or replace the winter GLB**.
+
+Reference photos (inspiration only, not reused as textures):
+
+- [Japan Ministry of the Environment: Fuji summer landscape journal](https://kanto.env.go.jp/blog/page_00056.html): late June snow often survives close to July, while exposed late-summer slopes have dark scoria and birch belts around 2,000–2,500 m.
+- [Japan Ministry of the Environment: Why Fuji's rock looks black](https://kanto.env.go.jp/blog/2020/05/post-870.html): upper volcanic scoria is dark when viewed close up, rather than blue.
+- [Drone photograph of the summit crater's exposed strata](https://note.com/hayakawayukio/n/n4276f012dd71): irregular dark-red/grey rock within the rim; photographic study only.
+
+To create **both** seasons with the same cached high-detail survey data:
+
+```bash
+# Existing winter model (default) is still reproducible with --season winter.
+blender --background --factory-startup --python-exit-code 1 \
+  --python scripts/blender_entry.py -- build-fuji --detail high \
+  --season summer --dem .review/fuji-dem/fuji-heightmap.bin \
+  --detail-patch .review/fuji-dem/fuji-summit-z15-patch.bin \
+  --detail-patch .review/fuji-dem/fuji-hoei-z15-patch.bin \
+  --output .review/geography/terrain/mount-fuji-survey-terrain/r12
+```
+
 Season, forest density and snow coverage are **art direction**, not a satellite
 or botanical claim; the realistic variant's elevations remain unchanged.
 

@@ -100,6 +100,8 @@ def main(argv: list[str] | None = None) -> int:
                                 help="Surveyed terrain or compact stylized Japan diorama")
         subcommand.add_argument("--dem", type=Path, default=Path(".review/fuji-dem/fuji-heightmap.bin"))
         subcommand.add_argument("--detail", choices=("preview", "standard", "high"), default="standard")
+        subcommand.add_argument("--season", choices=("winter", "summer"), default="winter",
+                                help="Realistic Fuji: snowy winter or fully snow-free late summer")
         subcommand.add_argument("--detail-patch", type=Path, action="append", default=[],
                                 help="Optional native GSI z15 crater patch (repeat for summit and Hoei)")
         if command == "build-fuji":
@@ -233,6 +235,8 @@ def main(argv: list[str] | None = None) -> int:
             if args.style == "iconic":
                 if args.detail_patch:
                     raise ValueError("Survey detail patches are only valid for realistic Fuji")
+                if args.season != "winter":
+                    raise ValueError("--season is only available for realistic Fuji")
                 from .geography.fuji.iconic_scene import iconic_spec
                 if args.command == "plan-fuji":
                     print(json.dumps(iconic_spec(args.detail), indent=2))
@@ -256,7 +260,8 @@ def main(argv: list[str] | None = None) -> int:
                 raise ValueError("GSI crater patches require --detail high")
             if args.command == "plan-fuji":
                 print(json.dumps({"asset_id": "mount-fuji-survey-terrain",
-                                  "source": dem.source, "detail": args.detail,
+                                  "source": dem.source, "detail": args.detail, "season": args.season,
+                                  "snow_cover": "none" if args.season=="summer" else "seasonal",
                                   "terrain_divisions": divisions,
                                   "terrain_vertices": (divisions+1)**2 +
                                       sum(p.spec.rows*p.spec.cols-((p.spec.rows-1)//p.spec.factor+1)*
@@ -272,6 +277,7 @@ def main(argv: list[str] | None = None) -> int:
             from .geography.fuji.blender_scene import build_fuji_scene
             print(json.dumps(build_fuji_scene(args.output, args.dem, divisions=divisions,
                                              detail_patches=tuple(args.detail_patch),
+                                             season=args.season,
                                              bpy_module=bpy), indent=2))
             return 0
         if args.command in ("plan-egypt-map", "build-egypt-map"):

@@ -59,14 +59,19 @@ def _value_noise(x: float, y: float) -> float:
     return north*(1-v)+south*v
 
 
-def terrain_color(height_m: float, slope: float, x: float, y: float) -> tuple[float, float, float, float]:
+def terrain_color(height_m: float, slope: float, x: float, y: float,
+                  *, season: str = "winter") -> tuple[float, float, float, float]:
     """Photo-informed seasonal albedo; all elevation geometry remains GSI.
 
     Environment Ministry field photographs describe black scoria above the
     fifth station; Fujinomiya and Hōei images show *localized* red cinders,
     not an entire pastel brown cone. Lower woods are dense dark conifers.
-    This is an original winter/early-spring interpretation, not satellite data.
+    Summer models August/September when the summit is normally snow-free;
+    winter retains the original late-winter/early-spring snow interpretation.
+    Neither albedo variant claims satellite-accurate seasonal vegetation.
     """
+    if season not in ("winter", "summer"):
+        raise ValueError(f"Unsupported Fuji albedo season: {season}")
     clamp=lambda value: max(0.,min(1.,value))
     large=_value_noise(x*.28+7.4,y*.28-4.1)
     canopy=_value_noise(x*1.05-13.7,y*1.05+9.4)
@@ -96,6 +101,12 @@ def terrain_color(height_m: float, slope: float, x: float, y: float) -> tuple[fl
     rock=_mix(rock,iron_scoria,oxidation)
     rock=_mix(rock,charcoal,.20*clamp(slope*1.5))
     c=_mix(c,rock,exposed)
+    if season=="summer":
+        # Late-summer deciduous/birch scrub is slightly more olive than the
+        # evergreen conifer belt. Never paint the barren summit green.
+        green_scrub=(.105,.137,.065)
+        foliage=.16*(1-exposed)*_smoothstep(1800,2250,height_m)*(.3+.7*large)
+        c=_mix(c,green_scrub,foliage)
 
     # Hōei 1707 pyroclastic deposits show rusty-grey grit distinct from the
     # darker upper summit. Modulate by the measured crater wall steepness.
@@ -110,6 +121,11 @@ def terrain_color(height_m: float, slope: float, x: float, y: float) -> tuple[fl
     grain=(.26*(_value_noise(x*7.3+5.2,y*7.3-8.2)-.5)
            +.14*(_value_noise(x*24.1,y*24.1)-.5))
     c=tuple(clamp(channel*(1+grain)) for channel in c)
+
+    # A separate snow-free GLB must contain absolutely no painted snow,
+    # including the inner summit crater and wind-sheltered gullies.
+    if season=="summer":
+        return (*c,1.)
 
     # Seasonal snow accumulates in irregular fingers and sheltered northern
     # gullies; steep crater cliffs retain exposed dark scoria.
@@ -174,7 +190,8 @@ def _stone_normal_image(bpy: Any, size: int) -> Any:
 
 
 def _terrain_object(bpy: Any, model: Any, dem: FujiDem, divisions: int,
-                    patches: tuple[FujiDetailPatch, ...] = ()) -> Any:
+                    patches: tuple[FujiDetailPatch, ...] = (),
+                    *, season: str = "winter") -> Any:
     spec = dem.spec
     if (divisions < 32 or divisions > spec.samples-1 or
             (spec.samples-1) % divisions):
@@ -203,7 +220,7 @@ def _terrain_object(bpy: Any, model: Any, dem: FujiDem, divisions: int,
             down = heights[min(spec.samples-1,src_row+row_stride)*spec.samples+src_col]
             grad_x = (right-left)/1000/max(1e-6, spec.width_km*(2 if 0<col<divisions else 1)/divisions)
             grad_y = (down-up)/1000/max(1e-6, spec.depth_km*(2 if 0<row<divisions else 1)/divisions)
-            colors.append(terrain_color(height, math.hypot(grad_x,grad_y), x, y))
+            colors.append(terrain_color(height, math.hypot(grad_x,grad_y), x, y, season=season))
 
     # Refine only the craters; keep their fine boundary vertices shared with
     # adjacent coarse polygons. Explicit edge splits eliminate T-junctions,
@@ -234,7 +251,7 @@ def _terrain_object(bpy: Any, model: Any, dem: FujiDem, divisions: int,
                 slope=math.hypot((ri-l)/(1000*dx*(2 if 0<c<s.cols-1 else 1)),
                                  (down-up)/(1000*dy*(2 if 0<r<s.rows-1 else 1)))
                 location=(x,y,h/1000)
-                color=terrain_color(h,slope,x,y)
+                color=terrain_color(h,slope,x,y,season=season)
                 if r%s.factor==0 and c%s.factor==0:
                     idx=(s.row_start+r//s.factor)*count+s.col_start+c//s.factor
                     verts[idx]=location
@@ -332,6 +349,7 @@ def _terrain_object(bpy: Any, model: Any, dem: FujiDem, divisions: int,
     obj["metres_per_scene_unit"] = 1000
     obj["kumiki_part"] = "terrain-surface"
     obj["detail_patches"] = ", ".join(p.spec.name for p in patches)
+    obj["surface_season"] = season
     return obj
 
 
@@ -420,6 +438,7 @@ def _studio(bpy: Any, scene: Any, stage: Any) -> Any:
 
 def build_fuji_scene(destination: Path, dem_path: Path, *, divisions: int = 512,
                      detail_patches: tuple[Path, ...] = (),
+                     season: str = "winter",
                      bpy_module: Any = None, preview_resolution: int = 1150) -> dict[str, Any]:
     if bpy_module is None:
         raise RuntimeError("Building Mount Fuji requires Blender bpy")
@@ -440,13 +459,15 @@ def build_fuji_scene(destination: Path, dem_path: Path, *, divisions: int = 512,
     scene.collection.children.link(model)
     scene.collection.children.link(stage)
     camera = _studio(bpy, scene, stage)
-    terrain = _terrain_object(bpy, model, dem, divisions, patches)
+    terrain = _terrain_object(bpy, model, dem, divisions, patches, season=season)
     wall, base = _plinth(bpy, model, dem, divisions)
     return export_revision(bpy, scene, camera, (terrain,wall,base), plan_fuji_shots(), destination,
                            samples=32 if divisions>=1024 else 16, metadata={
                                "asset_id": "mount-fuji-survey-terrain",
                                "generator": "GSI elevation-mesh",
                                "vertical_exaggeration": 1.0,
+                               "surface_season": season,
+                               "snow_cover": "none" if season=="summer" else "late-winter artistic snow",
                                "terrain_divisions": divisions,
                                "terrain_vertices": len(terrain.data.vertices),
                                "terrain_faces": len(terrain.data.polygons),

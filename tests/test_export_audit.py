@@ -1,8 +1,20 @@
 import tempfile
 import unittest
 from pathlib import Path
+import struct
+import zlib
 
 from kumiki_blender.export_audit import ExportAuditError, audit_export_files
+
+
+def _one_pixel_png() -> bytes:
+    def chunk(tag: bytes, content: bytes) -> bytes:
+        return (struct.pack(">I",len(content))+tag+content+
+                struct.pack(">I",zlib.crc32(tag+content)))
+    return (b"\x89PNG\r\n\x1a\n"+
+            chunk(b"IHDR",struct.pack(">IIBBBBB",1,1,8,2,0,0,0))+
+            chunk(b"IDAT",zlib.compress(b"\x00\xff\x00\x00"))+
+            chunk(b"IEND",b""))
 
 
 class ExportAuditTests(unittest.TestCase):
@@ -11,7 +23,7 @@ class ExportAuditTests(unittest.TestCase):
         self.addCleanup(temp.cleanup)
         self.root = Path(temp.name)
         (self.root / "source.blend").write_bytes(b"BLENDER-v300")
-        (self.root / "preview.png").write_bytes(b"\x89PNG\r\n\x1a\n" + b"still")
+        (self.root / "preview.png").write_bytes(_one_pixel_png())
 
     def test_readable_editable_source_and_preview_are_reported(self):
         report = audit_export_files(self.root, ["source.blend", "preview.png"])
@@ -26,6 +38,16 @@ class ExportAuditTests(unittest.TestCase):
         (self.root / "preview.png").write_bytes(b"not-a-png")
         with self.assertRaisesRegex(ExportAuditError, "PNG"):
             audit_export_files(self.root, ["preview.png"])
+
+    def test_truncated_or_corrupt_render_fails_even_with_correct_png_signature(self):
+        path=self.root/"preview.png"
+        original=path.read_bytes()
+        path.write_bytes(original[:-8])
+        with self.assertRaisesRegex(ExportAuditError,"Truncated PNG"):
+            audit_export_files(self.root,["preview.png"])
+        path.write_bytes(original[:-14]+bytes([original[-14]^1])+original[-13:])
+        with self.assertRaisesRegex(ExportAuditError,"PNG checksum"):
+            audit_export_files(self.root,["preview.png"])
 
     def test_relative_path_escape_is_rejected(self):
         with self.assertRaisesRegex(ExportAuditError, "relative"):

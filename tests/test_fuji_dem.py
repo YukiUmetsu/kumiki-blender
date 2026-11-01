@@ -93,6 +93,22 @@ class FujiTerrainTests(unittest.TestCase):
         self.assertGreater(hoei[0],basalt[0]*1.2)  # Localized rusty Hōei deposits.
         self.assertGreater(min(snow[:3]),.70)
 
+    def test_summer_fuji_has_no_snow_at_summit_or_in_hoei_gullies(self):
+        """Both seasonal GLBs use measured terrain; only baked albedo differs."""
+        locations=((3770,.04,0,0),(3700,.70,.21,-.11),(3420,.16,-.5,.8),
+                   (2900,.24,1.61,-2.18),(2240,.18,-2.4,-1.3))
+        for height,slope,x,y in locations:
+            with self.subTest(height=height):
+                summer=terrain_color(height,slope,x,y,season="summer")
+                self.assertLess(max(summer[:3]),.26)
+                self.assertEqual(summer[3],1)
+        winter=terrain_color(3770,.04,0,0)
+        summer=terrain_color(3770,.04,0,0,season="summer")
+        self.assertGreater(winter[0]-summer[0],.6)
+        self.assertEqual(winter,terrain_color(3770,.04,0,0,season="winter"))
+        with self.assertRaisesRegex(ValueError,"Unsupported Fuji"):
+            terrain_color(3700,.1,0,0,season="monsoon")
+
     def test_geographic_samples_in_declared_bounds(self):
         spec = FujiSpec()
         for lon, lat in ((138.7274,35.3606), (138.7451,35.34098),
@@ -152,6 +168,11 @@ class FujiTerrainTests(unittest.TestCase):
             with contextlib.redirect_stdout(output):
                 self.assertEqual(main(["plan-fuji", "--dem", str(path), "--detail", "preview"]), 0)
             self.assertIn('"terrain_divisions": 256', output.getvalue())
+            output=io.StringIO()
+            with contextlib.redirect_stdout(output):
+                self.assertEqual(main(["plan-fuji", "--dem", str(path),
+                                       "--detail", "preview", "--season", "summer"]), 0)
+            self.assertIn('"snow_cover": "none"',output.getvalue())
 
     def test_iconic_does_not_need_dem_and_is_distinct_asset(self):
         import contextlib
