@@ -127,3 +127,15 @@ rather than becoming neck skin, but the missing back-of-hair volume
 must be reconstructed as an actual connected stone sculpt before any
 production promotion. The candidate remains **HOLD** until new
 four-view Blender renders pass photo comparison.
+
+### First trim failure and corrected lateral-neck mask
+
+The first `trim_nape` pass still reported scalp minimum Z = **34.57 m**,
+so its new Blender test correctly failed. Inspecting the real GLB mesh
+showed the lowest remaining scalp vertices at approximately donor
+`(x=.108, y=-.010, z=.056)`: **lateral neck**, not rear skull.
+A rear-only cutoff cannot remove them. The revised selection now
+constrains both the posterior and lateral neck using the actual
+anatomical coordinates, with a 0.215-donor-metre upper cutoff
+weighted by side exposure. This remains an experimental scalp
+selection pending a fresh four-view Blender render.
