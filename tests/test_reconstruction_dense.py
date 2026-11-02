@@ -52,9 +52,10 @@ elif app == "RefineMesh":
     )
 elif app == "TextureMesh":
     assert flag("--input-file").name == "scene_dense.mvs"
-    assert flag("--mesh-file").name == "scene_dense_mesh_refined.ply"
+    assert flag("--mesh-file").name in ("scene_dense_mesh_refined.ply", "scene_dense_mesh.ply")
+    assert flag("--export-type") == Path("obj")
     if "SKIP_MVS_ATLAS" not in os.environ:
-        (flag("--output-file").parent / "atlas-00.png").write_bytes(b"fake atlas data")
+        (flag("--output-file").parent / "scene_dense_mesh_refined_texture_0.png").write_bytes(b"fake atlas data")
 else:
     sys.exit(99)
 if os.environ.get("SKIP_MVS_OUTPUT") != app:
@@ -150,8 +151,12 @@ class DenseMvsTests(unittest.TestCase):
         self.assertEqual(refinement[refinement.index("--decimate") + 1], "1.0")
         self.assertEqual(len(list((output / "logs").glob("*.log"))), 5)
         self.assertEqual(json.loads((output / "dense-report.json").read_text()), report)
-        self.assertTrue((output / "workspace/scene_dense_mesh_refined_texture.mvs").is_file())
-        self.assertEqual(report["texture_images"], ["workspace/atlas-00.png"])
+        self.assertTrue((output / "workspace/scene_dense_mesh_refined_texture.obj").is_file())
+        self.assertEqual(report["texture_images"],
+                         ["workspace/scene_dense_mesh_refined_texture_0.png"])
+        self.assertEqual(len(report["textured_obj"]["sha256"]), 64)
+        self.assertEqual(report["texture_atlases"][0]["sha256"],
+                         hashlib.sha256(b"fake atlas data").hexdigest())
         self.assertTrue((self.sparse / "undistorted/images/view-00.jpg").is_file())
 
     def test_openmvs_mesh_needs_ply_not_optional_mvs_archive(self):
@@ -159,7 +164,7 @@ class DenseMvsTests(unittest.TestCase):
         fixture = FAKE_MVS.replace(
             'flag("--output-file").write_bytes(b"synthetic MVS output")',
             'flag("--output-file").write_bytes(b"synthetic MVS output") if app in '
-            '("InterfaceCOLMAP", "DensifyPointCloud") else None')
+            '("InterfaceCOLMAP", "DensifyPointCloud", "TextureMesh") else None')
         for name in ("ReconstructMesh", "RefineMesh", "TextureMesh"):
             (self.bin / name).write_text(fixture)
         result = build_dense_reconstruction(
@@ -289,6 +294,20 @@ class DenseMvsTests(unittest.TestCase):
                                        executables=self.executables, resume=True)
         self.assertEqual(json.loads((broken / "dense-report.json").read_text())["failed_stage"],
                          "densify")
+
+    def test_resume_can_skip_unstarted_refinement_for_high_poly_raw_scan(self):
+        output = self.root / "raw-resume"
+        with patch.dict(os.environ, {"FAIL_MVS_STAGE": "ReconstructMesh"}):
+            failed = build_dense_reconstruction(self.sparse, output, DenseSettings(),
+                                                executables=self.executables)
+        self.assertEqual(failed["failed_stage"], "mesh")
+        result = build_dense_reconstruction(self.sparse, output,
+                                            DenseSettings(refine=False),
+                                            executables=self.executables, resume=True)
+        self.assertTrue(result["status"].startswith("dense-mesh-candidate"), result)
+        self.assertEqual(result["mesh"]["faces"], 1600)
+        self.assertFalse(result["refine"])
+        self.assertEqual(result["resume_skipped_stages"], ["interface", "densify"])
 
     def test_invalid_mesh_fails_even_when_external_commands_return_success(self):
         result = build_dense_reconstruction(self.sparse, self.root / "thin",

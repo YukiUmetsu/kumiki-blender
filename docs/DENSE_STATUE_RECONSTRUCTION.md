@@ -84,6 +84,10 @@ cost of CPU/RAM. Lower values may be used deliberately to create an optimized
 LOD. For interrupted CPU runs, repeat the same `build-dense-photos` command
 with `--resume`: it rechecks the original and workspace photo hashes and
 skips existing verified mesh/dense stages, saving hours of repeated depth maps.
+You may explicitly add `--no-refine` while resuming if refinement has not
+yet begun in the recorded pipeline; this keeps the original high-resolution
+surface as the reviewed mesh. Texturing uses OpenMVS OBJ export with actual
+UV-compatible texture atlases rather than an assumed .mvs project archive.
 Loosening thresholds does not improve a weak reconstruction. Each stage logs
 its command and stdout/stderr. Failures preserve a diagnostic report instead
 of silently promoting an unusable mesh.
@@ -98,7 +102,8 @@ of silently promoting an unusable mesh.
 - workspace/: an immutable private snapshot of the registered, undistorted
   images/cameras for reproducible relative paths and downstream depth maps.
 - dense-report.json: registration fraction, input manifest, method, stage
-  statuses, vertex/face counts, PLY SHA-256 and review requirements.
+  statuses, vertex/face counts, PLY SHA-256, texture OBJ/atlas SHA-256
+  hashes and review requirements.
 - logs/: per-stage logs, including GPU, memory and image failures.
 
 The Blender review worker validates the mesh against the recorded SHA-256 and
@@ -195,6 +200,10 @@ actual stage outputs, resumes from immutable intermediate evidence, records
 raw-vs-refined face retention and defaults to preserving input geometry.
 These geometry counts are evidence of density, **not** a surface-accuracy
 score; the scan still needs private photo-matched inspection.
+An experimental run with OpenMVS's automatic refinement retained only
+**312,706 faces (17.6%)** of the raw 1,777,733-face surface, justifying the
+new explicit preservation setting; this reduction is not, by itself,
+evidence that one version is a closer match to photographs.
 
 ## Independent full-body and facial reference sets (EPFL)
 

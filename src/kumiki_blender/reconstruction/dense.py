@@ -236,10 +236,18 @@ def build_dense_reconstruction(reconstruction: str | Path, output: str | Path,
         if report.get("status") != "review-required" or not isinstance(report.get("commands"), list):
             raise ReferenceError("Only an incomplete dense revision may be resumed")
         for key in ("source_revision", "asset_id", "manifest_sha256", "backend",
-                    "registered_images", "independent_images", "refine", "texture",
+                    "registered_images", "independent_images",
                     "resolution_level", "max_resolution", "number_views"):
             if report.get(key) != plan.get(key):
                 raise ReferenceError(f"Resume cannot change existing dense input/settings: {key}")
+        prior = {step.get("stage") for step in report["commands"]
+                 if isinstance(step, dict)}
+        # Later, unstarted stages may be explicitly disabled after a failure
+        # without invalidating the expensive camera/dense/mesh computation.
+        for key, begun in (("refine", {"refine", "texture"}),
+                           ("texture", {"texture"})):
+            if report.get(key) != plan[key] and prior.intersection(begun):
+                raise ReferenceError(f"Resume cannot change a started dense stage: {key}")
         # Older interrupted revisions had no explicit refine decimation flag.
         # It is safe to use the new detail-preserving default only if refinement
         # never began; otherwise the setting must match the prior revision.
@@ -258,7 +266,8 @@ def build_dense_reconstruction(reconstruction: str | Path, output: str | Path,
         report["resumed_from"] = {"failed_stage": report.get("failed_stage"),
                                   "exit_code": report.get("exit_code")}
         report.update({"status": "review-required", "failed_stage": None,
-                       "exit_code": None, "refine_decimate": plan["refine_decimate"]})
+                       "exit_code": None, "refine_decimate": plan["refine_decimate"],
+                       "refine": plan["refine"], "texture": plan["texture"]})
         report.pop("error", None)
         report["resume_skipped_stages"] = []
         previous_stages = {step.get("stage") for step in report["commands"]
@@ -313,6 +322,7 @@ def build_dense_reconstruction(reconstruction: str | Path, output: str | Path,
         dense = workspace / "scene_dense.mvs"
         mesh = workspace / "scene_dense_mesh.mvs"
         refined = workspace / "scene_dense_mesh_refined.mvs"
+        textured_obj = workspace / "scene_dense_mesh_refined_texture.obj"
         stages: list[tuple[str, str, list[str]]] = [
             ("interface", "InterfaceCOLMAP", ["--input-file", str(workspace),
                                               "--output-file", str(scene)]),
@@ -336,7 +346,8 @@ def build_dense_reconstruction(reconstruction: str | Path, output: str | Path,
                 "--input-file", str(dense),
                 "--mesh-file", str(workspace / ("scene_dense_mesh_refined.ply" if settings.refine
                                                   else "scene_dense_mesh.ply")),
-                "--output-file", str(workspace / "scene_dense_mesh_refined_texture.mvs")]))
+                "--output-file", str(textured_obj), "--export-type", "obj",
+                "--resolution-level", str(settings.resolution_level)]))
         ply = workspace / "scene_dense_mesh.ply"
         # OpenMVS 2.4 normally exports ReconstructMesh/RefineMesh as PLY even
         # when --output-file ends in .mvs. Requiring an .mvs archive here
@@ -369,15 +380,21 @@ def build_dense_reconstruction(reconstruction: str | Path, output: str | Path,
             if not require_file("refine_mesh", ply):
                 return checkpoint()
         if settings.texture:
-            textures = sorted(str(path.relative_to(target)) for path in target.rglob("*")
-                              if path.is_file() and path.suffix.lower() in (".png", ".jpg", ".jpeg")
-                              and not path.is_symlink()
-                              and not path.is_relative_to(workspace / "images"))
+            if not require_file("texture_mesh", textured_obj):
+                return checkpoint()
+            atlas_paths = sorted(path for path in workspace.glob("scene_dense_mesh_refined_texture*")
+                                 if path.is_file() and path.suffix.lower() in (".png", ".jpg", ".jpeg")
+                                 and not path.is_symlink() and path.stat().st_size > 0)
+            textures = [str(path.relative_to(target)) for path in atlas_paths]
             if not textures:
                 report.update(failed_stage="texture_output", exit_code=2,
                               error="TextureMesh reported success without texture atlas images")
                 return checkpoint()
             report["texture_images"] = textures
+            report["textured_obj"] = {"path": str(textured_obj.relative_to(target)),
+                                      "sha256": _sha256(textured_obj)}
+            report["texture_atlases"] = [{"path": str(path.relative_to(target)),
+                                          "sha256": _sha256(path)} for path in atlas_paths]
     else:
         commands = [
             ("patch_match", [exe["colmap"], "patch_match_stereo", "--workspace_path",
