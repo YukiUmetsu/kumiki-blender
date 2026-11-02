@@ -158,10 +158,28 @@ def main() -> None:
     sculpt_scene["reference_sculpt_method"] = "MANUAL: no anatomy equations or copied third-party geometry"
     sculpt_scene["reference_board_scene"] = "02 HAER POSES / UNREGISTERED"
     sculpt_scene["anatomy_detail_scene"] = "03 HAER ANATOMY / UNREGISTERED"
+    is_continuous_donor = (bpy.data.objects.get(
+        "Liberty sculpt candidate / continuous whole-head anatomy") is not None)
+    sculpt_scene["editable_geometry_source"] = (
+        "CC0 Blender Studio anatomical donor / NOT the installed statue"
+        if is_continuous_donor else
+        "Previous code-generated comparison / NOT an anatomical sculpt base"
+    )
     for photo, _path in photos:
         sculpt_scene[photo.survey_id] = photo.loc_url
 
     brief = bpy.data.texts.new("SCULPT BRIEF / actual Liberty face / HOLD")
+    if is_continuous_donor:
+        brief.write(
+            "CURRENT EDITABLE MESH: Blender Studio CC0 generic head, continuous "
+            "multires scaffold.\n"
+            "Eyeball transforms were corrected in the r66 scaffold. This "
+            "repairs false holes,\n"
+            "NOT the Statue of Liberty likeness. Eyes, brow, nose, lips, "
+            "mandible and neck\n"
+            "need subject-specific, hand-directed sculpting against "
+            "both profiles.\n\n"
+        )
     brief.write(
         "ACTUAL STATUE OF LIBERTY FACE - ANATOMICAL SCULPT BRIEF\n"
         "=================================================\n"
@@ -206,7 +224,7 @@ def main() -> None:
         "Work on an editable mesh in Sculpt Mode; establish primary face\n"
         "planes and true three-dimensional profiles with hand-directed\n"
         "sculpting. Keep the previous code-generated mesh as a visible HOLD\n"
-        "comparison, not the foundation of a released replacement.\n"
+        "comparison in a separate checkpoint, not a released replacement.\n"
         "Build proper brow overhang, nasal alae, lip undercuts, jaw, hair\n"
         "volume and deep cross-body copper drapery from multi-angle evidence.\n"
         "Do not export a new final GLB until an independently reviewed\n"
