@@ -174,6 +174,22 @@ def _bake_evaluated_transforms(bpy: Any, scene: Any, objects: list[Any],
                                      if body_by_object[obj].impact_material else {}))
                              for frame, speed in hits]
 
+    # Blender 4.5 Bullet constraint helpers retain pointers to body objects.
+    # Detach/remove them from the *working copy* before stripping rigid-body
+    # components for keyframe export. The pre-bake source.blend was already
+    # copied with fully editable native constraints intact. Leaving dangling
+    # helpers can segfault Blender on process exit (observed in CI).
+    for helper in list(scene.objects):
+        native = getattr(helper, "rigid_body_constraint", None)
+        if native is None or (native.object1 not in objects and native.object2 not in objects):
+            continue
+        bpy.ops.object.select_all(action="DESELECT")
+        helper.select_set(True)
+        bpy.context.view_layer.objects.active = helper
+        bpy.ops.rigidbody.constraint_remove()
+        if helper.get("kumiki_physics_helper") == "collision-only-constraint":
+            bpy.data.objects.remove(helper, do_unlink=True)
+
     # Remove simulation ownership *after* sampling. Keyframe insertion uses the
     # raw RNA API rather than a VIEW_3D/context-dependent keying-set operator.
     for obj in objects:

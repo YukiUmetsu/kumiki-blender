@@ -41,6 +41,11 @@ def main(folder: str) -> None:
 
     shot = load_physics_plan(ROOT / "examples" / "mechanical-constraints-physics-shot.json")
     build_physics_shot(bpy, shot, root / "physics-r01")
+    # Export works on a separate baked scene. Native Bullet constraints must
+    # not retain pointers to rigid bodies after those bodies become keyframed.
+    dangling = [obj.name for obj in bpy.context.scene.objects if obj.rigid_body_constraint is not None]
+    if dangling:
+        raise RuntimeError(f"Baked scene retains native constraints: {dangling}")
     action = json.loads((root / "physics-r01" / "baked-actions.json").read_text())[0]
     tracks = {track["target"].split(":")[1]: track["keys"] for track in action["tracks"]}
     if set(tracks) != {"hinge-arm", "slider-weight", "fixed-piece"} or action["durationFrames"] != 60:
