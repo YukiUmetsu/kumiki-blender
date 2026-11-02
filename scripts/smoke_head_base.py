@@ -110,9 +110,17 @@ def smoke(destination: Path) -> None:
     if math.dist(center, (3, -1, 5)) > 0.05:
         raise RuntimeError(f"GLB face geometry failed landmark-space transform: {center}")
 
+    fitted = report["head_fit"]
+
     def registered(point, *, linked_offset=0):
         x, y, z = point
-        return (3 - 2*y, -1 + 2*(x + linked_offset), 5 + 2*z)
+        source = (x + linked_offset, y, z)
+        return tuple(
+            fitted["scale"] * sum(fitted["rotation_3x3"][axis][j] * source[j]
+                                   for j in range(3))
+            + fitted["translation_m"][axis]
+            for axis in range(3)
+        )
 
     def maximum_deviation(points, expected):
         return max(min(math.dist(point, reference) for reference in expected)
