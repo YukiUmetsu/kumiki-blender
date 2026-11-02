@@ -81,10 +81,19 @@ private texture projection to produce a mesh for artistic inspection.
       --reconstruction .review/statue/sparse-r01 \
       --output .review/statue/masks-semantic-r01 --segmenter rembg
 
+    # Correct unwanted ground or a missing thin feature on selected views.
+    # Edit normalized polygons in a private JSON file; never modify r01.
+    kumiki-blender refine-dense-masks \
+      --reconstruction .review/statue/sparse-r01 \
+      --mask-revision .review/statue/masks-semantic-r01 \
+      --output .review/statue/masks-r02 \
+      --edits /private/statue/mask-edits.json \
+      --min-island-pixels 24 --max-hole-pixels 24
+
     # Use only reviewed masks; OpenMVS consumes <rectified-filename>.mask.png.
     kumiki-blender build-dense-photos \
       --reconstruction .review/statue/sparse-r01 \
-      --rectified-masks .review/statue/masks-r01/masks \
+      --rectified-masks .review/statue/masks-r02/masks \
       --output .review/statue/dense-masked-r01 --backend openmvs
 
     # CPU-capable OpenMVS meshing + refinement + texturing.
@@ -138,7 +147,8 @@ private texture projection to produce a mesh for artistic inspection.
       --dense-revision .review/statue/dense-masked-r01 \
       --output .review/statue/texture-finish-r01 \
       --exposure-ev 0.65 --gamma 1.12 --shadow-lift 0.06 \
-      --saturation 1.05 --neutralize-cast
+      --saturation 1.05 --neutralize-cast --balance-atlases \
+      --max-balance-ev 0.75
 
     # Blender imports the same verified OBJ/MTL/UVs with the corrected atlases
     # and packs them into the private .blend and GLB.
@@ -184,7 +194,17 @@ center box is available for quick drafts; use `--max-side` and `--iterations`
 to control GrabCut CPU cost. The `--segmenter rembg` alternative uses the explicitly
 selected `isnet-general-use` model (not a changing rembg default); it does not
 accept rectangle/point hints. If semantic inference misses thin features,
-rerun with guided GrabCut or correct its mask externally. Refine bad images
+rerun with guided GrabCut or use `refine-dense-masks` to remove small detached
+foreground islands, fill small enclosed holes and draw per-image polygon
+inclusions/exclusions. The format in
+[`examples/statue-mask-edits.example.json`](../examples/statue-mask-edits.example.json)
+uses normalized (0–1) coordinates in the **rectified** image, with exclusions
+applied last. `--min-island-pixels` and `--max-hole-pixels` are pixel-area
+thresholds, not radii: keep them low to avoid erasing fingers, hair or carving.
+The command validates all source photograph and mask hashes, writes a separate
+immutable candidate revision with change counts and QA contact sheet, and
+**never auto-approves** its output. Inspect every revised overlay, then point
+OpenMVS to the new revision's `masks/` directory. Refine bad images
 in a **new output revision**; masks
 that include trees or truncate the statue produce contaminated geometry.
 They are SHA-pinned, copied only into the private MVS workspace, checked on
@@ -246,13 +266,18 @@ against authentic photos before declaring a texture finished.
 `finish-dense-textures` applies bounded exposure EV, gamma, saturation,
 optional sampled cast-neutralization and shadow lift to an independent
 OBJ/MTL/atlas revision; it protects near-black/uncovered atlas texels and
-reports their approximate coverage, plus original/corrected side-by-side
+reports their approximate coverage and highlight-clipping warnings. With
+`--balance-atlases`, it additionally matches approximate exposure across
+**multiple atlas pages** using valid non-black pixels, capped by
+`--max-balance-ev` (default 0.75 EV). A single page is left unchanged by
+that option. It also writes original/corrected side-by-side
 `review/` previews. All original source files, UVs and face
 indices remain untouched. `--texture-finish` requires `--textured` and
 verifies both original and corrected content hashes before Blender import.
-This can improve dark overall exposure and broad color cast, but **cannot
-invent missing photographs, paint empty atlas patches or eliminate every
-projection seam**. Use the original-versus-corrected Blender views for
+This can improve dark overall exposure, broad color cast and atlas-page
+exposure mismatch, but **cannot invent missing photographs, paint empty atlas
+patches or fix intra-page UV chart seams and baked lighting**. Use the
+original-versus-corrected Blender views for
 artistic approval; the correction remains private by default.
 
 Open the PLY in Blender and compare front/profile/three-quarter views against

@@ -49,9 +49,12 @@ likeness or redistributable assets. It cannot reconstruct a statue from
 arbitrary unrelated web photos. For outdoor background contamination, use
 `prepare-dense-masks` (optional `[masks]` extra) to generate rectified GrabCut
 silhouettes, or `[mask-ai]` for optional local semantic background inference,
-and inspect the red overlays before dense MVS. For projected
-texture darkness or broad color cast, `finish-dense-textures` creates a
-separately SHA-pinned exposure/gamma/white-balance atlas revision; import it
+and inspect the red overlays before dense MVS. Use `refine-dense-masks` to
+remove tiny mask artifacts and hand-correct individual rectified views with
+normalized include/exclude polygons in a new private revision. For projected
+texture darkness, broad color cast or exposure mismatch between atlas pages,
+`finish-dense-textures --balance-atlases` creates a separately SHA-pinned
+exposure/gamma/white-balance atlas revision; import it
 with `render-dense-blender-review --textured --texture-finish`. Both remain
 manual-review candidates, not autonomous texture restoration.
 No technical score certifies facial likeness. Historical survey geometry,

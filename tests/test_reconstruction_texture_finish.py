@@ -91,7 +91,8 @@ class TextureFinishTests(unittest.TestCase):
     def test_source_mutations_and_settings_are_rejected_before_output(self):
         for settings in (TextureFinishSettings(gamma=0),
                          TextureFinishSettings(exposure_ev=float("nan")),
-                         TextureFinishSettings(protect_black=True)):
+                         TextureFinishSettings(protect_black=True),
+                         TextureFinishSettings(max_balance_ev=-1)):
             with self.assertRaises(ReferenceError):
                 finish_dense_textures(self.dense, self.root / "unfinished", settings)
             self.assertFalse((self.root / "unfinished").exists())
@@ -136,6 +137,35 @@ class TextureFinishTests(unittest.TestCase):
             self.assertEqual(corrected.mode, "RGBA")
             self.assertEqual(corrected.getpixel((2, 3))[3], 0)
             self.assertEqual(corrected.getpixel((30, 10))[3], 255)
+
+    def test_multiple_atlas_pages_are_exposure_balanced_without_changing_uvs(self):
+        second = self.atlas.parent / "scene_dense_mesh_refined_texture_material_01_map_Kd.png"
+        Image.new("RGB", (48, 32), (155, 155, 155)).save(second)
+        self.mtl.write_text(self.mtl.read_text() +
+                            f"newmtl m1\nmap_Kd {second.name}\n")
+        report_path = self.dense / "dense-report.json"
+        report = json.loads(report_path.read_text())
+        report["texture_atlases"].append({"path": str(second.relative_to(self.dense)),
+                                         "sha256": self._digest(second)})
+        report_path.write_text(json.dumps(report))
+        destination = self.root / "balanced"
+        result = finish_dense_textures(self.dense, destination,
+                                       TextureFinishSettings(balance_atlases=True,
+                                                             max_balance_ev=0.9))
+        self.assertEqual(len(result["texture_atlases"]), 2)
+        values = {item["path"]: item["atlas_balance_ev"] for item in result["texture_atlases"]}
+        self.assertGreater(values[self.atlas.name], 0)
+        self.assertLess(values[second.name], 0)
+        with Image.open(self.atlas) as dark_raw, Image.open(second) as bright_raw, \
+             Image.open(destination / self.atlas.name) as dark_finished, \
+             Image.open(destination / second.name) as bright_finished:
+            raw_gap = abs(sum(dark_raw.getpixel((30, 12))) - sum(bright_raw.getpixel((30, 12))))
+            balanced_gap = abs(sum(dark_finished.getpixel((30, 12))) -
+                               sum(bright_finished.getpixel((30, 12))))
+            self.assertLess(balanced_gap, raw_gap)
+        planned = plan_dense_blender_review(self.dense, self.root / "review", textured=True,
+                                            texture_finish=destination)
+        self.assertEqual(len(planned["texture_atlases"]), 2)
 
 
 if __name__ == "__main__":
