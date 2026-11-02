@@ -92,6 +92,14 @@ private texture projection to produce a mesh for artistic inspection.
       --dense-revision .review/statue/dense-r01 \
       --output .review/statue/blender-review-r01 --matched-views 4
 
+    # Preserve OpenMVS's genuine UV coordinates and diffuse atlas in a
+    # second PRIVATE .blend/GLB, with all OBJ/MTL/JPG references SHA-checked.
+    # Keep this separate from the neutral clay mesh geometry review.
+    kumiki-blender render-dense-blender-review \
+      --dense-revision .review/statue/dense-r01 \
+      --output .review/statue/blender-textured-review-r01 \
+      --textured --matched-views 4
+
 Options include --min-registered-images, --min-registered-fraction,
 --min-mesh-faces, --timeout-seconds, --no-refine (OpenMVS) and --no-texture.
 For large statues, `--resolution-level 0` (default) preserves rectified
@@ -109,6 +117,13 @@ You may explicitly add `--no-refine` while resuming if refinement has not
 yet begun in the recorded pipeline; this keeps the original high-resolution
 surface as the reviewed mesh. Texturing uses OpenMVS OBJ export with actual
 UV-compatible texture atlases rather than an assumed .mvs project archive.
+The default `--texture-decimate 1.0` retains all source faces, but for very
+large scans OpenMVS texture patch selection may be much slower than meshing.
+Use `--texture-decimate 0.25` to build a faster UV-textured LOD **without
+modifying the high-poly PLY**. An interrupted texture stage can be resumed
+with a lower texture decimation factor; the immutable dense/mesh stages are
+reused, not recomputed. This does not replace the original high-poly detail
+review or prove that the UV LOD captures thin features.
 Rectified mask files must be genuine grayscale PNGs (binary 0/255, both
 present, exact dimensions), with exact `<photo filename>.mask.png` names.
 They are SHA-pinned, copied only into the private MVS workspace, checked on
@@ -147,7 +162,13 @@ report. These cameras do not require survey anchors until the mesh is
 transformed into an independent Blender world coordinate system. The GLB is for
 **local artistic review only**, never an authorization to redistribute the
 original photographic texture or derived geometry. Dense photo projection
-atlases are not automatically attached to the PLY without real matching UVs.
+atlases cannot simply be attached to the PLY without the matching UVs:
+`--textured` imports the actual OpenMVS OBJ/MTL/JPG UV set, validates every
+material path and recorded hash, packs the image into a separate
+private-textured-review.blend and private-textured-review.glb. The neutral
+high-poly PLY remains separate and unmodified. Real photo atlases can still
+contain dark patches, empty-color regions and exposure seams; review these
+against authentic photos before declaring a texture finished.
 
 Open the PLY in Blender and compare front/profile/three-quarter views against
 authentic photos, especially eyes, chin, mouth, ears, hair and deep garment
@@ -233,6 +254,22 @@ An experimental run with OpenMVS's automatic refinement retained only
 **312,706 faces (17.6%)** of the raw 1,777,733-face surface, justifying the
 new explicit preservation setting; this reduction is not, by itself,
 evidence that one version is a closer match to photographs.
+
+**Completed private end-to-end MVS/Blender validation (2026-11-02):** The
+Eagle pipeline resumed the expensive dense/mesh stages after correcting the
+OpenMVS PLY output contract; it completed a 1,777,733-face raw scan, a
+UV-compatible OBJ of the same face count and an **8192px JPEG atlas**.
+Blender 4.5.15 imported the real PLY and generated 4 calibrated photo views,
+an editable .blend and a ~149 MB private clay GLB. It independently imported
+the OpenMVS UV OBJ/MTL/JPEG, embedded the atlas, and exported a ~205 MB
+private textured GLB. Texture projection took ~16 min at full mesh density;
+`--texture-decimate 0.25` yielded a **444,424-face textured LOD** in ~2.5
+min without modifying the raw geometry. All private atlas and model files
+remain outside Git. The atlas visibly contains very dark patches and the
+outdoor mesh still reconstructs ground/branches, so this is **proof of
+pipeline execution and camera/UV compatibility, not finished texture or
+silhouette quality**. Verified foreground masks and artist cleanup remain
+essential before any historic/production claim.
 
 ## Independent full-body and facial reference sets (EPFL)
 

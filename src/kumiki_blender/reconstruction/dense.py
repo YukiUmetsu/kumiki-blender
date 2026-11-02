@@ -36,6 +36,7 @@ class DenseSettings:
     max_resolution: int = 3200
     number_views: int = 5
     refine_decimate: float = 1.0
+    texture_decimate: float = 1.0
 
     def validate(self) -> "DenseSettings":
         if self.backend not in ("openmvs", "colmap"):
@@ -62,6 +63,10 @@ class DenseSettings:
                 or not math.isfinite(self.refine_decimate)
                 or not 0 < self.refine_decimate <= 1):
             raise ReferenceError("refine_decimate must be finite in (0,1]; 1 preserves input faces")
+        if (type(self.texture_decimate) not in (int, float)
+                or not math.isfinite(self.texture_decimate)
+                or not 0 < self.texture_decimate <= 1):
+            raise ReferenceError("texture_decimate must be finite in (0,1]; 1 preserves texture faces")
         return self
 
 
@@ -203,6 +208,7 @@ def plan_dense_reconstruction(reconstruction: str | Path, output: str | Path,
         "max_resolution": settings.max_resolution if settings.backend == "openmvs" else None,
         "number_views": settings.number_views if settings.backend == "openmvs" else None,
         "refine_decimate": settings.refine_decimate if settings.backend == "openmvs" else None,
+        "texture_decimate": settings.texture_decimate if settings.backend == "openmvs" else None,
         "status": "preflight-only / dense-and-artistic-review-required",
         "distribution_allowed": False,
         "limitations": "Output is private. Photo rights, monument identity, surface accuracy, scale and topology require independent review.",
@@ -281,9 +287,13 @@ def build_dense_reconstruction(reconstruction: str | Path, output: str | Path,
                  if isinstance(step, dict)}
         # Later, unstarted stages may be explicitly disabled after a failure
         # without invalidating the expensive camera/dense/mesh computation.
+        failed_texturing = report.get("failed_stage") in (
+            "texture", "texture_output", "texture_mesh_output")
         for key, begun in (("refine", {"refine", "texture"}),
                            ("texture", {"texture"})):
             if report.get(key) != plan[key] and prior.intersection(begun):
+                if key == "texture" and failed_texturing and plan[key] is False:
+                    continue  # Explicitly accept raw PLY after failed atlas generation.
                 raise ReferenceError(f"Resume cannot change a started dense stage: {key}")
         # Older interrupted revisions had no explicit refine decimation flag.
         # It is safe to use the new detail-preserving default only if refinement
@@ -292,6 +302,14 @@ def build_dense_reconstruction(reconstruction: str | Path, output: str | Path,
                 or "refine_decimate" not in report and any(
                     step.get("stage") == "refine" for step in report["commands"])):
             raise ReferenceError("Cannot change refinement settings in a started revision")
+        # TextureMesh may be retried at a lower polygon budget if an earlier
+        # texture run failed. Geometry/dense stages remain pinned and intact.
+        texture_started = "texture" in prior
+        texture_failed = failed_texturing
+        old_texture_decimate = report.get("texture_decimate", 1.0)
+        if (texture_started and not texture_failed
+                and old_texture_decimate != plan["texture_decimate"]):
+            raise ReferenceError("Cannot change the texture budget of a completed stage")
         workspace = target / "workspace"
         if not workspace.is_dir() or workspace.is_symlink() or not (target / "logs").is_dir():
             raise ReferenceError("Interrupted dense workspace or logs are missing")
@@ -309,6 +327,7 @@ def build_dense_reconstruction(reconstruction: str | Path, output: str | Path,
                                   "exit_code": report.get("exit_code")}
         report.update({"status": "review-required", "failed_stage": None,
                        "exit_code": None, "refine_decimate": plan["refine_decimate"],
+                       "texture_decimate": plan["texture_decimate"],
                        "refine": plan["refine"], "texture": plan["texture"],
                        "rectified_mask_source": plan["rectified_mask_source"],
                        "rectified_masks": plan["rectified_masks"]})
@@ -398,6 +417,7 @@ def build_dense_reconstruction(reconstruction: str | Path, output: str | Path,
                 "--mesh-file", str(workspace / ("scene_dense_mesh_refined.ply" if settings.refine
                                                   else "scene_dense_mesh.ply")),
                 "--output-file", str(textured_obj), "--export-type", "obj",
+                "--decimate", str(settings.texture_decimate),
                 "--resolution-level", str(settings.resolution_level)]))
         ply = workspace / "scene_dense_mesh.ply"
         # OpenMVS 2.4 normally exports ReconstructMesh/RefineMesh as PLY even

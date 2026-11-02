@@ -54,6 +54,7 @@ elif app == "TextureMesh":
     assert flag("--input-file").name == "scene_dense.mvs"
     assert flag("--mesh-file").name in ("scene_dense_mesh_refined.ply", "scene_dense_mesh.ply")
     assert flag("--export-type") == Path("obj")
+    assert float(args[args.index("--decimate")+1]) > 0
     if "SKIP_MVS_ATLAS" not in os.environ:
         (flag("--output-file").parent / "scene_dense_mesh_refined_texture_0.png").write_bytes(b"fake atlas data")
 else:
@@ -150,6 +151,8 @@ class DenseMvsTests(unittest.TestCase):
         self.assertEqual(densify[densify.index("--tower-mode") + 1], "0")
         refinement = report["commands"][3]["argv"]
         self.assertEqual(refinement[refinement.index("--decimate") + 1], "1.0")
+        texturing = report["commands"][4]["argv"]
+        self.assertEqual(texturing[texturing.index("--decimate") + 1], "1.0")
         self.assertEqual(len(list((output / "logs").glob("*.log"))), 5)
         self.assertEqual(json.loads((output / "dense-report.json").read_text()), report)
         self.assertTrue((output / "workspace/scene_dense_mesh_refined_texture.obj").is_file())
@@ -178,7 +181,8 @@ class DenseMvsTests(unittest.TestCase):
         for changed in ({"resolution_level": -1}, {"resolution_level": True},
                         {"max_resolution": 100}, {"number_views": 1},
                         {"number_views": 100}, {"refine_decimate": 1.2},
-                        {"refine_decimate": 0.0}, {"refine_decimate": True}):
+                        {"refine_decimate": 0.0}, {"refine_decimate": True},
+                        {"texture_decimate": 1.5}, {"texture_decimate": 0.0}):
             with self.subTest(changed=changed), self.assertRaises(ReferenceError):
                 DenseSettings(**changed).validate()
         output = self.root / "dense-quality"
@@ -323,6 +327,12 @@ class DenseMvsTests(unittest.TestCase):
             failed = build_dense_reconstruction(self.sparse, output, DenseSettings(),
                                                 executables=self.executables)
         self.assertEqual(failed["failed_stage"], "refine")
+        # Revisions created before the optional mask feature must still resume
+        # safely with no masks, without rerunning many hours of depth maps.
+        legacy = json.loads((output / "dense-report.json").read_text())
+        legacy.pop("rectified_masks")
+        legacy.pop("rectified_mask_source")
+        (output / "dense-report.json").write_text(json.dumps(legacy))
         commands_before = len(failed["commands"])
         repaired = build_dense_reconstruction(
             self.sparse, output, DenseSettings(),
@@ -358,6 +368,38 @@ class DenseMvsTests(unittest.TestCase):
         self.assertEqual(result["mesh"]["faces"], 1600)
         self.assertFalse(result["refine"])
         self.assertEqual(result["resume_skipped_stages"], ["interface", "densify"])
+
+    def test_failed_texture_can_retry_with_cheaper_uv_lod_keeping_raw_mesh(self):
+        output = self.root / "texture-retry"
+        with patch.dict(os.environ, {"FAIL_MVS_STAGE": "TextureMesh"}):
+            failed = build_dense_reconstruction(self.sparse, output, DenseSettings(),
+                                                executables=self.executables)
+        self.assertEqual(failed["failed_stage"], "texture")
+        retried = build_dense_reconstruction(
+            self.sparse, output, DenseSettings(texture_decimate=0.25),
+            executables=self.executables, resume=True)
+        self.assertTrue(retried["status"].startswith("dense-mesh-candidate"), retried)
+        self.assertEqual(retried["texture_decimate"], 0.25)
+        self.assertEqual(retried["resume_skipped_stages"],
+                         ["interface", "densify", "mesh", "refine"])
+        self.assertEqual(retried["mesh"]["faces"], 1900)
+        texture_step = retried["commands"][-1]["argv"]
+        self.assertEqual(texture_step[texture_step.index("--decimate")+1], "0.25")
+
+    def test_failed_texture_can_finish_raw_mesh_without_claiming_atlas(self):
+        output = self.root / "raw-after-texture-failure"
+        with patch.dict(os.environ, {"FAIL_MVS_STAGE": "TextureMesh"}):
+            failed = build_dense_reconstruction(self.sparse, output, DenseSettings(),
+                                                executables=self.executables)
+        self.assertEqual(failed["failed_stage"], "texture")
+        candidate = build_dense_reconstruction(
+            self.sparse, output, DenseSettings(texture=False),
+            executables=self.executables, resume=True)
+        self.assertTrue(candidate["status"].startswith("dense-mesh-candidate"), candidate)
+        self.assertFalse(candidate["texture"])
+        self.assertEqual(candidate["resume_skipped_stages"],
+                         ["interface", "densify", "mesh", "refine"])
+        self.assertNotIn("texture_atlases", candidate)
 
     def test_invalid_mesh_fails_even_when_external_commands_return_success(self):
         result = build_dense_reconstruction(self.sparse, self.root / "thin",

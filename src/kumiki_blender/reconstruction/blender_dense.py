@@ -16,6 +16,78 @@ from .dense import _json, _ply_counts
 from .references import ReferenceError
 
 
+def _textured_obj_plan(root: Path, report: dict[str, Any],
+                       max_mesh_faces: int) -> dict[str, Any]:
+    """Pin OBJ/MTL/atlases before Blender follows any relative file references."""
+    obj_record = report.get("textured_obj")
+    obj_name = (obj_record.get("path") if isinstance(obj_record, dict) else
+                "workspace/scene_dense_mesh_refined_texture.obj")
+    if (not isinstance(obj_name, str) or not obj_name.endswith(".obj")
+            or Path(obj_name).is_absolute() or ".." in Path(obj_name).parts):
+        raise ReferenceError("Dense textured OBJ path is unsafe")
+    obj = root / obj_name
+    if obj.is_symlink() or not obj.is_file() or not obj.resolve().is_relative_to(root):
+        raise ReferenceError("Dense textured OBJ is missing or linked")
+    with obj.open("rb") as stream:
+        digest = hashlib.file_digest(stream, "sha256").hexdigest()
+    if isinstance(obj_record, dict) and obj_record.get("sha256") != digest:
+        raise ReferenceError("Textured OBJ changed since dense reconstruction")
+    atlases = report.get("texture_atlases")
+    if atlases is None:
+        atlases = [{"path": filename} for filename in report.get("texture_images", [])]
+    if not isinstance(atlases, list) or not atlases:
+        raise ReferenceError("Dense textured review needs a recorded private texture atlas")
+    verified_atlases = []
+    for entry in atlases:
+        if not isinstance(entry, dict) or not isinstance(entry.get("path"), str):
+            raise ReferenceError("Invalid recorded texture atlas")
+        relative = Path(entry["path"])
+        if (relative.is_absolute() or ".." in relative.parts
+                or relative.suffix.lower() not in (".png", ".jpg", ".jpeg")):
+            raise ReferenceError("Unsafe texture atlas path")
+        path = root / relative
+        if (path.is_symlink() or not path.is_file() or not path.resolve().is_relative_to(root)
+                or path.parent != obj.parent):
+            raise ReferenceError("Texture atlas missing or outside OBJ folder")
+        with path.open("rb") as stream:
+            sha = hashlib.file_digest(stream, "sha256").hexdigest()
+        if entry.get("sha256") is not None and entry["sha256"] != sha:
+            raise ReferenceError("Texture atlas changed since dense reconstruction")
+        verified_atlases.append({"path": str(path), "sha256": sha})
+    # OpenMVS always writes a local MTL referenced by the OBJ. Scan the whole
+    # OBJ, not just its header, so a later malicious mtllib cannot cause
+    # Blender to load an unpinned external file. Count faces before import.
+    directives = []
+    face_count = 0
+    with obj.open("rb") as stream:
+        for line in stream:
+            if line.startswith(b"mtllib "):
+                directives.append(line[7:].decode("utf-8", errors="replace").strip())
+            elif line.startswith(b"f "):
+                face_count += 1
+                if face_count > max_mesh_faces:
+                    raise ReferenceError("Textured OBJ exceeds Blender review's face budget")
+    if face_count == 0:
+        raise ReferenceError("Textured OBJ contains no faces")
+    if len(directives) != 1 or Path(directives[0]).name != directives[0]:
+        raise ReferenceError("OBJ must reference exactly one local MTL file")
+    material = obj.parent / directives[0]
+    if material.is_symlink() or not material.is_file() or material.stat().st_size > 65_536:
+        raise ReferenceError("OBJ MTL file missing, linked or oversized")
+    mtl_lines = material.read_text(encoding="utf-8").splitlines()
+    texture_names = [line.split(maxsplit=1)[1].strip() for line in mtl_lines
+                     if line.startswith("map_Kd ")]
+    if (not texture_names or any(name not in {Path(item["path"]).name
+                                              for item in verified_atlases}
+                                 for name in texture_names)
+            or any(line.startswith("map_") and not line.startswith("map_Kd ")
+                   for line in mtl_lines)):
+        raise ReferenceError("OBJ MTL must reference only pinned diffuse atlases")
+    return {"source_obj": str(obj), "source_obj_sha256": digest,
+            "source_mtl": str(material), "texture_atlases": verified_atlases,
+            "textured_faces": face_count}
+
+
 def _matched_scan_cameras(report: dict[str, Any], count: int) -> list[dict[str, Any]]:
     """Camera poses and the dense PLY share COLMAP coordinates: no sculpt anchors."""
     from .cameras import (_matmul, _matvec, _quat_matrix, _read_intrinsics,
@@ -72,7 +144,8 @@ def _matched_scan_cameras(report: dict[str, Any], count: int) -> list[dict[str, 
 def plan_dense_blender_review(dense_revision: str | Path, output: str | Path,
                               *, max_mesh_faces: int = 5_000_000,
                               matched_views: int = 0,
-                              matched_resolution_percent: int = 100) -> dict[str, Any]:
+                              matched_resolution_percent: int = 100,
+                              textured: bool = False) -> dict[str, Any]:
     """Check a dense mesh has not changed since its reconstruction report."""
     root = Path(dense_revision).resolve()
     target = Path(output).resolve()
@@ -87,6 +160,8 @@ def plan_dense_blender_review(dense_revision: str | Path, output: str | Path,
     if (type(matched_resolution_percent) is not int
             or not 10 <= matched_resolution_percent <= 100):
         raise ReferenceError("matched_resolution_percent must be 10–100")
+    if type(textured) is not bool:
+        raise ReferenceError("textured must be a boolean")
     report = _json(root / "dense-report.json")
     mesh = report.get("mesh")
     if (not isinstance(report.get("status"), str)
@@ -116,10 +191,12 @@ def plan_dense_blender_review(dense_revision: str | Path, output: str | Path,
     if counts["faces"] > max_mesh_faces:
         raise ReferenceError("Dense mesh exceeds Blender review's face budget; split the scan")
     cameras = _matched_scan_cameras(report, matched_views) if matched_views else []
+    texture_plan = _textured_obj_plan(root, report, max_mesh_faces) if textured else {}
     return {"source_revision": str(root), "source_ply": str(path), "source_sha256": actual,
             "output": str(target), "faces": counts["faces"], "vertices": counts["vertices"],
             "matched_cameras": cameras,
             "matched_resolution_percent": matched_resolution_percent,
+            "textured": textured, **texture_plan,
             "status": "preflight-only / Blender-review-required",
             "distribution_allowed": False}
 
@@ -214,44 +291,71 @@ def build_dense_blender_review(dense_revision: str | Path, output: str | Path,
                                *, bpy_module: Any, render_previews: bool = True,
                                max_mesh_faces: int = 5_000_000,
                                matched_views: int = 0,
-                               matched_resolution_percent: int = 100) -> dict[str, Any]:
+                               matched_resolution_percent: int = 100,
+                               textured: bool = False) -> dict[str, Any]:
     """Save a private editable .blend and GLB; neither clears photo rights."""
     plan = plan_dense_blender_review(dense_revision, output,
                                      max_mesh_faces=max_mesh_faces,
                                      matched_views=matched_views,
-                                     matched_resolution_percent=matched_resolution_percent)
+                                     matched_resolution_percent=matched_resolution_percent,
+                                     textured=textured)
     bpy = bpy_module
     if tuple(bpy.app.version) < (4, 2, 0):
         raise ReferenceError("Dense Blender review requires Blender 4.2+")
     bpy.ops.wm.read_factory_settings(use_empty=True)
-    result = bpy.ops.wm.ply_import(filepath=plan["source_ply"], import_colors="SRGB")
+    result = (bpy.ops.wm.obj_import(filepath=plan["source_obj"],
+                                    forward_axis="Y", up_axis="Z") if textured else
+              bpy.ops.wm.ply_import(filepath=plan["source_ply"], import_colors="SRGB"))
     if "FINISHED" not in result:
-        raise ReferenceError("Blender could not import the private PLY")
+        raise ReferenceError("Blender could not import the private dense mesh")
     meshes = [obj for obj in bpy.context.scene.objects if obj.type == "MESH"]
     if len(meshes) != 1 or not meshes[0].data.polygons:
-        raise ReferenceError("Dense review expects exactly one nonempty PLY mesh")
+        raise ReferenceError("Dense review expects exactly one nonempty mesh")
     obj = meshes[0]
-    if len(obj.data.polygons) != plan["faces"] or len(obj.data.vertices) != plan["vertices"]:
+    if not textured and (len(obj.data.polygons) != plan["faces"] or
+                        len(obj.data.vertices) != plan["vertices"]):
         raise ReferenceError("Blender geometry differs from audited PLY counts")
+    if textured and len(obj.data.polygons) != plan["textured_faces"]:
+        raise ReferenceError("Blender textured OBJ geometry differs from audited face count")
     obj.name = "Private dense scan / unverified scale and axes"
-    material = bpy.data.materials.new("Dense statue / neutral review material")
-    material.use_nodes = True
-    shader = material.node_tree.nodes.get("Principled BSDF")
-    shader.inputs["Base Color"].default_value = (0.53, 0.49, 0.44, 1.0)
-    shader.inputs["Roughness"].default_value = 0.92
-    if obj.data.color_attributes:
-        color = obj.data.color_attributes.active_color
-        if color is not None:
-            attribute = material.node_tree.nodes.new("ShaderNodeAttribute")
-            attribute.attribute_name = color.name
-            material.node_tree.links.new(attribute.outputs["Color"], shader.inputs["Base Color"])
-    obj.data.materials.clear()
-    obj.data.materials.append(material)
+    if textured:
+        linked = {Path(item["path"]).resolve() for item in plan["texture_atlases"]}
+        for material in obj.data.materials:
+            if material is None or not material.use_nodes:
+                raise ReferenceError("Textured OBJ lost its image-linked material")
+            images = [node.image for node in material.node_tree.nodes
+                      if node.type == "TEX_IMAGE" and node.image is not None]
+            if not images or any(Path(bpy.path.abspath(img.filepath)).resolve() not in linked
+                                 for img in images):
+                raise ReferenceError("Textured OBJ references an unpinned image")
+            for shader in material.node_tree.nodes:
+                if shader.type == "BSDF_PRINCIPLED":
+                    shader.inputs["Roughness"].default_value = 0.85
+                    shader.inputs["Alpha"].default_value = 1.0
+        bpy.ops.file.pack_all()  # Private portable .blend; GLB embeds the atlas separately.
+    else:
+        material = bpy.data.materials.new("Dense statue / neutral review material")
+        material.use_nodes = True
+        shader = material.node_tree.nodes.get("Principled BSDF")
+        shader.inputs["Base Color"].default_value = (0.53, 0.49, 0.44, 1.0)
+        shader.inputs["Roughness"].default_value = 0.92
+        if obj.data.color_attributes:
+            color = obj.data.color_attributes.active_color
+            if color is not None:
+                attribute = material.node_tree.nodes.new("ShaderNodeAttribute")
+                attribute.attribute_name = color.name
+                material.node_tree.links.new(attribute.outputs["Color"], shader.inputs["Base Color"])
+        obj.data.materials.clear()
+        obj.data.materials.append(material)
     target = Path(plan["output"])
     target.mkdir(parents=True, exist_ok=False)
     record = {**plan, "status": "review-required",
               "historical_fidelity_verified": False, "previews": [],
-              "photo_matched_previews": []}
+              "photo_matched_previews": [],
+              "texture_quality_verified": False if textured else None,
+              "review_notes": ("Inspect black/empty atlas patches, seams and "
+                               "foreground contamination at matched photo pixels"
+                               if textured else "Neutral PLY geometry is untextured")}
 
     def checkpoint() -> None:
         (target / "blender-review-report.json").write_text(
@@ -265,17 +369,20 @@ def build_dense_blender_review(dense_revision: str | Path, output: str | Path,
             if plan["matched_cameras"]:
                 record["photo_matched_previews"] = _preview_matched(
                     bpy, target, plan["matched_cameras"], matched_resolution_percent)
-        bpy.ops.wm.save_as_mainfile(filepath=str(target / "private-dense-review.blend"))
+        base_name = "private-textured-review" if textured else "private-dense-review"
+        bpy.ops.wm.save_as_mainfile(filepath=str(target / (base_name + ".blend")))
         for item in bpy.context.selected_objects:
             item.select_set(False)
         obj.select_set(True)
         bpy.context.view_layer.objects.active = obj
-        result = bpy.ops.export_scene.gltf(filepath=str(target / "private-dense-review.glb"),
+        result = bpy.ops.export_scene.gltf(filepath=str(target / (base_name + ".glb")),
                                            export_format="GLB", use_selection=True,
                                            export_animations=False)
         if "FINISHED" not in result:
             raise ReferenceError("Blender failed to export the private review GLB")
-        record["glb_audit"] = audit_glb(target / "private-dense-review.glb")
+        record["glb_audit"] = audit_glb(target / (base_name + ".glb"))
+        record["review_blend"] = base_name + ".blend"
+        record["review_glb"] = base_name + ".glb"
         record["status"] = "private-Blender-mesh-candidate / artistic-and-rights-review-required"
     except (ReferenceError, RuntimeError, OSError, ValueError) as error:
         record.update(failed_stage="Blender-review", error=str(error))

@@ -177,6 +177,8 @@ def main(argv: list[str] | None = None) -> int:
                                   help="OpenMVS neighboring views per depth estimate")
         dense_parser.add_argument("--refine-decimate", type=float, default=1.0,
                                   help="OpenMVS pre-refinement face retention; 1 preserves high-poly detail")
+        dense_parser.add_argument("--texture-decimate", type=float, default=1.0,
+                                  help="OpenMVS texture OBJ face retention; lower for faster atlas LOD while PLY stays high-poly")
         dense_parser.add_argument("--timeout-seconds", type=int, default=7200)
         dense_parser.add_argument("--no-refine", action="store_true",
                                   help="OpenMVS: skip refined topology")
@@ -195,6 +197,8 @@ def main(argv: list[str] | None = None) -> int:
                                   help="Render calibrated dense-mesh views against pinned rectified photos (0–12)")
         review_dense.add_argument("--matched-resolution-percent", type=int, default=100,
                                   help="Photo-matched preview resolution percentage; 100 retains full camera pixels")
+        review_dense.add_argument("--textured", action="store_true",
+                                  help="Import pinned OpenMVS OBJ/MTL/atlas as private UV-textured Blender/GLB review")
         if command == "render-dense-blender-review":
             review_dense.add_argument("--no-renders", action="store_true")
             review_dense.add_argument("--blender", default="blender")
@@ -246,7 +250,8 @@ def main(argv: list[str] | None = None) -> int:
                 planned = plan_dense_blender_review(
                     args.dense_revision, args.output, max_mesh_faces=args.max_mesh_faces,
                     matched_views=args.matched_views,
-                    matched_resolution_percent=args.matched_resolution_percent)
+                    matched_resolution_percent=args.matched_resolution_percent,
+                    textured=args.textured)
                 if args.command == "plan-dense-blender-review":
                     print(json.dumps(planned, indent=2))
                     return 0
@@ -268,6 +273,8 @@ def main(argv: list[str] | None = None) -> int:
                            "--max-mesh-faces", str(args.max_mesh_faces),
                            "--matched-views", str(args.matched_views),
                            "--matched-resolution-percent", str(args.matched_resolution_percent)]
+                if args.textured:
+                    command.append("--textured")
                 if args.no_renders:
                     command.append("--no-renders")
                 return subprocess.run(command, check=False).returncode
@@ -275,7 +282,8 @@ def main(argv: list[str] | None = None) -> int:
                 args.dense_revision, args.output, bpy_module=bpy,
                 render_previews=not args.no_renders, max_mesh_faces=args.max_mesh_faces,
                 matched_views=args.matched_views,
-                matched_resolution_percent=args.matched_resolution_percent)
+                matched_resolution_percent=args.matched_resolution_percent,
+                textured=args.textured)
             print(json.dumps(report, indent=2))
             return 0 if report["status"].startswith("private-Blender-mesh-candidate") else 3
         if args.command in ("plan-dense-photos", "build-dense-photos"):
@@ -290,6 +298,7 @@ def main(argv: list[str] | None = None) -> int:
                     resolution_level=args.resolution_level,
                     max_resolution=args.max_resolution, number_views=args.number_views,
                     refine_decimate=args.refine_decimate,
+                    texture_decimate=args.texture_decimate,
                     refine=not args.no_refine, texture=not args.no_texture)
                 report = (plan_dense_reconstruction(args.reconstruction, args.output, settings,
                                                     rectified_masks=args.rectified_masks)

@@ -133,6 +133,35 @@ class DenseBlenderReviewTests(unittest.TestCase):
                 plan_dense_blender_review(self.dense, self.root / "review",
                                           matched_resolution_percent=invalid)
 
+    def test_textured_review_pins_obj_material_and_image_before_blender(self):
+        workspace = self.dense / "workspace"
+        workspace.mkdir()
+        base = "scene_dense_mesh_refined_texture"
+        obj = workspace / (base + ".obj")
+        mtl = workspace / (base + ".mtl")
+        atlas = workspace / (base + "_material_00_map_Kd.jpg")
+        obj.write_text(f"mtllib {mtl.name}\nv 0 0 0\nv 1 0 0\nv 0 1 0\n"
+                       "vt 0 0\nvt 1 0\nvt 0 1\nusemtl material_00\nf 1/1 2/2 3/3\n")
+        mtl.write_text(f"newmtl material_00\nmap_Kd {atlas.name}\n")
+        atlas.write_bytes(b"first-party synthetic image bytes")
+        report = json.loads(self.report.read_text())
+        report["textured_obj"] = {"path": str(obj.relative_to(self.dense)),
+                                  "sha256": hashlib.sha256(obj.read_bytes()).hexdigest()}
+        report["texture_atlases"] = [{"path": str(atlas.relative_to(self.dense)),
+                                      "sha256": hashlib.sha256(atlas.read_bytes()).hexdigest()}]
+        self.report.write_text(json.dumps(report))
+        planned = plan_dense_blender_review(self.dense, self.root / "review", textured=True)
+        self.assertTrue(planned["textured"])
+        self.assertEqual(planned["source_obj"], str(obj))
+        self.assertEqual(len(planned["texture_atlases"]), 1)
+        atlas.write_bytes(b"changed atlas")
+        with self.assertRaisesRegex(ReferenceError, "Texture atlas changed"):
+            plan_dense_blender_review(self.dense, self.root / "review", textured=True)
+        atlas.write_bytes(b"first-party synthetic image bytes")
+        mtl.write_text("newmtl bad\nmap_Kd ../../untrusted.jpg\n")
+        with self.assertRaisesRegex(ReferenceError, "only pinned"):
+            plan_dense_blender_review(self.dense, self.root / "review", textured=True)
+
 
 if __name__ == "__main__":
     unittest.main()

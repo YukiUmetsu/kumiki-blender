@@ -50,6 +50,7 @@ def main() -> None:
     for number in (1, 2):
         filename = f"first-{number:02d}.jpg"
         img = bpy.data.images.new(f"Test photo {number}", width=640, height=480)
+        img.generated_color = (0.65, 0.42, 0.28, 1.0)
         img.filepath_raw = str(images / filename)
         img.file_format = "JPEG"
         img.save()
@@ -62,11 +63,28 @@ def main() -> None:
     (sparse / "reconstruction-report.json").write_text(json.dumps({
         "status": "candidate / visual-review-required", "registered_images": 2,
     }))
+    textured = fixture / "workspace"
+    textured.mkdir()
+    obj = textured / "scene_dense_mesh_refined_texture.obj"
+    mtl = textured / "scene_dense_mesh_refined_texture.mtl"
+    atlas = textured / "scene_dense_mesh_refined_texture_material_00_map_Kd.jpg"
+    obj.write_text(f"mtllib {mtl.name}\n"
+                   "v 0 0 0\nv 1 0 0\nv 0 1 0\nv 0 0 1\n"
+                   "vt 0 0\nvt 1 0\nvt 0 1\nvt 1 1\n"
+                   "usemtl material_00\nf 1/1 2/2 3/3\nf 1/1 3/3 4/4\n")
+    mtl.write_text(f"newmtl material_00\nmap_Kd {atlas.name}\n")
+    atlas.write_bytes((images / "first-01.jpg").read_bytes())
+    with obj.open("rb") as stream:
+        obj_sha = hashlib.file_digest(stream, "sha256").hexdigest()
+    with atlas.open("rb") as stream:
+        atlas_sha = hashlib.file_digest(stream, "sha256").hexdigest()
     (fixture / "dense-report.json").write_text(json.dumps({
         "status": "dense-mesh-candidate / artistic-and-rights-review-required",
         "distribution_allowed": False,
         "source_revision": str(sparse),
         "mesh": {"ply": path.name, "sha256": sha, **counts},
+        "textured_obj": {"path": str(obj.relative_to(fixture)), "sha256": obj_sha},
+        "texture_atlases": [{"path": str(atlas.relative_to(fixture)), "sha256": atlas_sha}],
     }))
     from kumiki_blender.reconstruction.blender_dense import build_dense_blender_review
 
@@ -80,7 +98,17 @@ def main() -> None:
     assert (output / "private-dense-review.glb").stat().st_size > 0
     for filename in result["previews"] + result["photo_matched_previews"]:
         assert (output / filename).stat().st_size > 0
-    print("Real Blender private PLY/GLB, 3 axis and 2 calibrated photo views passed", flush=True)
+    textured_output = output.with_name(output.name + "-textured")
+    textured_result = build_dense_blender_review(
+        fixture, textured_output, bpy_module=bpy,
+        render_previews=False, textured=True)
+    assert textured_result["status"].startswith("private-Blender-mesh-candidate"), textured_result
+    assert textured_result["textured"] is True
+    assert textured_result["glb_audit"]["materials"] >= 1
+    assert (textured_output / "private-textured-review.blend").stat().st_size > 0
+    assert (textured_output / "private-textured-review.glb").stat().st_size > 0
+    print("Real Blender PLY/GLB, 3 axis, 2 calibrated, and private textured OBJ/GLB passed",
+          flush=True)
 
 
 if __name__ == "__main__":
