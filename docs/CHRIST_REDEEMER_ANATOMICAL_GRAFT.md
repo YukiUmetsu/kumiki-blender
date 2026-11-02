@@ -31,7 +31,7 @@ a photogrammetry scan of Christ the Redeemer. It does not establish likeness.
 ## One-command candidate (Blender installed)
 
 \`\`\`bash
-python -m pip install -e '.[preview,qa]'
+python -m pip install -e '.[preview,head-qa]'
 python scripts/preview_anatomical_head_swap.py \
   --base .review/christ_redeemer/r50.glb \
   --blender blender \

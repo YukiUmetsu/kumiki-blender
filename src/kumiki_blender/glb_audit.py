@@ -15,7 +15,10 @@ class AuditError(ValueError):
     """A generated artifact is missing, malformed, or not self-contained."""
 
 
-def audit_glb(path: str | Path, *, require_pbr_textures: bool = False) -> dict[str, Any]:
+def audit_glb(path: str | Path, *, require_pbr_textures: bool = False,
+              require_base_color_texture: bool = False,
+              required_albedo_materials: tuple[str, ...] = (),
+              forbid_color_texture_multiplication: bool = False) -> dict[str, Any]:
     """Check the GLB envelope and optionally require portable PBR texture paths."""
     source = Path(path)
     try:
@@ -83,6 +86,45 @@ def audit_glb(path: str | Path, *, require_pbr_textures: bool = False) -> dict[s
                            and "TEXCOORD_0" in primitive["attributes"]
                            for mesh in meshes for primitive in mesh["primitives"])):
             raise AuditError("GLB is missing embedded albedo/roughness/normal PBR textures or UV0")
+
+    def has_embedded_albedo(material: dict[str, Any]) -> bool:
+        pbr = material.get("pbrMetallicRoughness", {})
+        info = pbr.get("baseColorTexture", {}) if isinstance(pbr, dict) else {}
+        index = info.get("index") if isinstance(info, dict) else None
+        if not isinstance(index, int) or not 0 <= index < len(textures):
+            return False
+        texture = textures[index]
+        source_index = texture.get("source") if isinstance(texture, dict) else None
+        return (isinstance(source_index, int) and 0 <= source_index < len(images)
+                and isinstance(images[source_index].get("bufferView"), int))
+
+    if require_base_color_texture:
+        has_uv = any(isinstance(primitive.get("attributes"), dict) and
+                     "TEXCOORD_0" in primitive["attributes"]
+                     for mesh in meshes for primitive in mesh["primitives"])
+        if not has_uv or not any(isinstance(m, dict) and has_embedded_albedo(m)
+                                 for m in materials):
+            raise AuditError("GLB is missing an embedded base-color texture on a UV-mapped mesh")
+
+    if required_albedo_materials:
+        named={material.get("name"):material for material in materials
+               if isinstance(material,dict)}
+        missing=[name for name in required_albedo_materials
+                 if name not in named or not has_embedded_albedo(named[name])]
+        if missing:
+            raise AuditError(f"GLB materials missing embedded albedo: {missing}")
+
+    if forbid_color_texture_multiplication:
+        for mesh in meshes:
+            for primitive in mesh["primitives"]:
+                index=primitive.get("material")
+                attributes=primitive.get("attributes",{})
+                if (isinstance(index,int) and 0<=index<len(materials)
+                        and isinstance(attributes,dict)
+                        and "COLOR_0" in attributes
+                        and isinstance(materials[index],dict)
+                        and has_embedded_albedo(materials[index])):
+                    raise AuditError("GLB would multiply a base-color texture by COLOR_0")
 
     semantic_nodes = sum(
         1 for node in nodes if isinstance(node, dict) and isinstance(node.get("extras"), dict)

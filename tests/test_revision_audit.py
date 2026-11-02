@@ -6,14 +6,15 @@ from pathlib import Path
 
 from kumiki_blender.glb_audit import audit_glb
 from kumiki_blender.revision_audit import RevisionAuditError, audit_revision
+from png_fixtures import one_pixel_png
 
 
 def create_revision(folder: Path) -> dict:
     (folder / "previews").mkdir()
     files = {
         "source.blend": b"BLENDER-native-source",
-        "preview.png": b"\x89PNG\r\n\x1a\nhero",
-        "previews/detail.png": b"\x89PNG\r\n\x1a\ndetail",
+        "preview.png": one_pixel_png(),
+        "previews/detail.png": one_pixel_png((0, 255, 0)),
     }
     for name, data in files.items():
         (folder / name).write_bytes(data)
@@ -55,7 +56,7 @@ class RevisionAuditTests(unittest.TestCase):
             folder = Path(directory)
             create_revision(folder)
             (folder / "preview.png").write_bytes(b"\x89PNG\r\n\x1a\nchanged")
-            with self.assertRaisesRegex(RevisionAuditError, "size mismatch"):
+            with self.assertRaisesRegex(RevisionAuditError, "Invalid artifact"):
                 audit_revision(folder)
 
     def test_malformed_or_missing_manifest_fails(self):

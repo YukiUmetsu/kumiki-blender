@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "id": "mount-fuji-survey-terrain",
+  "title": "Mount Fuji / Survey-Based Volcano Terrain",
+  "description": "Geographically measured 1:1 vertical relief model of Mount Fuji with real summit rim, radial erosion, asymmetric flanks and the Hōei eruption crater.",
+  "kind": "hybrid",
+  "tags": ["japan", "fuji", "volcano", "mountain", "landscape", "terrain", "dem", "geography", "summit", "crater", "documentary"],
+  "aliases": ["Fujisan", "Fuji-san", "Mount Fuji 3D model", "Fuji topography"],
+  "rigged": false,
+  "animated": false,
+  "sources": [
+    "src/kumiki_blender/geography/fuji/dem.py",
+    "src/kumiki_blender/geography/fuji/blender_scene.py",
+    "scripts/prepare_fuji_dem.py",
+    "docs/MOUNT_FUJI_TERRAIN.md"
+  ],
+  "plan": ["plan-fuji"],
+  "build": ["build-fuji"]
+}

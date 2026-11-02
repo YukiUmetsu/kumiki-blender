@@ -57,6 +57,35 @@ PYTHONPATH=src python3 -m kumiki_blender inspect-texture-packs \
   --input /path/to/stone-pack/material-packs.json
 ```
 
+## Apply it to an AssetSpec v2 composer
+
+The same validated pack can now supply **AssetSpec v2** components via material
+roles, with no custom Blender shader code. Set each `assignments[].target` to
+the role from the AssetSpec's `materials` dictionary (e.g. `housing`, `panel`
+or `trim`), then run:
+
+```bash
+python3 -m kumiki_blender build-asset \
+  --spec examples/precision-control-enclosure-v2.json \
+  --texture-packs /path/to/material-packs.json \
+  --output .review/control-enclosure/textured-r01
+```
+
+For a precompiled `--plan` workflow, pass `--texture-packs` to the Blender
+worker and make the referenced map files available at the worker as well.
+Only explicitly assigned roles are replaced; other roles retain the built-in
+PBR presets. Real tile-scale UVs are generated for both planar and cylindrical
+parts. Missing roles, duplicate assignments and attempts to replace
+`optical-glass` transmission are rejected before output is written.
+
+The repository's first-party fixture script writes a `composer.json` example
+and corresponding maps for CI. These verify portability and shader wiring,
+not scan quality. For higher fidelity, use a reviewed material from a source
+such as [Poly Haven textures](https://polyhaven.com/textures), which publishes
+[CC0 asset terms](https://polyhaven.com/license) permitting commercial reuse
+and redistribution. Save the actual item permalink, creator and license in
+the pack recipe rather than treating the library-wide license as item proof.
+
 ## Apply it to a procedural facade
 
 Run from the repo root, substituting your Blender executable as appropriate:

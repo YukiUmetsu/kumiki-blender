@@ -50,6 +50,26 @@ def main() -> None:
         {"target": "wall-stone-light", "pack": "first-party-limestone"},
     ]
     (root / "facade.json").write_text(json.dumps(recipe, indent=2) + "\n")
+
+    # Verify composer integration with an in-repository, rights-cleared fixture.
+    # This is procedural painted steel, not a claim of photo-scanned fidelity.
+    steel = make_pbr_maps("painted-steel", "#566970", 0.33, resolution=128)
+    steel_maps = {"base_color": steel.base_color_png,
+                  "roughness": steel.roughness_png, "normal": steel.normal_png}
+    for channel, payload in steel_maps.items():
+        (root / f"steel-{channel}.png").write_bytes(payload)
+    composer_pack = {
+        **recipe["packs"][0],
+        "id": "first-party-painted-steel",
+        "tile_size_m": 0.36,
+        "metallic": 0.04,
+        "maps": {channel: f"steel-{channel}.png" for channel in steel_maps},
+        "sha256": {channel: hashlib.sha256(payload).hexdigest()
+                   for channel, payload in steel_maps.items()},
+    }
+    composer_recipe = {"schema_version": 1, "packs": [composer_pack],
+                       "assignments": [{"target": "housing", "pack": "first-party-painted-steel"}]}
+    (root / "composer.json").write_text(json.dumps(composer_recipe, indent=2) + "\n")
     print(f"Created first-party texture pack: {root}")
 
 

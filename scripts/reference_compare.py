@@ -1,16 +1,49 @@
-"""Reference versus Blender render QA contact sheet; requires Pillow.
+"""Make a non-registered reference/render inspection sheet.
 
-Use side-by-side before camera registration. Only add the blend overlay after
-matching camera orientation, framing, scale, and landmark positions.
+This tool never alters a photograph to suggest that unlike camera angles
+match. Reference images remain local QA material; do not commit them or infer
+redistribution rights from their being publicly viewable.
 
-    python scripts/reference_compare.py reference.png render.png \
-        --output .review/face-comparison.png
+    python scripts/reference_compare.py photo.jpg preview.png --output sheet.png
 """
+
+from __future__ import annotations
 
 import argparse
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont, ImageOps
+
+
+def comparison_sheet(reference: Path, render: Path, output: Path,
+                     *, panel_width: int = 900, panel_height: int = 680) -> Path:
+    if min(panel_width, panel_height) < 128:
+        raise ValueError("Comparison panels must be at least 128 pixels in each dimension")
+    margin, header, footer, gap = 20, 64, 48, 20
+    width = panel_width * 2 + margin * 2 + gap
+    height = panel_height + header + footer + margin * 2
+    canvas = Image.new("RGB", (width, height), (25, 30, 36))
+    draw = ImageDraw.Draw(canvas)
+    font = ImageFont.load_default()
+    for index, (image_path, label) in enumerate(((reference, "REFERENCE PHOTO"),
+                                                 (render, "BLENDER RENDER"))):
+        with Image.open(image_path) as im:
+            im.load()  # Also catches truncated photos and renders.
+            picture = ImageOps.contain(im.convert("RGB"), (panel_width, panel_height),
+                                       method=Image.Resampling.LANCZOS)
+        left = margin + index * (panel_width + gap)
+        top = margin + header
+        draw.rectangle((left, top, left + panel_width, top + panel_height),
+                       fill=(39, 43, 48))
+        canvas.paste(picture, (left + (panel_width - picture.width) // 2,
+                               top + (panel_height - picture.height) // 2))
+        draw.text((left, margin + 24), label, fill=(235, 238, 243), font=font)
+    draw.text((margin, height - footer),
+              "Different cameras / projection: compare geological form, colors and detail; NOT pixel alignment.",
+              fill=(174, 184, 194), font=font)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    canvas.save(output, format="PNG")
+    return output
 
 
 def tile(path: Path, size: int) -> Image.Image:
@@ -47,20 +80,28 @@ def compare(reference: Path, rendered: Path, output: Path,
     canvas.save(output)
 
 
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("reference", type=Path)
     parser.add_argument("render", type=Path)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--size", type=int, default=750)
-    parser.add_argument("--aligned", action="store_true")
+    parser.add_argument("--size", type=int, default=None,
+                        help="Square side-by-side panels (legacy Christ comparison)")
+    parser.add_argument("--aligned", action="store_true",
+                        help="Only for independently camera-registered photographs")
+    parser.add_argument("--panel-width", type=int, default=900)
+    parser.add_argument("--panel-height", type=int, default=680)
     args = parser.parse_args()
-    if args.size < 64 or args.size > 4096:
-        parser.error("--size must be between 64 and 4096 pixels")
-    for file in (args.reference, args.render):
-        if not file.is_file():
-            parser.error(f"Image not found: {file}")
-    compare(args.reference, args.render, args.output, args.size, args.aligned)
+    if args.aligned or args.size is not None:
+        size = args.size or 750
+        if size < 64 or size > 4096:
+            parser.error("--size must be between 64 and 4096")
+        compare(args.reference, args.render, args.output, size, args.aligned)
+    else:
+        comparison_sheet(args.reference, args.render, args.output,
+                         panel_width=args.panel_width,
+                         panel_height=args.panel_height)
 
 
 if __name__ == "__main__":
