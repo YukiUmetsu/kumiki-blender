@@ -1,0 +1,165 @@
+{
+  "schema_version": 1,
+  "coordinate_system": "glb-y-up-metres",
+  "source_kind": "REPLACE_WITH_VERIFIED_SOURCE_KIND",
+  "source_authenticity_review": "PENDING",
+  "source_sha256": "REPLACE_WITH_SHA256_OF_AUTHORIZED_SCAN",
+  "target_revision": "r59-cc0-generic-head-unregistered",
+  "target_geometry_status": "HOLD generic CC0 donor head anchors; not real monument measurements",
+  "instructions": "Source XYZ is intentionally null. Fill with matching actual scan 3D points, verify source rights and authentic monument provenance, then replace source_kind and SHA256. This is NOT ready to run.",
+  "landmarks": [
+    {
+      "name": "nose_tip",
+      "source_xyz": null,
+      "target_xyz": [
+        -0.0006,
+        35.9655,
+        2.0957
+      ]
+    },
+    {
+      "name": "nose_bridge",
+      "source_xyz": null,
+      "target_xyz": [
+        -0.0006,
+        36.2476,
+        2.1253
+      ]
+    },
+    {
+      "name": "left_eye_inner",
+      "source_xyz": null,
+      "target_xyz": [
+        -0.2297,
+        36.5428,
+        1.6868
+      ]
+    },
+    {
+      "name": "left_eye_outer",
+      "source_xyz": null,
+      "target_xyz": [
+        -0.8348,
+        36.5314,
+        1.4913
+      ]
+    },
+    {
+      "name": "right_eye_inner",
+      "source_xyz": null,
+      "target_xyz": [
+        0.2286,
+        36.5428,
+        1.6868
+      ]
+    },
+    {
+      "name": "right_eye_outer",
+      "source_xyz": null,
+      "target_xyz": [
+        0.8355,
+        36.5269,
+        1.4907
+      ]
+    },
+    {
+      "name": "left_brow",
+      "source_xyz": null,
+      "target_xyz": [
+        -0.6789,
+        36.8051,
+        1.7477
+      ]
+    },
+    {
+      "name": "right_brow",
+      "source_xyz": null,
+      "target_xyz": [
+        0.6778,
+        36.8051,
+        1.7477
+      ]
+    },
+    {
+      "name": "left_mouth",
+      "source_xyz": null,
+      "target_xyz": [
+        -0.4876,
+        35.5685,
+        1.7334
+      ]
+    },
+    {
+      "name": "right_mouth",
+      "source_xyz": null,
+      "target_xyz": [
+        0.4872,
+        35.5607,
+        1.7327
+      ]
+    },
+    {
+      "name": "upper_lip",
+      "source_xyz": null,
+      "target_xyz": [
+        -0.0006,
+        35.549,
+        1.9811
+      ]
+    },
+    {
+      "name": "lower_lip",
+      "source_xyz": null,
+      "target_xyz": [
+        -0.0006,
+        35.4645,
+        1.94
+      ]
+    },
+    {
+      "name": "chin_tip",
+      "source_xyz": null,
+      "target_xyz": [
+        -0.0006,
+        34.9343,
+        1.5944
+      ]
+    },
+    {
+      "name": "left_jaw",
+      "source_xyz": null,
+      "target_xyz": [
+        -0.6849,
+        35.0488,
+        0.6599
+      ]
+    },
+    {
+      "name": "right_jaw",
+      "source_xyz": null,
+      "target_xyz": [
+        0.6637,
+        35.0229,
+        0.6479
+      ]
+    },
+    {
+      "name": "left_cheek",
+      "source_xyz": null,
+      "target_xyz": [
+        -0.834,
+        35.9546,
+        1.5707
+      ]
+    },
+    {
+      "name": "right_cheek",
+      "source_xyz": null,
+      "target_xyz": [
+        0.8243,
+        35.938,
+        1.5735
+      ]
+    }
+  ]
+}

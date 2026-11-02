@@ -76,3 +76,15 @@ incomplete and must not be used as an actual fit.
 
 **Current status: no rights-cleared authentic scan has been imported or
 registered; existing production figure unchanged.**
+
+
+## Prepared target landmark scaffold
+
+The file [CHRIST_REDEEMER_SCAN_TARGET_ANCHORS_HOLD.json](CHRIST_REDEEMER_SCAN_TARGET_ANCHORS_HOLD.json)
+contains 17 named *existing generic donor* target anchors in **GLB Y-up
+metres**. They are derived from the earlier 2D-photo registration fixture
+with the explicit axis conversion (x, -z, y) -> (x, y, z) in GLB space.
+All source_xyz entries are intentionally null, so the template **cannot
+run or silently masquerade as a scan**. Replace them with actual
+3D coordinates selected on the licensed monument scan; inspect every
+correspondence against the source model before alignment.
