@@ -165,7 +165,7 @@ def _read_anchors(path: Path, asset_id: str) -> list[tuple[tuple[float, ...], tu
     return anchors
 
 
-def _read_intrinsics(path: Path) -> dict[int, dict[str, Any]]:
+def _read_intrinsics(path: Path, *, require_square_pixels: bool = True) -> dict[int, dict[str, Any]]:
     cameras = {}
     for line in path.read_text(encoding="utf-8").splitlines():
         if not line.strip() or line.lstrip().startswith("#"):
@@ -190,7 +190,7 @@ def _read_intrinsics(path: Path) -> dict[int, dict[str, Any]]:
             if (not all(math.isfinite(v) for v in params) or fx <= 0 or fy <= 0
                     or not 0 <= cx <= width or not 0 <= cy <= height):
                 raise ValueError("invalid intrinsics")
-            if abs(fx-fy) / max(fx, fy) > 0.005:
+            if require_square_pixels and abs(fx-fy) / max(fx, fy) > 0.005:
                 raise ReferenceError("Different fx/fy focal lengths need pixel-aspect handling; undistort to square-pixel PINHOLE")
             if camera_id in cameras:
                 raise ValueError("duplicate camera ID")
