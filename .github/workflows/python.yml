@@ -120,6 +120,14 @@ jobs:
             --python scripts/blender_physics_constraints_smoke.py -- .review/ci/physics-constraints
           python -m kumiki_blender audit --model .review/ci/physics-constraints/physics-r01/model.glb
           test -s .review/ci/physics-constraints/physics-r01/baked-actions.json
+      - name: Verify true Blender body-body bounce and proximity SFX candidates
+        env:
+          PYTHONPATH: src
+        run: |
+          blender --background --factory-startup --threads 2 --python-exit-code 1 \
+            --python scripts/blender_physics_pair_contacts_smoke.py -- .review/ci/physics-pair-contacts
+          python -m kumiki_blender audit --model .review/ci/physics-pair-contacts/physics-r01/model.glb
+          test -s .review/ci/physics-pair-contacts/physics-r01/baked-actions.json
       - name: Install optional AssetSpec and image QA dependencies (host Python only)
         run: python -m pip install -e '.[composer,qa]'
       - name: Verify guided surfaces, portable GLB and tiled UDIM in Blender

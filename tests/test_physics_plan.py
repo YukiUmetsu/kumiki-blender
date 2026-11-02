@@ -83,6 +83,23 @@ class PhysicsPlanTests(unittest.TestCase):
         with self.assertRaisesRegex(PhysicsPlanError, "unique"):
             parse_physics_plan({**VALID, "constraints": [hinge, hinge]})
 
+    def test_opt_in_pair_contact_labels_and_geometry_tolerance_are_strict(self):
+        pair = {"body_a": "role:base-fasteners", "body_b": "role:weighted-base",
+                "material": "metal-on-wood", "tolerance_m": .012}
+        shot = parse_physics_plan({**VALID, "contact_pairs": [pair]})
+        self.assertEqual(shot.contact_pairs[0].material, "metal-on-wood")
+        self.assertAlmostEqual(shot.contact_pairs[0].tolerance_m, .012)
+        self.assertEqual(parse_physics_plan(VALID).contact_pairs, ())
+        for invalid in ({**pair, "body_b": pair["body_a"]},
+                        {**pair, "material": "../../external.wav"},
+                        {**pair, "tolerance_m": .2},
+                        {**pair, "execute": "python"}):
+            with self.subTest(invalid=invalid), self.assertRaises(PhysicsPlanError):
+                parse_physics_plan({**VALID, "contact_pairs": [invalid]})
+        with self.assertRaisesRegex(PhysicsPlanError, "unique"):
+            parse_physics_plan({**VALID, "contact_pairs": [pair, {**pair,
+                "body_a": pair["body_b"], "body_b": pair["body_a"]}]})
+
     def test_load_is_bounded_and_cli_plan_needs_no_blender(self):
         from kumiki_blender.cli import main
         import io

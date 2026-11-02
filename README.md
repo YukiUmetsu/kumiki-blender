@@ -6,6 +6,8 @@ For fully automated rigid-body shots, use `kumiki-blender plan-physics --spec ex
 
 The same plan now supports native `hinge`, `slider` and `fixed` joints (see `examples/mechanical-constraints-physics-shot.json`) and conservative, measured ground-impact cues for SFX. Every constraint/impact is backed by a real Blender simulation; no per-model animation code is required.
 
+For a real **body-on-body collision**, add explicit `contact_pairs` as in [`examples/pair-impact-physics-shot.json`](examples/pair-impact-physics-shot.json). The worker cross-checks Bullet trajectories against mesh-surface proximity and post-impact slowdown before emitting semantic SFX cues; these are conservative geometric estimates, not native Bullet impulses.
+
 **New to Blender, 3D modeling, and this repository?** Start with the
 [beginner's step-by-step Wiki](https://github.com/YukiUmetsu/kumiki-blender/wiki): install the tools, generate your
 first tower, open it in Blender, change its color and dimensions, and learn how
