@@ -20,7 +20,7 @@ ROOT=Path(__file__).resolve().parents[2]
 sys.path.insert(0,str(ROOT/'src'))
 
 from kumiki_blender.asset_import import load_asset_provenance,inspect_source_glb
-from kumiki_blender.scan_registration import fit_scan_landmarks
+from kumiki_blender.scan_registration import fit_scan_landmarks,check_source_anchor_surface
 
 
 def main():
@@ -52,12 +52,13 @@ def main():
         parser.error('Anchor file must pin the exact scan GLB SHA-256')
     if data.get('source_kind')!='actual-monument-scan':
         parser.error('Reference donor/replica cannot be exported as an authenticated monument scan')
-    fit=fit_scan_landmarks(data['landmarks'])
     import numpy as np
     import trimesh
     scene=trimesh.load(args.source,force='scene')
+    surface_audit=check_source_anchor_surface(scene,data['landmarks'])
+    fit=fit_scan_landmarks(data['landmarks'])
     scene.apply_transform(np.asarray(fit['matrix_source_to_target']))
-    audit={**fit,'source_kind':data['source_kind'],
+    audit={**fit,**surface_audit,'source_kind':data['source_kind'],
            'source_authenticity_review':data.get('source_authenticity_review','unverified'),
            'provenance':provenance.to_manifest(inspection['input_sha256']),
            'source_meshes':len(scene.geometry),

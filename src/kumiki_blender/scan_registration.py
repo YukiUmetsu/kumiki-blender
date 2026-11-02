@@ -143,3 +143,37 @@ def fit_scan_landmarks(anchors: list[dict[str,Any]], *,
         "per_landmark_error_m":{name:round(float(err),6) for name,err in zip(names,distances)},
         "limitations":"3D alignment is not proof of monument authenticity, source rights, facial likeness or scan completeness.",
     }
+
+
+def check_source_anchor_surface(scene, anchors, *, max_gap_m=.08):
+    """Ensure every 3D source anchor lies on the actual GLB geometry.
+
+    Uses a world-space vertex KD-tree; conservative coarse-mesh tolerance
+    prevents trusting arbitrary JSON coordinates that never touch the scan.
+    """
+    import numpy as np
+    from scipy.spatial import cKDTree
+    if not math.isfinite(max_gap_m) or not .005<=max_gap_m<=.2:
+        raise ScanRegistrationError('Source anchor gap threshold must be 5..200 mm')
+    nodes=list(scene.graph.nodes_geometry)
+    if not nodes:
+        raise ScanRegistrationError('Source GLB has no mesh nodes')
+    from trimesh.transformations import transform_points
+    chunks=[]
+    for node in nodes:
+        matrix,name=scene.graph[node]
+        mesh=scene.geometry[name]
+        if len(mesh.vertices):
+            chunks.append(transform_points(mesh.vertices,matrix))
+    if not chunks:
+        raise ScanRegistrationError('Source GLB has no vertices')
+    xyz=np.concatenate(chunks,axis=0)
+    if not np.isfinite(xyz).all():
+        raise ScanRegistrationError('Source mesh contains nonfinite vertices')
+    _,points,_=_points(anchors)
+    distances,_=cKDTree(xyz).query(points,k=1)
+    if not np.isfinite(distances).all() or distances.max()>max_gap_m:
+        raise ScanRegistrationError('HOLD_source_anchor_off_mesh: largest gap %.4f m' % distances.max())
+    return {'source_anchor_max_vertex_gap_m':round(float(distances.max()),6),
+            'source_anchor_mean_vertex_gap_m':round(float(distances.mean()),6),
+            'source_mesh_vertex_count':int(len(xyz))}

@@ -88,3 +88,15 @@ All source_xyz entries are intentionally null, so the template **cannot
 run or silently masquerade as a scan**. Replace them with actual
 3D coordinates selected on the licensed monument scan; inspect every
 correspondence against the source model before alignment.
+
+
+## Additional geometry-authenticity gate
+
+Before fitting any transform, the CLI now verifies that **every source_xyz
+anchor is actually near a vertex of the imported GLB in its world coordinate
+frame** (default 8 cm maximum). This prevents arbitrary invented source
+coordinates from producing deceptively low reprojection errors. The audit
+records maximum/mean source anchor gaps and mesh vertex count. It is a
+conservative vertex-proximity screen, not proof that the GLB is a real
+monument scan. Source provenance and multi-view photo verification remain
+mandatory.

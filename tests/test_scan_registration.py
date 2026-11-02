@@ -2,7 +2,7 @@
 import math
 import unittest
 import numpy as np
-from kumiki_blender.scan_registration import fit_scan_landmarks,ScanRegistrationError
+from kumiki_blender.scan_registration import fit_scan_landmarks,ScanRegistrationError,check_source_anchor_surface
 
 
 class ScanRegistrationTests(unittest.TestCase):
@@ -60,6 +60,20 @@ class ScanRegistrationTests(unittest.TestCase):
         duplicates[0]['name']=duplicates[1]['name']
         with self.assertRaisesRegex(ScanRegistrationError,'unique'):
             fit_scan_landmarks(duplicates)
+
+    def test_source_anchors_must_touch_real_mesh(self):
+        import trimesh
+        scene=trimesh.Scene()
+        sphere=trimesh.creation.icosphere(subdivisions=3,radius=1.)
+        scene.add_geometry(sphere)
+        points=[dict(p) for p in self.anchors()]
+        for i,p in enumerate(points):
+            p['source_xyz']=sphere.vertices[i].tolist()
+        audit=check_source_anchor_surface(scene,points)
+        self.assertLess(audit['source_anchor_max_vertex_gap_m'],.001)
+        points[4]['source_xyz']=[10.,10.,10.]
+        with self.assertRaisesRegex(ScanRegistrationError,'off_mesh'):
+            check_source_anchor_surface(scene,points)
 
     def test_refuses_bad_coordinates_and_few_points(self):
         with self.assertRaisesRegex(ScanRegistrationError,'6..200'):
