@@ -285,3 +285,15 @@ scan or a CC BY reference model and compare its **frontal, profile
 and low-angle** silhouette against the editable clay. Rebuild the
 topology where necessary; do not treat generic donor anatomy as
 the actual monument.
+
+
+## Reproducible scan alignment (new)
+
+The [Christ scan registration gate](CHRIST_REDEEMER_SCAN_REGISTRATION.md)
+now accepts a **locally supplied, rights-cleared authentic monument GLB**
+and six or more non-coplanar corresponding 3D landmarks. It robustly fits
+only a uniform scale, proper rotation and translation; rejects reflected,
+anisotropic and high-residual candidates; and emits a separate HOLD preview
+and detailed residual/provenance manifest. A generic CC0 anatomy donor is
+not a monument scan. The authentic Pix4D/Baukunst surveys are visual
+references only until redistribution and commercial reuse rights are verified.
