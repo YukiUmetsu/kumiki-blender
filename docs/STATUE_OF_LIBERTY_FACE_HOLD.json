@@ -8,7 +8,11 @@
       "NPS Statue Statistics: https://www.nps.gov/stli/learn/historyculture/statue-statistics.htm",
       "HAER NY-138-236 installed-head oblique, Jet Lowe, 1984, LOC color 570005c",
       "HAER NY-138-237 installed-head right profile, Jet Lowe, 1984, LOC color 570006c",
+      "HAER NY-138-238/239 installed-head left ear, crown and rear hair, 1984",
+      "HAER NY-138-240 installed-head left three-quarter, 1984, LOC color 570009c",
       "HAER NY-138-241 installed-head left profile, 1984",
+      "HAER NY-138-177 through 181 installed-head 1985 repair-era anatomical details; camera pose unknown",
+      "r61 six-view SIFT feasibility: 14/15 weak pairs, 238/239 homography-dominated; no reliable 3D pose recovered",
       "HAER NY-138-227 coppersmith face display, reference-only",
       "NPS Heritage Documentation 2019 survey exists but no authorized mesh obtained"
     ],
@@ -17,7 +21,8 @@
       "NPS head width 3.05 m",
       "NPS eye width 0.76 m and mouth width 0.91 m",
       "NPS nose length 1.37 m",
-      "Unregistered HAER profile gives qualitative silhouette only"
+      "Unregistered HAER profiles and close-ups give qualitative silhouette/anatomy only",
+      "HAER 180 scale stick is oblique and cannot be interpreted as registered 3D depth"
     ]
   },
   "views": [
@@ -39,7 +44,7 @@
       "id": "three-quarter",
       "status": "hold",
       "registration": "unregistered",
-      "camera_evidence": "HAER 236 is an actual installed-head oblique, but no solved lens/camera pose or dense 3D correspondence",
+      "camera_evidence": "HAER 236 and 240 show installed-head obliques, but six-view exploratory matching has no solved lens/camera pose or dense 3D correspondence",
       "notes": "No comparable real-head 3D evidence for the current generator"
     }
   ],

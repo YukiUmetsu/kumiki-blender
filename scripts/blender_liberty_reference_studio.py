@@ -4,7 +4,7 @@ The archived photographs have unknown camera intrinsics and pose. They are
 reference *boards*, deliberately in a separate scene, never projections onto
 the illustrative head or registered likeness-gate input.
 
-Run this script with Blender 4.5 after generating a ``clay.blend`` checkpoint.
+Run this script with Blender 4.5 after generating a sculpt ``.blend`` checkpoint.
 """
 
 from __future__ import annotations
@@ -23,6 +23,7 @@ class ArchivedView:
     label: str
     loc_url: str
     jpeg_url: str
+    group: str = "pose"
 
 
 ARCHIVED_VIEWS = (
@@ -37,19 +38,69 @@ ARCHIVED_VIEWS = (
         "https://cdn.loc.gov/service/pnp/habshaer/ny/ny1200/ny1251/color/570006cv.jpg",
     ),
     ArchivedView(
+        "HAER NY-138-238", "haer-238-left-ear-large.jpg", "LEFT EAR / REAR MASS",
+        "https://www.loc.gov/pictures/item/ny1251.color.570007c/",
+        "https://cdn.loc.gov/service/pnp/habshaer/ny/ny1200/ny1251/color/570007cv.jpg",
+    ),
+    ArchivedView(
+        "HAER NY-138-239", "haer-239-left-crown-large.jpg", "LEFT CROWN / HAIR",
+        "https://www.loc.gov/pictures/item/ny1251.color.570008c/",
+        "https://cdn.loc.gov/service/pnp/habshaer/ny/ny1200/ny1251/color/570008cv.jpg",
+    ),
+    ArchivedView(
+        "HAER NY-138-240", "haer-240-left-profile-large.jpg", "LEFT THREE-QUARTER",
+        "https://www.loc.gov/pictures/item/ny1251.color.570009c/",
+        "https://cdn.loc.gov/service/pnp/habshaer/ny/ny1200/ny1251/color/570009cv.jpg",
+    ),
+    ArchivedView(
         "HAER NY-138-241", "haer-241-left-profile-large.jpg", "LEFT PROFILE",
         "https://www.loc.gov/pictures/item/ny1251.color.570010c/",
         "https://cdn.loc.gov/service/pnp/habshaer/ny/ny1200/ny1251/color/570010cv.jpg",
     ),
 )
 
+DETAIL_VIEWS = (
+    ArchivedView(
+        "HAER NY-138-177", "haer-177-repaired-profile-large.jpg", "REPAIRED SIDE / 1985",
+        "https://www.loc.gov/pictures/item/ny1251.photos.120435p/",
+        "https://cdn.loc.gov/service/pnp/habshaer/ny/ny1200/ny1251/photos/120435pv.jpg",
+        "detail",
+    ),
+    ArchivedView(
+        "HAER NY-138-178", "haer-178-face-eye-repair-large.jpg", "LOW VIEW / NOSE / ORBITS",
+        "https://www.loc.gov/pictures/item/ny1251.photos.120436p/",
+        "https://cdn.loc.gov/service/pnp/habshaer/ny/ny1200/ny1251/photos/120436pv.jpg",
+        "detail",
+    ),
+    ArchivedView(
+        "HAER NY-138-179", "haer-179-right-eye-large.jpg", "RIGHT EYE / EYELID",
+        "https://www.loc.gov/pictures/item/ny1251.photos.120437p/",
+        "https://cdn.loc.gov/service/pnp/habshaer/ny/ny1200/ny1251/photos/120437pv.jpg",
+        "detail",
+    ),
+    ArchivedView(
+        "HAER NY-138-180", "haer-180-nose-scale-large.jpg", "LOW VIEW / SCALE STICK",
+        "https://www.loc.gov/pictures/item/ny1251.photos.120438p/",
+        "https://cdn.loc.gov/service/pnp/habshaer/ny/ny1200/ny1251/photos/120438pv.jpg",
+        "detail",
+    ),
+    ArchivedView(
+        "HAER NY-138-181", "haer-181-nose-before-large.jpg", "NOSTRIL / LIP RELIEF",
+        "https://www.loc.gov/pictures/item/ny1251.photos.120439p/",
+        "https://cdn.loc.gov/service/pnp/habshaer/ny/ny1200/ny1251/photos/120439pv.jpg",
+        "detail",
+    ),
+)
+
+ALL_VIEWS = ARCHIVED_VIEWS + DETAIL_VIEWS
+
 
 def resolve_photos(reference_dir: Path) -> list[tuple[ArchivedView, Path]]:
-    """Fail closed if any of the three installed-monument source files is absent."""
+    """Fail closed if any of the eleven installed-monument photos is absent."""
     if not reference_dir.is_dir():
         raise ValueError(f"missing HAER directory: {reference_dir}")
     resolved = []
-    for photo in ARCHIVED_VIEWS:
+    for photo in ALL_VIEWS:
         path = reference_dir / photo.filename
         if not path.is_file() or path.stat().st_size < 1000:
             raise ValueError(f"missing/empty {photo.survey_id}: {path}; source: {photo.jpeg_url}")
@@ -86,7 +137,8 @@ def main() -> None:
     sculpt_scene.name = "01 SCULPT / neutral clay / HOLD"
     sculpt_scene["anatomy_acceptance"] = "HOLD - the installed face has not been reconstructed"
     sculpt_scene["archive_registration"] = "NONE - HAER poses/intrinsics unknown"
-    sculpt_scene["reference_board_scene"] = "02 HAER PHOTO BOARD / UNREGISTERED"
+    sculpt_scene["reference_board_scene"] = "02 HAER POSES / UNREGISTERED"
+    sculpt_scene["anatomy_detail_scene"] = "03 HAER ANATOMY / UNREGISTERED"
     for photo, _path in photos:
         sculpt_scene[photo.survey_id] = photo.loc_url
 
@@ -95,7 +147,7 @@ def main() -> None:
         "ACTUAL STATUE OF LIBERTY FACE - ANATOMICAL SCULPT BRIEF\n"
         "=================================================\n"
         "State: HOLD. The current head is not photo-faithful.\n"
-        "These photographs are of the installed copper monument (HAER, 1984).\n"
+        "These photographs are of the installed copper monument (HAER, 1984-85).\n"
         "Their camera poses and intrinsics are UNKNOWN; do not project them\n"
         "onto the mesh, score pixel matches or claim reconstruction.\n\n"
         "Sculpt order / work from primary mass to secondary folds:\n"
@@ -111,26 +163,15 @@ def main() -> None:
         "6. Check front, both sides and three-quarter in *neutral clay*.\n"
         "   Find a licensed authentic scan or calibrate reliable multi-view\n"
         "   camera correspondence before releasing a photo-faithful GLB.\n\n"
-        "Reference photos are packed in scene 02 HAER PHOTO BOARD.\n"
-        "Reference IDs: HAER NY-138-236, HAER NY-138-237, HAER NY-138-241.\n"
+        "02 HAER POSES: Six whole-head views, including hair and crown.\n"
+        "03 HAER ANATOMY: Five details of orbital, alar and mouth surfaces.\n"
+        "178-181 show restoration in progress; do not infer untouched\n"
+        "copper from damage or repair patches. The 180 scale stick lies\n"
+        "in oblique space: it is NOT a calibrated depth measurement.\n"
+        "238 and 239 largely repeat a rear/side view. More photographs\n"
+        "do not automatically mean a usable parallax baseline.\n"
     )
-
-    board = bpy.data.scenes.new("02 HAER PHOTO BOARD / UNREGISTERED")
-    board.render.engine = "CYCLES"
-    board.cycles.samples = 8
-    board.render.resolution_x = 1600
-    board.render.resolution_y = 960
-    board.render.resolution_percentage = 100
-    board.view_settings.view_transform = "Standard"
-    board.render.image_settings.file_format = "PNG"
-    board["source"] = "1984 HAER NY-138, installed Statue of Liberty head, NPS/LOC"
-    board["camera_registration"] = "UNREGISTERED / orthographic board only"
-    board["workflow"] = "Reference for human sculpt; no camera-matching or 3D survey claim"
-
-    world = bpy.data.worlds.new("Dark studio / archive board")
-    world.use_nodes = True
-    world.node_tree.nodes["Background"].inputs["Color"].default_value = (.045, .055, .065, 1)
-    board.world = world
+    sculpt_scene["reference_count"] = len(photos)
 
     ink = bpy.data.materials.new("Archive board / luminous ivory lettering")
     ink.use_nodes = True
@@ -141,8 +182,8 @@ def main() -> None:
     output_node = ink_nodes.new("ShaderNodeOutputMaterial")
     ink.node_tree.links.new(emission_node.outputs["Emission"], output_node.inputs["Surface"])
 
-    def type_label(name: str, content: str, position: tuple[float, float, float],
-                   size: float) -> None:
+    def type_label(board, name: str, content: str,
+                   position: tuple[float, float, float], size: float) -> None:
         text = bpy.data.curves.new(name, "FONT")
         text.body = content
         text.size = size
@@ -154,77 +195,110 @@ def main() -> None:
         obj.location = position
         obj.rotation_euler = (math.pi / 2, 0, 0)
 
-    # A face-on display of photo cards, **not** an attempted projection or
-    # camera registration. Image UVs retain the originals and are packed.
-    for index, (photo, path) in enumerate(photos):
-        image = bpy.data.images.load(str(path), check_existing=False)
-        if image.size[0] < 400 or image.size[1] < 500:
-            raise ValueError(f"image is unexpectedly small: {path}, {tuple(image.size)}")
-        image.pack()
-        image.filepath = f"//packed/{photo.filename}"
-        h = 3.68
-        w = h * image.size[0] / image.size[1]
-        x = (index - 1) * 3.2
-        mesh = bpy.data.meshes.new(f"Archive photo quad / {photo.survey_id}")
-        mesh.from_pydata(
-            [(-w / 2, 0, -h / 2), (w / 2, 0, -h / 2),
-             (w / 2, 0, h / 2), (-w / 2, 0, h / 2)], [], [(0, 1, 2, 3)])
-        mesh.update()
-        uv = mesh.uv_layers.new(name="Original photo orientation")
-        for polygon in mesh.polygons:
-            for loop_index, uv_co in zip(polygon.loop_indices,
-                                         ((0, 0), (1, 0), (1, 1), (0, 1))):
-                uv.data[loop_index].uv = uv_co
-        material = bpy.data.materials.new(f"Photo emission / {photo.survey_id}")
-        material.use_nodes = True
-        nodes = material.node_tree.nodes
-        nodes.clear()
-        tex = nodes.new("ShaderNodeTexImage")
-        tex.image = image
-        emission = nodes.new("ShaderNodeEmission")
-        emission.inputs["Strength"].default_value = 1.0
-        output = nodes.new("ShaderNodeOutputMaterial")
-        color_output = tex.outputs["Color"]
-        if photo.survey_id == "HAER NY-138-237":
-            # The source transparency is very underexposed. Lift preview
-            # shadows without changing the packed, original photo pixels.
-            gamma = nodes.new("ShaderNodeGamma")
-            gamma.inputs["Gamma"].default_value = .68
-            material.node_tree.links.new(color_output, gamma.inputs["Color"])
-            color_output = gamma.outputs["Color"]
-        material.node_tree.links.new(color_output, emission.inputs["Color"])
-        material.node_tree.links.new(emission.outputs["Emission"], output.inputs["Surface"])
-        mesh.materials.append(material)
-        obj = bpy.data.objects.new(f"SOURCE {photo.survey_id} | {photo.label}", mesh)
-        board.collection.objects.link(obj)
-        obj.location.x = x
-        obj["public_domain_source"] = photo.loc_url
-        obj["camera_status"] = "Unknown: no matched lens, pose or registered pixel grid"
-        obj["display_only_gamma"] = .68 if photo.survey_id == "HAER NY-138-237" else 1.0
-        type_label(f"Title / {photo.survey_id}", photo.label, (x, -.01, -2.13), .18)
-        type_label(f"Accession / {photo.survey_id}", photo.survey_id,
-                   (x, -.01, -2.40), .13)
-        if photo.survey_id == "HAER NY-138-237":
-            type_label("Shadow preview warning", "SHADOWS LIFTED / ORIGINAL PACKED",
-                       (x, -.01, -2.59), .10)
+    def make_board(name: str, sources: list[tuple[ArchivedView, Path]],
+                   banner: str, caution: str, filename: str) -> None:
+        """Two-dimensional image cards, never fitted photogrammetry cameras."""
+        board = bpy.data.scenes.new(name)
+        board.render.engine = "CYCLES"
+        board.cycles.samples = 8
+        board.render.resolution_x = 1920
+        board.render.resolution_y = 1280
+        board.render.resolution_percentage = 100
+        board.view_settings.view_transform = "Standard"
+        board.render.image_settings.file_format = "PNG"
+        board["source"] = "1984-85 HAER NY-138, actual installed head, NPS/LOC"
+        board["camera_registration"] = "NONE / photo contact board / pose unknown"
+        board["workflow"] = "Anatomical sculpt aid; not a 3D survey or measured comparison"
+        board["photo_count"] = len(sources)
+        world = bpy.data.worlds.new(f"Dark archive board / {name}")
+        world.use_nodes = True
+        world.node_tree.nodes["Background"].inputs["Color"].default_value = (
+            .045, .055, .065, 1)
+        board.world = world
 
-    type_label("Banner", "ACTUAL INSTALLED HEAD  |  HAER 1984  |  UNREGISTERED PHOTOGRAPHS",
-               (0., -.01, 2.17), .21)
-    type_label("Gate warning", "NO FRONT CAMERA CALIBRATION  -  FACE LIKENESS HOLD",
-               (0., -.01, -2.86), .18)
+        for index, (photo, path) in enumerate(sources):
+            image = bpy.data.images.load(str(path), check_existing=False)
+            if image.size[0] < 400 or image.size[1] < 500:
+                raise ValueError(f"image unexpectedly small: {path}, {tuple(image.size)}")
+            image.pack()
+            image.filepath = f"//packed/{photo.filename}"
+            # Leave clear label gutters below tall portrait negatives.
+            h = min(3.05, 3.20 * image.size[1] / image.size[0])
+            w = min(3.4, h * image.size[0] / image.size[1])
+            # Top row of three; bottom row of two or three, with space
+            # reserved for the image accession and repair-era qualifiers.
+            row = index // 3
+            row_count = min(3, len(sources) - 3 * row)
+            x = (index % 3 - (row_count - 1) / 2) * 4.1
+            z = 2.25 - 4.45 * row
+            mesh = bpy.data.meshes.new(f"Archive photo quad / {photo.survey_id}")
+            mesh.from_pydata(
+                [(-w / 2, 0, -h / 2), (w / 2, 0, -h / 2),
+                 (w / 2, 0, h / 2), (-w / 2, 0, h / 2)], [], [(0, 1, 2, 3)])
+            mesh.update()
+            uv = mesh.uv_layers.new(name="Unwarped archive pixels")
+            for polygon in mesh.polygons:
+                for loop_index, uv_co in zip(polygon.loop_indices,
+                                             ((0, 0), (1, 0), (1, 1), (0, 1))):
+                    uv.data[loop_index].uv = uv_co
+            material = bpy.data.materials.new(f"Photo emission / {photo.survey_id}")
+            material.use_nodes = True
+            nodes = material.node_tree.nodes
+            nodes.clear()
+            tex = nodes.new("ShaderNodeTexImage")
+            tex.image = image
+            emission = nodes.new("ShaderNodeEmission")
+            emission.inputs["Strength"].default_value = 1.0
+            output = nodes.new("ShaderNodeOutputMaterial")
+            color_output = tex.outputs["Color"]
+            if photo.survey_id == "HAER NY-138-237":
+                # Display-only lift; original source bytes are packed.
+                gamma = nodes.new("ShaderNodeGamma")
+                gamma.inputs["Gamma"].default_value = .68
+                material.node_tree.links.new(color_output, gamma.inputs["Color"])
+                color_output = gamma.outputs["Color"]
+            material.node_tree.links.new(color_output, emission.inputs["Color"])
+            material.node_tree.links.new(emission.outputs["Emission"], output.inputs["Surface"])
+            mesh.materials.append(material)
+            obj = bpy.data.objects.new(f"SOURCE {photo.survey_id} | {photo.label}", mesh)
+            board.collection.objects.link(obj)
+            obj.location = (x, 0., z)
+            obj["public_domain_source"] = photo.loc_url
+            obj["camera_status"] = "Unknown: no lens, pose or registered pixel grid"
+            obj["display_only_gamma"] = .68 if photo.survey_id == "HAER NY-138-237" else 1.0
+            obj["restoration_photo"] = photo.group == "detail"
+            type_label(board, f"Title / {photo.survey_id}", photo.label,
+                       (x, -.01, z - 1.79), .17)
+            type_label(board, f"Accession / {photo.survey_id}", photo.survey_id,
+                       (x, -.01, z - 2.02), .13)
+        type_label(board, "Banner", banner, (0., -.01, 4.55), .23)
+        type_label(board, "Gate warning", caution, (0., -.01, -4.80), .16)
 
-    camera_data = bpy.data.cameras.new("Archive contact board / not a survey camera")
-    camera_data.type = "ORTHO"
-    camera_data.ortho_scale = 10.5
-    camera = bpy.data.objects.new(camera_data.name, camera_data)
-    board.collection.objects.link(camera)
-    camera.location = (0., -12., 0.)
-    camera.rotation_euler = (Vector((0., 0., 0.)) - camera.location).to_track_quat(
-        "-Z", "Y").to_euler()
-    board.camera = camera
-    bpy.context.window.scene = board
-    board.render.filepath = str((cfg.output / "haer-reference-board.png").resolve())
-    bpy.ops.render.render(write_still=True, scene=board.name)
+        camera_data = bpy.data.cameras.new(f"Contact board camera / {name}")
+        camera_data.type = "ORTHO"
+        # Blender's ortho_scale spans the horizontal field for a landscape
+        # render; 17 m gives this 3:2 board >11 m of vertical clearance.
+        camera_data.ortho_scale = 17.0
+        camera = bpy.data.objects.new(camera_data.name, camera_data)
+        board.collection.objects.link(camera)
+        camera.location = (0., -12., 0.)
+        camera.rotation_euler = (Vector((0., 0., 0.)) - camera.location).to_track_quat(
+            "-Z", "Y").to_euler()
+        board.camera = camera
+        bpy.context.window.scene = board
+        board.render.filepath = str((cfg.output / filename).resolve())
+        bpy.ops.render.render(write_still=True, scene=board.name)
+
+    make_board("02 HAER POSES / UNREGISTERED",
+               [item for item in photos if item[0].group == "pose"],
+               "INSTALLED LIBERTY HEAD | 1984 | SIX UNREGISTERED VIEWS",
+               "NO FRONT SURVEY CAMERA  /  PHOTO-FAITHFUL LIKENESS: HOLD",
+               "haer-pose-board.png")
+    make_board("03 HAER ANATOMY / UNREGISTERED",
+               [item for item in photos if item[0].group == "detail"],
+               "INSTALLED LIBERTY FACE | 1985 | RESTORATION DETAILS",
+               "DAMAGE / REPAIRS VISIBLE  -  NO DEPTH OR CAMERA CALIBRATION",
+               "haer-anatomy-board.png")
 
     bpy.context.window.scene = sculpt_scene
     bpy.ops.object.select_all(action="DESELECT")

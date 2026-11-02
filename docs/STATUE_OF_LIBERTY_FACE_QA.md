@@ -1,5 +1,73 @@
 # Statue of Liberty — reference-calibrated facial acceptance gate
 
+## r61 — actual-head archival anatomy atlas + parallax feasibility (**HOLD**)
+
+This iteration changes the **source evidence and sculpt workbench**, not the
+still-rejected face mesh. From the Library of Congress/NPS Historic American
+Engineering Record, the reference studio now packs **eleven distinct primary
+photographs of the actual installed copper statue** in three editable scenes:
+the inherited continuous donor sculpt, **six 1984 whole-head/side/crown
+views** (HAER 236–241), and **five 1985 restoration-era anatomical close-ups**
+(HAER 177–181). Unlike the museum coppersmith face and miniature replicas,
+these really depict the installed monument. All source JPEGs are individually
+SHA-256 verified and packed unchanged into the new `.blend`.
+
+Especially useful new observations:
+
+- [HAER 240](https://www.loc.gov/pictures/item/ny1251.color.570009c/)
+  shows the **left three-quarter cheek/jaw** and hair/crown junction;
+  [238](https://www.loc.gov/pictures/item/ny1251.color.570007c/) and
+  [239](https://www.loc.gov/pictures/item/ny1251.color.570008c/)
+  show the sculpted hair direction, large rolled side-lock, and ear recession.
+- [HAER 178](https://www.loc.gov/pictures/item/ny1251.photos.120436p/)
+  reveals the **orbital and nostril undercuts from below**;
+  [179](https://www.loc.gov/pictures/item/ny1251.photos.120437p/)
+  isolates the eyelid/eye form, and
+  [181](https://www.loc.gov/pictures/item/ny1251.photos.120439p/)
+  shows the distinctive external alar wing, inner nostril and lip volume.
+- [HAER 180](https://www.loc.gov/pictures/item/ny1251.photos.120438p/)
+  contains a scale stick in the worker's hand. **Its depth and angle relative
+  to the face are not registered**, so it cannot be used as a direct 3D
+  measurement. Restoration damage and patching in these photos must not be
+  sculpted as an intended original facial feature.
+
+An optional OpenCV/SIFT study tested whether the six color views could support
+an actual camera reconstruction. Using broad **head-only ROI rectangles**,
+14 of 15 image pairs had fewer than 20 tentative descriptor matches or fewer
+than 15 epipolar inliers. The remaining pair, **238/239**, produced 88
+tentative matches, 79 homography inliers and 76 epipolar inliers: these are
+close/redundant side-hair views, not an independent depth baseline. The
+best other profile candidate **240/241** had just 23 tentative matches and
+10 epipolar inliers. These are exploratory *correspondence counts*, not a
+calibration or likeness score. Scaffold clutter, different illumination,
+viewpoint, crop, and dark smooth copper still preclude responsible 3D
+triangulation from this photo subset. The pose and shape remain **unrecovered**.
+
+```bash
+python3 scripts/fetch_liberty_haer.py --output .review/liberty-haer
+
+# Optional only: pip install opencv-python-headless
+python3 scripts/liberty_haer_photo_overlap.py \
+  --reference-dir .review/liberty-haer \
+  --output .review/liberty-r61-photo-overlap.json
+
+/path/to/blender-4.5/blender --background --factory-startup \
+  --python-exit-code 1 --python scripts/blender_liberty_reference_studio.py -- \
+  --clay-blend .review/liberty-r60-spatial-study/anatomy-stroke-study.blend \
+  --reference-dir .review/liberty-haer \
+  --output .review/liberty-r61-reference-studio
+```
+
+**Scale caution:** NPS lists *chin to cranium* as **5.26 m**, while the old
+r59 donor study deliberately used an **illustrative 3.52 m** head-height
+proxy. That earlier donor scale must not be propagated as an actual monument
+measurement. See [NPS dimensions](https://www.nps.gov/stli/learn/historyculture/statue-statistics.htm).
+The atlas does not rescale or promote the generic head; it is for an artist
+to perform a genuinely source-constrained sculpt from anatomical primary
+forms. No new photo-faithful GLB, claimed scan, camera alignment or released
+facial geometry is justified. **Craftsmanship status: informed reference
+foundation; model acceptance remains HOLD.**
+
 ## r60 — reversible 3D anatomy trial, donor route frozen (**HOLD**)
 
 One additional *distinct* volumetric sculpt experiment was conducted on the
