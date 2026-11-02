@@ -81,6 +81,13 @@ texture darkness, broad color cast or exposure mismatch between atlas pages,
 exposure/gamma/white-balance atlas revision; import it
 with `render-dense-blender-review --textured --texture-finish`. Both remain
 manual-review candidates, not autonomous texture restoration.
+
+For relightable scans, `finish-dense-textures --surface-recipe` adds opt-in
+mask-guided linear-light de-lighting, material-specific roughness priors,
+camera-artifact cleanup and measured 16-bit height/Blender displacement maps.
+`package-finished-udim` exports a separate UV-remapped 1001+ tile package.
+These private artist-review candidates cannot guarantee measured reflectance
+or recover lost surface geometry; see [dense statue reconstruction](docs/DENSE_STATUE_RECONSTRUCTION.md#advanced-photographic-material-finishing).
 Very dark atlases can optionally use bounded `--auto-exposure-luma 115`.
 Add `--uv-aware-stats` to measure brightness and missing dark texels only on
 real textured OBJ faces, with a private red-marked UV coverage preview.
