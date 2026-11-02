@@ -94,17 +94,17 @@ def main() -> None:
     brief.write(
         "ACTUAL STATUE OF LIBERTY FACE - ANATOMICAL SCULPT BRIEF\n"
         "=================================================\n"
-        "State: HOLD. The existing illustrative head is not photo-faithful.\n"
+        "State: HOLD. The current head is not photo-faithful.\n"
         "These photographs are of the installed copper monument (HAER, 1984).\n"
         "Their camera poses and intrinsics are UNKNOWN; do not project them\n"
         "onto the mesh, score pixel matches or claim reconstruction.\n\n"
         "Sculpt order / work from primary mass to secondary folds:\n"
-        "1. Establish continuous frontal, temporal, cheek and jaw volumes.\n"
-        "   Current profile looks like an upright slab and the chin is squared.\n"
+        "1. Establish real-target frontal, temporal, cheek and jaw volumes.\n"
+        "   The old procedural face is slab-like; the CC0 donor is generic.\n"
         "2. Study the underside of brow and true hollow orbital transition.\n"
         "   Real eye sits deep under a broad continuous upper lid ridge.\n"
         "3. Rebuild nasal bridge, tip, alae, nostril shadow, and philtrum as\n"
-        "   connected masses; the current nose is a pinched protrusion.\n"
+        "   connected masses; compare actual depth against BOTH profiles.\n"
         "4. Give both lips genuine forward/underlying volume, a continuous\n"
         "   cupid-to-corner line, and a lower-lip-to-chin break.\n"
         "5. Rebuild masseter, jaw and ear transitions before engraving folds.\n"
@@ -228,7 +228,8 @@ def main() -> None:
 
     bpy.context.window.scene = sculpt_scene
     bpy.ops.object.select_all(action="DESELECT")
-    face = bpy.data.objects.get("liberty-head-face")
+    face = (bpy.data.objects.get("liberty-head-face") or
+            bpy.data.objects.get("Liberty sculpt candidate / continuous whole-head anatomy"))
     if face:
         face.select_set(True)
         bpy.context.view_layer.objects.active = face

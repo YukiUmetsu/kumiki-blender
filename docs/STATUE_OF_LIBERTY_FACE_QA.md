@@ -1,5 +1,61 @@
 # Statue of Liberty — reference-calibrated facial acceptance gate
 
+## r59 — isolated continuous anatomy sculpt foundation (**HOLD**)
+
+The earlier r41 experiment grafted a generic CC0 donor face into a separately
+scanned **miniature** and left an unacceptable border seam, detached features
+and mismatched anatomy. This trial changes the **underlying source topology**:
+the entire, uncut Blender Studio CC0 human head (Dan Ulrich, Human Base Meshes
+v1.2.0) is retained as **one continuous editable anatomical surface**, with
+its original eye geometry and two-level Multires sculpt stack. Its source is
+SHA-256 verified, and parent/world matrices are preserved before eye objects
+are unparented so the original sockets and globes stay aligned. There is no
+face-patch graft, replica scan substitution or Gaussian facial relief.
+
+The cranium is scaled to the NPS *height-to-width ratio* at the earlier
+illustrative 3.52 m head height, using a visually inspected donor **chin
+landmark and cheek/cranium-width section** rather than the source file's
+shoulder/bust bounds. These source section landmarks are approximate and
+not evidence of actual-monument anatomy. Fore-aft depth is **inferred from
+the donor**, not measured from the actual statue. Four neutral-clay cameras
+(front, three-quarter, both profiles) are saved in the new editable `.blend`.
+The existing HAER reference-board generator can add the three authentic
+installed-head photographs as packed images in a separate scene.
+
+```bash
+python3 scripts/fetch_liberty_anatomy.py \
+  --output .review/liberty-donor/source.blend
+blender --background --factory-startup --threads 6 --python-exit-code 1 \
+  --python scripts/blender_liberty_whole_head_sculpt.py -- \
+  --source .review/liberty-donor/source.blend \
+  --output .review/liberty-r59-whole-head --resolution 640
+blender --background --factory-startup --threads 6 --python-exit-code 1 \
+  --python scripts/blender_liberty_reference_studio.py -- \
+  --clay-blend .review/liberty-r59-whole-head/whole-head-sculpt.blend \
+  --reference-dir .review/liberty-haer \
+  --output .review/liberty-r59-studio
+```
+
+**Visual verdict:** usable as a *human sculpting starting surface*, not an
+accepted Statue of Liberty head. The real [HAER 241 left profile](https://www.loc.gov/pictures/item/ny1251.color.570010c/)
+and [HAER 237 right profile](https://www.loc.gov/pictures/item/ny1251.color.570006c/)
+show a dramatically deeper supraorbital mass, broader near-vertical cheek
+plane, prominent undercut nasal alae, projected lips and a large rounded chin.
+The untouched donor renders show shallow brow, generic narrow jaw, weak
+under-lip/chin structure and a smooth tall bald cranium. Its ears are
+incorrectly exposed without Bartholdi's characteristic coiffure. A focused
+automatic broad-plane deformation of this new donor was also rendered but
+**rejected**: it made a cartoonish jutting eyebrow and squared jaw. That
+deformation is deliberately **not** in the reproducible script or promoted
+artifacts; hand-sculpted volume and photographic camera constraints remain
+necessary. The old r53 GLB and production Statue mesh remain unchanged.
+
+**Release gate:** authenticity of the CC0 donor is verified, authenticity as
+*the installed monument* is not; camera correspondence is absent and all
+three facial likeness views remain **HOLD**. This is an experimental, separately
+editable alternate foundation, not a photo-faithful reconstruction. Its
+presence does not lift the existing `STATUE_OF_LIBERTY_FACE_HOLD.json` gate.
+
 ## r58 — dual-profile clay inspection with persistent cameras (**HOLD**)
 
 The sculpt renderer now saves **four independently selectable orthographic
