@@ -1,5 +1,39 @@
 # Statue of Liberty — reference-calibrated facial acceptance gate
 
+## r58 — dual-profile clay inspection with persistent cameras (**HOLD**)
+
+The sculpt renderer now saves **four independently selectable orthographic
+cameras** in its `.blend` (front, three-quarter, profile facing left, and
+opposite-profile facing right), plus a PNG for each. This enables qualitative
+comparison against both actual installed-head archival profiles, rather than
+mistaking the two sides for interchangeable views. It does not assign survey
+camera poses, change the facial mesh, or pass the release gate.
+
+```bash
+blender --background --factory-startup --threads 6 --python-exit-code 1 \
+  --python scripts/blender_liberty_face_clay.py -- \
+  --measurement-guides --resolution 640 \
+  --output .review/liberty-face-r58-four-views
+
+# Same-facing side-by-side study, *not* pixel-registered evidence:
+python3 scripts/reference_compare.py \
+  .review/liberty-haer/haer-237-right-profile-large.jpg \
+  .review/liberty-face-r58-four-views/opposite-profile.png \
+  --ref-crop 230 250 700 800 \
+  --output .review/liberty-face-r58-four-views/right-side-study.png
+python3 scripts/reference_compare.py \
+  .review/liberty-haer/haer-241-left-profile-large.jpg \
+  .review/liberty-face-r58-four-views/profile.png \
+  --ref-crop 170 240 660 820 \
+  --output .review/liberty-face-r58-four-views/left-side-study.png
+```
+
+The model's current profile is still too planar around the brow/cheek and
+cannot reproduce the real nose-tip / lip / chin projection. It remains the
+previously rejected illustrative geometry, not a new sculpt foundation. The
+new cameras make the next genuine anatomy rebuild easier to inspect and
+prevent single-side tunnel vision.
+
 ## r57 — authentic installed-head reference studio, still **HOLD**
 
 Three archival color photographs attributed in the HAER index to Jet Lowe show the **actual installed

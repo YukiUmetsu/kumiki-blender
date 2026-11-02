@@ -17,6 +17,16 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 
+# Preserve all sculpt-inspection poses in the saved .blend. Profile faces left;
+# opposite-profile faces right. These are *not* calibrated HAER cameras.
+FIXED_CLAY_SHOTS = (
+    ("front", (0., -8., 26.69)),
+    ("threequarter", (5.8, -7.4, 26.69)),
+    ("profile", (8., -.12, 26.69)),
+    ("opposite-profile", (-8., -.12, 26.69)),
+)
+
+
 def main() -> None:
     import bpy
     from mathutils import Vector
@@ -149,30 +159,28 @@ def main() -> None:
              (1.27, -1.71, 27.40-target.nose_length))
         annotate(f"nose {target.nose_length:.2f}m", 1.31, 26.57)
 
-    data = bpy.data.cameras.new("Fixed clay inspection orthographic")
-    data.type = "ORTHO"
-    data.ortho_scale = 4.70 if cfg.measurement_guides else 4.10
-    camera = bpy.data.objects.new(data.name, data)
-    scene.collection.objects.link(camera)
-    scene.camera = camera
-    shots = (
-        ("front", (0., -8., 26.69)),
-        ("threequarter", (5.8, -7.4, 26.69)),
-        ("profile", (8., -.12, 26.69)),
-    )
-    for name, position in shots:
+    cameras = {}
+    for name, position in FIXED_CLAY_SHOTS:
+        data = bpy.data.cameras.new(f"Clay QA / {name} / orthographic-unregistered")
+        data.type = "ORTHO"
+        data.ortho_scale = 4.70 if cfg.measurement_guides else 4.10
+        camera = bpy.data.objects.new(data.name, data)
+        scene.collection.objects.link(camera)
+        camera.location = position
+        camera.rotation_euler = (Vector((0., 0., 26.69)) - camera.location).to_track_quat(
+            "-Z", "Y").to_euler()
+        camera["correspondence"] = "Illustrative orthographic, not photo-registered"
+        cameras[name] = camera
+
+    for name, _position in FIXED_CLAY_SHOTS:
         for obj in guides:
             obj.hide_render = name != "front"
-        camera.location = position
-        vector = Vector((0., 0., 26.69))-camera.location
-        camera.rotation_euler = vector.to_track_quat("-Z", "Y").to_euler()
+        scene.camera = cameras[name]
         scene.render.filepath = str(cfg.output / f"{name}.png")
         bpy.ops.render.render(write_still=True)
     for obj in guides:
         obj.hide_render = False
-    camera.location = shots[0][1]
-    camera.rotation_euler = (Vector((0., 0., 26.69))-camera.location).to_track_quat(
-        "-Z", "Y").to_euler()
+    scene.camera = cameras["front"]
     bpy.ops.wm.save_as_mainfile(filepath=str(cfg.output / "clay.blend"))
     print(f"Neutral facial comparison views: {cfg.output}")
 
