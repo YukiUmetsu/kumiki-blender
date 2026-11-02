@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import html
 import os
 import re
 import tempfile
@@ -140,12 +141,75 @@ def _render_contact_sheet(photos: Sequence[Photo], annotations: AnnotationSet | 
     sheet.save(target, format="PNG")
 
 
+def _render_registration_svg(pair: dict[str, Any], target: Path) -> None:
+    """A private, geometry-only diagnostic; no source image pixels are included."""
+    outlines = [pair.get("reference_outline_px"), pair.get("candidate_aligned_outline_px")]
+    points = [point for outline in outlines if outline for point in outline]
+    for name in ("anchor_reference_px", "anchor_candidate_aligned_px"):
+        points.extend(pair.get(name, {}).values())
+    for observation in pair.get("heldout", {}).values():
+        points.extend((observation["reference_px"], observation["candidate_aligned_px"]))
+    if not points:
+        return
+    xs, ys = [point[0] for point in points], [point[1] for point in points]
+    span = max(1.0, max(max(xs)-min(xs), max(ys)-min(ys)))
+    padding = max(15.0, span * 0.12)
+    left, top = min(xs)-padding, min(ys)-padding
+    width, height = max(xs)-min(xs)+2*padding, max(ys)-min(ys)+2*padding
+    def fmt(value: float) -> str:
+        return f"{value:.3f}"
+
+    def polygon(outline: Any, stroke: str, label: str, dash: str) -> str:
+        if not outline:
+            return ""
+        vertices = " ".join(f"{fmt(x)},{fmt(y)}" for x, y in outline)
+        return (f'<polygon points="{vertices}" fill="none" stroke="{stroke}" '
+                f'stroke-width="2" stroke-dasharray="{dash}" vector-effect="non-scaling-stroke" '
+                f'aria-label="{label}"/>')
+
+    parts = [
+        '<svg xmlns="http://www.w3.org/2000/svg" role="img" '
+        'aria-label="UNVERIFIED 2D alignment; not calibrated camera geometry" '
+        f'viewBox="{fmt(left)} {fmt(top)} {fmt(width)} {fmt(height)}" '
+        'width="800" height="800">',
+        '<rect x="' + fmt(left) + '" y="' + fmt(top) + '" width="' + fmt(width)
+        + '" height="' + fmt(height) + '" fill="#121e27"/>',
+        polygon(outlines[0], "#43dbce", "reference outline", "none"),
+        polygon(outlines[1], "#ffb56b", "candidate aligned outline", "6 4"),
+    ]
+    radius = max(1.6, span * 0.008)
+    for name, reference_point in sorted(pair.get("anchor_reference_px", {}).items()):
+        candidate_point = pair["anchor_candidate_aligned_px"][name]
+        parts.append(f'<circle cx="{fmt(reference_point[0])}" cy="{fmt(reference_point[1])}" '
+                     f'r="{fmt(radius)}" fill="#43dbce"/>')
+        parts.append(f'<circle cx="{fmt(candidate_point[0])}" cy="{fmt(candidate_point[1])}" '
+                     f'r="{fmt(radius)}" stroke="#ffb56b" fill="none" stroke-width="2"/>')
+    for name, observation in sorted(pair.get("heldout", {}).items()):
+        ref = observation["reference_px"]
+        aligned = observation["candidate_aligned_px"]
+        parts.append(f'<line x1="{fmt(ref[0])}" y1="{fmt(ref[1])}" '
+                     f'x2="{fmt(aligned[0])}" y2="{fmt(aligned[1])}" '
+                     'stroke="#f169a7" stroke-width="2" vector-effect="non-scaling-stroke"/>')
+        parts.append(f'<text x="{fmt(aligned[0]+radius*2)}" y="{fmt(aligned[1])}" '
+                     f'font-size="{fmt(max(6.0, span*0.018))}" fill="#ffe9f4">'
+                     f'{html.escape(name)}</text>')
+    label_size = max(3.0, span * 0.018)
+    parts.append(f'<text x="{fmt(left+padding/3)}" y="{fmt(top+padding/2)}" '
+                 f'font-size="{fmt(label_size)}" fill="#f9d38a">UNVERIFIED 2D</text>')
+    parts.append(f'<text x="{fmt(left+padding/3)}" y="{fmt(top+padding/2+label_size*1.4)}" '
+                 f'font-size="{fmt(label_size*0.7)}" fill="#c9d6dd">'
+                 'teal: reference | orange: render | pink: held-out</text>')
+    parts.append('</svg>')
+    target.write_text("\n".join(parts) + "\n", encoding="utf-8")
+
+
 def write_analysis_revision(output: Path, audit: dict[str, Any],
                             proposals: dict[str, Any] | None,
                             comparisons: dict[str, Any] | None, *,
                             photos: Sequence[Photo] = (),
                             annotations: AnnotationSet | None = None,
-                            reprojection: dict[str, Any] | None = None) -> Path:
+                            reprojection: dict[str, Any] | None = None,
+                            registration: dict[str, Any] | None = None) -> Path:
     """Create one new immutable revision; never overwrite existing user results."""
     output = Path(output)
     if output.exists() or output.is_symlink():
@@ -174,6 +238,22 @@ def write_analysis_revision(output: Path, audit: dict[str, Any],
         if reprojection is not None:
             _write_json(staged / "landmark-qa.json", reprojection)
             files.append("landmark-qa.json")
+        if registration is not None:
+            _write_json(staged / "registration-proposals.json", registration)
+            files.append("registration-proposals.json")
+            for pair in registration.get("pairs", []):
+                if pair.get("status") != "proposed-unverified":
+                    continue
+                for field in ("reference_image_id", "candidate_image_id"):
+                    image_id = pair.get(field)
+                    if (not isinstance(image_id, str) or len(image_id) > 96
+                            or not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", image_id)):
+                        raise ValueError("Unsafe registration image ID")
+                overlays = staged / "overlays"
+                overlays.mkdir(exist_ok=True)
+                stem = f"registration-{pair['reference_image_id']}--{pair['candidate_image_id']}"
+                _render_registration_svg(pair, overlays / f"{stem}.svg")
+                files.append(f"overlays/{stem}.svg")
         proposal_index = {item["image_id"]: item.get("landmarks", [])
                           for item in proposals.get("images", [])} if proposals else {}
         if photos and (annotations or proposal_index):

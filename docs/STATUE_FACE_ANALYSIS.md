@@ -97,6 +97,35 @@ python -m kumiki_blender.face_analysis compare \
 
 To iterate, make a fresh `-r02` output directory. Existing report directories are not overwritten. Keep the original photos, annotations, candidate renders, and comparison results private; commit only the reusable module and synthetic tests.
 
+### Suggest a 2D reference-to-render alignment
+
+Real photos and Blender renders often have different crop, zoom, and image-plane rotation. The standalone `register` command proposes a rotation, uniform scale, and translation from **at least three non-collinear, manually reviewed** matching landmarks. It never asserts that the 3D camera or geometry has been calibrated.
+
+First mark matching anchor landmarks in the reference and candidate annotation bundles. Use stable features appropriate to the view, and reserve other features as **held-out checks**. For example, if eyes and nose establish the crop/rotation, measure the chin and jaw only afterward; using a feature to align itself would conceal its own shape error.
+
+`anchors.json`:
+
+```json
+{
+  "schema_version": 1,
+  "pairs": [{
+    "reference_image_id": "christ-the-redeemer-face1",
+    "candidate_image_id": "candidate-front-r01",
+    "anchor_landmark_ids": ["eye-inner-left", "eye-inner-right", "nose-tip"]
+  }]
+}
+```
+
+```bash
+python -m kumiki_blender.face_analysis register \
+  --reference /private/christ-face-review-r01/face-evidence.json \
+  --candidate /private/candidate-review-r01/face-evidence.json \
+  --anchors /private/anchors.json \
+  --output /private/registration-proposal-r01
+```
+
+`registration-proposals.json` includes the candidate-to-reference transform matrix, normalized anchor-fit residual, and separate preliminary errors for **held-out** facial points. Each proposed fit also gets a private **geometry-only** `overlays/registration-*.svg` schematic showing two outlines and the held-out feature offsets; it contains no photograph pixels. Poorly spread, missing, or automatic/unverified anchors produce `unmeasured`. Every successful fit remains `proposed-unverified` and must be checked against the actual images and perspective by a human. It does not automatically become a verified pair accepted by `compare`.
+
 ### When a calibrated camera plan and sculpt-point matches exist
 
 The separate `reproject` command deliberately **reuses** the repository's existing `reconstruction.landmarks.check_landmark_reprojection` implementation; it does not invent another projection formula. Both inputs must follow that module's registered camera-plan and 3D sculpt-landmark schemas. No reprojection can be run merely from the 15 uncalibrated photos.

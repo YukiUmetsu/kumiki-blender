@@ -14,6 +14,7 @@ from .compare import ViewPair, compare_views, summarize_observations
 from .detectors import propose_landmarks
 from .inputs import (inspect_coverage, load_annotations, load_photo_set,
                      photos_from_reference_set)
+from .registration import load_registration_pairs, propose_registrations
 from .reports import load_evidence_bundle, load_pairs, write_analysis_revision
 
 
@@ -33,6 +34,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     compare.add_argument("--candidate", required=True, type=Path)
     compare.add_argument("--pairs", required=True, type=Path)
     compare.add_argument("--output", required=True, type=Path)
+    register = subcommands.add_parser("register", help="Suggest unverified 2D similarity alignment")
+    register.add_argument("--reference", required=True, type=Path)
+    register.add_argument("--candidate", required=True, type=Path)
+    register.add_argument("--anchors", required=True, type=Path)
+    register.add_argument("--output", required=True, type=Path)
     reproject = subcommands.add_parser("reproject", help="Reuse calibrated 3D-to-2D landmark checks")
     reproject.add_argument("--camera-plan", required=True, type=Path)
     reproject.add_argument("--sculpt-landmarks", required=True, type=Path)
@@ -81,6 +87,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             result = compare_views(reference, candidate, pairs)
             result["observations"] = summarize_observations(result)
             write_analysis_revision(args.output, {}, None, result)
+        elif args.command == "register":
+            reference = load_evidence_bundle(args.reference)
+            candidate = load_evidence_bundle(args.candidate)
+            anchors = load_registration_pairs(args.anchors)
+            report = propose_registrations(reference, candidate, anchors)
+            write_analysis_revision(args.output, {}, None, None, registration=report)
         else:
             from ..reconstruction.landmarks import check_landmark_reprojection
             with tempfile.TemporaryDirectory(prefix=".face-reprojection-") as temporary:
