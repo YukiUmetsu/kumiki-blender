@@ -27,8 +27,11 @@ class TextureFinishSettings:
     neutralize_cast: bool = False
     protect_black: int = 12
     balance_atlases: bool = False
+    balance_uv_seams: bool = False
     uv_aware_stats: bool = False
     max_balance_ev: float = 0.75
+    max_seam_ev: float = 0.75
+    min_seam_anchors: int = 8
     auto_exposure_luma: float | None = None
     max_auto_exposure_ev: float = 1.0
 
@@ -38,6 +41,7 @@ class TextureFinishSettings:
                                 ("saturation", 0.0, 2.5),
                                 ("shadow_lift", 0.0, 0.35),
                                 ("max_balance_ev", 0.0, 2.0),
+                                ("max_seam_ev", 0.0, 2.0),
                                 ("max_auto_exposure_ev", 0.0, 2.0)):
             value = getattr(self, name)
             if type(value) not in (float, int) or not math.isfinite(value) or not low <= value <= high:
@@ -47,8 +51,12 @@ class TextureFinishSettings:
                 or not math.isfinite(target) or not 32 <= target <= 224)):
             raise ReferenceError("auto_exposure_luma must be finite in [32, 224]")
         if (type(self.neutralize_cast) is not bool or type(self.balance_atlases) is not bool
-                or type(self.uv_aware_stats) is not bool):
-            raise ReferenceError("neutralize_cast, balance_atlases and uv_aware_stats must be booleans")
+                or type(self.uv_aware_stats) is not bool or type(self.balance_uv_seams) is not bool):
+            raise ReferenceError("neutralize_cast, balance_atlases, balance_uv_seams and uv_aware_stats must be booleans")
+        if self.balance_atlases and self.balance_uv_seams:
+            raise ReferenceError("Choose either median atlas balancing or UV seam balancing, not both")
+        if type(self.min_seam_anchors) is not int or not 4 <= self.min_seam_anchors <= 256:
+            raise ReferenceError("min_seam_anchors must be an integer between 4 and 256")
         if type(self.protect_black) is not int or not 0 <= self.protect_black <= 32:
             raise ReferenceError("protect_black must be an integer between 0 and 32")
         return self
@@ -88,6 +96,7 @@ def _sample_luminance(photo: Any, protect_black: int,
 
 def _atlas_correction(photo: Any, settings: TextureFinishSettings, *,
                       balance_ev: float = 0.0,
+                      seam_ev: float = 0.0,
                       auto_ev: float = 0.0,
                       uv_coverage: Any = None) -> tuple[Any, dict[str, Any]]:
     from PIL import Image, ImageEnhance, ImageStat
@@ -104,7 +113,7 @@ def _atlas_correction(photo: Any, settings: TextureFinishSettings, *,
         means = stats.mean[:3]
         neutral = sum(means) / 3
         gains = [max(0.75, min(1.25, neutral / max(1.0, mean))) for mean in means]
-    exposure = 2**(settings.exposure_ev + balance_ev + auto_ev)
+    exposure = 2**(settings.exposure_ev + balance_ev + seam_ev + auto_ev)
     channels = original.split()
     corrected_channels = []
     for channel, gain in zip(channels, gains):
@@ -146,6 +155,7 @@ def _atlas_correction(photo: Any, settings: TextureFinishSettings, *,
         "sampled_mean_rgb": [round(x, 2) for x in stats.mean[:3]],
         "neutralization_gains": [round(x, 5) for x in gains],
         "atlas_balance_ev": round(balance_ev, 5),
+        "uv_seam_balance_ev": round(seam_ev, 5),
         "auto_exposure_ev": round(auto_ev, 5),
         "warnings": warnings,
     }
@@ -173,6 +183,18 @@ def finish_dense_textures(dense_revision: str | Path, output: str | Path,
     if not str(dense_report.get("status", "")).startswith("dense-mesh-candidate"):
         raise ReferenceError("Dense texture correction requires a completed candidate mesh")
     pinned = _textured_obj_plan(source, dense_report, max_mesh_faces=10_000_000)
+    original_obj, original_mtl = Path(pinned["source_obj"]), Path(pinned["source_mtl"])
+    seam_balance: dict[str, float] = {}
+    seam_diagnostics: dict[str, Any] | None = None
+    if settings.balance_uv_seams:
+        from .uv_seams import balance_uv_seams
+
+        seam_balance, seam_diagnostics = balance_uv_seams(
+            original_obj, original_mtl,
+            {Path(item["path"]).name: Path(item["path"])
+             for item in pinned["texture_atlases"]},
+            protect_black=settings.protect_black, max_ev=settings.max_seam_ev,
+            min_anchors=settings.min_seam_anchors)
     uv_coverage: dict[str, Any] = {}
     uv_faces: dict[str, int] = {}
     if settings.uv_aware_stats:
@@ -214,7 +236,6 @@ def finish_dense_textures(dense_revision: str | Path, output: str | Path,
                         ev = math.log2(target_luma / max(1, value))
                         balance[filename] = max(-settings.max_balance_ev,
                                                 min(settings.max_balance_ev, ev))
-    original_obj, original_mtl = Path(pinned["source_obj"]), Path(pinned["source_mtl"])
     target.mkdir(parents=True, exist_ok=False)
     (target / "review").mkdir()
     shutil.copy2(original_obj, target / original_obj.name)
@@ -236,6 +257,8 @@ def finish_dense_textures(dense_revision: str | Path, output: str | Path,
         "status": "incomplete / texture-review-required",
         "distribution_allowed": False,
     }
+    if seam_diagnostics is not None:
+        report["uv_seam_balance"] = seam_diagnostics
 
     def checkpoint() -> None:
         (target / "texture-finish-report.json").write_text(
@@ -251,6 +274,7 @@ def finish_dense_textures(dense_revision: str | Path, output: str | Path,
                     raise ReferenceError("Texture correction expects a JPEG or PNG atlas")
                 corrected, quality = _atlas_correction(
                     photo, settings, balance_ev=balance.get(atlas.name, 0.0),
+                    seam_ev=seam_balance.get(atlas.name, 0.0),
                     auto_ev=auto_ev, uv_coverage=uv_coverage.get(atlas.name))
                 output_path = target / atlas.name
                 if photo.format == "JPEG":

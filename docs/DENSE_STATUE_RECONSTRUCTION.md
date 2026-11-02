@@ -193,6 +193,15 @@ private texture projection to produce a mesh for artistic inspection.
       --auto-exposure-luma 115 --max-auto-exposure-ev 1.0 \
       --balance-atlases --uv-aware-stats
 
+    # Better when a statue spans several UV atlas pages: estimate brightness
+    # directly from shared mesh vertices along page boundaries, not from
+    # unrelated page-wide averages. This is an ALTERNATIVE to --balance-atlases.
+    kumiki-blender finish-dense-textures \
+      --dense-revision .review/statue/dense-masked-r01 \
+      --output .review/statue/texture-seams-r01 \
+      --balance-uv-seams --max-seam-ev 0.75 --min-seam-anchors 8 \
+      --uv-aware-stats
+
     # Blender imports the same verified OBJ/MTL/UVs with the corrected atlases
     # and packs them into the private .blend and GLB.
     kumiki-blender render-dense-blender-review \
@@ -402,6 +411,24 @@ hide. It is disabled by default for compatibility; it rejects unsupported
 UV tiling, absent face UVs and unused atlas pages instead of guessing.
 Diagnostic masks are approximate at 768px resolution and cannot recover
 photographic details or correct UV seam geometry.
+
+For multi-page models, `--balance-uv-seams` instead estimates per-page exposure
+differences at **shared OBJ mesh vertices along material/atlas boundaries**.
+It samples just inside the adjacent UV faces to avoid black atlas gutters,
+rejects transparent, near-black and clipped samples, requires at least eight
+valid shared vertices per page pair, and rejects inconsistent brightness gaps.
+Accepted page constraints are solved across connected atlas pages, centered
+around zero to avoid an overall exposure shift, and individually limited by
+`--max-seam-ev` (default 0.75 EV). The output report includes the candidate,
+sampled and valid seam vertex counts, pairs accepted/rejected and why, median
+and scatter of the source brightness gap, approximate remaining EV gap after
+adjustment, per-page `uv_seam_balance_ev`, and warnings for unsupported pages.
+No page gain is applied where evidence is inadequate. `--balance-atlases` and
+`--balance-uv-seams` cannot be combined because they use different page-exposure
+estimators. UV seam balancing does **not** handle in-page chart seams, relight
+strong cast shadows, resolve different materials or infer disconnected/duplicated
+OBJ vertex positions as the same physical vertex. Review the corrected atlas
+previews and Blender model against source photographs before using an output.
 This can improve dark overall exposure, broad color cast and atlas-page
 exposure mismatch, but **cannot invent missing photographs, paint empty atlas
 patches or fix intra-page UV chart seams and baked lighting**. Use the
