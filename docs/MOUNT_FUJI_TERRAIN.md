@@ -12,6 +12,17 @@ The iconic model deliberately sacrifices realistic dimensions and geography.
 It is a miniature symbol rather than a topographic study. All landmarks and
 five-petal flowers are **actual exportable mesh**, not camera-facing sprites.
 
+## r14 — slightly larger Fuji, same miniature stage
+
+The iconic mountain is now **1.70× tall** and **1.38× wide** compared with
+the original sculpture (from 1.62× / 1.32× in r13). This is a restrained
+second enlargement, not a redesign. The display footprint stays exactly
+**13.26 × 10.75 units**; the torii remains in the clear southern forecourt.
+Both sakura move slightly toward the front outer corners, to
+`(-4.68, -2.02)` and `(5.15, -1.00)`, preserving ground-level clearance
+from the wider cone. Their tree geometry, blossoms and materials are unchanged.
+The slight higher peak has its own adjusted snow-crown inspection camera.
+
 ## r13 — broaden Fuji and rebalance the miniature
 
 In response to the request for a substantially **wider**, not just taller,

@@ -248,8 +248,8 @@ class FujiTerrainTests(unittest.TestCase):
         self.assertEqual(plan_iconic_shots()[0].name,"hero")
         self.assertGreater(_snow_limit(.2),0.25)
         self.assertLess(_snow_limit(.2),.43)
-        self.assertGreater(ICONIC_FUJI_VERTICAL_SCALE,1.5)
-        self.assertGreater(ICONIC_FUJI_RADIUS_SCALE,1.3)  # Broad, not spire-like Fuji.
+        self.assertGreater(ICONIC_FUJI_VERTICAL_SCALE,1.65)
+        self.assertGreater(ICONIC_FUJI_RADIUS_SCALE,1.36)  # Broad, not spire-like Fuji.
         self.assertLess(ICONIC_STAGE_WIDTH,13.5)  # Miniature, proportionate plinth.
         self.assertLess(ICONIC_STAGE_DEPTH,11.0)
         outer_fuji_radius=3.53*(1+.028+.021)*ICONIC_FUJI_RADIUS_SCALE

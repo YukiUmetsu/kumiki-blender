@@ -28,13 +28,13 @@ SAKURA_PETAL_PALETTE=((.98,.46,.63),(.99,.67,.78),(.997,.83,.87),
 # Iconic staging: give the Fuji a broad, monumental silhouette while keeping
 # an intentionally small *relative* stage and human-scale shrine/trees.
 ICONIC_FUJI_BASE_Z=.57
-ICONIC_FUJI_VERTICAL_SCALE=1.62
-ICONIC_FUJI_RADIUS_SCALE=1.32
+ICONIC_FUJI_VERTICAL_SCALE=1.70
+ICONIC_FUJI_RADIUS_SCALE=1.38
 ICONIC_STAGE_WIDTH=13.26
 ICONIC_STAGE_DEPTH=10.75
 ICONIC_TORII_ORIGIN=(1.65,-4.45)
-ICONIC_SAKURA_LEFT=(-4.68,-1.72)
-ICONIC_SAKURA_RIGHT=(5.25,.55)
+ICONIC_SAKURA_LEFT=(-4.68,-2.02)
+ICONIC_SAKURA_RIGHT=(5.15,-1.00)
 
 
 def plan_iconic_shots() -> tuple[QualityShot, ...]:
@@ -44,8 +44,8 @@ def plan_iconic_shots() -> tuple[QualityShot, ...]:
         QualityShot("front", (0, -22.5, 9.2), (0, -.15, 2.75), 14.7),
         QualityShot("opposite", (-16.5, -15.0, 10.7), (0, .2, 2.70), 16.5),
         QualityShot("torii-and-sakura", (8.0, -12.0, 5.6), (3.05, -3.5, 1.55), 7.0),
-        QualityShot("sakura-botanical", (-8.6, -5.9, 4.1), (-4.68, -1.72, 2.0), 4.0),
-        QualityShot("snow-crown", (7.2, -7.1, 10.7), (0, .65, 5.9), 5.7),
+        QualityShot("sakura-botanical", (-8.6, -6.1, 4.1), (-4.68, -2.02, 2.0), 4.0),
+        QualityShot("snow-crown", (7.2, -7.1, 11.2), (0, .65, 6.08), 5.9),
         QualityShot("footprint", (0, -1, 24), (0, 0, .35), 15.5),
     )
 
