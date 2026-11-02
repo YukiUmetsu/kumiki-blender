@@ -25,7 +25,13 @@ class BlenderCameraProbeTests(unittest.TestCase):
                 "--head-study","--face-method","anatomical","--blend",str(blend)],
                 text=True,capture_output=True,timeout=100)
             self.assertEqual(build.returncode,0,build.stdout[-1000:]+build.stderr[-1000:])
-            for shot in ("head_front","head_profile","head_three_quarter","head_low"):
+            # Image center is not always over the head: in profile it can
+            # land on empty background. Sample stable visible face pixels.
+            visible_pixels={"head_front":[350,350],
+                            "head_profile":[210,330],
+                            "head_three_quarter":[330,350],
+                            "head_low":[350,350]}
+            for shot, model_uv in visible_pixels.items():
                 with self.subTest(shot=shot):
                     source=root/(shot+".json")
                     source.write_text(json.dumps({"model_shot":shot,
@@ -33,7 +39,7 @@ class BlenderCameraProbeTests(unittest.TestCase):
                         "subject_photo_url":"https://example.org/reference.jpg",
                         "model_revision":"qa-test",
                         "landmarks":[{"name":"head_center",
-                                      "model_uv":[350,350],"photo_uv":[350,350]}]}))
+                                      "model_uv":model_uv,"photo_uv":model_uv}]}))
                     target=root/(shot+"-3d.json")
                     result=subprocess.run([blender,"-b",str(blend),
                         "--python-exit-code","1","--python",str(PROBE),"--",
