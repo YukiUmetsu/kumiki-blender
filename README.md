@@ -1,7 +1,7 @@
 # Kumiki Blender
 
 **New to Blender, 3D modeling, and this repository?** Start with the
-[beginner's step-by-step guide](wiki/Home.md): install the tools, generate your
+[beginner's step-by-step Wiki](https://github.com/YukiUmetsu/kumiki-blender/wiki): install the tools, generate your
 first tower, open it in Blender, change its color and dimensions, and learn how
 the catalog and export files work.
 
