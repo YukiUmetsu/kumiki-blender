@@ -175,6 +175,144 @@ class GuidedSurfaceTests(unittest.TestCase):
         self.assertLess(corrected_gap, original_gap)
         self.assertEqual(diagnostics["delighting_method"], "low-frequency-heuristic")
 
+    def test_three_uv_registered_views_suppress_transient_shadow_without_inventing_unobserved_pixels(self):
+        photo = Image.new("RGB", self.size, (120, 100, 80))
+        for y in range(10, 22):
+            for x in range(8, 20):
+                photo.putpixel((x, y), (80, 65, 54))  # Baked view-dependent shadow.
+        photo.putpixel((0, 0), (0, 0, 0))  # Unobserved atlas padding.
+        photo.save(self.atlas)
+        self._image("stone-mask.png", 255)
+        views = []
+        for index in range(3):
+            view = Image.new("RGB", self.size, (120, 100, 80))
+            if index == 0:
+                for y in range(10, 22):
+                    for x in range(8, 20):
+                        view.putpixel((x, y), (80, 65, 54))
+            view.save(self.root / f"uv-view-{index}.png")
+            conf = Image.new("L", self.size, 255)
+            if index in (1, 2):
+                for y in range(8, 24):
+                    for x in range(30, 42):
+                        conf.putpixel((x, y), 0)
+            conf.save(self.root / f"uv-conf-{index}.png")
+            views.append({"id": f"angle-{index}", "photo": f"uv-view-{index}.png",
+                          "confidence": f"uv-conf-{index}.png"})
+        spec = self._recipe({
+            "regions": [{"id": "stone", "mask": "stone-mask.png", "roughness": .85}],
+            "observations": views,
+        })
+        corrected, _, report = finish_surface_atlas(
+            photo, spec, SurfaceOptions(multiview_strength=1.0, multiview_max_ev=2.0))
+        self.assertGreater(corrected.getpixel((12, 16))[0], 112)
+        self.assertEqual(corrected.getpixel((0, 0)), (0, 0, 0))
+        self.assertEqual(corrected.getpixel((35, 16)), (120, 100, 80))
+        self.assertEqual(report["multiview"]["view_count"], 3)
+        self.assertGreater(report["multiview"]["changed_fraction"], 0.01)
+        self.assertEqual(photo.getpixel((12, 16)), (80, 65, 54))
+
+    def test_multiview_rejects_unaligned_missing_or_mutated_observation(self):
+        self._image("atlas.png", 120, "RGB")
+        self._image("region.png", 255)
+        self._image("uv-view.png", 140, "RGB")
+        self._image("uv-confidence.png", 255)
+        view = {"id": "angle-a", "photo": "uv-view.png", "confidence": "uv-confidence.png"}
+        for invalid in (
+            [view],
+            [view, view, view],
+            [view, dict(view, id="angle-b"), dict(view, id="angle-c")],
+            [view, dict(view, id="angle-b", photo="uv-confidence.png"),
+             dict(view, id="angle-c")],
+        ):
+            with self.subTest(invalid=invalid), self.assertRaises(ReferenceError):
+                self._recipe({"regions": [{"id": "stone", "mask": "region.png",
+                                            "roughness": .8}], "observations": invalid})
+        good = []
+        for index in range(3):
+            self._image(f"uv-view-{index}.png", 140 + index, "RGB")
+            good.append(dict(view, id=f"angle-{index}", photo=f"uv-view-{index}.png"))
+        spec = self._recipe({"regions": [{"id": "stone", "mask": "region.png",
+                                           "roughness": .8}], "observations": good})
+        self._image("uv-view-0.png", 60, "RGB")
+        with Image.open(self.atlas) as original, self.assertRaisesRegex(ReferenceError, "changed"):
+            finish_surface_atlas(original, spec, SurfaceOptions(multiview_strength=1))
+        with Image.open(self.atlas) as original, self.assertRaisesRegex(ReferenceError,
+                                                                         "requires 3"):
+            finish_surface_atlas(original,
+                                 self._recipe({"regions": [{"id": "stone",
+                                                             "mask": "region.png",
+                                                             "roughness": .8}]}),
+                                 SurfaceOptions(multiview_strength=1))
+
+    def test_multiview_exposure_is_normalized_separately_per_material_region(self):
+        photo = Image.new("RGB", self.size, (110, 100, 90))
+        for y in range(self.size[1]):
+            for x in range(24, 48):
+                photo.putpixel((x, y), (80, 70, 60))
+        photo.save(self.atlas)
+        stone, metal = Image.new("L", self.size, 0), Image.new("L", self.size, 0)
+        for y in range(self.size[1]):
+            for x in range(self.size[0]):
+                (stone if x < 24 else metal).putpixel((x, y), 255)
+        stone.save(self.root / "stone.png")
+        metal.save(self.root / "metal.png")
+        self._image("confidence.png", 255)
+        views = []
+        for index in range(3):
+            view = photo.copy()
+            if index == 0:
+                for y in range(self.size[1]):
+                    for x in range(self.size[0]):
+                        view.putpixel((x, y), (160, 150, 140) if x < 24
+                                      else (48, 40, 35))
+            view.save(self.root / f"angle-{index}.png")
+            views.append({"id": f"angle-{index}", "photo": f"angle-{index}.png",
+                          "confidence": "confidence.png"})
+        spec = self._recipe({
+            "regions": [{"id": "stone", "mask": "stone.png", "roughness": .86},
+                        {"id": "metal", "mask": "metal.png", "roughness": .34}],
+            "observations": views,
+        })
+        _, _, report = finish_surface_atlas(
+            photo, spec, SurfaceOptions(multiview_strength=1, multiview_max_ev=2))
+        stone_gain = report["multiview"]["per_material_exposure"][0]["views"][0]["linear_rgb_gain"][0]
+        metal_gain = report["multiview"]["per_material_exposure"][1]["views"][0]["linear_rgb_gain"][0]
+        self.assertLess(stone_gain, 1)
+        self.assertGreater(metal_gain, 1)
+
+    def test_multiview_128_row_chunk_boundary_and_transparent_view_are_safe(self):
+        size = (128, 258)
+        atlas = self.root / "chunk-atlas.png"
+        original = Image.new("RGBA", size, (126, 118, 108, 255))
+        for y in range(124, 133):
+            for x in range(30, 65):
+                original.putpixel((x, y), (84, 79, 72, 255))
+        original.save(atlas)
+        Image.new("L", size, 255).save(self.root / "chunk-region.png")
+        Image.new("L", size, 255).save(self.root / "chunk-confidence.png")
+        views = []
+        for index in range(3):
+            photo = Image.new("RGBA", size, (126, 118, 108, 255))
+            if index == 0:
+                # A transparent projection is not a valid independent view.
+                for y in range(124, 133):
+                    for x in range(30, 65):
+                        photo.putpixel((x, y), (126, 118, 108, 0))
+            photo.save(self.root / f"chunk-view-{index}.png")
+            views.append({"id": f"angle-{index}",
+                          "photo": f"chunk-view-{index}.png",
+                          "confidence": "chunk-confidence.png"})
+        self.manifest.write_text(json.dumps({"schema_version": 1, "atlases": {
+            atlas.name: {"regions": [{"id": "stone", "mask": "chunk-region.png",
+                                         "roughness": .85}], "observations": views}}}))
+        spec = load_surface_recipe(self.manifest, {atlas.name: atlas})[atlas.name]
+        output, _, report = finish_surface_atlas(
+            original, spec, SurfaceOptions(multiview_strength=1, multiview_max_ev=2))
+        self.assertEqual(output.getpixel((40, 127)), original.getpixel((40, 127)))
+        self.assertEqual(output.getpixel((40, 128)), original.getpixel((40, 128)))
+        self.assertEqual(report["multiview"]["view_count"], 3)
+
 
 class UDIMTests(unittest.TestCase):
     def test_shared_uvs_are_split_per_material_without_changing_vertex_positions(self):
