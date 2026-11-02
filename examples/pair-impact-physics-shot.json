@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "asset_id": "rigid-pair-impact-smoke",
+  "action_id": "anvil-bounce",
+  "duration_frames": 60,
+  "gravity_mps2": [0, 0, -9.81],
+  "substeps": 32,
+  "solver_iterations": 32,
+  "bodies": [
+    {"target": "name:impact-block", "kind": "active", "shape": "BOX", "mass_kg": 0.25, "friction": 0.5, "restitution": 0.45},
+    {"target": "name:stone-anvil", "kind": "passive", "shape": "BOX", "friction": 0.65, "restitution": 0.3},
+    {"target": "name:distant-wall", "kind": "passive", "shape": "BOX"}
+  ],
+  "contact_pairs": [
+    {"body_a": "name:stone-anvil", "body_b": "name:impact-block", "material": "metal-on-stone", "tolerance_m": 0.02},
+    {"body_a": "name:impact-block", "body_b": "name:distant-wall", "material": "metal-on-wood", "tolerance_m": 0.02}
+  ]
+}

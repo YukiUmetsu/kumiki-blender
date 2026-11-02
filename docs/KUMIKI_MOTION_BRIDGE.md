@@ -27,7 +27,7 @@ The output directory must **not exist**. The original `.blend` is never overwrit
 | `physics-plan.json` | Canonical reusable input plan, including explicit material/solver settings |
 | `manifest.json` | Schema-1 metadata and GLB counts for the Kumiki-UI asset bridge |
 
-Use `baked-actions.json` in `loadBlenderRevision(..., { bakedActions })` and select the generated action in Storybook with the portable camera/lighting inspector. This motion-only bundle has **no rendered preview images** and is not a full visual-QA revision; review Blender viewport frames and rendered video before production approval. If the glTF exporter cannot represent a shot faithfully (non-TRS clips, overlapping actions, untagged nodes), the build fails explicitly.
+Publish the bundle as one directory and call `loadBlenderRevisionFromUrl("https://assets.example/shot/manifest.json")` in Kumiki-UI: the GLB and declared PM2 sidecar load automatically with no per-asset fetch code. The generated action is selectable in Storybook with the portable camera/lighting inspector. This motion-only bundle has **no rendered preview images** and is not a full visual-QA revision; review Blender viewport frames and rendered video before production approval. If the glTF exporter cannot represent a shot faithfully (non-TRS clips, overlapping actions, untagged nodes), the build fails explicitly.
 
 Physics is assigned only to explicitly targeted editable meshes. `name:<exact Blender object name>` selects one mesh (and automatically gives an untagged selected object a safe `kumiki_part` role); `role:<kumiki_part>` applies a rule to all matching meshes. All selected bodies are checked for overlaps and the animation is sampled from frame zero at a 30-fps reference rate, producing exactly `duration_frames` of playback. In headless Blender 4.5, the worker samples evaluated Bullet transforms and inserts native object keyframes because the standard `bpy.ops.rigidbody.bake_to_keyframes` operator requires an unavailable UI keying context. The generic shot does not guess arbitrary collision forces or contacts from gravity equations.
 
@@ -45,7 +45,21 @@ Other supported types: `slider` with `limits_m` and `fixed` without limits. All 
 
 If `ground` exists, the builder conservatively derives audio cue candidates from **sampled Bullet transforms and actual mesh bounds**: a body must approach the authored ground plane, have measurable downward speed and subsequently remain supported or rebound. Example body option: `"impact_material":"metal-on-floor"`. The PM2 action contains fractional-frame `{frame,target,speedMps,material}` records, aligned to canonical GLB semantic part IDs.
 
-This is **not** Bullet's native contact impulse/manifold: timings are frame-interpolated estimates, and glancing hits or body-to-body contacts may not be detected. The worker suppresses pass-throughs, ambiguous IDs and unverified non-ground contacts. Missing evidence means **no cue**, not an invented sound. Use the independent [`export-motion --contacts`](#one-command-after-baking) path for artist-verified or externally measured contacts.
+This is **not** Bullet's native contact impulse/manifold: timings are frame-interpolated estimates, and glancing hits may not be detected. The worker suppresses pass-throughs and ambiguous IDs. Missing evidence means **no cue**, not an invented sound. Use the independent [`export-motion --contacts`](#one-command-after-baking) path for artist-verified or externally measured contacts.
+
+### Body-to-body collisions (explicit pair QA)
+
+Use [the anvil bounce example](../examples/pair-impact-physics-shot.json) for an actual Blender rigid body striking a separate passive object. List **only the pairs you need sound for**, with one semantic sound material per pair:
+
+```json
+{"contact_pairs": [{"body_a":"name:impact-block","body_b":"name:stone-anvil","material":"metal-on-stone","tolerance_m":0.02}]}
+```
+
+The worker records **evaluated Bullet relative motion** in a forward-only bake, verifies approaching velocity followed by rebound/slowdown, then checks **world-space mesh BVH intersections or vertex-to-surface proximity** at the candidate frame. This catches tested 3D block-on-anvil rebounds without inserting invented contact forces. Contact cues are currently **integer-frame candidates** (not precise Bullet impact times or impulses), written as normal PM2 `{frame,target,speedMps,material}` records; the label maps to a licensed SFX file in Kumiki-UI.
+
+- Only explicitly configured pairs run the more expensive geometry checks (max 64). Each reference must resolve to exactly one configured rigid-body mesh, with at least one active body. Pairs disabled by Blender constraints fail rather than claiming an impact.
+- Up to 8,000 source mesh vertices per contact body; unapplied viewport modifiers are refused. For denser visual meshes use a separate lightweight collision proxy; the worker refuses unsupported geometry instead of using a misleading bounding sphere.
+- Geometry is rigid in local space. Rotational glances, thin-object contacts and near-misses can be missed. Self-collisions, deforming/cloth contacts and actual Bullet manifold/impulse extraction are still not provided. Always compare reference renders and manually approve audible impacts.
 
 ## One command after baking
 
@@ -65,7 +79,7 @@ kumiki-blender export-motion --model model.glb --merge-clips --output baked-acti
 kumiki-blender export-motion --model model.glb --merge-clips --resample-mixed --output baked-actions.json
 ```
 
-The output is a **PM2 action array**, ready to supply to the pending Kumiki-UI `loadBlenderRevision(..., { bakedActions })` bridge. It includes 30-fps reference frames, per-node absolute local translation/quaternion/scale, and any explicitly supplied contact timestamps. A full source GLB glTF clip is still playable in the existing asset bridge; the sidecar adds a renderer-neutral, bounded motion contract and SFX cues.
+The output is a **PM2 action array**, ready for Kumiki-UI's `loadBlenderRevisionFromUrl(manifestUrl)` bridge. It includes 30-fps reference frames, per-node absolute local translation/quaternion/scale, and any explicitly supplied contact timestamps. A full source GLB glTF clip is still playable in the existing asset bridge; the sidecar adds a renderer-neutral, bounded motion contract and SFX cues.
 
 ## Prepare a Blender animation
 
@@ -106,6 +120,6 @@ hero.dispose(); factory.release();
 - Duration: up to 120 seconds at 30-fps reference, 128 animated nodes, 120,000 sampled transform keys, 4,096 contact cues. Large sequences should be split into clips for rendering and editing. The source GLB is capped at 512 MiB; animation accessors are read via bounded file offsets without loading all mesh geometry into memory.
 - `export-motion` is an interchange converter, **not a rigid-body physics solver or an artistic fidelity certificate**. Genuine Blender reference-frame comparison remains mandatory. Cloth/soft-body geometry needs morph targets or a separate vertex-cache pipeline.
 
-Real Blender QA: `scripts/blender_physics_smoke.py` creates two falling metal cubes and an unexported floor, simulates them in Blender 4.5, and checks that the GLB has exactly two semantic animated nodes, neither penetrates the floor and at least one grounded SFX cue is measured. `scripts/blender_physics_constraints_smoke.py` verifies all three native constraint kinds: pendulum hinge falls, slider moves within its bounds, welded body remains fixed. The PR CI additionally bakes the **actual 12 fasteners** in the existing desk-lamp AssetSpec, checks trajectories and nonzero grounded contact cues, and uploads `.blend`, GLB, PM2 and manifest artifacts for independent inspection.
+Real Blender QA: `scripts/blender_physics_smoke.py` verifies two falling bodies and a floor. `scripts/blender_physics_constraints_smoke.py` verifies real hinge, slider and fixed joints. `scripts/blender_physics_pair_contacts_smoke.py` verifies a **real block-on-anvil bounce**, two plausible pair impact cues, correct canonical GLB target and nonpenetration **without a ground plane**. CI also bakes the **actual 12 fasteners** in the existing desk-lamp AssetSpec and uploads editable `.blend`, GLB, PM2 and manifest artifacts for independent inspection.
 
 Blender references: [Rigid Body Python API](https://docs.blender.org/api/4.5/bpy.ops.rigidbody.html), [Rigid Body Introduction](https://docs.blender.org/manual/en/latest/physics/rigid_body/introduction.html).

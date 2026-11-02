@@ -58,6 +58,16 @@ class PhysicsConstraint:
 
 
 @dataclass(frozen=True)
+class PhysicsContactPair:
+    """Explicitly authorized body-body proximity cue, not a Bullet manifold."""
+
+    body_a: str
+    body_b: str
+    material: str
+    tolerance_m: float
+
+
+@dataclass(frozen=True)
 class PhysicsShot:
     asset_id: str
     action_id: str
@@ -68,6 +78,7 @@ class PhysicsShot:
     bodies: tuple[PhysicsBody, ...]
     ground: GroundCollider | None = None
     constraints: tuple[PhysicsConstraint, ...] = ()
+    contact_pairs: tuple[PhysicsContactPair, ...] = ()
 
 
 def _object(value: Any, label: str, required: set[str], optional: set[str] = frozenset()) -> dict[str, Any]:
@@ -96,7 +107,7 @@ def _vector(value: Any, label: str, minimum: float, maximum: float) -> tuple[flo
 
 def parse_physics_plan(value: Any) -> PhysicsShot:
     raw = _object(value, "plan", {"schema_version", "asset_id", "action_id", "duration_frames", "bodies"},
-                  {"gravity_mps2", "substeps", "solver_iterations", "ground", "constraints"})
+                  {"gravity_mps2", "substeps", "solver_iterations", "ground", "constraints", "contact_pairs"})
     if raw["schema_version"] != 1 or type(raw["schema_version"]) is not int:
         raise PhysicsPlanError("Only physics schema_version 1 is supported")
     asset = raw["asset_id"]
@@ -205,8 +216,30 @@ def parse_physics_plan(value: Any) -> PhysicsShot:
             raise PhysicsPlanError(f"{label}.disable_collisions must be boolean")
         constraints.append(PhysicsConstraint(ident, kind, refs[0], refs[1], pivot,
                                              tuple(v/axis_length for v in axis), limits, disable))
+    raw_pairs = raw.get("contact_pairs", [])
+    if not isinstance(raw_pairs, list) or len(raw_pairs) > 64:
+        raise PhysicsPlanError("contact_pairs must contain at most 64 explicit pairs")
+    pairs = []
+    seen_pairs: set[frozenset[str]] = set()
+    for index, raw_pair in enumerate(raw_pairs):
+        label = f"contact_pairs[{index}]"
+        item = _object(raw_pair, label, {"body_a", "body_b", "material"}, {"tolerance_m"})
+        refs = (item["body_a"], item["body_b"])
+        for ref in refs:
+            if (not isinstance(ref, str) or not (ref.startswith("name:") or ref.startswith("role:"))
+                    or not _NAME.fullmatch(ref.split(":", 1)[1])):
+                raise PhysicsPlanError(f"{label} requires name:<object> or role:<part> selectors")
+        key = frozenset(refs)
+        if len(key) != 2 or key in seen_pairs:
+            raise PhysicsPlanError(f"{label} must be a unique pair of different bodies")
+        seen_pairs.add(key)
+        material = item["material"]
+        if not isinstance(material, str) or not _NAME.fullmatch(material):
+            raise PhysicsPlanError(f"{label}.material must be a safe SFX label")
+        pairs.append(PhysicsContactPair(refs[0], refs[1], material,
+                                        _float(item.get("tolerance_m", .014), f"{label}.tolerance_m", .001, .04)))
     return PhysicsShot(asset, action, duration, gravity, substeps, iterations,
-                       tuple(bodies), ground, tuple(constraints))
+                       tuple(bodies), ground, tuple(constraints), tuple(pairs))
 
 
 def load_physics_plan(source: str | Path) -> PhysicsShot:

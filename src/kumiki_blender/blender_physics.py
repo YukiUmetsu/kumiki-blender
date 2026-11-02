@@ -17,6 +17,7 @@ from typing import Any
 
 from .glb_audit import audit_glb
 from .glb_motion import canonical_ids_by_node_name, write_glb_motion
+from .blender_pair_contacts import measure_pair_contacts
 from .impact_measurement import GroundSample, ground_impact_frames
 from .physics_plan import PhysicsPlanError, PhysicsShot
 
@@ -147,12 +148,15 @@ def _bake_evaluated_transforms(bpy: Any, scene: Any, objects: list[Any],
     """
     if not objects:
         raise PhysicsPlanError("Cannot bake a physics shot without active bodies")
-    samples: dict[Any, list[tuple[int, Any, Any | None]]] = {obj: [] for obj in objects}
+    # Passive bodies must be sampled as geometric witnesses when pair contact
+    # measurement is explicitly requested; only ACTIVE bodies become keyed.
+    tracked = list(dict.fromkeys([*objects, *(obj for obj, _ in assignments)])) if shot.contact_pairs else objects
+    samples: dict[Any, list[tuple[int, Any, Any | None]]] = {obj: [] for obj in tracked}
     for frame in range(scene.frame_start, scene.frame_end + 1):
         scene.frame_set(frame)
         bpy.context.view_layer.update()
         graph = bpy.context.evaluated_depsgraph_get()
-        for obj in objects:
+        for obj in tracked:
             evaluated = obj.evaluated_get(graph)
             parent = obj.parent.evaluated_get(graph).matrix_world.copy() if obj.parent else None
             samples[obj].append((frame, evaluated.matrix_world.copy(), parent))
@@ -173,6 +177,9 @@ def _bake_evaluated_transforms(bpy: Any, scene: Any, objects: list[Any],
                                   **({"material": body_by_object[obj].impact_material}
                                      if body_by_object[obj].impact_material else {}))
                              for frame, speed in hits]
+
+    for obj, events in measure_pair_contacts(shot, assignments, samples).items():
+        measured.setdefault(obj, []).extend(events)
 
     # Blender 4.5 Bullet constraint helpers retain pointers to body objects.
     # Detach/remove them from the *working copy* before stripping rigid-body
@@ -328,7 +335,9 @@ def build_physics_shot(bpy: Any, shot: PhysicsShot, output: str | Path) -> dict[
                     "substeps": shot.substeps, "solver_iterations": shot.solver_iterations,
                     "has_collision_ground": shot.ground is not None,
                     "constraints": len(shot.constraints),
-                    "contact_evidence": "evaluated-geometry-ground-proximity" if cues else "none",
+                    "contact_evidence": ("evaluated-motion-and-mesh-pair-proximity" if shot.contact_pairs and cues
+                                         else "evaluated-geometry-ground-proximity" if cues else "none"),
+                    "requested_contact_pairs": len(shot.contact_pairs),
                     "animated_tracks": motion["tracks"], "contact_cues": motion["contacts"]},
     }
     (destination / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
