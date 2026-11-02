@@ -21,6 +21,7 @@ from .egyptian_monuments import MonumentError, make_monument_study
 from .egypt_map import CITY_MARKERS, LABELS, RIVER_CHANNELS, EgyptMapSpec
 from .geography.fuji import load_dem
 from .glb_audit import AuditError, audit_glb
+from .glb_motion import MotionExportError, write_glb_motion
 from .lattice import make_lattice_tower
 from .landmark_scan import prepare_sphinx_scan
 from .material_overrides import load_material_overrides, verify_material_overrides
@@ -132,6 +133,13 @@ def main(argv: list[str] | None = None) -> int:
     audit_parser = subcommands.add_parser("audit")
     audit_parser.add_argument("--model", type=Path, required=True)
     audit_parser.add_argument("--require-pbr-textures", action="store_true")
+    motion_parser = subcommands.add_parser(
+        "export-motion", help="Convert Blender-baked glTF node clips into Kumiki PM2 motion JSON")
+    motion_parser.add_argument("--model", type=Path, required=True, help="Animated Blender-exported GLB")
+    motion_parser.add_argument("--clip", help="Clip name; optional when GLB has exactly one animation")
+    motion_parser.add_argument("--output", type=Path, required=True, help="New PM2 baked-actions.json")
+    motion_parser.add_argument("--action-id", help="Optional Kumiki action ID; defaults to <clip>-baked")
+    motion_parser.add_argument("--contacts", type=Path, help="Optional validated contact cue array JSON")
     revision_parser = subcommands.add_parser("audit-revision")
     revision_parser.add_argument("--root", type=Path, required=True)
     visual_parser = subcommands.add_parser("visual-qa", help="Contact sheet and optional render regression")
@@ -333,6 +341,11 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     try:
+        if args.command == "export-motion":
+            print(json.dumps(write_glb_motion(args.model, args.output, clip_name=args.clip,
+                                              action_id=args.action_id,
+                                              contacts_path=args.contacts), indent=2))
+            return 0
         if args.command == "prepare-dense-masks":
             from .reconstruction.masking import generate_rectified_masks
             from .reconstruction.references import ReferenceError
@@ -1046,7 +1059,7 @@ def main(argv: list[str] | None = None) -> int:
         manifest = build_scene(recipe, plan, output, bpy_module=bpy)
         print(json.dumps(manifest, indent=2))
         return 0
-    except (CatalogError, RecipeError, PorticoError, FacadeError, MonumentError, GeometryError, AssetImportError, HeadFitError, MakeHumanSourceError, RenderProfileError, RevisionAuditError, AuditError, ExportAuditError,
+    except (CatalogError, RecipeError, PorticoError, FacadeError, MonumentError, GeometryError, AssetImportError, HeadFitError, MakeHumanSourceError, RenderProfileError, RevisionAuditError, AuditError, ExportAuditError, MotionExportError,
             SurfaceError, RuntimeError, OSError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 2
