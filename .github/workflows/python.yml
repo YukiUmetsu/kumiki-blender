@@ -29,6 +29,10 @@ jobs:
         env:
           PYTHONPATH: src
         run: python -m unittest tests.test_reconstruction_splats tests.test_reconstruction_splats_cli -v
+      - name: Test Gaussian-splat camera tours and FFmpeg video contract (mock GPU rasterizer)
+        env:
+          PYTHONPATH: src
+        run: python -m unittest tests.test_reconstruction_splat_video -v
       - name: Test anatomical head-base alignment and CLI preflight
         env:
           PYTHONPATH: src

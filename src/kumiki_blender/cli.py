@@ -220,6 +220,33 @@ def main(argv: list[str] | None = None) -> int:
         splat_parser.add_argument("--max-image-size", type=int, default=4000)
         splat_parser.add_argument("--rectified-masks", type=Path,
                                   help="Optional reviewed masks matching existing --reconstruction rectified photos")
+    for command in ("plan-splat-video", "render-splat-video"):
+        video_parser = subcommands.add_parser(
+            command, help="GPU-render Gaussian splat orbit frames and encode private H.264 MP4")
+        video_parser.add_argument("--splat", type=Path, required=True,
+                                  help="Candidate splat revision directory or Gaussian .ply/.spz")
+        video_parser.add_argument("--output", type=Path, required=True,
+                                  help="New immutable video revision directory")
+        video_parser.add_argument("--camera-track", type=Path,
+                                  help="Existing SplatTransform/SuperSplat camera track (instead of auto orbit)")
+        video_parser.add_argument("--fps", type=int, default=30)
+        video_parser.add_argument("--seconds", type=int, default=6)
+        video_parser.add_argument("--width", type=int, default=1920)
+        video_parser.add_argument("--height", type=int, default=1080)
+        video_parser.add_argument("--fov", type=float, default=50.0)
+        video_parser.add_argument("--start-degrees", type=float, default=-65.0)
+        video_parser.add_argument("--orbit-degrees", type=float, default=115.0)
+        video_parser.add_argument("--elevation-degrees", type=float, default=12.0)
+        video_parser.add_argument("--target", type=float, nargs=3, metavar=("X", "Y", "Z"))
+        video_parser.add_argument("--distance", type=float)
+        video_parser.add_argument("--shutter", type=float, default=0.0,
+                                  help="Motion blur shutter fraction 0–1 (0 disables)")
+        video_parser.add_argument("--viewer", action="store_true",
+                                  help="Also build a self-contained private splat viewer.html")
+        video_parser.add_argument("--splat-transform", default="splat-transform")
+        video_parser.add_argument("--ffmpeg", default="ffmpeg")
+        video_parser.add_argument("--ffprobe", default="ffprobe")
+        video_parser.add_argument("--timeout-seconds", type=int, default=7200)
     photo_mask_parser = subcommands.add_parser(
         "prepare-dense-masks", help="Create inspectable rectified foreground mask candidates with CPU GrabCut")
     photo_mask_parser.add_argument("--reconstruction", type=Path, required=True)
@@ -561,6 +588,30 @@ def main(argv: list[str] | None = None) -> int:
                 raise RecipeError(str(error)) from error
             print(json.dumps(report, indent=2))
             return 0 if args.command == "plan-splats" or report["status"].startswith("candidate") else 3
+        if args.command in ("plan-splat-video", "render-splat-video"):
+            from .reconstruction.references import ReferenceError
+            from .reconstruction.splat_video import (SplatVideoSettings, plan_splat_video,
+                                                     render_splat_video)
+            try:
+                settings = SplatVideoSettings(
+                    fps=args.fps, seconds=args.seconds, width=args.width, height=args.height,
+                    fov=args.fov, orbit_degrees=args.orbit_degrees,
+                    start_degrees=args.start_degrees,
+                    elevation_degrees=args.elevation_degrees,
+                    target=tuple(args.target) if args.target is not None else None,
+                    distance=args.distance, shutter=args.shutter, viewer=args.viewer,
+                    splat_transform=args.splat_transform, ffmpeg=args.ffmpeg,
+                    ffprobe=args.ffprobe, timeout_seconds=args.timeout_seconds)
+                report = (plan_splat_video(args.splat, args.output, settings,
+                                           camera_track=args.camera_track)
+                          if args.command == "plan-splat-video" else
+                          render_splat_video(args.splat, args.output, settings,
+                                             camera_track=args.camera_track))
+            except ReferenceError as error:
+                raise RecipeError(str(error)) from error
+            print(json.dumps(report, indent=2))
+            return (0 if args.command == "plan-splat-video" or
+                    report["status"].startswith("candidate") else 3)
         if args.command == "prepare-makehuman-head":
             from .head_sources.makehuman import (fetch_makehuman_obj,
                                                  load_body_mesh, verify_makehuman_obj)

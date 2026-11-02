@@ -29,11 +29,14 @@ kumiki-blender plan-splats --photos /path/to/object-angles --asset-id my-statue 
 kumiki-blender build-splats --photos /path/to/object-angles --asset-id my-statue \
   --output .review/my-statue/splats-r01 --engine pycolmap \
   --opensplat /path/to/OpenSplat/build/opensplat
+kumiki-blender render-splat-video --splat .review/my-statue/splats-r01 \
+  --output .review/my-statue/video-r01 --viewer
 ```
 
 See [Gaussian splat setup, input modes, output and limitations](docs/GAUSSIAN_SPLATS.md).
 Splats are not editable mesh GLBs, do not imply faithful geometry, and are not
-yet an MP4 video-rendering path. Only private review candidates are produced.
+riggable assets. Optional GPU SplatTransform rendering produces a private
+camera-tour MP4 and HTML viewer; both still require visual and license review.
 
 ## New: reference-driven statue reconstruction evidence
 
