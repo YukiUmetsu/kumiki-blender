@@ -9,7 +9,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from PIL import Image
+from PIL import Image, ImageDraw
 
 from kumiki_blender.cli import main
 from kumiki_blender.reconstruction.blender_dense import plan_dense_blender_review
@@ -18,6 +18,8 @@ from kumiki_blender.reconstruction.texture_finish import (
     TextureFinishSettings, _atlas_correction, _sample_luminance, finish_dense_textures,
 )
 from kumiki_blender.reconstruction.uv_seams import _solve_page_offsets
+from kumiki_blender.reconstruction.uv_gutters import pad_uv_gutters
+from kumiki_blender.reconstruction.uv_coverage import rasterize_uv_coverage
 
 
 class TextureFinishTests(unittest.TestCase):
@@ -102,7 +104,11 @@ class TextureFinishTests(unittest.TestCase):
                          TextureFinishSettings(max_seam_ev=-0.01),
                          TextureFinishSettings(min_seam_anchors=3),
                          TextureFinishSettings(balance_uv_seams=True,
-                                               balance_atlases=True)):
+                                               balance_atlases=True),
+                         TextureFinishSettings(pad_uv_gutters="yes"),
+                         TextureFinishSettings(gutter_pixels=0),
+                         TextureFinishSettings(gutter_pixels=17),
+                         TextureFinishSettings(gutter_pixels=True)):
             with self.assertRaises(ReferenceError):
                 finish_dense_textures(self.dense, self.root / "unfinished", settings)
             self.assertFalse((self.root / "unfinished").exists())
@@ -490,6 +496,149 @@ class TextureFinishTests(unittest.TestCase):
                                       ("a", "c", 3.0, 30)], max_ev=0.4)
         self.assertLessEqual(max(map(abs, uneven.values())), 0.400001)
         self.assertAlmostEqual(sum(uneven.values()), 0.0, places=5)
+
+    def _set_up_square_uv_gutter(self, *, transparent=False):
+        self.obj.write_text(
+            f"mtllib {self.mtl.name}\n"
+            "v 0 0 0\nv 1 0 0\nv 1 1 0\nv 0 1 0\n"
+            "vt 0.25 0.25\nvt 0.75 0.25\nvt 0.75 0.75\nvt 0.25 0.75\n"
+            "usemtl m0\nf 1/1 2/2 3/3\nf 1/1 3/3 4/4\n")
+        atlas_mode = "RGBA" if transparent else "RGB"
+        blank = (0, 0, 0, 0) if transparent else (0, 0, 0)
+        stone = (90, 110, 140, 255) if transparent else (90, 110, 140)
+        with Image.new(atlas_mode, (64, 64), blank) as atlas:
+            atlas.paste(stone, (16, 16, 48, 48))
+            atlas.putpixel((31, 31), blank)  # Missing texel inside mesh UVs.
+            atlas.save(self.atlas)
+        report_path = self.dense / "dense-report.json"
+        report = json.loads(report_path.read_text())
+        report["textured_obj"]["sha256"] = self._digest(self.obj)
+        report["texture_atlases"][0]["sha256"] = self._digest(self.atlas)
+        report_path.write_text(json.dumps(report))
+
+    def test_uv_gutter_padding_extends_existing_edge_color_only_outside_uv_faces(self):
+        self._set_up_square_uv_gutter()
+        originals = {item: item.read_bytes() for item in (self.obj, self.mtl, self.atlas)}
+        baseline = finish_dense_textures(
+            self.dense, self.root / "unpadded", TextureFinishSettings())
+        self.assertNotIn("uv_gutter_padding", baseline["texture_atlases"][0])
+        target = self.root / "padded"
+        report = finish_dense_textures(
+            self.dense, target,
+            TextureFinishSettings(pad_uv_gutters=True, gutter_pixels=4,
+                                  uv_aware_stats=True))
+        item = report["texture_atlases"][0]
+        padding = item["uv_gutter_padding"]
+        self.assertTrue(padding["enabled"])
+        self.assertEqual(padding["radius_pixels"], 4)
+        self.assertGreater(padding["padded_pixels"], 0)
+        self.assertGreater(padding["invalid_mapped_texels_preserved"], 0)
+        with Image.open(self.root / "unpadded" / self.atlas.name) as before, \
+             Image.open(target / self.atlas.name) as after:
+            self.assertEqual(before.getpixel((15, 30)), (0, 0, 0))
+            self.assertEqual(after.getpixel((15, 30)), (90, 110, 140))
+            self.assertEqual(after.getpixel((12, 30)), (90, 110, 140))
+            self.assertEqual(after.getpixel((10, 30)), (0, 0, 0))
+            self.assertEqual(after.getpixel((31, 31)), (0, 0, 0))
+            self.assertEqual(after.getpixel((25, 25)), (90, 110, 140))
+        self.assertEqual({item: item.read_bytes() for item in originals}, originals)
+        plan = plan_dense_blender_review(self.dense, self.root / "padded-blender",
+                                         textured=True, texture_finish=target)
+        self.assertEqual(len(plan["texture_atlases"]), 1)
+
+        # Gutter pixels are derived from the *corrected* color, not a stale
+        # unexposed source pixel, so exposure/white-balance remain consistent.
+        boosted = finish_dense_textures(
+            self.dense, self.root / "padded-exposed",
+            TextureFinishSettings(pad_uv_gutters=True, exposure_ev=0.7))
+        with Image.open(self.root / "padded-exposed" / self.atlas.name) as after:
+            self.assertEqual(after.getpixel((15, 30)), after.getpixel((16, 30)))
+            self.assertGreater(after.getpixel((15, 30))[0], 90)
+        self.assertGreater(boosted["texture_atlases"][0]["uv_gutter_padding"]["padded_pixels"], 0)
+
+    def test_transparent_uv_gutter_padding_preserves_inside_holes_and_outside_alpha(self):
+        self._set_up_square_uv_gutter(transparent=True)
+        target = self.root / "alpha-gutters"
+        finish_dense_textures(self.dense, target,
+                              TextureFinishSettings(pad_uv_gutters=True, gutter_pixels=3))
+        with Image.open(target / self.atlas.name) as after:
+            self.assertEqual(after.mode, "RGBA")
+            self.assertEqual(after.getpixel((15, 30)), (90, 110, 140, 255))
+            self.assertEqual(after.getpixel((10, 30))[3], 0)
+            self.assertEqual(after.getpixel((31, 31))[3], 0)
+
+    def test_uv_gutter_padding_keeps_colors_separate_and_crosses_tile_boundaries(self):
+        w, h = 1040, 48
+        original = Image.new("RGB", (w, h), (0, 0, 0))
+        coverage = Image.new("L", (w, h), 0)
+        painter = ImageDraw.Draw(coverage)
+        painter.rectangle((1016, 12, 1027, 35), fill=255)
+        painter.rectangle((104, 12, 117, 35), fill=255)
+        painter.rectangle((132, 12, 145, 35), fill=255)
+        ImageDraw.Draw(original).rectangle((1016, 12, 1027, 35), fill=(80, 110, 160))
+        ImageDraw.Draw(original).rectangle((104, 12, 117, 35), fill=(160, 30, 20))
+        ImageDraw.Draw(original).rectangle((132, 12, 145, 35), fill=(10, 50, 180))
+        corrected = original.copy()
+        stats = pad_uv_gutters(corrected, original, coverage, radius=4, protect_black=12)
+        self.assertGreater(stats["padded_pixels"], 0)
+        for x in (1014, 1029):
+            self.assertEqual(corrected.getpixel((x, 20)), (80, 110, 160))
+        self.assertEqual(corrected.getpixel((102, 20)), (160, 30, 20))
+        self.assertEqual(corrected.getpixel((147, 20)), (10, 50, 180))
+        self.assertEqual(corrected.getpixel((124, 20)), (0, 0, 0))
+
+    def test_cli_uv_gutter_padding_records_settings_and_rejects_tiled_uv(self):
+        self._set_up_square_uv_gutter()
+        target = self.root / "cli-gutters"
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(main(["finish-dense-textures", "--dense-revision", str(self.dense),
+                                   "--output", str(target), "--pad-uv-gutters",
+                                   "--gutter-pixels", "2"]), 0)
+        report = json.loads((target / "texture-finish-report.json").read_text())
+        self.assertTrue(report["settings"]["pad_uv_gutters"])
+        self.assertEqual(report["settings"]["gutter_pixels"], 2)
+        self.assertGreater(report["texture_atlases"][0]["uv_gutter_padding"]["padded_pixels"], 0)
+        self.obj.write_text(self.obj.read_text().replace("vt 0.75 0.25", "vt 2 0.25"))
+        record_path = self.dense / "dense-report.json"
+        record = json.loads(record_path.read_text())
+        record["textured_obj"]["sha256"] = self._digest(self.obj)
+        record_path.write_text(json.dumps(record))
+        invalid = self.root / "invalid-gutter-uv"
+        with self.assertRaisesRegex(ReferenceError, "tiled/out-of-range"):
+            finish_dense_textures(self.dense, invalid,
+                                  TextureFinishSettings(pad_uv_gutters=True))
+        self.assertFalse(invalid.exists())
+
+    def test_native_uv_mask_selection_validates_all_pages_without_allocating_every_page(self):
+        self._set_up_square_uv_gutter()
+        second = self.atlas.with_name("other-page.png")
+        self.mtl.write_text(self.mtl.read_text() + f"newmtl m1\nmap_Kd {second.name}\n")
+        self.obj.write_text(self.obj.read_text() + "usemtl m1\nf 1/1 2/2 3/3\n")
+        masks, faces = rasterize_uv_coverage(
+            self.obj, self.mtl, {self.atlas.name: (64, 64)},
+            atlas_names={self.atlas.name, second.name})
+        self.assertEqual(list(masks), [self.atlas.name])
+        self.assertEqual(faces[self.atlas.name], 2)
+        self.assertTrue(masks[self.atlas.name].getbbox())
+        with self.assertRaisesRegex(ReferenceError, "100-megapixel"):
+            rasterize_uv_coverage(
+                self.obj, self.mtl, {self.atlas.name: (11000, 11000)},
+                atlas_names={self.atlas.name, second.name})
+
+    def test_gutter_padding_and_cross_page_seam_balance_can_run_together(self):
+        second = self._set_up_cross_page_seam()
+        target = self.root / "balanced-and-padded"
+        result = finish_dense_textures(
+            self.dense, target,
+            TextureFinishSettings(balance_uv_seams=True, pad_uv_gutters=True,
+                                  gutter_pixels=3, min_seam_anchors=8))
+        self.assertEqual(len(result["texture_atlases"]), 2)
+        self.assertEqual(result["uv_seam_balance"]["pairs"][0]["valid_anchors"], 11)
+        for item in result["texture_atlases"]:
+            self.assertTrue(item["uv_gutter_padding"]["enabled"])
+            self.assertTrue((target / item["path"]).is_file())
+        self.assertEqual([item["path"] for item in result["texture_atlases"]],
+                         [self.atlas.name, second.name])
 
 
 if __name__ == "__main__":

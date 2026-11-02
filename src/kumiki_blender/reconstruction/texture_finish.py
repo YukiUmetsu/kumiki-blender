@@ -1,7 +1,8 @@
 """Non-destructive exposure/white-balance corrections for private MVS UV atlases.
 
 No geometry, UV coordinates or original images are changed. Missing/black
-texels are *not* fabricated. Every new atlas remains an artist-review candidate.
+texels *inside mesh UV faces* are not fabricated. Optional UV gutter extension
+only reaches unmapped pixels. Each atlas remains an artist-review candidate.
 """
 
 from __future__ import annotations
@@ -28,6 +29,8 @@ class TextureFinishSettings:
     protect_black: int = 12
     balance_atlases: bool = False
     balance_uv_seams: bool = False
+    pad_uv_gutters: bool = False
+    gutter_pixels: int = 4
     uv_aware_stats: bool = False
     max_balance_ev: float = 0.75
     max_seam_ev: float = 0.75
@@ -51,12 +54,15 @@ class TextureFinishSettings:
                 or not math.isfinite(target) or not 32 <= target <= 224)):
             raise ReferenceError("auto_exposure_luma must be finite in [32, 224]")
         if (type(self.neutralize_cast) is not bool or type(self.balance_atlases) is not bool
-                or type(self.uv_aware_stats) is not bool or type(self.balance_uv_seams) is not bool):
-            raise ReferenceError("neutralize_cast, balance_atlases, balance_uv_seams and uv_aware_stats must be booleans")
+                or type(self.uv_aware_stats) is not bool or type(self.balance_uv_seams) is not bool
+                or type(self.pad_uv_gutters) is not bool):
+            raise ReferenceError("neutralize_cast, balance_atlases, balance_uv_seams, pad_uv_gutters and uv_aware_stats must be booleans")
         if self.balance_atlases and self.balance_uv_seams:
             raise ReferenceError("Choose either median atlas balancing or UV seam balancing, not both")
         if type(self.min_seam_anchors) is not int or not 4 <= self.min_seam_anchors <= 256:
             raise ReferenceError("min_seam_anchors must be an integer between 4 and 256")
+        if type(self.gutter_pixels) is not int or not 1 <= self.gutter_pixels <= 16:
+            raise ReferenceError("gutter_pixels must be an integer between 1 and 16")
         if type(self.protect_black) is not int or not 0 <= self.protect_black <= 32:
             raise ReferenceError("protect_black must be an integer between 0 and 32")
         return self
@@ -184,6 +190,20 @@ def finish_dense_textures(dense_revision: str | Path, output: str | Path,
         raise ReferenceError("Dense texture correction requires a completed candidate mesh")
     pinned = _textured_obj_plan(source, dense_report, max_mesh_faces=10_000_000)
     original_obj, original_mtl = Path(pinned["source_obj"]), Path(pinned["source_mtl"])
+    pinned_atlas_names = {Path(item["path"]).name for item in pinned["texture_atlases"]}
+    if settings.pad_uv_gutters:
+        from .uv_coverage import rasterize_uv_coverage
+        from .uv_gutters import _MAX_ATLAS_PIXELS
+
+        # Reject malformed UVs/unused texture pages and oversized images
+        # before creating a corrected revision. Full-res masks are generated
+        # one atlas at a time later to keep multi-page memory bounded.
+        rasterize_uv_coverage(original_obj, original_mtl,
+                              {name: (1, 1) for name in pinned_atlas_names})
+        for entry in pinned["texture_atlases"]:
+            with Image.open(entry["path"]) as atlas:
+                if atlas.width * atlas.height > _MAX_ATLAS_PIXELS:
+                    raise ReferenceError("UV gutter atlas exceeds the 100-megapixel safety budget")
     seam_balance: dict[str, float] = {}
     seam_diagnostics: dict[str, Any] | None = None
     if settings.balance_uv_seams:
@@ -276,12 +296,23 @@ def finish_dense_textures(dense_revision: str | Path, output: str | Path,
                     photo, settings, balance_ev=balance.get(atlas.name, 0.0),
                     seam_ev=seam_balance.get(atlas.name, 0.0),
                     auto_ev=auto_ev, uv_coverage=uv_coverage.get(atlas.name))
+                if "A" in photo.getbands() or "transparency" in photo.info:
+                    corrected.putalpha(photo.convert("RGBA").getchannel("A"))
+                padding = None
+                if settings.pad_uv_gutters:
+                    from .uv_coverage import rasterize_uv_coverage
+                    from .uv_gutters import pad_uv_gutters
+
+                    masks, _faces = rasterize_uv_coverage(
+                        original_obj, original_mtl, {atlas.name: corrected.size},
+                        atlas_names=pinned_atlas_names)
+                    padding = pad_uv_gutters(
+                        corrected, photo, masks[atlas.name],
+                        radius=settings.gutter_pixels, protect_black=settings.protect_black)
                 output_path = target / atlas.name
                 if photo.format == "JPEG":
                     corrected.save(output_path, "JPEG", quality=95, subsampling=0)
                 else:
-                    if "A" in photo.getbands() or "transparency" in photo.info:
-                        corrected.putalpha(photo.convert("RGBA").getchannel("A"))
                     corrected.save(output_path, "PNG", optimize=True)
                 # A small side-by-side makes gross exposure and cast regressions
                 # visible without opening a huge 8K atlas in an image editor.
@@ -319,6 +350,7 @@ def finish_dense_textures(dense_revision: str | Path, output: str | Path,
                 "dimensions": list(corrected.size), "source_sha256": item["sha256"],
                 "comparison_preview": str(preview_path.relative_to(target)),
                 "source_median_luma": brightness.get(atlas.name),
+                **({"uv_gutter_padding": padding} if padding is not None else {}),
                 "uv_mapped_faces": uv_faces.get(atlas.name),
                 "uv_dark_review": uv_dark_review,
                 **quality,

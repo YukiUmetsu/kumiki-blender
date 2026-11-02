@@ -249,6 +249,10 @@ def main(argv: list[str] | None = None) -> int:
                                        help="Match valid-texel exposure across multiple UV atlas pages")
     texture_finish_parser.add_argument("--balance-uv-seams", action="store_true",
                                        help="Bounded page exposure from shared mesh vertices across UV atlas pages")
+    texture_finish_parser.add_argument("--pad-uv-gutters", action="store_true",
+                                       help="Extend existing mapped UV colors into nearby dark/transparent unmapped texels")
+    texture_finish_parser.add_argument("--gutter-pixels", type=int, default=4,
+                                       help="Maximum UV edge padding distance in source-atlas pixels (1–16)")
     texture_finish_parser.add_argument("--uv-aware-stats", action="store_true",
                                        help="Sample only actual OBJ UV faces; report dark/blank texels on the mesh")
     texture_finish_parser.add_argument("--max-balance-ev", type=float, default=0.75)
@@ -399,6 +403,8 @@ def main(argv: list[str] | None = None) -> int:
                                                     protect_black=args.protect_black,
                                                     balance_atlases=args.balance_atlases,
                                                     balance_uv_seams=args.balance_uv_seams,
+                                                    pad_uv_gutters=args.pad_uv_gutters,
+                                                    gutter_pixels=args.gutter_pixels,
                                                     uv_aware_stats=args.uv_aware_stats,
                                                     max_balance_ev=args.max_balance_ev,
                                                     max_seam_ev=args.max_seam_ev,

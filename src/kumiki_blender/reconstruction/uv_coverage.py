@@ -42,16 +42,28 @@ def _material_textures(path: Path, atlas_names: set[str]) -> dict[str, str]:
 
 
 def rasterize_uv_coverage(obj: Path, mtl: Path,
-                          sample_sizes: dict[str, tuple[int, int]]) -> tuple[dict[str, Any], dict[str, int]]:
+                          sample_sizes: dict[str, tuple[int, int]], *,
+                          atlas_names: set[str] | None = None) -> tuple[dict[str, Any], dict[str, int]]:
     """Rasterize material-tagged OBJ faces into per-atlas Pillow L masks.
 
-    ``sample_sizes`` must correspond exactly to the texture thumbnail sizes
-    used by color/exposure QA. Unsupported tiling or missing UVs are rejected
-    rather than estimating exposure on unrelated atlas padding.
+    ``sample_sizes`` selects the pages and dimensions to rasterize. An optional
+    ``atlas_names`` can list *all* pinned atlas names while only one selected
+    page gets a native-resolution mask, avoiding simultaneously allocating
+    enormous masks for a multi-page scan. All OBJ faces remain UV-validated.
+    Unsupported tiling or missing UVs are rejected rather than guessing.
     """
     from PIL import Image, ImageDraw
 
-    materials = _material_textures(mtl, set(sample_sizes))
+    pinned_names = set(sample_sizes) if atlas_names is None else set(atlas_names)
+    if not sample_sizes or not set(sample_sizes) <= pinned_names:
+        raise ReferenceError("UV coverage page selection must use pinned atlas names")
+    for size in sample_sizes.values():
+        if (len(size) != 2 or any(type(value) is not int or not 1 <= value <= 32768
+                                  for value in size)):
+            raise ReferenceError("UV coverage mask dimensions must be positive and bounded")
+    if sum(width * height for width, height in sample_sizes.values()) > 100_000_000:
+        raise ReferenceError("UV coverage masks exceed the 100-megapixel safety budget")
+    materials = _material_textures(mtl, pinned_names)
     masks = {name: Image.new("L", dimensions, 0)
              for name, dimensions in sample_sizes.items()}
     painters = {name: ImageDraw.Draw(mask) for name, mask in masks.items()}
@@ -89,7 +101,9 @@ def rasterize_uv_coverage(obj: Path, mtl: Path,
                 if not 3 <= len(tokens) <= 32:
                     raise ReferenceError("UV face must have 3–32 vertices")
                 points = []
-                width, height = sample_sizes[current]
+                selected = current in sample_sizes
+                if selected:
+                    width, height = sample_sizes[current]
                 for token in tokens:
                     parts = token.split("/")
                     if len(parts) < 2 or not parts[1]:
@@ -103,10 +117,12 @@ def rasterize_uv_coverage(obj: Path, mtl: Path,
                     offset = index-1 if index > 0 else len(uv)+index
                     if index == 0 or not 0 <= offset < len(uv):
                         raise ReferenceError("Textured OBJ face references an unknown UV index")
-                    u, v = uv[offset]
-                    points.append((round(u*(width-1)), round((1-v)*(height-1))))
-                painters[current].polygon(points, fill=255)
-                faces[current] += 1
+                    if selected:
+                        u, v = uv[offset]
+                        points.append((round(u*(width-1)), round((1-v)*(height-1))))
+                if selected:
+                    painters[current].polygon(points, fill=255)
+                    faces[current] += 1
     if not face_count or any(not mask.getbbox() for mask in masks.values()):
         raise ReferenceError("Atlas coverage needs at least one mapped UV face per texture page")
     return masks, faces
