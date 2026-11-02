@@ -147,6 +147,15 @@ class MaterialPackTests(unittest.TestCase):
                 with self.subTest(change=change), self.assertRaises(AssetImportError):
                     load_texture_packs(path)
 
+    def test_rejects_duplicate_license_and_map_properties(self):
+        with tempfile.TemporaryDirectory() as dirname:
+            path, original = sample(Path(dirname))
+            path.write_text(json.dumps(original).replace(
+                '"redistribution_allowed": true',
+                '"redistribution_allowed": false, "redistribution_allowed": true'))
+            with self.assertRaisesRegex(AssetImportError, "Duplicate texture pack JSON"):
+                load_texture_packs(path)
+
 
 if __name__ == "__main__":
     unittest.main()

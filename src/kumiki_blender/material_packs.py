@@ -28,6 +28,15 @@ _DIGEST = re.compile(r"[0-9a-f]{64}\Z")
 _LICENSE = re.compile(r"[A-Za-z0-9][A-Za-z0-9.+-]{1,79}\Z")
 
 
+def _unique_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise AssetImportError(f"Duplicate texture pack JSON property: {key}")
+        result[key] = value
+    return result
+
+
 @dataclass(frozen=True)
 class TextureMap:
     name: str
@@ -180,6 +189,7 @@ def load_texture_packs(path: str | Path) -> tuple[TextureAssignment, ...]:
         if recipe_file.stat().st_size > MAX_RECIPE_BYTES:
             raise AssetImportError("Texture pack recipe exceeds 64 KiB")
         raw = json.loads(recipe_file.read_text(encoding="utf-8"),
+                         object_pairs_hook=_unique_pairs,
                          parse_constant=lambda x: (_ for _ in ()).throw(ValueError(x)))
     except (OSError, UnicodeError, ValueError) as error:
         if isinstance(error, AssetImportError):
