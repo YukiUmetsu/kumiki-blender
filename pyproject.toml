@@ -16,6 +16,7 @@ dependencies = []
 composer = ["pydantic>=2.10,<3"]
 qa = ["Pillow>=11,<13"]
 photogrammetry = ["Pillow>=11,<13", "pycolmap>=4.0.2,<5"]
+masks = ["Pillow>=11,<13", "numpy>=1.26,<3", "opencv-python-headless>=4.10,<5"]
 
 [project.scripts]
 kumiki-blender = "kumiki_blender.cli:main"
