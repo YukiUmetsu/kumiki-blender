@@ -25,7 +25,7 @@ ROCK_NORMAL_TILES = 6  # 1024² shading detail across 26 km, not 26-m rock pixel
 def plan_fuji_shots() -> tuple[QualityShot, ...]:
     """Opposing profiles plus the two named crater checkpoints."""
     return (
-        QualityShot("hero", (11, -23, 8.0), (0, 0, 2.25), 12.5),
+        QualityShot("hero", (11, -23, 8.0), (0, 0, 2.25), 9.6),
         QualityShot("north-profile", (-12, 32, 9), (0, 0, 2.05), 18.0),
         QualityShot("summit-crater", (0.85, -1.55, 5.9), (0, 0, 3.55), 2.0),
         QualityShot("hoei-context", (8.5, -10.5, 5.1), (0.8, -1.2, 2.85), 5.4),
@@ -153,6 +153,16 @@ def terrain_color(height_m: float, slope: float, x: float, y: float,
                           *(1-_smoothstep(3290,3460,height_m)))
         c=_mix(c,(.216,.166,.105),.51*golden_shoulder)
 
+    if season == "winter":
+        # The user's four snow-season photographs show slate-blue, shadowed
+        # lower slopes, not the warm brown ash of a snow-free summer aerial.
+        # This is an artistic approximation of blue skylight/atmospheric cast,
+        # applied to the PBR albedo so GLB viewers without our studio retain
+        # the recognizable cold-season color hierarchy.
+        cool_slate=(.063,.093,.139)
+        c=_mix(c,cool_slate,.63*exposed)
+        c=_mix(c,(.005,.022,.035),.29*(1-exposed))
+
     # Grain represents pigment variation only. It cannot create or erase any
     # measured erosion grooves, cliffs or other DEM geometry.
     grain=(.26*(_value_noise(x*7.3+5.2,y*7.3-8.2)-.5)
@@ -164,19 +174,42 @@ def terrain_color(height_m: float, slope: float, x: float, y: float,
     if season=="summer":
         return (*c,1.)
 
-    # Seasonal snow accumulates in irregular fingers and sheltered northern
-    # gullies; steep crater cliffs retain exposed dark scoria.
+    # The supplied winter views show a bright cap and long, branching white
+    # snow channels down the blue-grey cone. Preserve exposed rocky ridges and
+    # the dark wind-scoured crater; do not turn the mountain into a white dome.
     fingers=(math.sin(bearing*9+math.sin(bearing*3.1))*112
              +math.sin(bearing*17+y*.8)*57
              +math.sin(x*2.2+y*2.7)*24)
     sheltered=clamp(y/6)
-    snowline=2885+fingers+min(.45,slope)*195-115*sheltered
-    coverage=_smoothstep(snowline-55,snowline+415,height_m)
-    coverage*=max(.31,1-slope*.57)
+    snowline=2445+fingers+min(.45,slope)*160-115*sheltered
+    coverage=_smoothstep(snowline-120,snowline+470,height_m)
+    coverage*=max(.35,1-slope*.50)
+    # Real snow lies between branching dark volcanic ribs. Two offset angular
+    # scales and an altitude-dependent phase keep the rock exposure from
+    # becoming a regular barcode or mathematically even snow spokes.
+    rock_ribs=max(0.,math.sin(bearing*18.7
+                              +1.5*math.sin(bearing*5.3)
+                              +.0023*(height_m-2800)))**4
+    rock_ribs*=.62+.38*_value_noise(x*1.7+8.2,y*1.7-3.4)
+    rib_zone=(_smoothstep(2480,2910,height_m)
+              *(1-_smoothstep(3460,3700,height_m)))
+    coverage*=1-.78*rock_ribs*rib_zone
+    valley_variation=_value_noise(5.3*math.cos(bearing)+6,
+                                  5.3*math.sin(bearing)-4)
+    drainage=max(0.,math.cos(bearing*22.4
+                            +1.65*math.sin(bearing*6.1)
+                            +(height_m-2500)*.0032))**8
+    lower_reach=1930+450*valley_variation
+    drainage*=(_smoothstep(lower_reach,lower_reach+420,height_m)
+               *(1-_smoothstep(3020,3490,height_m)))
+    coverage=max(coverage,(.44+.33*valley_variation)*drainage)
     volcanic_seam=max(0.,math.sin(bearing*31+math.sin(bearing*7)+x*.38))**7
-    coverage*=1-.32*volcanic_seam
-    snow=(.86,.898,.918)
-    c=_mix(c,snow,coverage*.98)
+    coverage*=1-.48*volcanic_seam
+    # White sunlit snowfall with restrained blue skylight in the steep,
+    # narrow gullies. The color difference remains visible in portable GLBs.
+    snow_shadow=clamp(.10+.46*min(.9,slope)+.20*volcanic_seam)
+    snow=_mix((.94,.963,.985),(.62,.77,.94),snow_shadow)
+    c=_mix(c,snow,coverage*.99)
     return (*c, 1.)
 
 
@@ -538,7 +571,7 @@ def _plinth(bpy: Any, model: Any, dem: FujiDem, divisions: int) -> tuple[Any, An
     return wall, obj
 
 
-def _studio(bpy: Any, scene: Any, stage: Any) -> Any:
+def _studio(bpy: Any, scene: Any, stage: Any, *, season: str = "winter") -> Any:
     scene.render.engine = "CYCLES"
     scene.cycles.device = "CPU"
     scene.cycles.use_denoising = True
@@ -548,11 +581,14 @@ def _studio(bpy: Any, scene: Any, stage: Any) -> Any:
     world = bpy.data.worlds.new("Fuji / clear high-altitude daylight")
     world.use_nodes = True
     bg = next(n for n in world.node_tree.nodes if n.type == "BACKGROUND")
-    bg.inputs["Color"].default_value = (.32,.44,.58,1)
-    bg.inputs["Strength"].default_value = .61
+    bg.inputs["Color"].default_value = ((.04,.30,.92,1) if season == "winter"
+                                         else (.32,.44,.58,1))
+    bg.inputs["Strength"].default_value = .75 if season == "winter" else .61
     scene.world = world
     sun_data = bpy.data.lights.new("Fuji / clear-afternoon survey sunlight", "SUN")
     sun_data.energy = 2.7
+    if season == "winter":
+        sun_data.color = (.91,.96,1.0)
     sun_data.angle = math.radians(4.5)
     sun = bpy.data.objects.new(sun_data.name, sun_data)
     stage.objects.link(sun)
@@ -586,7 +622,7 @@ def build_fuji_scene(destination: Path, dem_path: Path, *, divisions: int = 512,
     stage = bpy.data.collections.new("Fuji / documentary studio only")
     scene.collection.children.link(model)
     scene.collection.children.link(stage)
-    camera = _studio(bpy, scene, stage)
+    camera = _studio(bpy, scene, stage, season=season)
     terrain = _terrain_object(bpy, model, dem, divisions, patches, season=season)
     wall, base = _plinth(bpy, model, dem, divisions)
     manifest=export_revision(bpy, scene, camera, (terrain,wall,base), plan_fuji_shots(), destination,

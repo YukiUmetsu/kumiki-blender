@@ -69,9 +69,14 @@ class FujiTerrainTests(unittest.TestCase):
         forest = terrain_color(1350, .12, 3, 4)
         self.assertGreater(forest[1], forest[0])
         self.assertGreater(forest[1], forest[2])
-        scree = terrain_color(2660, .31, 2, -2)
+        scree = terrain_color(2660, .31, 2, -2, season="summer")
         self.assertGreater(scree[0], forest[0])
         self.assertGreater(scree[0], scree[2])
+        # The winter reference photos instead call for blue-grey volcanic
+        # slopes beneath the snow and a larger white snowcap.
+        winter_scree = terrain_color(2660, .31, 2, -2, season="winter")
+        self.assertGreater(winter_scree[2], winter_scree[0] * 1.12)
+        self.assertGreater(winter_scree[0], scree[0] * 2.5)
         self.assertTrue(all(0<=channel<=1 for channel in white))
 
     def test_forest_noise_deterministic_and_continuous(self):
@@ -88,9 +93,9 @@ class FujiTerrainTests(unittest.TestCase):
         """Ministry of Environment: black scoria above Fuji's fifth station."""
         trees=terrain_color(1450,.2,2,3)
         other_trees=terrain_color(1450,.2,-5,3)
-        basalt=terrain_color(2780,.25,-1,2)
+        basalt=terrain_color(2780,.25,-1,2,season="summer")
         summit_ash=terrain_color(3450,.14,-.3,.4,season="summer")
-        hoei=terrain_color(2660,.31,1.61,-2.18)
+        hoei=terrain_color(2660,.31,1.61,-2.18,season="summer")
         snow=terrain_color(3700,.12,0,0)
         self.assertGreater(trees[1],trees[0]*1.6)
         self.assertLess(trees[1],.15)  # Dense forest, not mint-green grass.
@@ -104,6 +109,26 @@ class FujiTerrainTests(unittest.TestCase):
         self.assertLess(summit_ash[0]-summit_ash[1],.035)
         self.assertGreater(hoei[0],basalt[0]*1.2)  # Localized rusty Hōei deposits.
         self.assertGreater(min(snow[:3]),.70)
+
+    def test_user_photo_winter_snow_reaches_lower_gullies_with_cool_shadows(self):
+        """Photo direction: white snow, blue-grey flanks, dark conifer foot."""
+        shoulder = terrain_color(2700,.4,-.1,.8,season="winter")
+        bare_rock = terrain_color(2700,.4,-.1,.8,season="summer")
+        lower_slate = terrain_color(2450,.2,.7,-.5,season="winter")
+        forest = terrain_color(1800,.2,2,3,season="winter")
+        snow = terrain_color(3700,.12,0,0,season="winter")
+        self.assertGreater(sum(shoulder[:3]),sum(bare_rock[:3])*2)
+        self.assertGreater(lower_slate[2],lower_slate[0]*1.2)
+        self.assertLess(max(forest[:3]),.07)
+        self.assertGreater(min(snow[:3]),.80)
+        self.assertGreater(snow[2],snow[0])
+        # Photo close-ups show interrupted snow by exposed volcanic rock ribs,
+        # not a single white cone or evenly painted circular snowline.
+        upper_ring=[terrain_color(3150,.28,1.4*math.cos(i*math.pi/10),
+                                  1.4*math.sin(i*math.pi/10),season="winter")
+                    for i in range(20)]
+        self.assertGreater(max(c[0] for c in upper_ring)
+                           -min(c[0] for c in upper_ring),.35)
 
     def test_summer_fuji_has_no_snow_at_summit_or_in_hoei_gullies(self):
         """Both seasonal GLBs use measured terrain; only baked albedo differs."""

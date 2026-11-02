@@ -12,6 +12,31 @@ The iconic model deliberately sacrifices realistic dimensions and geography.
 It is a miniature symbol rather than a topographic study. All landmarks and
 five-petal flowers are **actual exportable mesh**, not camera-facing sprites.
 
+## r20 — user-photo winter palette and longer snow gullies
+
+Four supplied Mount Fuji photographs (`mt-fuji1` through `mt-fuji4`) are the
+**primary visual references for the winter colorway**. They are reference-only:
+their photographers, dates, camera response and licenses are not established,
+and no pixels are imported into the model or its exported albedo texture.
+
+| Reference | Visible palette evidence | Reinterpretation in the model |
+| --- | --- | --- |
+| User `mt-fuji4` (snowy peak, saturated blue distant flanks) | Brilliant white cap, cobalt shaded lower cone, blue atmospheric perspective | Cooler winter-only slate-blue rock, brighter white cap; no attempt to reproduce the unknown color grading |
+| User `mt-fuji3` (town and distant peak) | Broad blue-grey volcanic slopes beneath snow, much darker forest belt | Snow cover extends down multiple drainages; near-black conifers remain in the lower forest |
+| User `mt-fuji2` (frontal cone) | Broken narrow snow fingers, deep blue-grey exposed gullies | Vary snowline by bearing, slope and drainage; exposed rock ribs stay visible |
+| User `mt-fuji1` (lake and flowers) | Snow reads clearly from a wide scenic view, with a cool bluish lower mountain | Greater snow/rock value contrast that survives small-scale GLB viewing |
+
+Previous r19 winter renders had a visually dominant **warm brown exposed cone**,
+a high, relatively sparse snowcap and muted sky, unlike the supplied images.
+For r20 the winter-only albedo makes exposed slopes colder, extends broken snow
+fingers downward and lightens snow to a cool daylight white. Winter studio
+lighting now has a stronger blue-skylight atmosphere; **embedded GLB pigments
+do not depend on that studio lighting**. The snow-free summer interpretation
+remains geologically warm-neutral and snow-free. The underlying measured GSI
+mesh, summit/Hōei patch data and 1:1 elevation are not modified. These photos
+are not camera-registered, so this is **reference-guided art direction**, not
+a claim of physically matched seasonal imagery.
+
 ## r18 — correct the realistic Mount Fuji's mauve volcanic cone
 
 The r16/r17 **actual Blender hero and north-profile renders** revealed a
