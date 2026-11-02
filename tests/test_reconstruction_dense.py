@@ -137,6 +137,8 @@ class DenseMvsTests(unittest.TestCase):
         self.assertEqual(report["mesh"]["ply"], "workspace/scene_dense_mesh_refined.ply")
         self.assertEqual(report["mesh"]["vertices"], 2400)
         self.assertEqual(report["mesh"]["faces"], 1900)
+        self.assertEqual(report["raw_mesh"]["faces"], 1600)
+        self.assertEqual(report["refined_face_retention"], round(1900 / 1600, 5))
         self.assertEqual(len(report["mesh"]["sha256"]), 64)
         self.assertEqual([step["stage"] for step in report["commands"]],
                          ["interface", "densify", "mesh", "refine", "texture"])
@@ -144,16 +146,33 @@ class DenseMvsTests(unittest.TestCase):
         self.assertEqual(densify[densify.index("--resolution-level") + 1], "0")
         self.assertEqual(densify[densify.index("--max-resolution") + 1], "3200")
         self.assertEqual(densify[densify.index("--tower-mode") + 1], "0")
+        refinement = report["commands"][3]["argv"]
+        self.assertEqual(refinement[refinement.index("--decimate") + 1], "1.0")
         self.assertEqual(len(list((output / "logs").glob("*.log"))), 5)
         self.assertEqual(json.loads((output / "dense-report.json").read_text()), report)
         self.assertTrue((output / "workspace/scene_dense_mesh_refined_texture.mvs").is_file())
         self.assertEqual(report["texture_images"], ["workspace/atlas-00.png"])
         self.assertTrue((self.sparse / "undistorted/images/view-00.jpg").is_file())
 
+    def test_openmvs_mesh_needs_ply_not_optional_mvs_archive(self):
+        # OpenMVS 2.4 writes PLY for meshing/refinement, not an .mvs archive.
+        fixture = FAKE_MVS.replace(
+            'flag("--output-file").write_bytes(b"synthetic MVS output")',
+            'flag("--output-file").write_bytes(b"synthetic MVS output") if app in '
+            '("InterfaceCOLMAP", "DensifyPointCloud") else None')
+        for name in ("ReconstructMesh", "RefineMesh", "TextureMesh"):
+            (self.bin / name).write_text(fixture)
+        result = build_dense_reconstruction(
+            self.sparse, self.root / "ply-only", DenseSettings(),
+            executables=self.executables)
+        self.assertTrue(result["status"].startswith("dense-mesh-candidate"), result)
+        self.assertTrue((self.root / "ply-only/workspace/scene_dense_mesh_refined.ply").is_file())
+
     def test_detail_settings_are_bounded_and_audited(self):
         for changed in ({"resolution_level": -1}, {"resolution_level": True},
                         {"max_resolution": 100}, {"number_views": 1},
-                        {"number_views": 100}):
+                        {"number_views": 100}, {"refine_decimate": 1.2},
+                        {"refine_decimate": 0.0}, {"refine_decimate": True}):
             with self.subTest(changed=changed), self.assertRaises(ReferenceError):
                 DenseSettings(**changed).validate()
         output = self.root / "dense-quality"
@@ -242,6 +261,34 @@ class DenseMvsTests(unittest.TestCase):
                                                   DenseSettings(), executables=self.executables)
         self.assertEqual(textured["failed_stage"], "texture_output")
         self.assertEqual(textured["status"], "review-required")
+
+    def test_resume_skips_valid_completed_cpu_stages_and_rechecks_input_hashes(self):
+        output = self.root / "resume"
+        with patch.dict(os.environ, {"FAIL_MVS_STAGE": "RefineMesh"}):
+            failed = build_dense_reconstruction(self.sparse, output, DenseSettings(),
+                                                executables=self.executables)
+        self.assertEqual(failed["failed_stage"], "refine")
+        commands_before = len(failed["commands"])
+        repaired = build_dense_reconstruction(
+            self.sparse, output, DenseSettings(),
+            executables=self.executables, resume=True)
+        self.assertTrue(repaired["status"].startswith("dense-mesh-candidate"), repaired)
+        self.assertEqual(repaired["resume_skipped_stages"], ["interface", "densify", "mesh"])
+        self.assertEqual(len(repaired["commands"]), commands_before + 2)
+        with self.assertRaisesRegex(ReferenceError, "incomplete"):
+            build_dense_reconstruction(self.sparse, output, DenseSettings(),
+                                       executables=self.executables, resume=True)
+
+        broken = self.root / "broken-resume"
+        with patch.dict(os.environ, {"FAIL_MVS_STAGE": "DensifyPointCloud"}):
+            build_dense_reconstruction(self.sparse, broken, DenseSettings(),
+                                       executables=self.executables)
+        (broken / "workspace/images/view-00.jpg").write_text("tampered")
+        with self.assertRaisesRegex(ReferenceError, "Resume workspace image changed"):
+            build_dense_reconstruction(self.sparse, broken, DenseSettings(),
+                                       executables=self.executables, resume=True)
+        self.assertEqual(json.loads((broken / "dense-report.json").read_text())["failed_stage"],
+                         "densify")
 
     def test_invalid_mesh_fails_even_when_external_commands_return_success(self):
         result = build_dense_reconstruction(self.sparse, self.root / "thin",

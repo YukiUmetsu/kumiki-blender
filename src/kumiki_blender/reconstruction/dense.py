@@ -35,6 +35,7 @@ class DenseSettings:
     resolution_level: int = 0
     max_resolution: int = 3200
     number_views: int = 5
+    refine_decimate: float = 1.0
 
     def validate(self) -> "DenseSettings":
         if self.backend not in ("openmvs", "colmap"):
@@ -57,6 +58,10 @@ class DenseSettings:
             raise ReferenceError("max_resolution must be 640–16384")
         if type(self.number_views) is not int or not 2 <= self.number_views <= 32:
             raise ReferenceError("number_views must be 2–32")
+        if (type(self.refine_decimate) not in (int, float)
+                or not math.isfinite(self.refine_decimate)
+                or not 0 < self.refine_decimate <= 1):
+            raise ReferenceError("refine_decimate must be finite in (0,1]; 1 preserves input faces")
         return self
 
 
@@ -164,6 +169,7 @@ def plan_dense_reconstruction(reconstruction: str | Path, output: str | Path,
         "resolution_level": settings.resolution_level if settings.backend == "openmvs" else None,
         "max_resolution": settings.max_resolution if settings.backend == "openmvs" else None,
         "number_views": settings.number_views if settings.backend == "openmvs" else None,
+        "refine_decimate": settings.refine_decimate if settings.backend == "openmvs" else None,
         "status": "preflight-only / dense-and-artistic-review-required",
         "distribution_allowed": False,
         "limitations": "Output is private. Photo rights, monument identity, surface accuracy, scale and topology require independent review.",
@@ -212,14 +218,58 @@ def _execute(command: list[str], log: Path, timeout_seconds: int) -> int:
 
 def build_dense_reconstruction(reconstruction: str | Path, output: str | Path,
                                settings: DenseSettings, *,
-                               executables: dict[str, str] | None = None) -> dict[str, Any]:
+                               executables: dict[str, str] | None = None,
+                               resume: bool = False) -> dict[str, Any]:
     """Reconstruct a private candidate mesh and checkpoint every external stage."""
-    plan = plan_dense_reconstruction(reconstruction, output, settings, executables=executables)
-    target = Path(plan["output"])
-    target.mkdir(parents=True, exist_ok=False)
-    (target / "logs").mkdir()
-    report = {**plan, "status": "review-required", "commands": [],
-              "failed_stage": None, "exit_code": None, "mesh": None}
+    if type(resume) is not bool:
+        raise ReferenceError("resume must be a boolean")
+    target = Path(output).resolve()
+    if resume:
+        if Path(output).is_symlink() or not target.is_dir() or settings.backend != "openmvs":
+            raise ReferenceError("Resume requires an existing, non-linked OpenMVS revision")
+        # Full original camera/image hash preflight still runs. The placeholder
+        # is never created; this preserves the plan's no-overwrite contract.
+        plan = plan_dense_reconstruction(reconstruction, target / ".resume-preflight",
+                                         settings, executables=executables)
+        plan["output"] = str(target)
+        report = _json(target / "dense-report.json")
+        if report.get("status") != "review-required" or not isinstance(report.get("commands"), list):
+            raise ReferenceError("Only an incomplete dense revision may be resumed")
+        for key in ("source_revision", "asset_id", "manifest_sha256", "backend",
+                    "registered_images", "independent_images", "refine", "texture",
+                    "resolution_level", "max_resolution", "number_views"):
+            if report.get(key) != plan.get(key):
+                raise ReferenceError(f"Resume cannot change existing dense input/settings: {key}")
+        # Older interrupted revisions had no explicit refine decimation flag.
+        # It is safe to use the new detail-preserving default only if refinement
+        # never began; otherwise the setting must match the prior revision.
+        if ("refine_decimate" in report and report["refine_decimate"] != plan["refine_decimate"]
+                or "refine_decimate" not in report and any(
+                    step.get("stage") == "refine" for step in report["commands"])):
+            raise ReferenceError("Cannot change refinement settings in a started revision")
+        workspace = target / "workspace"
+        if not workspace.is_dir() or workspace.is_symlink() or not (target / "logs").is_dir():
+            raise ReferenceError("Interrupted dense workspace or logs are missing")
+        for name in plan["undistorted_images"]:
+            staged = workspace / "images" / name
+            _check_regular(staged, target)
+            if _sha256(staged) != _sha256(Path(plan["source_revision"]) / "undistorted/images" / name):
+                raise ReferenceError(f"Resume workspace image changed: {name}")
+        report["resumed_from"] = {"failed_stage": report.get("failed_stage"),
+                                  "exit_code": report.get("exit_code")}
+        report.update({"status": "review-required", "failed_stage": None,
+                       "exit_code": None, "refine_decimate": plan["refine_decimate"]})
+        report.pop("error", None)
+        report["resume_skipped_stages"] = []
+        previous_stages = {step.get("stage") for step in report["commands"]
+                           if isinstance(step, dict)}
+    else:
+        plan = plan_dense_reconstruction(reconstruction, output, settings, executables=executables)
+        target.mkdir(parents=True, exist_ok=False)
+        (target / "logs").mkdir()
+        report = {**plan, "status": "review-required", "commands": [],
+                  "failed_stage": None, "exit_code": None, "mesh": None}
+        previous_stages = set()
 
     def checkpoint() -> dict[str, Any]:
         (target / "dense-report.json").write_text(json.dumps(report, indent=2) + "\n",
@@ -247,17 +297,17 @@ def build_dense_reconstruction(reconstruction: str | Path, output: str | Path,
     source = Path(plan["source_revision"])
     exe = plan["executables"]
     workspace = target / "workspace"
-    try:
-        # OpenMVS can store image references relative to its working folder.
-        # Both backends therefore receive a complete private copy; neither
-        # writes depth maps into the original immutable camera revision.
-        for path in (source / "undistorted").rglob("*"):
-            if path.is_symlink():
-                raise ReferenceError(f"Linked COLMAP input is unsupported: {path.name}")
-        shutil.copytree(source / "undistorted", workspace)
-    except (OSError, ReferenceError) as error:
-        report.update(failed_stage="copy_workspace", error=str(error), exit_code=2)
-        return checkpoint()
+    if not resume:
+        try:
+            # OpenMVS can store image references relative to its working folder.
+            # Neither backend writes into the immutable camera revision.
+            for path in (source / "undistorted").rglob("*"):
+                if path.is_symlink():
+                    raise ReferenceError(f"Linked COLMAP input is unsupported: {path.name}")
+            shutil.copytree(source / "undistorted", workspace)
+        except (OSError, ReferenceError) as error:
+            report.update(failed_stage="copy_workspace", error=str(error), exit_code=2)
+            return checkpoint()
     if settings.backend == "openmvs":
         scene = workspace / "scene.mvs"
         dense = workspace / "scene_dense.mvs"
@@ -278,6 +328,8 @@ def build_dense_reconstruction(reconstruction: str | Path, output: str | Path,
         if settings.refine:
             stages.append(("refine", "RefineMesh", ["--input-file", str(dense),
                                                    "--mesh-file", str(workspace / "scene_dense_mesh.ply"),
+                                                   "--decimate", str(settings.refine_decimate),
+                                                   "--resolution-level", str(settings.resolution_level),
                                                    "--output-file", str(refined)]))
         if settings.texture:
             stages.append(("texture", "TextureMesh", [
@@ -286,12 +338,31 @@ def build_dense_reconstruction(reconstruction: str | Path, output: str | Path,
                                                   else "scene_dense_mesh.ply")),
                 "--output-file", str(workspace / "scene_dense_mesh_refined_texture.mvs")]))
         ply = workspace / "scene_dense_mesh.ply"
-        stage_outputs = {"interface": scene, "densify": dense, "mesh": mesh,
-                         "refine": refined, "texture": workspace / "scene_dense_mesh_refined_texture.mvs"}
+        # OpenMVS 2.4 normally exports ReconstructMesh/RefineMesh as PLY even
+        # when --output-file ends in .mvs. Requiring an .mvs archive here
+        # rejected a valid 1.7-million-face eagle mesh after 30 minutes of
+        # CPU depth reconstruction. TextureMesh similarly writes OBJ+atlases;
+        # its material outputs are checked separately below.
+        stage_outputs = {"interface": scene, "densify": dense,
+                         "mesh": workspace / "scene_dense_mesh.ply",
+                         "refine": workspace / "scene_dense_mesh_refined.ply"}
+        skip_chain = True
         for stage, app, args in stages:
+            existing = stage_outputs.get(stage)
+            if (resume and skip_chain and stage in previous_stages
+                    and stage != report["resumed_from"]["failed_stage"]
+                    and existing is not None
+                    and existing.is_file() and not existing.is_symlink()
+                    and existing.stat().st_size > 0):
+                if stage in ("mesh", "refine"):
+                    _ply_counts(existing)
+                report["resume_skipped_stages"].append(stage)
+                checkpoint()
+                continue
+            skip_chain = False
             if not run(stage, [exe[app], *args, "--working-folder", str(workspace)]):
                 return checkpoint()
-            if not require_file(stage, stage_outputs[stage]):
+            if stage in stage_outputs and not require_file(stage, stage_outputs[stage]):
                 return checkpoint()
         if settings.refine:
             ply = workspace / "scene_dense_mesh_refined.ply"
@@ -338,6 +409,13 @@ def build_dense_reconstruction(reconstruction: str | Path, output: str | Path,
         metrics = _ply_counts(ply)
         report["mesh"] = {"ply": str(ply.relative_to(target)),
                           "sha256": _sha256(ply), **metrics}
+        if settings.backend == "openmvs" and settings.refine:
+            raw = workspace / "scene_dense_mesh.ply"
+            original = _ply_counts(raw)
+            report["raw_mesh"] = {"ply": str(raw.relative_to(target)),
+                                  "sha256": _sha256(raw), **original}
+            report["refined_face_retention"] = round(
+                metrics["faces"] / original["faces"], 5)
         if metrics["faces"] < settings.min_mesh_faces:
             raise ReferenceError(
                 f"Dense mesh has only {metrics['faces']} faces; needs {settings.min_mesh_faces}")

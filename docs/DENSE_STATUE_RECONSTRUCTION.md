@@ -62,13 +62,14 @@ private texture projection to produce a mesh for artistic inspection.
       --output .review/statue/dense-gpu-r01 --backend colmap
 
     # Inspect the PLY in Blender, preserving editable geometry and a
-    # PRIVATE review GLB. These are arbitrary axes, not calibrated statue views.
+    # PRIVATE review GLB. Include calibrated views of the *same* raw scan
+    # from pinned SfM photos, with no sculpt-space survey required.
     kumiki-blender plan-dense-blender-review \
       --dense-revision .review/statue/dense-r01 \
-      --output .review/statue/blender-review-r01
+      --output .review/statue/blender-review-r01 --matched-views 4
     kumiki-blender render-dense-blender-review \
       --dense-revision .review/statue/dense-r01 \
-      --output .review/statue/blender-review-r01
+      --output .review/statue/blender-review-r01 --matched-views 4
 
 Options include --min-registered-images, --min-registered-fraction,
 --min-mesh-faces, --timeout-seconds, --no-refine (OpenMVS) and --no-texture.
@@ -77,6 +78,12 @@ image detail in OpenMVS depth maps, while `--max-resolution 3200` (default)
 and `--number-views 5` (default) bound resource use. Lower fidelity for a
 quick diagnostic by setting `--resolution-level 1` or `2`. Artificial
 OpenMVS tower-mode fill is disabled to avoid inventing monument geometry.
+`--refine-decimate 1.0` (default) disables OpenMVS's aggressive automatic
+pre-refinement decimation, important for eyes, relief and feathers, at the
+cost of CPU/RAM. Lower values may be used deliberately to create an optimized
+LOD. For interrupted CPU runs, repeat the same `build-dense-photos` command
+with `--resume`: it rechecks the original and workspace photo hashes and
+skips existing verified mesh/dense stages, saving hours of repeated depth maps.
 Loosening thresholds does not improve a weak reconstruction. Each stage logs
 its command and stdout/stderr. Failures preserve a diagnostic report instead
 of silently promoting an unusable mesh.
@@ -84,9 +91,9 @@ of silently promoting an unusable mesh.
 ## Results and review
 
 - OpenMVS: workspace/scene_dense_mesh.ply, optionally
-  workspace/scene_dense_mesh_refined.ply,
-  workspace/scene_dense_mesh_refined_texture.mvs
-  and texture atlas images.
+  workspace/scene_dense_mesh_refined.ply and textured OBJ/atlas outputs.
+  OpenMVS 2.4 mesh/refinement stages emit PLY without necessarily saving
+  .mvs archives: validate the actual geometry and atlas files.
 - COLMAP: meshed-poisson.ply and optionally a textured/ folder.
 - workspace/: an immutable private snapshot of the registered, undistorted
   images/cameras for reproducible relative paths and downstream depth maps.
@@ -97,7 +104,13 @@ of silently promoting an unusable mesh.
 The Blender review worker validates the mesh against the recorded SHA-256 and
 face counts before importing PLY geometry. Its separate immutable folder
 contains private-dense-review.blend, private-dense-review.glb, a report and
-three 320px neutral-studio views from fixed local axes. The GLB is for
+three 320px neutral-studio views from fixed local axes. With
+`--matched-views 1..12` it also validates hashes of selected original
+rectified photos, creates calibrated Blender perspective cameras in the
+**same COLMAP frame as the dense PLY** and renders photo-matched clay views;
+each preview identifies the pinned corresponding photograph in the private
+report. These cameras do not require survey anchors until the mesh is
+transformed into an independent Blender world coordinate system. The GLB is for
 **local artistic review only**, never an authorization to redistribute the
 original photographic texture or derived geometry. Dense photo projection
 atlases are not automatically attached to the PLY without real matching UVs.
@@ -173,6 +186,16 @@ triangulating 14,556 sparse points; median *feature reprojection* error was
 1.153 pixels. This demonstrates genuine multi-view camera registration, not
 mesh quality, full surface coverage, scale accuracy or historic likeness.
 
+The first private 1600px OpenMVS run produced **2,236,655 dense points** and
+an **889,038-vertex / 1,777,733-face** unrefined eagle surface. That exposed
+two critical defects in the initial pipeline: OpenMVS 2.4 outputs the actual
+mesh PLY without the anticipated .mvs archive, and its default refinement
+automatically removes much of the input geometry. The code now recognizes
+actual stage outputs, resumes from immutable intermediate evidence, records
+raw-vs-refined face retention and defaults to preserving input geometry.
+These geometry counts are evidence of density, **not** a surface-accuracy
+score; the scan still needs private photo-matched inspection.
+
 ## Independent full-body and facial reference sets (EPFL)
 
 The [EPFL Geometric Computing Laboratory statue archive](https://lgg.epfl.ch/statues.php)
@@ -208,3 +231,16 @@ As with the eagle scene, these helpers pin each original archive hash, record
 the individual photo hashes and mark all camera directions as unverified until
 SfM. Compare the private reconstruction to EPFL's views and mesh without
 turning the research dataset into a public example asset.
+
+**Measured private facial-camera benchmark (2026-11-02):** All **32/32** EPFL
+sculpted-mask photos registered with PyCOLMAP 4.0.2 CPU; 5,834 sparse matched
+points and median feature reprojection error 0.909px. All 32 originals had
+invalid EXIF orientation `0`: the first direct test failed in native COLMAP,
+and the lossless staged metadata repair enabled the successful second run.
+These are camera/metadata results, not a validated facial mesh.
+
+**Measured private full-body benchmark (2026-11-02):** All **37/37** Freddie
+Mercury statue photos registered with PyCOLMAP CPU at 1600px, with 11,039
+sparse matched points and median *feature* reprojection error 0.479px. This
+supports camera coverage of a challenging standing monument, not verified
+anatomical or mesh fidelity.

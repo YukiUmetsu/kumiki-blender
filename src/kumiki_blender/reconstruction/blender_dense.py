@@ -16,8 +16,62 @@ from .dense import _json, _ply_counts
 from .references import ReferenceError
 
 
+def _matched_scan_cameras(report: dict[str, Any], count: int) -> list[dict[str, Any]]:
+    """Camera poses and the dense PLY share COLMAP coordinates: no sculpt anchors."""
+    from .cameras import (_matmul, _matvec, _quat_matrix, _read_intrinsics,
+                          _read_poses)
+
+    source_value = report.get("source_revision")
+    if not isinstance(source_value, str):
+        raise ReferenceError("Matched views need the source sparse reconstruction revision")
+    source = Path(source_value).resolve()
+    if (Path(source_value).is_symlink() or not source.is_dir()
+            or (source / "undistorted").is_symlink()):
+        raise ReferenceError("Matched-view sparse revision is missing or linked")
+    sparse_report = _json(source / "reconstruction-report.json")
+    if not str(sparse_report.get("status", "")).startswith("candidate"):
+        raise ReferenceError("Matched-view sparse reconstruction is not a candidate")
+    model = source / "undistorted/text-model"
+    photo_root = source / "undistorted/images"
+    if model.is_symlink() or not model.is_dir() or photo_root.is_symlink():
+        raise ReferenceError("Rectified camera model or images are missing or linked")
+    index = _json(source / "undistorted-reference-index.json")
+    entries = {entry["filename"]: entry for entry in index.get("images", [])
+               if isinstance(entry, dict) and isinstance(entry.get("filename"), str)}
+    poses = _read_poses(model / "images.txt")
+    intrinsics = _read_intrinsics(model / "cameras.txt")
+    if (len(poses) < count or len(entries) != len(index.get("images", []))
+            or len(poses) != sparse_report.get("registered_images")):
+        raise ReferenceError("Matched-view image and camera counts differ from sparse report")
+    # Even spacing through COLMAP image IDs, with no subjective view labels.
+    chosen = [poses[i * len(poses) // count] for i in range(count)]
+    matched = []
+    for image_id, camera_id, filename, quaternion, tvec in chosen:
+        entry = entries.get(filename)
+        intr = intrinsics.get(camera_id)
+        photo = photo_root / filename
+        if (entry is None or intr is None or photo.is_symlink() or not photo.is_file()
+                or not photo.resolve().is_relative_to(source)
+                or entry.get("dimensions") != [intr["width"], intr["height"]]):
+            raise ReferenceError(f"Rectified camera/photo mismatch for {filename}")
+        with photo.open("rb") as stream:
+            digest = hashlib.file_digest(stream, "sha256").hexdigest()
+        if digest != entry.get("sha256"):
+            raise ReferenceError(f"Rectified photo changed since reconstruction: {filename}")
+        world_to_camera = _quat_matrix(quaternion)
+        camera_to_world = [[world_to_camera[j][i] for j in range(3)] for i in range(3)]
+        center = _matvec(camera_to_world, tuple(-value for value in tvec))
+        orientation = _matmul(camera_to_world, [[1, 0, 0], [0, -1, 0], [0, 0, -1]])
+        matched.append({"image_id": image_id, "filename": filename,
+                        "source_photo_path": str(photo), "source_photo_sha256": digest,
+                        "intrinsics": intr, "location_colmap": center,
+                        "rotation_3x3": orientation})
+    return matched
+
+
 def plan_dense_blender_review(dense_revision: str | Path, output: str | Path,
-                              *, max_mesh_faces: int = 5_000_000) -> dict[str, Any]:
+                              *, max_mesh_faces: int = 5_000_000,
+                              matched_views: int = 0) -> dict[str, Any]:
     """Check a dense mesh has not changed since its reconstruction report."""
     root = Path(dense_revision).resolve()
     target = Path(output).resolve()
@@ -27,6 +81,8 @@ def plan_dense_blender_review(dense_revision: str | Path, output: str | Path,
         raise ReferenceError("Blender review needs an unused output outside dense revision")
     if type(max_mesh_faces) is not int or not 100 <= max_mesh_faces <= 10_000_000:
         raise ReferenceError("max_mesh_faces must be 100–10,000,000")
+    if type(matched_views) is not int or not 0 <= matched_views <= 12:
+        raise ReferenceError("matched_views must be 0–12")
     report = _json(root / "dense-report.json")
     mesh = report.get("mesh")
     if (not isinstance(report.get("status"), str)
@@ -55,8 +111,10 @@ def plan_dense_blender_review(dense_revision: str | Path, output: str | Path,
         raise ReferenceError("Dense mesh header no longer matches audited geometry")
     if counts["faces"] > max_mesh_faces:
         raise ReferenceError("Dense mesh exceeds Blender review's face budget; split the scan")
+    cameras = _matched_scan_cameras(report, matched_views) if matched_views else []
     return {"source_revision": str(root), "source_ply": str(path), "source_sha256": actual,
             "output": str(target), "faces": counts["faces"], "vertices": counts["vertices"],
+            "matched_cameras": cameras,
             "status": "preflight-only / Blender-review-required",
             "distribution_allowed": False}
 
@@ -108,11 +166,52 @@ def _preview_axes(bpy: Any, obj: Any, target: Path) -> list[str]:
     return paths
 
 
+def _preview_matched(bpy: Any, target: Path, entries: list[dict[str, Any]]) -> list[str]:
+    """Clay renders from rectified photo cameras, in the unscaled scan frame."""
+    from mathutils import Matrix  # type: ignore[import-not-found]
+
+    scene = bpy.context.scene
+    scene.render.resolution_percentage = 40
+    output = []
+    for index, entry in enumerate(entries):
+        intr = entry["intrinsics"]
+        camera_data = bpy.data.cameras.new("Scan/photo registration / " + entry["filename"])
+        camera_data.type = "PERSP"
+        camera_data.sensor_fit = "HORIZONTAL"
+        camera_data.sensor_width = 36.0
+        camera_data.lens = intr["fx_px"] * 36.0 / intr["width"]
+        camera_data.shift_x = (intr["width"] / 2 - intr["cx_px"]) / intr["width"]
+        camera_data.shift_y = (intr["cy_px"] - intr["height"] / 2) / intr["width"]
+        camera_data.show_background_images = True
+        background = camera_data.background_images.new()
+        background.image = bpy.data.images.load(entry["source_photo_path"], check_existing=True)
+        background.alpha = 0.45
+        camera = bpy.data.objects.new(camera_data.name, camera_data)
+        scene.collection.objects.link(camera)
+        rotation = entry["rotation_3x3"]
+        location = entry["location_colmap"]
+        camera.matrix_world = Matrix((
+            (*rotation[0], location[0]), (*rotation[1], location[1]),
+            (*rotation[2], location[2]), (0, 0, 0, 1),
+        ))
+        scene.camera = camera
+        scene.render.resolution_x = intr["width"]
+        scene.render.resolution_y = intr["height"]
+        name = f"renders/photo-matched-{index + 1:02d}.png"
+        scene.render.filepath = str(target / name)
+        bpy.ops.render.render(write_still=True)
+        output.append(name)
+    return output
+
+
 def build_dense_blender_review(dense_revision: str | Path, output: str | Path,
                                *, bpy_module: Any, render_previews: bool = True,
-                               max_mesh_faces: int = 5_000_000) -> dict[str, Any]:
+                               max_mesh_faces: int = 5_000_000,
+                               matched_views: int = 0) -> dict[str, Any]:
     """Save a private editable .blend and GLB; neither clears photo rights."""
-    plan = plan_dense_blender_review(dense_revision, output, max_mesh_faces=max_mesh_faces)
+    plan = plan_dense_blender_review(dense_revision, output,
+                                     max_mesh_faces=max_mesh_faces,
+                                     matched_views=matched_views)
     bpy = bpy_module
     if tuple(bpy.app.version) < (4, 2, 0):
         raise ReferenceError("Dense Blender review requires Blender 4.2+")
@@ -143,7 +242,8 @@ def build_dense_blender_review(dense_revision: str | Path, output: str | Path,
     target = Path(plan["output"])
     target.mkdir(parents=True, exist_ok=False)
     record = {**plan, "status": "review-required",
-              "historical_fidelity_verified": False, "previews": []}
+              "historical_fidelity_verified": False, "previews": [],
+              "photo_matched_previews": []}
 
     def checkpoint() -> None:
         (target / "blender-review-report.json").write_text(
@@ -154,6 +254,9 @@ def build_dense_blender_review(dense_revision: str | Path, output: str | Path,
         if render_previews:
             (target / "renders").mkdir()
             record["previews"] = _preview_axes(bpy, obj, target)
+            if plan["matched_cameras"]:
+                record["photo_matched_previews"] = _preview_matched(
+                    bpy, target, plan["matched_cameras"])
         bpy.ops.wm.save_as_mainfile(filepath=str(target / "private-dense-review.blend"))
         for item in bpy.context.selected_objects:
             item.select_set(False)

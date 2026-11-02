@@ -69,11 +69,63 @@ class DenseBlenderReviewTests(unittest.TestCase):
             with contextlib.redirect_stdout(io.StringIO()):
                 self.assertEqual(main(["render-dense-blender-review",
                                        "--dense-revision", str(self.dense),
-                                       "--output", str(output), "--no-renders"]), 0)
+                                       "--output", str(output), "--no-renders",
+                                       "--matched-views", "0"]), 0)
         command = runner.call_args.args[0]
         self.assertIn("render-dense-blender-review", command)
         self.assertIn("--no-renders", command)
+        self.assertIn("--matched-views", command)
         self.assertFalse(output.exists())
+
+    def _prepare_pinned_sparse_cameras(self):
+        source = self.root / "sparse"
+        model = source / "undistorted/text-model"
+        model.mkdir(parents=True)
+        images = source / "undistorted/images"
+        images.mkdir()
+        (model / "cameras.txt").write_text("1 PINHOLE 640 480 600 600 320 240\n")
+        (model / "images.txt").write_text("".join(
+            f"{i+1} 1 0 0 0 {i} 0 4 1 view-{i:02d}.jpg\n\n" for i in range(4)))
+        entries = []
+        for i in range(4):
+            filename = f"view-{i:02d}.jpg"
+            data = f"first-party-photo-{i}".encode()
+            (images / filename).write_bytes(data)
+            entries.append({"filename": filename,
+                            "sha256": hashlib.sha256(data).hexdigest(),
+                            "dimensions": [640, 480]})
+        (source / "undistorted-reference-index.json").write_text(
+            json.dumps({"images": entries}))
+        (source / "reconstruction-report.json").write_text(
+            json.dumps({"status": "candidate / visual-review-required",
+                        "registered_images": 4}))
+        report = json.loads(self.report.read_text())
+        report["source_revision"] = str(source)
+        self.report.write_text(json.dumps(report))
+        return images
+
+    def test_matched_views_are_camera_calibrated_and_hash_pinned(self):
+        images = self._prepare_pinned_sparse_cameras()
+        record = plan_dense_blender_review(self.dense, self.root / "review", matched_views=3)
+        self.assertEqual(len(record["matched_cameras"]), 3)
+        first = record["matched_cameras"][0]
+        self.assertEqual(first["location_colmap"], (0.0, 0.0, -4.0))
+        self.assertEqual(first["rotation_3x3"], [[1.0, 0.0, 0.0],
+                                                  [0.0, -1.0, 0.0],
+                                                  [0.0, 0.0, -1.0]])
+        self.assertEqual(first["intrinsics"]["fx_px"], 600.0)
+        self.assertFalse((self.root / "review").exists())
+        (images / "view-00.jpg").write_text("changed photo")
+        with self.assertRaisesRegex(ReferenceError, "changed since reconstruction"):
+            plan_dense_blender_review(self.dense, self.root / "review", matched_views=3)
+
+    def test_matched_views_require_sparse_revision_and_valid_bounds(self):
+        with self.assertRaisesRegex(ReferenceError, "source sparse"):
+            plan_dense_blender_review(self.dense, self.root / "review", matched_views=1)
+        for invalid in (-1, 13, True, 0.1):
+            with self.subTest(invalid=invalid), self.assertRaisesRegex(ReferenceError, "0–12"):
+                plan_dense_blender_review(self.dense, self.root / "review",
+                                          matched_views=invalid)
 
 
 if __name__ == "__main__":
