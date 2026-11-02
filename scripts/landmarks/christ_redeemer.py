@@ -1000,7 +1000,7 @@ def sculpt_scalp_surface_from_anatomy(head, trim_nape=False):
         # rendered as a huge rolled stone cape. The crown must end at the
         # nape; long hair is a separate sculpted curtain, not neck skin.
         rear=ease((co.y+.015)/.085)
-        side=ease((abs(co.x)-.055)/.060)
+        side=ease((abs(co.x)-.035)/.045)
         # The donor neck's lowest extracted faces are *lateral* at
         # x≈±.108, y≈-.01, z≈.056, not posterior. Trimming only rear
         # faces leaves the same rolled cape and fails the visual gate.

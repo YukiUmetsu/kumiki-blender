@@ -139,3 +139,15 @@ constrains both the posterior and lateral neck using the actual
 anatomical coordinates, with a 0.215-donor-metre upper cutoff
 weighted by side exposure. This remains an experimental scalp
 selection pending a fresh four-view Blender render.
+
+### Second lateral trim adjustment
+
+Filtering the previous real Blender scalp GLB offline showed that a
+lateral ramp starting at donor `|x|=.055` still retained neck vertices
+at `|x|≈.08, z≈.08`, with a world minimum near **34.81 m**.
+The revised ramp starts at `|x|=.035` and reaches full effect by
+`|x|=.080`. The same offline mesh selection predicted a minimum
+near **35.40 m** and removed the curled cape, but exposed an abrupt
+rear hair edge. **These are diagnostic GLB filtering results, not a
+passing Blender reconstruction**; the CI render and a connected
+posterior hair volume are still required.
