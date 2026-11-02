@@ -73,7 +73,8 @@ focal lengths and environmental clutter can all defeat reconstruction.
 kumiki-blender reconstruct-photos \
   --manifest /path/to/monument/references.json \
   --output .review/monument/reconstruction-r01 \
-  --colmap colmap --timeout-seconds 3600
+  --colmap colmap --timeout-seconds 3600 \
+  --undistort --max-image-size 4000
 ```
 
 The worker runs, in order:
@@ -83,6 +84,12 @@ The worker runs, in order:
 2. `exhaustive_matcher` to find verified image features.
 3. `mapper` to estimate camera geometry and sparse points.
 4. `model_converter` to inspect registered-image counts from actual models.
+5. When `--undistort` is selected: `image_undistorter` on the best sparse
+   model and `model_converter` on the **rectified** cameras. This produces
+   `undistorted/images/`, `undistorted/text-model/`, and a pinned
+   `undistorted-reference-index.json`. Use this for accurate Blender camera
+   overlays: COLMAP's common `SIMPLE_RADIAL` model cannot be represented by a
+   Blender pinhole camera without rectifying both its pixels and intrinsics.
 
 CPU feature extraction/matching are the default, making the initial pipeline
 usable on Macs without a CUDA card. The worker probes each installed COLMAP
@@ -101,6 +108,66 @@ per-stage logs and `reconstruction-report.json`. It contains local copies of
 third-party reference photos: keep this folder private and do not add it to
 GitHub/GLB distribution. Never delete an existing revision to rerun; choose a
 new `r02`, `r03`, etc.
+
+## Align actual cameras to an existing statue sculpt
+
+COLMAP's sparse coordinates have unknown scale, rotation and origin. To make
+those cameras meaningful against an existing editable sculpt/scan, select at
+least three **non-collinear corresponding 3D landmarks** (prefer four or more)
+in COLMAP sparse space and in your Blender sculpt's **metre coordinate frame**.
+Use manually verified masonry corners, plinth edges or durable surface features,
+not invented anatomical points or observations on different restorations.
+Replace the illustrative numbers and asset ID in
+[`examples/monument-alignment.example.json`](../examples/monument-alignment.example.json).
+An anchor pair has `colmap_xyz` and matching `blender_xyz_m`. The fitter
+estimates a proper rotation, scale and translation with a residual RMS gate;
+it rejects mirrored, degenerate and badly mismatched alignments. A small
+residual is necessary but **does not prove** a detailed sculpt is correct.
+
+```bash
+kumiki-blender prepare-camera-plan \
+  --reconstruction .review/monument/reconstruction-r01 \
+  --alignment /path/to/monument/landmarks.json \
+  --max-anchor-rms-m 0.05 \
+  --output .review/monument/camera-plan-r01
+
+kumiki-blender render-reference-scene \
+  --plan .review/monument/camera-plan-r01/camera-plan.json \
+  --model /path/to/monument/your-aligned-sculpt.glb \
+  --output .review/monument/blender-review-r01 \
+  --render-clay --max-cameras 8
+```
+
+This creates a **private** editable `reference-review.blend` with registered
+perspective cameras, externally linked reference photos for viewport alignment,
+and optionally up to 32 transparent neutral-clay renders. Do not pack or
+publish third-party photos or the review `.blend`. The model GLB must already
+use the anchor target frame; this does not transform the model or export it.
+The worker refuses cameras that cannot reproduce the photo projection, such as
+distorted images or substantially unequal focal lengths.
+
+To review exact silhouettes, each camera needs an accurate manually checked
+white-statue/black-background mask **of the same pixels**. If you ran with
+`--undistort`, original masks are geometrically invalid: create new masks on
+the rectified images, named `<original-filename>.png` (for example,
+`front.jpg.png`), in a private folder. Supply them while building the camera
+plan with `--undistorted-masks /path/to/rectified-masks`. The presence of an
+original, unrectified COLMAP matching mask is never treated as evidence on a
+rectified frame. Nearly all-white matching masks are treated as unscored.
+
+```bash
+kumiki-blender silhouette-qa \
+  --plan .review/monument/camera-plan-r01/camera-plan.json \
+  --renders .review/monument/blender-review-r01/renders \
+  --output .review/monument/silhouette-qa-r01 --min-iou 0.80
+```
+
+Each score is a mask intersection-over-union (IoU), precision and recall;
+mask-only overlays mark mesh-only pixels in red, reference-only in blue and
+overlap in gray. Outputs never include online photo pixels. Fewer than three
+scored cameras, missing renders, poor masks or low IoU require review. Even
+perfect IoU is **not** a photorealism or historical-fidelity certificate:
+sculptors still need face, eyes, hair, drapery, and authentic close-up study.
 
 Exit codes:
 
@@ -132,9 +199,10 @@ Exit codes:
 6. **Retopologize and bake.** Only after the high-resolution form is accepted,
    bake normals/displacement to reusable medium/low-detail GLB exports.
 
-**Remaining framework work:** robust arbitrary-photo feature retrieval/hloc;
-survey/point-cloud import generalized beyond the Sphinx; registered Blender
-reference camera scenes; region-aware 3D sculpt tools; calibrated multi-view
-mesh-versus-photo QA; high/low LOD geometry and texture baking. The current
-PR intentionally implements the independent intake/SfM foundation first, not
-all of these difficult artistic subsystems at once.
+**Remaining framework work:** real COLMAP evaluation on a licensed multi-angle
+statue dataset; robust arbitrary-photo feature retrieval/hloc; general
+survey/point-cloud intake beyond Sphinx; semantic/region-aware facial and
+drapery sculpt tools; landmark correspondence errors and close-up texture
+likeness QA; high/low LOD geometry and texture baking. Camera pose and
+silhouette tooling help artists measure shape mismatches, but do not themselves
+repair anatomy or recover unknown surface detail.

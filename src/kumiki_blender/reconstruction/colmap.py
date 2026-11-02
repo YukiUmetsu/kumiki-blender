@@ -85,6 +85,8 @@ def _prepare_images(references: list[ReferenceImage], output: Path) -> bool:
         index.append({"image_id": image.image_id, "filename": filename,
                       "source_url": image.source_url, "view": image.view,
                       "regions": image.regions, "sha256": image.sha256,
+                      "staged_mask_sha256": (_sha256(mask_root / (filename + ".png"))
+                                             if has_masks else None),
                       "dimensions": image.dimensions, "usage": "reference-only"})
     _write_json(output / "staged-reference-index.json", {"images": index,
         "notes": "Local source references only. Do not bundle photographs into distributable GLB assets."})
@@ -140,7 +142,9 @@ def _finite_float(value: str) -> bool:
 
 def build_sparse_reconstruction(reference_set: ReferenceSet, output: str | Path,
                                 *, colmap: str = "colmap",
-                                timeout_seconds: int = 3600) -> dict[str, Any]:
+                                timeout_seconds: int = 3600,
+                                undistort: bool = False,
+                                max_image_size: int = 4000) -> dict[str, Any]:
     """Produce auditable camera/sparse data using a locally installed COLMAP.
 
     External tools may fail on historical or unrelated internet photos. Their
@@ -152,6 +156,8 @@ def build_sparse_reconstruction(reference_set: ReferenceSet, output: str | Path,
         raise ReferenceError(f"Output already exists: {target}. Choose an unused revision directory")
     if type(timeout_seconds) is not int or not 30 <= timeout_seconds <= 86400:
         raise ReferenceError("COLMAP timeout_seconds must be 30–86400")
+    if type(undistort) is not bool or type(max_image_size) is not int or not 512 <= max_image_size <= 16384:
+        raise ReferenceError("undistort must be bool and max_image_size must be 512–16384")
     audit = audit_reference_set(reference_set)
     references = _staged_images(reference_set, audit)
     if len(references) < 3:
@@ -175,6 +181,7 @@ def build_sparse_reconstruction(reference_set: ReferenceSet, output: str | Path,
         "source_images": len(reference_set.images),
         "staged_independent_images": len(references),
         "registered_images": 0,
+        "undistortion_requested": undistort,
         "colmap_info": colmap_info,
         "commands": [], "failed_stage": None, "exit_code": None,
         "status": "review-required", "historical_fidelity_verified": False,
@@ -237,4 +244,67 @@ def build_sparse_reconstruction(reference_set: ReferenceSet, output: str | Path,
         report["status"] = "candidate / visual-review-required"
     else:
         report["failed_stage"] = "insufficient_registered_views"
+        return checkpoint()
+    if undistort:
+        # A production COLMAP default is SIMPLE_RADIAL; a Blender pinhole camera
+        # cannot reproduce its curved optics. Rectify *both* pixels and cameras.
+        best = max(counts, key=lambda item: item["registered_images"])["model"]
+        rectified = target / "undistorted"
+        rectified.mkdir()
+        args = ["--image_path", str(images), "--input_path", str(sparse / best),
+                "--output_path", str(rectified), "--output_type", "COLMAP",
+                "--max_image_size", str(max_image_size)]
+        code, command = _run(executable, "image_undistorter", args, target,
+                             len(report["commands"]) + 1, timeout_seconds)
+        report["commands"].append(command)
+        if code:
+            report["status"] = "review-required"
+            report["failed_stage"], report["exit_code"] = "image_undistorter", code
+            return checkpoint()
+        text_model = rectified / "text-model"
+        text_model.mkdir()
+        args = ["--input_path", str(rectified / "sparse"), "--output_path", str(text_model),
+                "--output_type", "TXT"]
+        code, command = _run(executable, "model_converter", args, target,
+                             len(report["commands"]) + 1, timeout_seconds)
+        report["commands"].append(command)
+        if code:
+            report["status"] = "review-required"
+            report["failed_stage"], report["exit_code"] = "undistorted_model_converter", code
+            return checkpoint()
+        try:
+            from PIL import Image
+            from .cameras import _read_intrinsics, _read_poses
+
+            corrected_cameras = _read_intrinsics(text_model / "cameras.txt")
+            corrected_poses = _read_poses(text_model / "images.txt")
+            if len(corrected_poses) != report["registered_images"]:
+                raise ReferenceError("Undistorted model changed registered-image count")
+            original_index = json.loads((target / "staged-reference-index.json").read_text())
+            originals = {entry["filename"]: entry for entry in original_index["images"]}
+            rectified_index = []
+            for _, camera_id, filename, _, _ in corrected_poses:
+                if filename not in originals or camera_id not in corrected_cameras:
+                    raise ReferenceError("Undistorted COLMAP image is not in source index")
+                path = rectified / "images" / filename
+                if path.is_symlink() or not path.is_file():
+                    raise ReferenceError(f"Missing rectified image {filename}")
+                with Image.open(path) as image:
+                    size = image.size
+                    image.verify()
+                camera = corrected_cameras[camera_id]
+                if list(size) != [camera["width"], camera["height"]]:
+                    raise ReferenceError(f"Rectified image dimensions differ from camera {filename}")
+                rectified_index.append({**originals[filename], "dimensions": list(size),
+                                        "sha256": _sha256(path),
+                                        "mask_requires_rectification": True})
+            _write_json(target / "undistorted-reference-index.json", {"images": rectified_index})
+            report["undistorted_model"] = "undistorted/text-model"
+            report["undistorted_images"] = len(rectified_index)
+            report["source_sparse_model"] = best
+        except (ReferenceError, OSError, ValueError, KeyError) as error:
+            report["status"] = "review-required"
+            report["failed_stage"], report["exit_code"] = "undistortion_validation", 2
+            report["error"] = str(error)
+            return checkpoint()
     return checkpoint()

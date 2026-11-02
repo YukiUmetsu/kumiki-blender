@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "asset_id": "your-statue-id",
+  "anchors": [
+    {
+      "colmap_xyz": [0.0, 0.0, 0.0],
+      "blender_xyz_m": [0.0, 0.0, 0.0]
+    },
+    {
+      "colmap_xyz": [1.0, 0.0, 0.0],
+      "blender_xyz_m": [0.0, 2.0, 0.0]
+    },
+    {
+      "colmap_xyz": [0.0, 1.0, 0.0],
+      "blender_xyz_m": [-2.0, 0.0, 0.0]
+    },
+    {
+      "colmap_xyz": [0.0, 0.0, 1.0],
+      "blender_xyz_m": [0.0, 0.0, 2.0]
+    }
+  ]
+}

@@ -55,12 +55,20 @@ elif task == "mapper":
     model = argument("--output_path") / "0"
     model.mkdir(parents=True)
     (model / "cameras.bin").write_bytes(b"synthetic test")
+elif task == "image_undistorter":
+    from shutil import copyfile
+    target = argument("--output_path")
+    (target / "images").mkdir()
+    (target / "sparse").mkdir()
+    for image in argument("--image_path").iterdir():
+        copyfile(image, target / "images" / image.name)
 elif task == "model_converter":
     output = argument("--output_path")
     if not output.is_dir():
         print("model_converter expects an existing output directory")
         sys.exit(49)
     (output / "images.txt").write_text("# Image list\\n1 1 0 0 0 0 0 0 1 front.png\\n\\n2 1 0 0 0 0 0 0 1 left.png\\n\\n3 1 0 0 0 0 0 0 1 right.png\\n\\n")
+    (output / "cameras.txt").write_text("1 PINHOLE 120 90 100 100 60 45\\n")
 else:
     sys.exit(99)
 '''
@@ -174,6 +182,20 @@ class ColmapWorkflowTests(unittest.TestCase):
         report = build_sparse_reconstruction(source, self.root / "r01", colmap=str(self.fake))
         self.assertEqual(report["staged_independent_images"], 3)
         self.assertEqual(report["status"], "candidate / visual-review-required")
+
+    def test_optional_undistorter_preserves_rectified_camera_and_pixel_provenance(self):
+        output = self.root / "r01"
+        report = build_sparse_reconstruction(self.references(), output, colmap=str(self.fake),
+                                             undistort=True, max_image_size=4000)
+        self.assertEqual(report["status"], "candidate / visual-review-required")
+        self.assertEqual(report["undistorted_model"], "undistorted/text-model")
+        self.assertEqual(report["undistorted_images"], 3)
+        self.assertEqual(report["source_sparse_model"], "0")
+        self.assertEqual([command[0] for command in report["commands"]][-2:],
+                         ["image_undistorter", "model_converter"])
+        index = json.loads((output / "undistorted-reference-index.json").read_text())
+        self.assertEqual(len(index["images"]), 3)
+        self.assertTrue(all(item["mask_requires_rectification"] for item in index["images"]))
 
     def test_partial_staging_failure_persists_diagnostic_report(self):
         source = self.references()

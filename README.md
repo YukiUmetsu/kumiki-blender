@@ -12,14 +12,17 @@ set to a locally installed **COLMAP** sparse reconstruction worker. Run:
 pip install -e '.[qa]'
 kumiki-blender reference-audit --manifest /path/to/references.json
 kumiki-blender reconstruct-photos --manifest /path/to/references.json \
-  --output .review/your-monument/reconstruction-r01
+  --output .review/your-monument/reconstruction-r01 --undistort
 ```
 
-This is a genuine multi-image camera/geometry *evidence* path, not another
-procedural facial sculpt. It is not automatic statue photogrammetry from
-arbitrary web photos, and no successful technical step certifies facial
-likeness. Historical survey geometry, source-specific artistic sculpting,
-registered multi-view review and production GLB baking remain separate work.
+Then use `prepare-camera-plan` with manually matched 3D landmark coordinates,
+`render-reference-scene` for an editable Blender scene with the registered
+photo cameras, and `silhouette-qa` to compare neutral-clay renders against
+manually checked statue masks. See the [full camera and mask workflow](docs/REFERENCE_RECONSTRUCTION.md).
+This is genuine multi-image camera/geometry *evidence*, not another procedural
+facial sculpt or automatic statue photogrammetry from arbitrary web photos.
+No technical score certifies facial likeness. Historical survey geometry,
+source-specific artistic sculpting and production GLB baking remain separate work.
 
 ## New: Agent-authored AssetSpec v2 composer
 

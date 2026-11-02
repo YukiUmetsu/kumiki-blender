@@ -24,7 +24,7 @@ jobs:
       - name: Test photo-reference evidence and COLMAP worker boundary
         env:
           PYTHONPATH: src
-        run: python -m unittest tests.test_reconstruction_references tests.test_reconstruction_colmap tests.test_reconstruction_cli -v
+        run: python -m unittest tests.test_reconstruction_references tests.test_reconstruction_colmap tests.test_reconstruction_cli tests.test_reconstruction_cameras tests.test_reconstruction_silhouettes -v
       - name: Test measured Khufu masonry and Sphinx source intake
         env:
           PYTHONPATH: src
@@ -128,6 +128,13 @@ jobs:
           python -m kumiki_blender visual-qa \
             --revision .review/ci/control-enclosure --output .review/ci/control-enclosure-visual-qa
           test -s .review/ci/control-enclosure-visual-qa/contact-sheet.png
+      - name: Verify registered SfM camera projection and clay masks inside real Blender
+        run: |
+          blender --background --factory-startup --threads 2 --python-exit-code 1 \
+            --python scripts/smoke_reference_scene.py -- \
+            .review/ci/desk-lamp/model.glb .review/ci/reference-camera-review
+          test -s .review/ci/reference-camera-review/reference-review.blend
+          test -s .review/ci/reference-camera-review/renders/test-angle-0.png
       - name: Audit portable GLB and immutable revision
         env:
           PYTHONPATH: src
@@ -169,6 +176,15 @@ jobs:
             .review/ci/control-enclosure/
             .review/ci/control-enclosure-visual-qa/
             .review/ci/composer-textures/
+          if-no-files-found: warn
+      - name: Upload calibrated camera projection smoke previews
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: camera-projection-blender-qa
+          path: |
+            .review/ci/reference-camera-review/
+            .review/ci/reference-scene-synthetic-input/
           if-no-files-found: warn
 
   tests:
