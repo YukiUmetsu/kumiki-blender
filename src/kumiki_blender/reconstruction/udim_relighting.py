@@ -44,6 +44,8 @@ def _matched_photo_entries(package: Path, count: int) -> list[dict[str, Any]]:
     if (dense.is_symlink() or not dense.is_dir()
             or (dense / "dense-report.json").is_symlink()):
         raise ReferenceError("UDIM source dense reconstruction is missing")
+    if _sha256(dense / "dense-report.json") != finish_report.get("source_dense_report_sha256"):
+        raise ReferenceError("UDIM source dense report changed since texture finishing")
     cameras = _matched_scan_cameras(_json(dense / "dense-report.json"), count)
     if any((Path(item["source_photo_path"]).stat().st_size > 512 * 1024 * 1024
             or Path(item["source_photo_path"]).suffix.lower()

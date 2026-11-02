@@ -376,8 +376,18 @@ class TextureFinishTests(unittest.TestCase):
         self.assertEqual(solo["comparison"], [])
         self.assertIsNone(solo["gallery"])
         self.assertTrue((scene_only / solo["blend"]["path"]).is_file())
-        (photos / "frame-0.jpg").write_bytes(b"changed registered photograph")
+        first_photo = photos / "frame-0.jpg"
+        original_photo_bytes = first_photo.read_bytes()
+        first_photo.write_bytes(b"changed registered photograph")
         broken_output = self.root / "relighting-broken-source"
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(main(["render-udim-material-review", "--udim-package", str(package),
+                                   "--output", str(broken_output), "--matched-views", "2"]), 2)
+        self.assertFalse(broken_output.exists())
+        first_photo.write_bytes(original_photo_bytes)
+        modified_dense = json.loads(dense_file.read_text())
+        modified_dense["source_revision"] = str(source) + "/changed"
+        dense_file.write_text(json.dumps(modified_dense))
         with contextlib.redirect_stderr(io.StringIO()):
             self.assertEqual(main(["render-udim-material-review", "--udim-package", str(package),
                                    "--output", str(broken_output), "--matched-views", "2"]), 2)
