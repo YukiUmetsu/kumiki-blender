@@ -94,12 +94,14 @@ class BlenderPhysicsTests(unittest.TestCase):
 
             def motion(model, destination, **options):
                 self.assertTrue(options["merge_clips"])
+                self.assertTrue(options["resample_mixed"])
                 self.assertEqual(options["action_id"], "fastener-drop")
                 Path(destination).write_text("[]", encoding="utf-8")
                 return {"tracks": 2, "contacts": 0, "frames": 120}
 
-            def bake(_bpy, _scene, objects):
+            def bake(_bpy, _scene, objects, _shot, _assignments):
                 events.append(("bake", tuple(obj.name for obj in objects)))
+                return {}
 
             with patch("kumiki_blender.blender_physics._bake_evaluated_transforms", side_effect=bake), patch("kumiki_blender.blender_physics.audit_glb", return_value={
                 "bytes": 8, "meshes": 3, "nodes": 3, "materials": 1,

@@ -29,7 +29,23 @@ The output directory must **not exist**. The original `.blend` is never overwrit
 
 Use `baked-actions.json` in `loadBlenderRevision(..., { bakedActions })` and select the generated action in Storybook with the portable camera/lighting inspector. This motion-only bundle has **no rendered preview images** and is not a full visual-QA revision; review Blender viewport frames and rendered video before production approval. If the glTF exporter cannot represent a shot faithfully (non-TRS clips, overlapping actions, untagged nodes), the build fails explicitly.
 
-Physics is assigned only to explicitly targeted editable meshes. `name:<exact Blender object name>` selects one mesh (and automatically gives an untagged selected object a safe `kumiki_part` role); `role:<kumiki_part>` applies a rule to all matching meshes. All selected bodies are checked for overlaps and the animation is sampled from frame zero at a 30-fps reference rate, producing exactly `duration_frames` of playback. In headless Blender 4.5, the worker samples evaluated Bullet transforms and inserts native object keyframes because the standard `bpy.ops.rigidbody.bake_to_keyframes` operator requires an unavailable UI keying context. The generic shot intentionally does not infer collision forces or SFX events from curves.
+Physics is assigned only to explicitly targeted editable meshes. `name:<exact Blender object name>` selects one mesh (and automatically gives an untagged selected object a safe `kumiki_part` role); `role:<kumiki_part>` applies a rule to all matching meshes. All selected bodies are checked for overlaps and the animation is sampled from frame zero at a 30-fps reference rate, producing exactly `duration_frames` of playback. In headless Blender 4.5, the worker samples evaluated Bullet transforms and inserts native object keyframes because the standard `bpy.ops.rigidbody.bake_to_keyframes` operator requires an unavailable UI keying context. The generic shot does not guess arbitrary collision forces or contacts from gravity equations.
+
+### Reusable hinges, sliders and welded joints
+
+Use [the mechanical joint example](../examples/mechanical-constraints-physics-shot.json) for a real Blender-native three-joint demonstration. Each rule names two already-configured rigid bodies; `role:` is allowed only if it uniquely selects one body. `pivot_m` is the world-space joint anchor and `axis` is a unit vector. Hinge rotation uses the constraint helper's Z axis; slider translation uses its X axis, automatically oriented to `axis`.
+
+```json
+{"id":"door-pin","kind":"hinge","body_a":"name:door-frame","body_b":"name:door-panel","pivot_m":[0,0,1],"axis":[0,0,1],"limits_deg":[-70,70]}
+```
+
+Other supported types: `slider` with `limits_m` and `fixed` without limits. All use Blender Bullet constraints, not handcrafted keyframes. Joint helpers remain in the editable `.blend` but are excluded from the portable GLB. Conflicting role selectors and invalid/out-of-order limits fail before the bake.
+
+### Ground-impact audio cues
+
+If `ground` exists, the builder conservatively derives audio cue candidates from **sampled Bullet transforms and actual mesh bounds**: a body must approach the authored ground plane, have measurable downward speed and subsequently remain supported or rebound. Example body option: `"impact_material":"metal-on-floor"`. The PM2 action contains fractional-frame `{frame,target,speedMps,material}` records, aligned to canonical GLB semantic part IDs.
+
+This is **not** Bullet's native contact impulse/manifold: timings are frame-interpolated estimates, and glancing hits or body-to-body contacts may not be detected. The worker suppresses pass-throughs, ambiguous IDs and unverified non-ground contacts. Missing evidence means **no cue**, not an invented sound. Use the independent [`export-motion --contacts`](#one-command-after-baking) path for artist-verified or externally measured contacts.
 
 ## One command after baking
 
@@ -43,6 +59,10 @@ kumiki-blender export-motion --model model.glb --clip "RigidBodyAction" \
 
 # If Blender emitted one disjoint clip per rigid body:
 kumiki-blender export-motion --model model.glb --merge-clips --output baked-actions.json
+
+# Blender may emit LINEAR position but STEP constant rotation on one object;
+# this explicit opt-in preserves every 30-fps rendered frame, not subframes:
+kumiki-blender export-motion --model model.glb --merge-clips --resample-mixed --output baked-actions.json
 ```
 
 The output is a **PM2 action array**, ready to supply to the pending Kumiki-UI `loadBlenderRevision(..., { bakedActions })` bridge. It includes 30-fps reference frames, per-node absolute local translation/quaternion/scale, and any explicitly supplied contact timestamps. A full source GLB glTF clip is still playable in the existing asset bridge; the sidecar adds a renderer-neutral, bounded motion contract and SFX cues.
@@ -81,11 +101,11 @@ hero.dispose(); factory.release();
 
 ## Accuracy and limits
 
-- Only glTF **node-local translation/rotation/scale** clips with FLOAT accessors and `LINEAR` or `STEP` interpolation are accepted. Rotation interpolation uses shortest-path quaternion slerp. `CUBICSPLINE`, morph/cloth vertex cache and arbitrary bone animation without semantic node tags fail explicitly. Mixed STEP/LINEAR channels on one node are rejected because PM2 has per-track interpolation.
+- Only glTF **node-local translation/rotation/scale** clips with FLOAT accessors and `LINEAR` or `STEP` interpolation are accepted. Rotation interpolation uses shortest-path quaternion slerp. `CUBICSPLINE`, morph/cloth vertex cache and arbitrary bone animation without semantic node tags fail explicitly. Mixed STEP/LINEAR channels on one node are rejected by default; `--resample-mixed` converts them to per-frame linear PM2 tracks for 30-fps video, with no guarantee of subframe parity.
 - Names and role ordinals follow the exported GLB's default scene DFS order, not raw Blender collection order. Avoid editing GLB hierarchy after creating the sidecar. A node with a matrix instead of animatable TRS is rejected.
 - Duration: up to 120 seconds at 30-fps reference, 128 animated nodes, 120,000 sampled transform keys, 4,096 contact cues. Large sequences should be split into clips for rendering and editing. The source GLB is capped at 512 MiB; animation accessors are read via bounded file offsets without loading all mesh geometry into memory.
 - `export-motion` is an interchange converter, **not a rigid-body physics solver or an artistic fidelity certificate**. Genuine Blender reference-frame comparison remains mandatory. Cloth/soft-body geometry needs morph targets or a separate vertex-cache pipeline.
 
-Real Blender QA: `scripts/blender_physics_smoke.py` creates two falling metal cubes and an unexported floor, simulates them in Blender 4.5, and checks that the GLB has exactly two semantic animated nodes and that neither penetrates the floor. The PR CI additionally bakes the **actual 12 fasteners** in the existing desk-lamp AssetSpec, checks their vertical trajectories and uploads `.blend`, GLB, PM2 and manifest artifacts for independent inspection.
+Real Blender QA: `scripts/blender_physics_smoke.py` creates two falling metal cubes and an unexported floor, simulates them in Blender 4.5, and checks that the GLB has exactly two semantic animated nodes, neither penetrates the floor and at least one grounded SFX cue is measured. `scripts/blender_physics_constraints_smoke.py` verifies all three native constraint kinds: pendulum hinge falls, slider moves within its bounds, welded body remains fixed. The PR CI additionally bakes the **actual 12 fasteners** in the existing desk-lamp AssetSpec, checks trajectories and nonzero grounded contact cues, and uploads `.blend`, GLB, PM2 and manifest artifacts for independent inspection.
 
 Blender references: [Rigid Body Python API](https://docs.blender.org/api/4.5/bpy.ops.rigidbody.html), [Rigid Body Introduction](https://docs.blender.org/manual/en/latest/physics/rigid_body/introduction.html).

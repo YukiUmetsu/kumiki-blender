@@ -46,7 +46,7 @@ def main(folder: str) -> None:
         "ground": {"height_m": 0, "friction": .7, "restitution": .08},
         "bodies": [
             {"target": "role:hardware", "kind": "active", "mass_kg": .3,
-             "restitution": .22, "friction": .5},
+             "restitution": .22, "friction": .5, "impact_material": "metal-on-floor"},
         ],
     })
     build_physics_shot(bpy, plan, root / "physics-r01")
@@ -61,6 +61,10 @@ def main(folder: str) -> None:
         raise RuntimeError(f"Real rigid-body bake failed to fall: {first:.3f} -> {end:.3f} m")
     if any(key["position"][1] < .02 for track in sidecar[0]["tracks"] for key in track["keys"]):
         raise RuntimeError("An animated body penetrated or fell through simulation-only ground")
+    contacts = sidecar[0]["contacts"]
+    if not contacts or not all(cue["material"] == "metal-on-floor" and .25 <= cue["speedMps"] <= 10
+                               and cue["target"].startswith("kumiki:hardware:") for cue in contacts):
+        raise RuntimeError("Real solver contact did not produce bounded canonical PM2 SFX cues")
     manifest = json.loads((root / "physics-r01" / "manifest.json").read_text())
     if not manifest["physics"]["has_collision_ground"] or manifest["glb_audit"]["semantic_nodes"] != 2:
         raise RuntimeError("Ground collider must exist in .blend but not leak into GLB")

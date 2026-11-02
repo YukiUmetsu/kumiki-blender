@@ -4,6 +4,8 @@
 
 For fully automated rigid-body shots, use `kumiki-blender plan-physics --spec examples/desk-lamp-physics-shot.json`, then `build-physics` under Blender with a saved `.blend` loaded. A declarative plan generates a new editable physics scene, GLB, and PM2 animation sidecar; it never overwrites source geometry.
 
+The same plan now supports native `hinge`, `slider` and `fixed` joints (see `examples/mechanical-constraints-physics-shot.json`) and conservative, measured ground-impact cues for SFX. Every constraint/impact is backed by a real Blender simulation; no per-model animation code is required.
+
 **New to Blender, 3D modeling, and this repository?** Start with the
 [beginner's step-by-step Wiki](https://github.com/YukiUmetsu/kumiki-blender/wiki): install the tools, generate your
 first tower, open it in Blender, change its color and dimensions, and learn how

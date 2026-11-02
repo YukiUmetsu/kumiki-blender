@@ -61,6 +61,28 @@ class PhysicsPlanTests(unittest.TestCase):
             with self.subTest(invalid=invalid), self.assertRaises(PhysicsPlanError):
                 parse_physics_plan({**VALID, "ground": invalid})
 
+    def test_reusable_fixed_hinge_slider_constraints_are_strictly_validated(self):
+        hinge = {"id": "door-pin", "kind": "hinge", "body_a": "name:post", "body_b": "name:panel",
+                 "pivot_m": [0, 0, 1], "axis": [0, 0, 1], "limits_deg": [-70, 70]}
+        slider = {"id": "rail", "kind": "slider", "body_a": "name:post", "body_b": "name:panel",
+                  "pivot_m": [0, 0, .4], "axis": [1, 0, 0], "limits_m": [-.2, .2]}
+        fixed = {"id": "bolt", "kind": "fixed", "body_a": "name:post", "body_b": "name:panel",
+                 "pivot_m": [0, 0, .4]}
+        shot = parse_physics_plan({**VALID, "constraints": [hinge, slider, fixed]})
+        self.assertEqual([item.kind for item in shot.constraints], ["hinge", "slider", "fixed"])
+        self.assertEqual(shot.constraints[0].limits, (-70, 70))
+        self.assertEqual(shot.constraints[1].axis, (1, 0, 0))
+        for invalid in ({**hinge, "limits_deg": [70, -70]},
+                        {**hinge, "axis": [0, 0, 0]},
+                        {**hinge, "limits_m": [-1, 1]},
+                        {**hinge, "body_b": "name:post"},
+                        {**hinge, "disable_collisions": "false"},
+                        {**hinge, "kind": "unknown"}):
+            with self.subTest(invalid=invalid), self.assertRaises(PhysicsPlanError):
+                parse_physics_plan({**VALID, "constraints": [invalid]})
+        with self.assertRaisesRegex(PhysicsPlanError, "unique"):
+            parse_physics_plan({**VALID, "constraints": [hinge, hinge]})
+
     def test_load_is_bounded_and_cli_plan_needs_no_blender(self):
         from kumiki_blender.cli import main
         import io
