@@ -109,6 +109,14 @@ private texture projection to produce a mesh for artistic inspection.
       --rectified-masks .review/statue/masks-r02/masks \
       --output .review/statue/mask-consistency-r01
 
+    # Compare r02 and optional r03 against identical sparse feature tracks.
+    # Positive deltas signal more disagreement, NOT automatic acceptance.
+    kumiki-blender compare-dense-masks \
+      --reconstruction .review/statue/sparse-r01 \
+      --baseline-masks .review/statue/masks-r02/masks \
+      --candidate-masks .review/statue/masks-r03/masks \
+      --output .review/statue/mask-compare-r02-r03
+
     # Use only reviewed masks; OpenMVS consumes <rectified-filename>.mask.png.
     kumiki-blender build-dense-photos \
       --reconstruction .review/statue/sparse-r01 \
@@ -294,6 +302,12 @@ nor a small sparse sample guarantee a good silhouette: consistently included
 background features and thin untracked anatomy still require manual review.
 All previews remain private and the audit never edits masks or automatically
 approves reconstruction.
+`compare-dense-masks` runs the same audit on a baseline and a revised mask
+folder, writes both private reviews, hashes the reports, ranks per-camera
+differences and flags increases in mixed 3D tracks or likely background leaks.
+Its `consistency_regressed` field is a **review alert**, not a proof of which
+mask is better. Keep the baseline when an optional candidate has not been
+visually justified.
 
 Loosening thresholds does not improve a weak reconstruction. Each stage logs
 its command and stdout/stderr. Failures preserve a diagnostic report instead
@@ -327,6 +341,10 @@ interpret from sparse tracks. Real-data runs also revealed that COLMAP can
 contain multiple observations of the same 3D track within one registered
 image; the auditor now deduplicates these votes and excludes contradictory
 within-camera labels rather than failing or double-counting them.
+The new `compare-dense-masks` command independently reproduced the conservative
+candidate's **+14 mixed tracks** and **+7 suspected excess-foreground votes**
+relative to the semantic baseline, set `consistency_regressed: true`, and
+ranked the affected cameras (notably views 012–014) for inspection.
 
 - OpenMVS: workspace/scene_dense_mesh.ply, optionally
   workspace/scene_dense_mesh_refined.ply and textured OBJ/atlas outputs.

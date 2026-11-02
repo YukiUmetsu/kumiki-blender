@@ -66,7 +66,9 @@ real multi-view statue tests show color cleanup can worsen mask agreement.
 `audit-dense-masks` checks whether the same COLMAP 3D
 feature is inconsistently included across rectified views and writes private
 direction-coded correction overlays, full-resolution detail crops and review
-coordinates. OpenMVS seam-leveling can be toggled when a specific build
+coordinates. `compare-dense-masks` reports source-pinned before/after mask
+disagreement changes without automatically approving either revision.
+OpenMVS seam-leveling can be toggled when a specific build
 produces dark texture patches. For projected
 texture darkness, broad color cast or exposure mismatch between atlas pages,
 `finish-dense-textures --balance-atlases` creates a separately SHA-pinned

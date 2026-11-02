@@ -4,6 +4,7 @@ import contextlib
 import hashlib
 import io
 import json
+import shutil
 import struct
 import tempfile
 import unittest
@@ -12,6 +13,7 @@ from pathlib import Path
 from PIL import Image
 
 from kumiki_blender.cli import main
+from kumiki_blender.reconstruction.mask_comparison import compare_multiview_masks
 from kumiki_blender.reconstruction.mask_consistency import audit_multiview_masks
 from kumiki_blender.reconstruction.references import ReferenceError
 
@@ -213,6 +215,58 @@ class MaskConsistencyTests(unittest.TestCase):
         self.assertEqual(image["consensus_outliers"], 0)
         self.assertEqual(image["tracked_observations"], 2)
         self.assertTrue(any("deduplicated" in warning for warning in image["warnings"]))
+
+    def _candidate_masks(self):
+        candidate = self.root / "candidate-masks"
+        candidate.mkdir()
+        for mask in self.masks.glob("*.mask.png"):
+            shutil.copy2(mask, candidate / mask.name)
+        return candidate
+
+    def test_compare_revisions_reports_improvement_without_auto_approval(self):
+        candidate = self._candidate_masks()
+        mask_path = candidate / "view-02.jpg.mask.png"
+        with Image.open(mask_path) as previous:
+            changed = previous.copy()
+        changed.putpixel((4, 40), 255)  # fixes single camera minority BG
+        changed.save(mask_path)
+        target = self.root / "comparison"
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(main([
+                "compare-dense-masks", "--reconstruction", str(self.sparse),
+                "--baseline-masks", str(self.masks),
+                "--candidate-masks", str(candidate),
+                "--output", str(target), "--max-overlay-points", "5",
+            ]), 0)
+        report = json.loads((target / "mask-comparison-report.json").read_text())
+        self.assertFalse(report["approved_for_reconstruction"])
+        self.assertFalse(report["distribution_allowed"])
+        self.assertEqual(report["delta"]["mixed_label_tracks_delta"], -1)
+        self.assertEqual(report["delta"]["possible_missing_subject_delta"], -1)
+        self.assertFalse(report["consistency_regressed"])
+        self.assertEqual(len(report["images"]), 3)
+        for group in ("baseline", "candidate"):
+            self.assertTrue((target / report[group]["audit"]).is_file())
+        with Image.open(self.masks / "view-02.jpg.mask.png") as unchanged:
+            self.assertEqual(unchanged.getpixel((4, 40)), 0)
+
+    def test_compare_flags_new_background_leak_and_invalid_sources(self):
+        candidate = self._candidate_masks()
+        path = candidate / "view-00.jpg.mask.png"
+        with Image.open(path) as previous:
+            changed = previous.copy()
+        changed.putpixel((4, 30), 255)  # introduces minority extra FG
+        changed.save(path)
+        target = self.root / "comparison-leak"
+        report = compare_multiview_masks(self.sparse, self.masks, candidate, target)
+        self.assertGreater(report["delta"]["mixed_label_tracks_delta"], 0)
+        self.assertEqual(report["delta"]["possible_background_leaks_delta"], 1)
+        self.assertTrue(report["consistency_regressed"])
+        for bad in (self.masks, self.root / "not-a-mask-folder"):
+            rejected = self.root / ("rejected-" + bad.name)
+            with self.assertRaises(ReferenceError):
+                compare_multiview_masks(self.sparse, self.masks, bad, rejected)
+            self.assertFalse(rejected.exists())
 
     def test_tampering_corrupt_tracks_or_no_overlap_rejects_without_output(self):
         target = self.root / "invalid"

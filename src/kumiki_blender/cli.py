@@ -228,6 +228,13 @@ def main(argv: list[str] | None = None) -> int:
     mask_consistency_parser.add_argument("--rectified-masks", type=Path, required=True)
     mask_consistency_parser.add_argument("--output", type=Path, required=True)
     mask_consistency_parser.add_argument("--max-overlay-points", type=int, default=200)
+    mask_comparison_parser = subcommands.add_parser(
+        "compare-dense-masks", help="Compare two registered mask revisions using identical COLMAP tracks")
+    mask_comparison_parser.add_argument("--reconstruction", type=Path, required=True)
+    mask_comparison_parser.add_argument("--baseline-masks", type=Path, required=True)
+    mask_comparison_parser.add_argument("--candidate-masks", type=Path, required=True)
+    mask_comparison_parser.add_argument("--output", type=Path, required=True)
+    mask_comparison_parser.add_argument("--max-overlay-points", type=int, default=200)
     texture_finish_parser = subcommands.add_parser(
         "finish-dense-textures", help="Non-destructive UV-atlas exposure, shadow and cast correction")
     texture_finish_parser.add_argument("--dense-revision", type=Path, required=True)
@@ -358,6 +365,17 @@ def main(argv: list[str] | None = None) -> int:
                 report = audit_multiview_masks(
                     args.reconstruction, args.rectified_masks, args.output,
                     max_overlay_points=args.max_overlay_points)
+            except ReferenceError as error:
+                raise RecipeError(str(error)) from error
+            print(json.dumps(report, indent=2))
+            return 0
+        if args.command == "compare-dense-masks":
+            from .reconstruction.mask_comparison import compare_multiview_masks
+            from .reconstruction.references import ReferenceError
+            try:
+                report = compare_multiview_masks(
+                    args.reconstruction, args.baseline_masks, args.candidate_masks,
+                    args.output, max_overlay_points=args.max_overlay_points)
             except ReferenceError as error:
                 raise RecipeError(str(error)) from error
             print(json.dumps(report, indent=2))
