@@ -98,6 +98,29 @@ class ChristRedeemerTests(unittest.TestCase):
             self.assertAlmostEqual(report["hair_bounds_max_z_m"], 38.0, delta=.1)
 
     @unittest.skipUnless(os.environ.get("KUMIKI_BLENDER_BINARY"),
+                         "Set KUMIKI_BLENDER_BINARY for the scalp topology experiment")
+    def test_scalp_surface_study_uses_one_head_derived_patch(self):
+        with tempfile.TemporaryDirectory() as directory:
+            metrics = Path(directory) / "scalp-study.json"
+            command = [os.environ["KUMIKI_BLENDER_BINARY"], "--background",
+                       "--factory-startup", "--python-exit-code", "1",
+                       "--python", str(SCRIPT), "--", "--head-study",
+                       "--face-method", "anatomical", "--scalp-surface-hair",
+                       "--metrics", str(metrics)]
+            process = subprocess.run(command, capture_output=True, text=True, timeout=75)
+            self.assertEqual(process.returncode, 0, process.stdout[-1800:] +
+                             process.stderr[-1800:])
+            report = json.loads(metrics.read_text())
+            self.assertTrue(report["scalp_surface_hair"])
+            self.assertFalse(report["integrated_hair"])
+            self.assertEqual(report["mesh_count"], 4)
+            self.assertGreater(report["hair_surface_vertices"], 7000)
+            self.assertGreater(report["hair_bounds_width_m"], 2.5)
+            self.assertLess(report["hair_bounds_width_m"], 3.5)
+            self.assertGreater(report["hair_bounds_min_z_m"], 34.0)
+            self.assertAlmostEqual(report["hair_bounds_max_z_m"], 38.0, delta=.1)
+
+    @unittest.skipUnless(os.environ.get("KUMIKI_BLENDER_BINARY"),
                          "Set KUMIKI_BLENDER_BINARY for the live Blender QA test")
     def test_headless_build_dimensions_normals_and_portable_glb(self):
         executable = os.environ["KUMIKI_BLENDER_BINARY"]

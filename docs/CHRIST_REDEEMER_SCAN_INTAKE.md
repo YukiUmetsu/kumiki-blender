@@ -146,6 +146,36 @@ surface topology* registered to the real subject, or use licensed authentic
 scan geometry. Another parameter change to the same ellipsoidal sweeps is not
 an acceptable third attempt. The face and hair remain a visual HOLD.
 
+### Anatomy-surface hair study — topology checkpoint (also HOLD)
+
+The next candidate `--scalp-surface-hair` changes **the source of its geometry**:
+it extracts one connected high-density scalp quad patch from the CC0 anatomy
+mesh, preserves its exact anatomical surface correspondence, relaxes the
+boundary loops, and extends the side and rear skin over the neck. This is not
+another ellipsoidal loft, and it leaves the donor's sculpted face intact.
+
+```bash
+blender -b --factory-startup --python scripts/landmarks/christ_redeemer.py -- \
+  --head-study --face-method anatomical --scalp-surface-hair --verify \
+  --views .review/christ_redeemer/scalp-surface \
+  --shot head_front --shot head_profile --shot head_three_quarter --shot head_low
+```
+
+The first `scalp_surface_r13` clay views exposed a stepped forehead boundary,
+copied ear bumps and an undersized side curtain. `r14` smooths the boundary
+and extends the selected neck/temple surface; it **does improve contour
+continuity** but the forehead still looks bald, the ear forms protrude, and
+the hair terminates as side bulges rather than long carved locks. Real-subject
+front and low-oblique photographs were inspected against both renders in
+**unregistered, qualitative** comparison sheets. **Both surface passes fail
+the likeness gate**; this method is now frozen as an editable sculpt foundation,
+not promoted to the full figure or GLB.
+
+No currently authorized authentic monument mesh or registered photo-camera
+set constrains the actual scalp-to-shoulder surface. Subsequent genuine
+sculpting/retopology requires that target evidence or manual artist-directed
+3D fitting; more procedural hair masks cannot establish photo fidelity.
+
 | Reconstruction gate | Decision | Evidence / unresolved work |
 | --- | --- | --- |
 | Authentic subject foundation | **HOLD** | S1/S2 clearly depict the monument, but no authorized high-detail scan mesh is available; A1 is only a generic donor. |

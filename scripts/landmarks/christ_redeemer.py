@@ -970,7 +970,118 @@ def sculpted_anatomical_hair_mantle():
     return objects
 
 
-def build_anatomical_head_study(path, integrated_hair=False):
+def sculpt_scalp_surface_from_anatomy(head):
+    """Extract the donor's *real scalp topology* as a sculptable stone layer.
+
+    Unlike the failed free-form hood lofts, every source surface point comes
+    from the anatomical quad mesh. A rearward neck drape is added to that
+    source topology while the forehead hairline is kept on the skull.
+    This is a candidate 3D sculpt, not a registered monument reconstruction.
+    """
+    def ease(value):
+        t=max(0.,min(1.,value))
+        return t*t*(3-2*t)
+
+    vertices=head.data.vertices
+    def hairline(co):
+        rear=ease((co.y+.075)/.100)
+        side=ease((abs(co.x)-.047)/.070)
+        return .347-.285*rear-.100*rear*side-.053*side
+
+    selected=[]
+    for polygon in head.data.polygons:
+        center=sum((vertices[i].co for i in polygon.vertices),Vector())/len(polygon.vertices)
+        if center.z>hairline(center):
+            selected.append(tuple(polygon.vertices))
+    if not selected:
+        raise ValueError("No anatomical scalp faces in the selected hairline")
+
+    # Retain the largest connected patch. Separate little islands at the ear
+    # or undercut must not turn into free-floating pieces of stone hair.
+    vertex_to_faces={}
+    for index,face in enumerate(selected):
+        for vertex_id in face:
+            vertex_to_faces.setdefault(vertex_id,[]).append(index)
+    visited=set()
+    components=[]
+    for start in range(len(selected)):
+        if start in visited:
+            continue
+        stack=[start]
+        visited.add(start)
+        group=[]
+        while stack:
+            index=stack.pop()
+            group.append(index)
+            for vertex_id in selected[index]:
+                for adjacent in vertex_to_faces[vertex_id]:
+                    if adjacent not in visited:
+                        visited.add(adjacent)
+                        stack.append(adjacent)
+        components.append(group)
+    selected=[selected[index] for index in max(components,key=len)]
+    mapped={}
+    positions=[]
+    faces=[]
+    for face in selected:
+        remapped=[]
+        for original_id in face:
+            if original_id not in mapped:
+                source=vertices[original_id]
+                co=source.co.copy()
+                rear=ease((co.y+.070)/.120)
+                side=ease((abs(co.x)-.050)/.07)
+                lower=ease((.315-co.z)/.19)
+                attachment=ease((co.z-hairline(co))/.028)
+                # Project a separate scalp skin out along the true head
+                # normal. The front hairline stays close to the forehead;
+                # the lower rear region drapes over, rather than deforms,
+                # the donor's cervical column.
+                co+=source.normal*(.004+.008*attachment)
+                drape=rear*lower*attachment
+                co.y+=.034*drape
+                co.x+=math.copysign((.014+.012*side)*drape,co.x)
+                mapped[original_id]=len(positions)
+                positions.append(tuple(co))
+            remapped.append(mapped[original_id])
+        faces.append(tuple(remapped))
+    mesh=bpy.data.meshes.new("Hair | extracted scalp quad topology")
+    mesh.from_pydata(positions,[],faces)
+    mesh.update()
+    # A raw per-face selection creates stair-stepped outlines at the
+    # forehead/temples. Relax only the boundary graph, preserving interior
+    # anatomical correspondence and a clean sculptable hairline contour.
+    counts={}
+    for face in faces:
+        for a,b in zip(face,face[1:]+face[:1]):
+            edge=tuple(sorted((a,b)))
+            counts[edge]=counts.get(edge,0)+1
+    boundary={}
+    for (a,b),count in counts.items():
+        if count==1:
+            boundary.setdefault(a,set()).add(b)
+            boundary.setdefault(b,set()).add(a)
+    for _ in range(10):
+        previous=[v.co.copy() for v in mesh.vertices]
+        for index,neighbors in boundary.items():
+            average=sum((previous[j] for j in neighbors),Vector())/len(neighbors)
+            mesh.vertices[index].co=previous[index].lerp(average,.46)
+    mesh.update()
+    ob=bpy.data.objects.new("Hair | anatomy-derived sculptable scalp drape",mesh)
+    bpy.context.collection.objects.link(ob)
+    ob.data.materials.append(STONE)
+    for poly in mesh.polygons:
+        poly.use_smooth=True
+    solid=ob.modifiers.new("Physical stone hairline and drape thickness","SOLIDIFY")
+    solid.thickness=.009
+    solid.offset=-1
+    solid.use_rim=True
+    ob.scale=(11.,11.,11.)
+    ob.location=(0,0,34.03)
+    return ob
+
+
+def build_anatomical_head_study(path, integrated_hair=False, scalp_surface_hair=False):
     """Prototype a real quad-topology head instead of more 2D face relief.
 
     The selected path must be a rights-cleared anatomical OBJ with one
@@ -1082,6 +1193,8 @@ def build_anatomical_head_study(path, integrated_hair=False):
             polygon.use_smooth=True
     if integrated_hair:
         parts.extend(sculpted_anatomical_hair_mantle())
+    if scalp_surface_hair:
+        parts.append(sculpt_scalp_surface_from_anatomy(head))
     # Newly created loft objects can carry stale matrix_world values until
     # a dependency-graph update. Applying the gaze tilt first accidentally
     # put the entire hair volume near the scene origin, outside every camera.
@@ -1280,6 +1393,8 @@ def main():
                    help="CC0 anatomical OBJ, used only in --head-study anatomical mode")
     p.add_argument("--integrated-hair",action="store_true",
                    help="Clay-only continuous scalp and neck hair-mass study")
+    p.add_argument("--scalp-surface-hair",action="store_true",
+                   help="Clay-only anatomy-surface retopology study (not loft hair)")
     p.add_argument("--samples",type=int,default=16)
     p.add_argument("--size",type=int,default=720)
     p.add_argument("--shot",action="append",choices=("front","profile","three_quarter",
@@ -1295,9 +1410,14 @@ def main():
         p.error("Anatomical mode is a clay-only reconstruction HOLD, not a full export")
     if args.integrated_hair and (not args.head_study or FACE_METHOD != "anatomical"):
         p.error("--integrated-hair requires --head-study --face-method anatomical")
+    if args.scalp_surface_hair and (not args.head_study or FACE_METHOD != "anatomical"):
+        p.error("--scalp-surface-hair requires --head-study --face-method anatomical")
+    if args.scalp_surface_hair and args.integrated_hair:
+        p.error("Choose one hair reconstruction foundation")
     if args.head_study:
         if FACE_METHOD == "anatomical":
-            build_anatomical_head_study(args.anatomy_base,args.integrated_hair)
+            build_anatomical_head_study(args.anatomy_base,args.integrated_hair,
+                                       args.scalp_surface_hair)
         else:
             build_head_study()
         head=next(ob for ob in bpy.data.objects
@@ -1313,12 +1433,13 @@ def main():
                  "mesh_count":sum(ob.type=="MESH" for ob in bpy.data.objects)}
         if FACE_METHOD == "anatomical":
             metrics["integrated_hair"]=args.integrated_hair
-            if args.integrated_hair:
+            metrics["scalp_surface_hair"]=args.scalp_surface_hair
+            if args.integrated_hair or args.scalp_surface_hair:
                 hair_objs=[obj for obj in bpy.data.objects
                            if obj.name.startswith("Hair | ")]
                 hair_points=[obj.matrix_world @ v.co
                              for obj in hair_objs for v in obj.data.vertices]
-                assert len(hair_objs)==3 and hair_points
+                assert len(hair_objs)==(1 if args.scalp_surface_hair else 3) and hair_points
                 metrics["hair_surface_vertices"]=len(hair_points)
                 metrics["hair_bounds_min_z_m"]=round(min(p.z for p in hair_points),3)
                 metrics["hair_bounds_max_z_m"]=round(max(p.z for p in hair_points),3)
