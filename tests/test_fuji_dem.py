@@ -17,7 +17,8 @@ from kumiki_blender.geography.fuji.blender_scene import (ROCK_NORMAL_TILES, _val
                                                         plan_fuji_shots, terrain_color)
 from kumiki_blender.geography.fuji.iconic_scene import (
     ICONIC_BLUE_BASALT, ICONIC_TREE_LINE, SAKURA_PETAL_PALETTE,
-    iconic_spec, plan_iconic_shots, _snow_limit,
+    ICONIC_FUJI_BASE_Z, ICONIC_FUJI_VERTICAL_SCALE, ICONIC_FUJI_RADIUS_SCALE,
+    iconic_spec, plan_iconic_shots, _snow_limit, _fuji_profile,
 )
 
 
@@ -245,6 +246,11 @@ class FujiTerrainTests(unittest.TestCase):
         self.assertEqual(plan_iconic_shots()[0].name,"hero")
         self.assertGreater(_snow_limit(.2),0.25)
         self.assertLess(_snow_limit(.2),.43)
+        self.assertGreater(ICONIC_FUJI_VERTICAL_SCALE,1.5)
+        self.assertLess(ICONIC_FUJI_RADIUS_SCALE,1.1)  # Retain compact footprint.
+        enlarged_peak=(ICONIC_FUJI_BASE_Z+
+                       (_fuji_profile(.068)-ICONIC_FUJI_BASE_Z)*ICONIC_FUJI_VERTICAL_SCALE)
+        self.assertGreater(enlarged_peak,6.5)  # Dominates both trees and torii.
         self.assertGreater(ICONIC_BLUE_BASALT[2],ICONIC_BLUE_BASALT[0]*2)
         self.assertGreater(ICONIC_TREE_LINE[1],ICONIC_TREE_LINE[0]*2)
         self.assertGreater(len(SAKURA_PETAL_PALETTE),4)

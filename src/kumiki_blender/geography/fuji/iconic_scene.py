@@ -25,17 +25,23 @@ ICONIC_TREE_LINE=(.082,.213,.145)
 SAKURA_PETAL_PALETTE=((.98,.46,.63),(.99,.67,.78),(.997,.83,.87),
                       (.92,.34,.51),(.97,.70,.80))
 
+# Iconic staging: Fuji deliberately dominates the shrine and flowering trees,
+# while its footprint stays inside the same compact 10.2 × 8.6 diorama base.
+ICONIC_FUJI_BASE_Z=.57
+ICONIC_FUJI_VERTICAL_SCALE=1.62
+ICONIC_FUJI_RADIUS_SCALE=1.06
+
 
 def plan_iconic_shots() -> tuple[QualityShot, ...]:
     """Hero plus scrutiny of the emblematic geometry and small-footprint layout."""
     return (
-        QualityShot("hero", (9.8, -17.4, 9), (0, 0, 2.0), 11.9),
-        QualityShot("front", (0, -18, 6.3), (0, 0, 2.05), 11.5),
-        QualityShot("opposite", (-13, -11, 7.5), (0, .2, 1.95), 12.1),
+        QualityShot("hero", (10.4, -18.4, 10.0), (0, 0, 2.82), 12.1),
+        QualityShot("front", (0, -19, 8.1), (0, 0, 2.75), 12.3),
+        QualityShot("opposite", (-13, -12, 9.0), (0, .2, 2.70), 12.5),
         QualityShot("torii-and-sakura", (5.8, -8.8, 4.7), (1.55, -2.25, 1.55), 5.0),
         QualityShot("sakura-botanical", (-6.4, -5.3, 3.7), (-3.1, -1.45, 2.0), 3.65),
-        QualityShot("snow-crown", (6.5, -6, 8.2), (0, .65, 3.68), 4.2),
-        QualityShot("footprint", (0, -1, 19), (0, 0, .35), 11.5),
+        QualityShot("snow-crown", (7.2, -7.1, 10.7), (0, .65, 5.9), 5.7),
+        QualityShot("footprint", (0, -1, 21), (0, 0, .35), 11.5),
     )
 
 
@@ -48,6 +54,8 @@ def iconic_spec(detail: str = "standard") -> dict[str, Any]:
         "detail": detail,
         "footprint_units": [10.2, 8.6],
         "vertical_scale": "intentionally exaggerated and non-geographic",
+        "fuji_vertical_multiplier": ICONIC_FUJI_VERTICAL_SCALE,
+        "fuji_radius_multiplier": ICONIC_FUJI_RADIUS_SCALE,
         "landmarks": ["Fuji snow crown", "vermillion torii", "flowering sakura"],
         "terrain_divisions": {"preview": 144, "standard": 240, "high": 360}[detail],
         "sakura_blossom_target": {"preview": 1500, "standard": 3700, "high": 8500}[detail],
@@ -352,7 +360,16 @@ def _mountain(bpy: Any, model: Any, mats: dict, divisions: int) -> list:
             rim_faces.append((k*n+j,(k+1)*n+j,(k+1)*n+(j+1)%n,k*n+(j+1)%n))
     rim=_mesh(bpy,model,"Summit / recessed volcanic rim and dark caldera",
               rim_verts,rim_faces,mats["crater"],smooth=True)
-    return [flank,cap,rim]
+    mountain=(flank,cap,rim)
+    for obj in mountain:
+        # Grow only Fuji. Torii, path, pedestal and sakura retain their sizes;
+        # stretch from ground height so the mountain never floats above it.
+        for vertex in obj.data.vertices:
+            vertex.co.x*=ICONIC_FUJI_RADIUS_SCALE
+            vertex.co.y=.65+(vertex.co.y-.65)*ICONIC_FUJI_RADIUS_SCALE
+            vertex.co.z=ICONIC_FUJI_BASE_Z+(vertex.co.z-ICONIC_FUJI_BASE_Z)*ICONIC_FUJI_VERTICAL_SCALE
+        obj.data.update()
+    return list(mountain)
 
 
 def _box(bpy: Any, model: Any, name: str, center: tuple, size: tuple, mat: Any) -> Any:

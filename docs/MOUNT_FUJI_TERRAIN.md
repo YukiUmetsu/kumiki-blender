@@ -12,6 +12,22 @@ The iconic model deliberately sacrifices realistic dimensions and geography.
 It is a miniature symbol rather than a topographic study. All landmarks and
 five-petal flowers are **actual exportable mesh**, not camera-facing sprites.
 
+## r12 — Fuji as the dominant landmark
+
+The compact iconic scene now gives Mount Fuji much stronger visual hierarchy:
+the mountain's modeled height is increased **1.62×** and its radius **1.06×**,
+measured from the mountain's foot. The torii, sakura trees, stepping stones,
+garden and plinth remain their original sizes, and the display footprint is
+still **10.2 × 8.6 units**. This is intentional miniaturized stage design,
+not a change to the geographically accurate Fuji variant.
+
+The flank, irregular snowcap and recessed summit rim grow together; their
+portable GLB albedo textures and original blue-green, white and sakura-pink
+palette remain intact. Wider hero, frontal and opposite camera framing keeps
+the enlarged peak in view, with separate details for the snow crown and
+blossoms. Inspect both the source renders and an independently re-imported
+GLB to confirm the relative scale and materials survived export.
+
 ## r11 — portable color for the iconic Sakura/Torii GLB
 
 The r10 miniature already had pink vertex-painted sakura, blue-grey/green
