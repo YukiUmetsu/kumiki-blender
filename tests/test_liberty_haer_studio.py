@@ -16,6 +16,16 @@ spec.loader.exec_module(studio)
 
 
 class LibertyHaerStudioTests(unittest.TestCase):
+    def test_replica_links_are_reference_only_and_not_authentic_survey(self):
+        references = studio.REPLICA_VIEWER_REFERENCES
+        self.assertGreaterEqual(len(references), 3)
+        self.assertEqual(len({url for _, url, _ in references}), len(references))
+        for label, url, note in references:
+            self.assertIn("replica" if "jerryfisher" not in label else "bronze", label.lower())
+            self.assertTrue(url.startswith("https://sketchfab.com/3d-models/"))
+            self.assertNotIn("nps.gov", url)
+            self.assertTrue(note)
+
     def test_sources_are_distinct_installed_head_photographs(self):
         self.assertEqual([view.survey_id for view in studio.ARCHIVED_VIEWS], [
             f"HAER NY-138-{n}" for n in range(236, 242)])
