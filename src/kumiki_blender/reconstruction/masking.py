@@ -16,6 +16,7 @@ from .dense import (DenseSettings, _json, _sha256,
 from .references import ReferenceError
 
 _DEFAULT_BOX = (0.12, 0.04, 0.88, 0.96)
+_ISNET_SHA256 = "60920e99c45464f2ba57bee2ad08c919a52bbf852739e96947fbb4358c0d964a"
 
 
 def _normalized_pair(value: Any, label: str) -> tuple[float, float]:
@@ -116,22 +117,70 @@ def _grabcut(photo: Any, guide: dict[str, Any], max_side: int,
     return binary
 
 
+def _rembg_mask(photo: Any, session: Any) -> Any:
+    """Optional semantic foreground candidate, with an explicitly selected model."""
+    import numpy as np  # type: ignore[import-not-found]
+    from rembg import remove  # type: ignore[import-not-found]
+
+    result = remove(photo.convert("RGB"), session=session, only_mask=True)
+    if not hasattr(result, "convert"):
+        raise ReferenceError("Background model did not return a Pillow mask")
+    alpha = np.asarray(result.convert("L"))
+    if alpha.shape != (photo.height, photo.width):
+        raise ReferenceError("Background model returned a mask in the wrong image dimensions")
+    binary = np.where(alpha >= 128, 255, 0).astype(np.uint8)
+    if not binary.any() or np.all(binary == 255):
+        raise ReferenceError("Background model produced an empty or entirely foreground mask")
+    return binary
+
+
+def _verified_model_sha(session: Any) -> str:
+    """Pin the published rembg IS-Net ONNX, not just a changeable model name."""
+    try:
+        path = Path(session.model_dir()) / "isnet-general-use.onnx"
+    except (AttributeError, TypeError) as error:
+        raise ReferenceError("Rembg session cannot identify its model weights") from error
+    if path.is_symlink() or not path.is_file() or _sha256(path) != _ISNET_SHA256:
+        raise ReferenceError("IS-Net background model weights differ from the recorded SHA-256")
+    return _ISNET_SHA256
+
+
 def generate_rectified_masks(reconstruction: str | Path, output: str | Path, *,
                              guides: str | Path | None = None,
                              center_box: tuple[float, ...] = _DEFAULT_BOX,
                              max_side: int = 1280,
-                             iterations: int = 5) -> dict[str, Any]:
+                             iterations: int = 5,
+                             segmenter: str = "grabcut") -> dict[str, Any]:
     """Make immutable mask candidates, overlays and QA metrics for every photo."""
     if type(max_side) is not int or not 256 <= max_side <= 4096:
         raise ReferenceError("Mask max_side must be 256–4096")
     if type(iterations) is not int or not 1 <= iterations <= 12:
         raise ReferenceError("GrabCut iterations must be 1–12")
+    if segmenter not in ("grabcut", "rembg"):
+        raise ReferenceError("Mask segmenter must be grabcut or rembg")
+    if segmenter == "rembg" and guides is not None:
+        raise ReferenceError("Rembg uses semantic inference; use grabcut for manual per-photo box/point guides")
     default_box = _box(center_box)
     try:
-        import cv2  # noqa: F401  # type: ignore[import-not-found]
         from PIL import Image, ImageDraw
     except ImportError as error:
-        raise ReferenceError("Mask generation requires pip install -e '.[masks]'") from error
+        raise ReferenceError("Mask generation requires Pillow (install the masks extra)") from error
+    session = None
+    model_sha = None
+    if segmenter == "rembg":
+        try:
+            from rembg import new_session  # type: ignore[import-not-found]
+        except ImportError as error:
+            raise ReferenceError("Semantic masking requires pip install -e '.[mask-ai]'") from error
+        # The library may download weights at first invocation. Never select
+        # rembg's default (which can change to a differently licensed model).
+        session = new_session("isnet-general-use")
+        model_sha = _verified_model_sha(session)
+    else:
+        try:
+            import cv2  # noqa: F401  # type: ignore[import-not-found]
+        except ImportError as error:
+            raise ReferenceError("GrabCut masking requires pip install -e '.[masks]'") from error
     plan = plan_dense_reconstruction(reconstruction, output,
                                      DenseSettings(min_registered_images=3,
                                                    min_registered_fraction=0.25,
@@ -149,6 +198,9 @@ def generate_rectified_masks(reconstruction: str | Path, output: str | Path, *,
     report: dict[str, Any] = {
         "schema_version": 1, "source_revision": str(source),
         "guide_sha256": guide_sha, "max_side": max_side, "iterations": iterations,
+        "segmenter": segmenter,
+        "segmentation_model": "isnet-general-use" if segmenter == "rembg" else None,
+        "segmentation_model_sha256": model_sha,
         "status": "incomplete / manual-mask-review-required", "images": [],
         "approved_for_reconstruction": False,
     }
@@ -166,12 +218,17 @@ def generate_rectified_masks(reconstruction: str | Path, output: str | Path, *,
                 expected = images[filename]["dimensions"]
                 if list(original.size) != expected:
                     raise ReferenceError(f"Rectified photo size changed: {filename}")
-                binary = _grabcut(original, guide_map[filename], max_side, iterations)
+                binary = (_rembg_mask(original, session) if segmenter == "rembg" else
+                          _grabcut(original, guide_map[filename], max_side, iterations))
                 mask = Image.fromarray(binary, mode="L")
                 occupancy = round(sum(mask.histogram()[128:])/ (mask.width*mask.height), 5)
                 warnings = []
+                if segmenter == "grabcut" and guides is None:
+                    warnings.append("Unreviewed center-box guess; add per-photo guides for busy backgrounds")
                 if occupancy < 0.05 or occupancy > 0.90:
                     warnings.append("Suspicious foreground fraction; check seed box and background")
+                elif occupancy > 0.45:
+                    warnings.append("Large segmented region; verify that nearby architecture/foliage is excluded")
                 edges = (mask.crop((0, 0, mask.width, 1)),
                          mask.crop((0, mask.height-1, mask.width, mask.height)),
                          mask.crop((0, 0, 1, mask.height)),
