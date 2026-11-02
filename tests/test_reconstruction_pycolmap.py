@@ -12,7 +12,7 @@ from kumiki_blender.reconstruction.colmap import build_sparse_reconstruction
 from kumiki_blender.reconstruction.pycolmap_worker import main
 from kumiki_blender.reconstruction.references import ReferenceError
 
-import test_reconstruction_colmap as fixture_colmap
+from tests import test_reconstruction_colmap as fixture_colmap
 
 
 class PycolmapBackendTests(unittest.TestCase):

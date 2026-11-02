@@ -24,7 +24,7 @@ jobs:
       - name: Test photo-reference evidence and COLMAP worker boundary
         env:
           PYTHONPATH: src
-        run: python -m unittest tests.test_reconstruction_references tests.test_reconstruction_colmap tests.test_reconstruction_dense tests.test_reconstruction_blender_dense tests.test_reconstruction_cli tests.test_reconstruction_cameras tests.test_reconstruction_silhouettes tests.test_reconstruction_landmarks -v
+        run: python -m unittest tests.test_reconstruction_references tests.test_reconstruction_colmap tests.test_reconstruction_pycolmap tests.test_reconstruction_dense tests.test_reconstruction_blender_dense tests.test_reconstruction_cli tests.test_reconstruction_cameras tests.test_reconstruction_silhouettes tests.test_reconstruction_landmarks tests.test_prepare_pix4d_eagle tests.test_prepare_epfl_statue -v
       - name: Test measured Khufu masonry and Sphinx source intake
         env:
           PYTHONPATH: src
@@ -135,13 +135,16 @@ jobs:
             .review/ci/desk-lamp/model.glb .review/ci/reference-camera-review
           test -s .review/ci/reference-camera-review/reference-review.blend
           test -s .review/ci/reference-camera-review/renders/test-angle-0.png
-      - name: Import dense scan PLY into an editable private Blender review and GLB
+      - name: Import dense scan PLY and pinned UV OBJ into private Blender/GLB reviews
         run: |
           blender --background --factory-startup --threads 2 --python-exit-code 1 \
             --python scripts/smoke_dense_blender.py -- .review/ci/dense-blender-review
           python -m kumiki_blender audit --model .review/ci/dense-blender-review/private-dense-review.glb
+          python -m kumiki_blender audit --model .review/ci/dense-blender-review-textured/private-textured-review.glb
           test -s .review/ci/dense-blender-review/private-dense-review.blend
+          test -s .review/ci/dense-blender-review-textured/private-textured-review.blend
           test -s .review/ci/dense-blender-review/renders/axis-three-quarter.png
+          test -s .review/ci/dense-blender-review/renders/photo-matched-01.png
       - name: Audit portable GLB and immutable revision
         env:
           PYTHONPATH: src
@@ -193,14 +196,15 @@ jobs:
             .review/ci/reference-camera-review/
             .review/ci/reference-scene-synthetic-input/
           if-no-files-found: warn
-      - name: Upload first-party private dense PLY Blender review
+      - name: Upload first-party synthetic dense PLY and UV Blender reviews
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: dense-ply-blender-qa
           path: |
             .review/ci/dense-blender-review/
-            .review/ci/dense-blender-first-party-input/
+            .review/ci/dense-blender-review-textured/
+            .review/ci/dense-blender-review-first-party-input/
           if-no-files-found: warn
 
   tests:
