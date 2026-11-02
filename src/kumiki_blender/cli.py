@@ -229,6 +229,9 @@ def main(argv: list[str] | None = None) -> int:
     texture_finish_parser.add_argument("--balance-atlases", action="store_true",
                                        help="Match valid-texel exposure across multiple UV atlas pages")
     texture_finish_parser.add_argument("--max-balance-ev", type=float, default=0.75)
+    texture_finish_parser.add_argument("--auto-exposure-luma", type=float,
+                                       help="Opt-in target median brightness (32–224) across all atlas pages")
+    texture_finish_parser.add_argument("--max-auto-exposure-ev", type=float, default=1.0)
     for command in ("plan-dense-blender-review", "render-dense-blender-review"):
         review_dense = subcommands.add_parser(
             command, help="Inspect or create a private editable Blender scene from a dense PLY")
@@ -344,7 +347,9 @@ def main(argv: list[str] | None = None) -> int:
                                                     neutralize_cast=args.neutralize_cast,
                                                     protect_black=args.protect_black,
                                                     balance_atlases=args.balance_atlases,
-                                                    max_balance_ev=args.max_balance_ev))
+                                                    max_balance_ev=args.max_balance_ev,
+                                                    auto_exposure_luma=args.auto_exposure_luma,
+                                                    max_auto_exposure_ev=args.max_auto_exposure_ev))
             except ReferenceError as error:
                 raise RecipeError(str(error)) from error
             print(json.dumps(report, indent=2))

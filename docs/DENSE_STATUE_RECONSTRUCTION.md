@@ -159,6 +159,14 @@ private texture projection to produce a mesh for artistic inspection.
       --saturation 1.05 --neutralize-cast --balance-atlases \
       --max-balance-ev 0.75
 
+    # Alternative: opt-in bounded automatic brightness for very dark scans.
+    # Keep manual exposure EV at zero initially to avoid double brightening.
+    kumiki-blender finish-dense-textures \
+      --dense-revision .review/statue/dense-masked-r01 \
+      --output .review/statue/texture-auto-r01 \
+      --auto-exposure-luma 115 --max-auto-exposure-ev 1.0 \
+      --balance-atlases
+
     # Blender imports the same verified OBJ/MTL/UVs with the corrected atlases
     # and packs them into the private .blend and GLB.
     kumiki-blender render-dense-blender-review \
@@ -302,6 +310,15 @@ exposure mismatch, but **cannot invent missing photographs, paint empty atlas
 patches or fix intra-page UV chart seams and baked lighting**. Use the
 original-versus-corrected Blender views for
 artistic approval; the correction remains private by default.
+For dark atlases whose desired exposure is not yet known,
+`--auto-exposure-luma 115` estimates a **bounded shared exposure offset**
+from the median of non-black, non-transparent atlas texels. The option is
+disabled by default; its allowed target range is 32–224 on the 0–255
+grayscale scale, and `--max-auto-exposure-ev` (default 1 EV) caps correction.
+Any additional manual `--exposure-ev` is additive, so review highlight-clipping
+warnings before combining them. Different stone colors and deliberately dark
+surfaces can fool median brightness: this is image enhancement, not a physical
+albedo calibration or proof of historical color.
 
 Open the PLY in Blender and compare front/profile/three-quarter views against
 authentic photos, especially eyes, chin, mouth, ears, hair and deep garment
@@ -452,3 +469,34 @@ Mercury statue photos registered with PyCOLMAP CPU at 1600px, with 11,039
 sparse matched points and median *feature* reprojection error 0.479px. This
 supports camera coverage of a challenging standing monument, not verified
 anatomical or mesh fidelity.
+
+## Reusable CC BY sculpture benchmark (Cycladic figurine)
+
+The [University of Wyoming's original Greek Cycladic Figurine photogrammetry
+dataset](https://dataverse.arcc.uwyo.edu/dataset.xhtml?persistentId=doi:10.15786/16543554)
+contains **72 photographs** of a replica sculpture (229.2 MiB ZIP). It is
+explicitly **CC BY 4.0**. Credit *Hutchens, Chad Everett; Koenig, Charles
+(2021), Greek Cycladic Figurine photogrammetry dataset, Wyoming Data
+Repository, doi:10.15786/16543554*, link the license and identify any changes.
+This small tabletop sculpture is a good legally reusable integration fixture,
+but **not** a replacement for the busy-background, large-statue benchmarks
+above. No dataset photographs or models are included in Git.
+
+    # Download the original ZIP from the official Dataverse page above.
+    # Extract privately and run the source-aware intake (72 images required).
+    python scripts/prepare_cycladic_figurine.py \
+      --unpacked /private/cycladic-figurine \
+      --archive /private/cycladic_figurine_photo_dataset.zip
+
+    kumiki-blender reconstruct-photos \
+      --manifest /private/cycladic-figurine/reference-set.json \
+      --output /private/cycladic-sparse-r01 \
+      --engine pycolmap --undistort --max-image-size 1600
+
+The intake verifies the publisher's recorded archive MD5 when supplied,
+pins the actual source ZIP SHA-256, individual photo SHA-256 values and
+attribution, and deliberately leaves camera directions unknown until SfM.
+Generated output stays private pending manual review and a valid attribution
+notice. A full OpenMVS/Blender reconstruction on this source remains a future
+benchmark; availability of photographs is not a claim that its camera
+registration or mesh appearance has already been verified.

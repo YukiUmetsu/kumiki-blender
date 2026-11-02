@@ -28,16 +28,23 @@ class TextureFinishSettings:
     protect_black: int = 12
     balance_atlases: bool = False
     max_balance_ev: float = 0.75
+    auto_exposure_luma: float | None = None
+    max_auto_exposure_ev: float = 1.0
 
     def validate(self) -> "TextureFinishSettings":
         for name, low, high in (("exposure_ev", -3.0, 3.0),
                                 ("gamma", 0.4, 2.5),
                                 ("saturation", 0.0, 2.5),
                                 ("shadow_lift", 0.0, 0.35),
-                                ("max_balance_ev", 0.0, 2.0)):
+                                ("max_balance_ev", 0.0, 2.0),
+                                ("max_auto_exposure_ev", 0.0, 2.0)):
             value = getattr(self, name)
             if type(value) not in (float, int) or not math.isfinite(value) or not low <= value <= high:
                 raise ReferenceError(f"{name} must be finite in [{low}, {high}]")
+        target = self.auto_exposure_luma
+        if (target is not None and (type(target) not in (float, int)
+                or not math.isfinite(target) or not 32 <= target <= 224)):
+            raise ReferenceError("auto_exposure_luma must be finite in [32, 224]")
         if type(self.neutralize_cast) is not bool or type(self.balance_atlases) is not bool:
             raise ReferenceError("neutralize_cast and balance_atlases must be booleans")
         if type(self.protect_black) is not int or not 0 <= self.protect_black <= 32:
@@ -67,11 +74,13 @@ def _sample_luminance(photo: Any, protect_black: int) -> float | None:
     _rgb, gray, valid = _valid_texel_sample(photo, protect_black)
     if not valid.getbbox():
         return None
-    return ImageStat.Stat(gray, valid).mean[0]
+    # Median is less sensitive to highlights or shadow areas than the mean.
+    return float(ImageStat.Stat(gray, valid).median[0])
 
 
 def _atlas_correction(photo: Any, settings: TextureFinishSettings, *,
-                      balance_ev: float = 0.0) -> tuple[Any, dict[str, Any]]:
+                      balance_ev: float = 0.0,
+                      auto_ev: float = 0.0) -> tuple[Any, dict[str, Any]]:
     from PIL import Image, ImageEnhance, ImageStat
 
     original = photo.convert("RGB")
@@ -83,7 +92,7 @@ def _atlas_correction(photo: Any, settings: TextureFinishSettings, *,
         means = stats.mean[:3]
         neutral = sum(means) / 3
         gains = [max(0.75, min(1.25, neutral / max(1.0, mean))) for mean in means]
-    exposure = 2**(settings.exposure_ev + balance_ev)
+    exposure = 2**(settings.exposure_ev + balance_ev + auto_ev)
     channels = original.split()
     corrected_channels = []
     for channel, gain in zip(channels, gains):
@@ -121,6 +130,7 @@ def _atlas_correction(photo: Any, settings: TextureFinishSettings, *,
         "sampled_mean_rgb": [round(x, 2) for x in stats.mean[:3]],
         "neutralization_gains": [round(x, 5) for x in gains],
         "atlas_balance_ev": round(balance_ev, 5),
+        "auto_exposure_ev": round(auto_ev, 5),
         "warnings": warnings,
     }
 
@@ -151,8 +161,9 @@ def finish_dense_textures(dense_revision: str | Path, output: str | Path,
     # A bounded gain per page can reduce *between-page* seams, but it cannot
     # repair UV chart edges or different lighting within a single atlas.
     balance: dict[str, float] = {}
-    if settings.balance_atlases and len(pinned["texture_atlases"]) > 1:
-        brightness = {}
+    brightness: dict[str, float | None] = {}
+    auto_ev = 0.0
+    if settings.balance_atlases or settings.auto_exposure_luma is not None:
         for entry in pinned["texture_atlases"]:
             atlas_path = Path(entry["path"])
             with Image.open(atlas_path) as image:
@@ -160,11 +171,16 @@ def finish_dense_textures(dense_revision: str | Path, output: str | Path,
         usable = [value for value in brightness.values() if value is not None]
         if usable:
             target_luma = statistics.median(usable)
-            for filename, value in brightness.items():
-                if value is not None:
-                    ev = math.log2(target_luma / max(1, value))
-                    balance[filename] = max(-settings.max_balance_ev,
-                                            min(settings.max_balance_ev, ev))
+            if settings.auto_exposure_luma is not None:
+                desired_ev = math.log2(settings.auto_exposure_luma / max(1, target_luma))
+                auto_ev = max(-settings.max_auto_exposure_ev,
+                              min(settings.max_auto_exposure_ev, desired_ev))
+            if settings.balance_atlases and len(usable) > 1:
+                for filename, value in brightness.items():
+                    if value is not None:
+                        ev = math.log2(target_luma / max(1, value))
+                        balance[filename] = max(-settings.max_balance_ev,
+                                                min(settings.max_balance_ev, ev))
     original_obj, original_mtl = Path(pinned["source_obj"]), Path(pinned["source_mtl"])
     target.mkdir(parents=True, exist_ok=False)
     (target / "review").mkdir()
@@ -201,7 +217,8 @@ def finish_dense_textures(dense_revision: str | Path, output: str | Path,
                 if photo.format not in ("JPEG", "PNG"):
                     raise ReferenceError("Texture correction expects a JPEG or PNG atlas")
                 corrected, quality = _atlas_correction(
-                    photo, settings, balance_ev=balance.get(atlas.name, 0.0))
+                    photo, settings, balance_ev=balance.get(atlas.name, 0.0),
+                    auto_ev=auto_ev)
                 output_path = target / atlas.name
                 if photo.format == "JPEG":
                     corrected.save(output_path, "JPEG", quality=95, subsampling=0)
@@ -227,6 +244,7 @@ def finish_dense_textures(dense_revision: str | Path, output: str | Path,
                 "path": atlas.name, "sha256": _sha256(output_path),
                 "dimensions": list(corrected.size), "source_sha256": item["sha256"],
                 "comparison_preview": str(preview_path.relative_to(target)),
+                "source_median_luma": brightness.get(atlas.name),
                 **quality,
             })
         except Exception as error:
