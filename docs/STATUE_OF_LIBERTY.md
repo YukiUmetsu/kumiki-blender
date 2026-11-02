@@ -1,5 +1,59 @@
 # Statue of Liberty — scan-assisted detail rebuild
 
+## r63 — broad copper drapery study (**opt-in; visual gate HOLD**)
+
+The default gown assembled 26 raised pinstripe tubes onto a radially rippled
+column, added a sinusoidal hanging front curtain, and applied nine detached
+wrinkle rods to the raised sleeve. These were plausible construction primitives,
+but their regularity and straight drop disagree with the **large, asymmetric
+folds of the installed copper toga**.
+
+The new `--detailed-drapery` option keeps the default model and other
+detail options unchanged. It substitutes:
+
+- One watertight underrobe with broad, shoulder-to-hem tension lines in the
+  *surface itself*, without the 26 separate pleat rods.
+- One closed, body-conforming upper overfold with a **diagonal, slightly
+  scalloped lower edge** and cross-body folds, instead of the detached rolled
+  hem rod and narrow sinusoidal curtain.
+- One continuous raised-arm sleeve surface with swept folds, rather than
+  the nine parallel ornamental wrinkle rods.
+- Four repeatable drapery cameras: frontal, three-quarter, profile, and
+  raised-sleeve detail.
+
+**Primary references:** [Library of Congress / HAER NY-138 photo index
+(government photographs, Jet Lowe, 1984)](https://tile.loc.gov/storage-services/master/pnp/habshaer/ny/ny1200/ny1251/data/ny1251cap.pdf),
+especially frames **232** (whole installed statue and large diagonal fold),
+**252** (torch-arm toga), **253–254** (underside and overlapping folds), and
+**263** (close copper panel contours and riveted seams). These photographs
+were used for qualitative directions and layering **only**. They have not been
+camera-registered; fold depths, panel extent, exact shoulder junction and
+seams are not measured from them. Source images are reference-only and not
+bundled into the GLB.
+
+**Visual QA:** The initial substitution still showed an obviously artificial
+vertical hanging curtain. A different overfold representation restored the
+sloping bottom edge, but its first render looked like a smooth triangular
+bib. A single follow-up depth/tension adjustment improved separation in front
+and three-quarter views, but the large overfold is still too smooth and
+mechanically narrow, the sleeve connection is not convincingly draped, and
+the rear panel is still generic. **HOLD** for historical/photographic
+fidelity; no approved replacement of the default export and no claim that
+the model resembles the monument at review quality. The face remains
+separately **HOLD** as recorded in [face QA](STATUE_OF_LIBERTY_FACE_QA.md).
+The next step requires **registered full-body silhouettes and real fold
+landmarks**, followed by manually sculpting primary cloth masses in Blender,
+not more sinusoidal displacement passes.
+
+```bash
+KUMIKI_RENDER_PROFILE=smoke blender --background --factory-startup \
+  --threads 6 --python-exit-code 1 --python scripts/blender_entry.py -- \
+  build-liberty --detailed-drapery --detailed-feet \
+  --output .review/landmarks/statues/statue-of-liberty/r63-drapery
+PYTHONPATH=src python3 -m kumiki_blender audit-revision \
+  --root .review/landmarks/statues/statue-of-liberty/r63-drapery
+```
+
 ## r62 — restored broken shackle, sculpted sandals and chain (**opt-in study**)
 
 The model previously omitted a defining sculptural feature at Liberty's feet.

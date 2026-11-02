@@ -212,6 +212,43 @@ class LibertyTests(unittest.TestCase):
         with self.assertRaises(LibertyError):
             make_liberty_study(detailed_feet=1)
 
+    def test_detailed_drapery_is_integrated_sculptural_geometry(self):
+        from kumiki_blender.liberty_drapery import (sculpted_front_overfold,
+                                                   sculpted_torch_sleeve,
+                                                   sculpted_underrobe)
+
+        base = {part.name for part in make_liberty_study().instances}
+        self.assertIn("liberty-gown-pleat-00", base)
+        self.assertIn("liberty-sleeve-torch-wrinkle-00", base)
+        study = make_liberty_study(detailed_drapery=True)
+        parts = {part.name: part for part in study.instances}
+        self.assertTrue(dict(study.parameters)["detailed_drapery"])
+        self.assertNotIn("liberty-gown-pleat-00", parts)
+        self.assertNotIn("liberty-sleeve-torch-wrinkle-00", parts)
+        self.assertNotIn("liberty-gown-overfold-hem", parts)
+        self.assertEqual(sum("gown-pleat-" in name for name in parts), 0)
+        gown = parts["liberty-gown-underrobe"].mesh
+        sleeve = parts["liberty-sleeve-torch"].mesh
+        overfold = parts["liberty-gown-front-overfold"].mesh
+        self.assertGreater(len(gown.vertices), 15_000)
+        self.assertGreater(len(sleeve.vertices), 5_000)
+        self.assertGreater(len(overfold.vertices), 10_000)
+        # Its lower edge rises diagonally; it is not a straight skirt fringe.
+        hem = overfold.vertices[68*73:69*73]
+        self.assertGreater(hem[-1][2]-hem[0][2], 2.5)
+        for mesh in (gown, sleeve, overfold, sculpted_underrobe(),
+                     sculpted_torch_sleeve(), sculpted_front_overfold()):
+            report = audit_mesh(mesh)
+            self.assertEqual(report.boundary_edges, 0)
+            self.assertEqual(report.nonmanifold_edges, 0)
+            self.assertGreater(report.volume_m3, 0)
+        # Independent dimensions and a scaled, grounded alternative are kept.
+        reduced = make_liberty_study(scale=.5, include_pedestal=False,
+                                     detailed_drapery=True)
+        self.assertLess(reduced.bounds_min[2], .05)
+        with self.assertRaises(LibertyError):
+            make_liberty_study(detailed_drapery=1)
+
     def test_export_parts_are_closed_meshes_and_have_unique_semantic_names(self):
         study = make_liberty_study()
         self.assertLess(len(study.instances), 700)

@@ -178,7 +178,8 @@ def make_liberty_study(*, scale: float = 1., include_pedestal: bool = True,
                        detailed_tablet: bool = False,
                        detailed_crown: bool = False,
                        detailed_face: bool = False,
-                       detailed_feet: bool = False) -> LibertyStudy:
+                       detailed_feet: bool = False,
+                       detailed_drapery: bool = False) -> LibertyStudy:
     """Make the original, reference-guided statue and optional 8.9m pedestal."""
     if (isinstance(scale, bool) or not isinstance(scale, (int, float)) or
             not math.isfinite(scale) or not .05 <= scale <= 20):
@@ -193,6 +194,8 @@ def make_liberty_study(*, scale: float = 1., include_pedestal: bool = True,
         raise LibertyError("detailed_face must be a boolean")
     if type(detailed_feet) is not bool:
         raise LibertyError("detailed_feet must be a boolean")
+    if type(detailed_drapery) is not bool:
+        raise LibertyError("detailed_drapery must be a boolean")
     result: list[MeshInstance] = []
 
     def put(name: str, mesh: Mesh, material: str = "patina") -> None:
@@ -253,37 +256,47 @@ def make_liberty_study(*, scale: float = 1., include_pedestal: bool = True,
         from .liberty_feet import foot_detail_parts
         for name, mesh, material in foot_detail_parts():
             put(name, mesh, material)
-    put("gown-underrobe", _gown())
+    if detailed_drapery:
+        from .liberty_drapery import (sculpted_front_overfold, sculpted_underrobe,
+                                      sculpted_torch_sleeve)
+        put("gown-underrobe", sculpted_underrobe())
+    else:
+        put("gown-underrobe", _gown())
 
     # The overfold is a descending diagonal sash, with a detached rolled hem.
-    put("gown-front-overfold", _cloth_panel([
-        (13.18, -.95, 2.11, -2.02, .32),
-        (14.05, -1.35, 2.14, -2.12, .24),
-        (15.10, -1.64, 2.05, -2.15, .22),
-        (16.65, -1.93, 1.81, -2.20, .34),
-        (18.15, -1.91, 1.38, -2.19, .27),
-        (19.80, -1.66, .89, -2.14, .25),
-        (21.50, -1.35, .43, -1.97, .16),
-        (23.00, -1.05, -.15, -1.71, .10),
-        (24.18, -.98, -.61, -1.24, .05),
-    ], folds=8), "patina-light")
+    if detailed_drapery:
+        put("gown-front-overfold", sculpted_front_overfold(), "patina-light")
+    else:
+        put("gown-front-overfold", _cloth_panel([
+            (13.18, -.95, 2.11, -2.02, .32),
+            (14.05, -1.35, 2.14, -2.12, .24),
+            (15.10, -1.64, 2.05, -2.15, .22),
+            (16.65, -1.93, 1.81, -2.20, .34),
+            (18.15, -1.91, 1.38, -2.19, .27),
+            (19.80, -1.66, .89, -2.14, .25),
+            (21.50, -1.35, .43, -1.97, .16),
+            (23.00, -1.05, -.15, -1.71, .10),
+            (24.18, -.98, -.61, -1.24, .05),
+        ], folds=8), "patina-light")
     # Long vertical tunic fluting and secondary hanging textile edges.
-    for i in range(26):
-        x = -2.10 + i*.163
-        points = []
-        for j in range(15):
-            z = 9.98 + j*.83
-            rx = 2.34 + .54*math.sin((z-9.83)/14.75*math.pi)
-            t = min(.94, x/max(rx, 1))
-            y = -1.82*math.sqrt(max(.05, 1-t*t))-.13
-            points.append((x+.12*math.sin(z*.49+i*.65), y-.06*math.sin(i*.9+z*.31), z))
-        put(f"gown-pleat-{i:02d}", _tube(points, [.024+.012*(1-j/14) for j in range(15)], 8),
-            "patina-shadow" if i%3 == 0 else "patina-light")
+    if not detailed_drapery:
+        for i in range(26):
+            x = -2.10 + i*.163
+            points = []
+            for j in range(15):
+                z = 9.98 + j*.83
+                rx = 2.34 + .54*math.sin((z-9.83)/14.75*math.pi)
+                t = min(.94, x/max(rx, 1))
+                y = -1.82*math.sqrt(max(.05, 1-t*t))-.13
+                points.append((x+.12*math.sin(z*.49+i*.65), y-.06*math.sin(i*.9+z*.31), z))
+            put(f"gown-pleat-{i:02d}", _tube(points, [.024+.012*(1-j/14) for j in range(15)], 8),
+                "patina-shadow" if i%3 == 0 else "patina-light")
     # Rolled hem seams tracking the diagonal drapery and a trailing back cape.
-    put("gown-overfold-hem", _tube([
-        (-1.1, -2.04, 13.15), (-.28, -2.25, 12.95), (.53, -2.36, 13.38),
-        (1.31, -2.26, 14.28), (2.07, -2.13, 15.10),
-    ], [.095, .115, .108, .085, .045]), "patina-shadow")
+    if not detailed_drapery:
+        put("gown-overfold-hem", _tube([
+            (-1.1, -2.04, 13.15), (-.28, -2.25, 12.95), (.53, -2.36, 13.38),
+            (1.31, -2.26, 14.28), (2.07, -2.13, 15.10),
+        ], [.095, .115, .108, .085, .045]), "patina-shadow")
     put("gown-back-cape", _cloth_panel([
         (12.7, -.7, 1.85, 2.04, .30), (15.4, -1.8, 2.0, 2.12, .27),
         (18.6, -2.1, 1.7, 2.22, .36), (21.3, -1.45, 1.8, 2.00, .28),
@@ -293,16 +306,19 @@ def make_liberty_study(*, scale: float = 1., include_pedestal: bool = True,
     put("shoulder-torso", _loft(((22.75, 0, 0, 1.8, 1.0),
                                  (23.60, 0, 0, 2.43, 1.10),
                                  (24.58, -.05, .0, 1.95, .97)), 48))
-    put("sleeve-torch", _loft(((22.45, -2.13, .06, .66, .72),
-                              (23.42, -2.31, .05, .99, .85),
-                              (24.60, -2.40, .06, .73, .73),
-                              (25.12, -2.52, .03, .49, .50)), 48), "patina-light")
-    for i in range(9):
-        y = -.63+i*.155
-        put(f"sleeve-torch-wrinkle-{i:02d}", _tube([
-            (-3.11, y, 23.7+i*.06), (-2.61, y-.10, 23.0+i*.045),
-            (-2.0, y+.06, 22.45+i*.035),
-        ], [.045, .083, .024]), "patina-shadow")
+    if detailed_drapery:
+        put("sleeve-torch", sculpted_torch_sleeve(), "patina-light")
+    else:
+        put("sleeve-torch", _loft(((22.45, -2.13, .06, .66, .72),
+                                  (23.42, -2.31, .05, .99, .85),
+                                  (24.60, -2.40, .06, .73, .73),
+                                  (25.12, -2.52, .03, .49, .50)), 48), "patina-light")
+        for i in range(9):
+            y = -.63+i*.155
+            put(f"sleeve-torch-wrinkle-{i:02d}", _tube([
+                (-3.11, y, 23.7+i*.06), (-2.61, y-.10, 23.0+i*.045),
+                (-2.0, y+.06, 22.45+i*.035),
+            ], [.045, .083, .024]), "patina-shadow")
 
     # Arm, wrist and knuckles trace an anatomically believable upward line.
     put("arm-raised", _tube([
@@ -548,4 +564,5 @@ def make_liberty_study(*, scale: float = 1., include_pedestal: bool = True,
                                              ("detailed_tablet", detailed_tablet),
                                              ("detailed_crown", detailed_crown),
                                              ("detailed_face", detailed_face),
-                                             ("detailed_feet", detailed_feet)))
+                                             ("detailed_feet", detailed_feet),
+                                             ("detailed_drapery", detailed_drapery)))
