@@ -94,6 +94,24 @@ DETAIL_VIEWS = (
 
 ALL_VIEWS = ARCHIVED_VIEWS + DETAIL_VIEWS
 
+# These are rotating *previews* of other physical objects.  In particular,
+# none depicts a verified survey of the full-size copper monument in New York.
+# Keep the viewer URLs in the .blend's text datablocks, not imported meshes.
+REPLICA_VIEWER_REFERENCES = (
+    ("Maurice Svay / Arts et Metiers, Paris / ~3m replica",
+     "https://sketchfab.com/3d-models/statue-of-liberty-c461ed8724424ad99500fd058a0ab082",
+     "Photogrammetry / 699k tris / study broad cloth and face planes"),
+    ("jerryfisher / 19th-century bronze model",
+     "https://sketchfab.com/3d-models/statue-of-liberty-6626abe1f3e8469a9d8f4b74d8aa2a71",
+     "Photogrammetry / 4M tris / study cast folds and asymmetry"),
+    ("3Dystopia / Luxembourg Gardens, Paris / bronze replica",
+     "https://sketchfab.com/3d-models/statue-of-liberty-04a8e7b1ba9142ba8cebc6108cd5bb97",
+     "Simplified photogrammetry / 20k tris / study full-body proportions"),
+    ("3DSCANFR / Bartholdi 1889 Paris replica / premium viewer",
+     "https://sketchfab.com/3d-models/statue-of-liberty-auguste-bartholdi-1889-0fc2c8744b654cc6bc44a567158c53aa",
+     "580-photo scan / 8K textures / compare front and profile"),
+)
+
 
 def resolve_photos(reference_dir: Path) -> list[tuple[ArchivedView, Path]]:
     """Fail closed if any of the eleven installed-monument photos is absent."""
@@ -137,6 +155,7 @@ def main() -> None:
     sculpt_scene.name = "01 SCULPT / neutral clay / HOLD"
     sculpt_scene["anatomy_acceptance"] = "HOLD - the installed face has not been reconstructed"
     sculpt_scene["archive_registration"] = "NONE - HAER poses/intrinsics unknown"
+    sculpt_scene["reference_sculpt_method"] = "MANUAL: no anatomy equations or copied third-party geometry"
     sculpt_scene["reference_board_scene"] = "02 HAER POSES / UNREGISTERED"
     sculpt_scene["anatomy_detail_scene"] = "03 HAER ANATOMY / UNREGISTERED"
     for photo, _path in photos:
@@ -170,6 +189,28 @@ def main() -> None:
         "in oblique space: it is NOT a calibrated depth measurement.\n"
         "238 and 239 largely repeat a rear/side view. More photographs\n"
         "do not automatically mean a usable parallax baseline.\n"
+    )
+    brief.write(
+        "\nREPLICA SCAN PREVIEWS / VISUAL STUDY ONLY\n"
+        "-----------------------------------------\n"
+        "The following models are scans of physical REPLICAS. Rotate the public\n"
+        "previews to study sculptural anatomy and fold volume, but DO NOT\n"
+        "import, trace, extract, redistribute, or blend their geometry.\n"
+        "Their faces and folds do not prove the installed monument's shape.\n\n"
+    )
+    for label, url, note in REPLICA_VIEWER_REFERENCES:
+        brief.write(f"{label}\n  {url}\n  {note}\n\n")
+    brief.write(
+        "NON-PROCEDURAL SCULPT CHECKPOINT\n"
+        "-------------------------------\n"
+        "Work on an editable mesh in Sculpt Mode; establish primary face\n"
+        "planes and true three-dimensional profiles with hand-directed\n"
+        "sculpting. Keep the previous code-generated mesh as a visible HOLD\n"
+        "comparison, not the foundation of a released replacement.\n"
+        "Build proper brow overhang, nasal alae, lip undercuts, jaw, hair\n"
+        "volume and deep cross-body copper drapery from multi-angle evidence.\n"
+        "Do not export a new final GLB until an independently reviewed\n"
+        "front/profile/oblique clay proof has improved substantially.\n"
     )
     sculpt_scene["reference_count"] = len(photos)
 
