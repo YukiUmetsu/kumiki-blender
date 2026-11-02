@@ -75,6 +75,29 @@ class ChristRedeemerTests(unittest.TestCase):
             self.assertLess(report["nose_advance_vs_cheek_mm"], 650)
 
     @unittest.skipUnless(os.environ.get("KUMIKI_BLENDER_BINARY"),
+                         "Set KUMIKI_BLENDER_BINARY for the Blender anatomical hair study")
+    def test_hair_mantle_is_visible_at_anatomical_head_scale(self):
+        with tempfile.TemporaryDirectory() as directory:
+            metrics = Path(directory) / "hair-study.json"
+            command = [os.environ["KUMIKI_BLENDER_BINARY"], "--background",
+                       "--factory-startup", "--python-exit-code", "1",
+                       "--python", str(SCRIPT), "--", "--head-study",
+                       "--face-method", "anatomical", "--integrated-hair",
+                       "--metrics", str(metrics)]
+            process = subprocess.run(command, capture_output=True, text=True, timeout=75)
+            self.assertEqual(process.returncode, 0, process.stdout[-1800:] +
+                             process.stderr[-1800:])
+            report = json.loads(metrics.read_text())
+            self.assertTrue(report["integrated_hair"])
+            self.assertEqual(report["mesh_count"], 6)
+            self.assertGreater(report["hair_surface_vertices"], 15000)
+            self.assertGreater(report["hair_bounds_width_m"], 3.0)
+            self.assertLess(report["hair_bounds_width_m"], 4.0)
+            self.assertGreater(report["hair_bounds_min_z_m"], 33.0)
+            self.assertLess(report["hair_bounds_min_z_m"], 35.0)
+            self.assertAlmostEqual(report["hair_bounds_max_z_m"], 38.0, delta=.1)
+
+    @unittest.skipUnless(os.environ.get("KUMIKI_BLENDER_BINARY"),
                          "Set KUMIKI_BLENDER_BINARY for the live Blender QA test")
     def test_headless_build_dimensions_normals_and_portable_glb(self):
         executable = os.environ["KUMIKI_BLENDER_BINARY"]

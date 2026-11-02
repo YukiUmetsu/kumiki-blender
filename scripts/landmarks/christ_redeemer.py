@@ -895,7 +895,82 @@ def build_head_study():
     orient_head(set(bpy.data.objects)-existing)
 
 
-def build_anatomical_head_study(path):
+def sculpted_anatomical_hair_mantle():
+    """Broad volumetric stone sweeps, rooted at the real head cage.
+
+    This is a deliberately separate, author-directed hairstyle foundation:
+    overlapping solid back and temple volumes pass through the scalp and
+    posterior cervical surface so their roots cannot hover like the rejected
+    hollow hood. The silhouette is inferred from genuine Rio monument photos,
+    not a recovered metric scan, and remains an anatomical clay QA candidate.
+    """
+    objects=[]
+
+    def sweep(name, profiles, side=0):
+        # Profile records: cage z, lateral center, sagittal center, lateral
+        # radius, sagittal radius. Cubic continuity avoids the stacked
+        # scallops seen when each ring-to-ring interval eased independently.
+        sections=[]
+        for j in range(100):
+            z=profiles[0][0]+(profiles[-1][0]-profiles[0][0])*j/99
+            for index,(lower,upper) in enumerate(zip(profiles[:-1],profiles[1:])):
+                if upper[0]<=z<=lower[0]:
+                    weight=(z-lower[0])/(upper[0]-lower[0])
+                    previous=profiles[max(0,index-1)]
+                    following=profiles[min(len(profiles)-1,index+2)]
+                    def cubic(k):
+                        a,b,c,d=(previous[k],lower[k],upper[k],following[k])
+                        t=weight
+                        return .5*((2*b)+(-a+c)*t+
+                                   (2*a-5*b+4*c-d)*t*t+
+                                   (-a+3*b-3*c+d)*t*t*t)
+                    cx,cy,rx,ry=(cubic(k) for k in (1,2,3,4))
+                    break
+            ring=[]
+            for k in range(64):
+                angle=TAU*k/64
+                x=(side*cx if side else 0.)+rx*math.cos(angle)
+                y=cy+ry*math.sin(angle)
+                # A gently flattened frontal section gives the temple
+                # curtains a broad carved surface rather than a rope shape.
+                if side and math.sin(angle)<0:
+                    y+=.12*ry*(-math.sin(angle))**2
+                ring.append((x,y,z))
+            sections.append(ring)
+        ob=loft(name,sections,STONE,invert=True)
+        ob.scale=(11.,11.,11.)
+        ob.location=(0,0,34.03)
+        objects.append(ob)
+
+    # This substantial nape volume overlaps the skull and both long side
+    # sweeps. It fills the neck indentation without a hollow, sheet-like hood.
+    sweep("Hair | solid joined-back stone volume",[
+        (.387,0.,.012,.006,.009),
+        (.351,0.,.043,.076,.047),
+        (.280,0.,.065,.102,.062),
+        (.210,0.,.085,.113,.073),
+        (.120,0.,.098,.124,.074),
+        (.048,0.,.106,.137,.070),
+        (.008,0.,.103,.125,.050),
+    ])
+    for side in (-1,1):
+        # Broad, overlapping temple curtains following the jaw to the
+        # shoulders. Their crown and side roots deliberately intersect the
+        # anatomical mesh and rear hair volume.
+        sweep("Hair | %s | scalp-rooted side stone drape"%side,[
+            (.381,.012,-.030,.007,.012),
+            (.352,.068,-.060,.020,.042),
+            (.311,.099,-.038,.029,.049),
+            (.251,.111,-.009,.032,.050),
+            (.181,.116,.018,.033,.055),
+            (.105,.119,.038,.033,.058),
+            (.037,.125,.058,.028,.055),
+            (.010,.137,.073,.010,.028),
+        ],side)
+    return objects
+
+
+def build_anatomical_head_study(path, integrated_hair=False):
     """Prototype a real quad-topology head instead of more 2D face relief.
 
     The selected path must be a rights-cleared anatomical OBJ with one
@@ -1005,6 +1080,12 @@ def build_anatomical_head_study(path):
             bpy.ops.object.modifier_apply(modifier=subdiv.name)
         for polygon in obj.data.polygons:
             polygon.use_smooth=True
+    if integrated_hair:
+        parts.extend(sculpted_anatomical_hair_mantle())
+    # Newly created loft objects can carry stale matrix_world values until
+    # a dependency-graph update. Applying the gaze tilt first accidentally
+    # put the entire hair volume near the scene origin, outside every camera.
+    bpy.context.view_layer.update()
     orient_head(parts)
 
 
@@ -1197,6 +1278,8 @@ def main():
     p.add_argument("--anatomy-base",type=Path,
                    default=ANATOMY_BASE,
                    help="CC0 anatomical OBJ, used only in --head-study anatomical mode")
+    p.add_argument("--integrated-hair",action="store_true",
+                   help="Clay-only continuous scalp and neck hair-mass study")
     p.add_argument("--samples",type=int,default=16)
     p.add_argument("--size",type=int,default=720)
     p.add_argument("--shot",action="append",choices=("front","profile","three_quarter",
@@ -1210,9 +1293,11 @@ def main():
     FACE_METHOD=args.face_method
     if FACE_METHOD == "anatomical" and not args.head_study:
         p.error("Anatomical mode is a clay-only reconstruction HOLD, not a full export")
+    if args.integrated_hair and (not args.head_study or FACE_METHOD != "anatomical"):
+        p.error("--integrated-hair requires --head-study --face-method anatomical")
     if args.head_study:
         if FACE_METHOD == "anatomical":
-            build_anatomical_head_study(args.anatomy_base)
+            build_anatomical_head_study(args.anatomy_base,args.integrated_hair)
         else:
             build_head_study()
         head=next(ob for ob in bpy.data.objects
@@ -1227,6 +1312,18 @@ def main():
                                       min(p.y for p in head_points),3),
                  "mesh_count":sum(ob.type=="MESH" for ob in bpy.data.objects)}
         if FACE_METHOD == "anatomical":
+            metrics["integrated_hair"]=args.integrated_hair
+            if args.integrated_hair:
+                hair_objs=[obj for obj in bpy.data.objects
+                           if obj.name.startswith("Hair | ")]
+                hair_points=[obj.matrix_world @ v.co
+                             for obj in hair_objs for v in obj.data.vertices]
+                assert len(hair_objs)==3 and hair_points
+                metrics["hair_surface_vertices"]=len(hair_points)
+                metrics["hair_bounds_min_z_m"]=round(min(p.z for p in hair_points),3)
+                metrics["hair_bounds_max_z_m"]=round(max(p.z for p in hair_points),3)
+                metrics["hair_bounds_width_m"]=round(
+                    max(p.x for p in hair_points)-min(p.x for p in hair_points),3)
             # The local cage has metric human-scale dimensions; its object
             # scale is 11. A physical nose/cheek depth check guards against
             # reverting to an entirely flat mask. This is *not* a photo fit.

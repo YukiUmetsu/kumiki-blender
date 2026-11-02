@@ -112,6 +112,40 @@ blender --background --factory-startup --python-exit-code 1 \
   --shot head_low --size 850 --samples 24
 ```
 
+### Hair reconstruction study — still on HOLD
+
+Two direct photographs of the **actual monument** clarify the silhouette:
+[Landowski archive low-angle close-up](https://www.paul-landowski.com/portfolio/le-christ-redempteur/)
+and [frontal face/shoulder photograph](https://generationvoyage.fr/christ-redempteur-rio-histoire/).
+The hair is a close-fitting center-parted crown with a few broad carved
+sweeps; its long side margins are relatively narrow and join the shoulder,
+not a free-standing tall hood. These third-party photographs were used as
+**local, reference-only** views; their files are not included in the repository
+or model export. Camera intrinsics and registered depth remain unknown.
+
+| Experiment | Geometry strategy | Actual front/profile verdict |
+| --- | --- | --- |
+| `scalp_r09` | Expand the anatomy cage's posterior scalp and neck vertices | **REJECTED:** still bald from the front and a swollen, indented rear silhouette in profile. |
+| `scalp_r10` | Solid, scalp-intersecting rear and temple-to-shoulder volumes | **INVALID RENDER:** Blender's new objects had stale transform matrices; a geometry-position regression is now tested. |
+| `scalp_r11` | Correctly transformed broad solid drapes | **REJECTED:** oversized wig-like side masses and a separate hood shape in profile. |
+| `scalp_r12` | Narrowed reference-observed silhouette, removed crown top blob, C1-smooth longitudinal profiles | **HOLD / METHOD FROZEN:** more compact than r11, but still reads as a smooth rigid hood, not integrated stone hair. Face and crown mismatch remain clear. |
+
+These are **artist-inferred draft volumes**, not target-verified geometry.
+The optional `--integrated-hair` flag reproduces the editable r12 scalp study,
+but does not replace the full-figure procedural export:
+
+```bash
+blender -b --factory-startup --python scripts/landmarks/christ_redeemer.py -- \
+  --head-study --face-method anatomical --integrated-hair --verify \
+  --views .review/christ_redeemer/hair-study \
+  --shot head_front --shot head_profile --shot head_three_quarter --shot head_low
+```
+
+**Required next method switch:** reconstruct the *hairline and nape as sculpted
+surface topology* registered to the real subject, or use licensed authentic
+scan geometry. Another parameter change to the same ellipsoidal sweeps is not
+an acceptable third attempt. The face and hair remain a visual HOLD.
+
 | Reconstruction gate | Decision | Evidence / unresolved work |
 | --- | --- | --- |
 | Authentic subject foundation | **HOLD** | S1/S2 clearly depict the monument, but no authorized high-detail scan mesh is available; A1 is only a generic donor. |
