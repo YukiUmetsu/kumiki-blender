@@ -19,6 +19,7 @@ from .export_audit import ExportAuditError
 from .facade import FacadeError, make_facade_study
 from .egyptian_monuments import MonumentError, make_monument_study
 from .egypt_map import CITY_MARKERS, LABELS, RIVER_CHANNELS, EgyptMapSpec
+from .geography.fuji import load_dem
 from .glb_audit import AuditError, audit_glb
 from .lattice import make_lattice_tower
 from .landmark_scan import prepare_sphinx_scan
@@ -109,6 +110,18 @@ def main(argv: list[str] | None = None) -> int:
         subcommand = subcommands.add_parser(command)
         subcommand.add_argument("--detail", choices=("standard", "high"), default="standard")
         if command == "build-egypt-map":
+            subcommand.add_argument("--output", type=Path, required=True)
+    for command in ("plan-fuji", "build-fuji"):
+        subcommand = subcommands.add_parser(command)
+        subcommand.add_argument("--style", choices=("realistic", "iconic"), default="realistic",
+                                help="Surveyed terrain or compact stylized Japan diorama")
+        subcommand.add_argument("--dem", type=Path, default=Path(".review/fuji-dem/fuji-heightmap.bin"))
+        subcommand.add_argument("--detail", choices=("preview", "standard", "high"), default="standard")
+        subcommand.add_argument("--season", choices=("winter", "summer"), default="winter",
+                                help="Realistic Fuji: snowy winter or fully snow-free late summer")
+        subcommand.add_argument("--detail-patch", type=Path, action="append", default=[],
+                                help="Optional native GSI z15 crater patch (repeat for summit and Hoei)")
+        if command == "build-fuji":
             subcommand.add_argument("--output", type=Path, required=True)
     column_parser = subcommands.add_parser("plan-classical-column")
     column_parser.add_argument("--order", choices=("tuscan", "doric", "ionic"), default="ionic")
@@ -342,6 +355,55 @@ def main(argv: list[str] | None = None) -> int:
                 "bounds_m": [[min(p[axis] for p in coords) for axis in range(3)],
                              [max(p[axis] for p in coords) for axis in range(3)]],
             }, indent=2))
+            return 0
+        if args.command in ("plan-fuji", "build-fuji"):
+            if args.style == "iconic":
+                if args.detail_patch:
+                    raise ValueError("Survey detail patches are only valid for realistic Fuji")
+                if args.season != "winter":
+                    raise ValueError("--season is only available for realistic Fuji")
+                from .geography.fuji.iconic_scene import iconic_spec
+                if args.command == "plan-fuji":
+                    print(json.dumps(iconic_spec(args.detail), indent=2))
+                    return 0
+                try:
+                    import bpy  # type: ignore[import-not-found]
+                except ImportError as error:
+                    raise RuntimeError("Iconic Fuji builds require Blender 4.2+") from error
+                from .geography.fuji.iconic_scene import build_iconic_fuji_scene
+                print(json.dumps(build_iconic_fuji_scene(args.output, detail=args.detail,
+                                                        bpy_module=bpy), indent=2))
+                return 0
+            if not args.dem.is_file():
+                raise RuntimeError(f"Mount Fuji DEM not found: {args.dem}. First run: python scripts/prepare_fuji_dem.py {args.dem}")
+            dem = load_dem(args.dem)
+            divisions = {"preview": 256, "standard": 512, "high": 1024}[args.detail]
+            from .geography.fuji.patches import load_patch, validate_patches
+            patches=tuple(load_patch(path) for path in args.detail_patch)
+            validate_patches(patches,dem,divisions)
+            if patches and divisions!=1024:
+                raise ValueError("GSI crater patches require --detail high")
+            if args.command == "plan-fuji":
+                print(json.dumps({"asset_id": "mount-fuji-survey-terrain",
+                                  "source": dem.source, "detail": args.detail, "season": args.season,
+                                  "snow_cover": "none" if args.season=="summer" else "seasonal",
+                                  "terrain_divisions": divisions,
+                                  "terrain_vertices": (divisions+1)**2 +
+                                      sum(p.spec.rows*p.spec.cols-((p.spec.rows-1)//p.spec.factor+1)*
+                                          ((p.spec.cols-1)//p.spec.factor+1) for p in patches),
+                                  "detail_patches": [p.spec.name for p in patches],
+                                  "statistics": dem.statistics(),
+                                  "vertical_exaggeration": 1.0}, indent=2))
+                return 0
+            try:
+                import bpy  # type: ignore[import-not-found]
+            except ImportError as error:
+                raise RuntimeError("Mount Fuji builds require Blender 4.2+. Run with --background --factory-startup --python scripts/blender_entry.py") from error
+            from .geography.fuji.blender_scene import build_fuji_scene
+            print(json.dumps(build_fuji_scene(args.output, args.dem, divisions=divisions,
+                                             detail_patches=tuple(args.detail_patch),
+                                             season=args.season,
+                                             bpy_module=bpy), indent=2))
             return 0
         if args.command in ("plan-egypt-map", "build-egypt-map"):
             spec = (EgyptMapSpec(columns=700, rows=420) if args.detail == "high"
