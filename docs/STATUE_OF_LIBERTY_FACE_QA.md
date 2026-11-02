@@ -1,5 +1,58 @@
 # Statue of Liberty — reference-calibrated facial acceptance gate
 
+## r60 — reversible 3D anatomy trial, donor route frozen (**HOLD**)
+
+One additional *distinct* volumetric sculpt experiment was conducted on the
+r59 full, continuous Blender Studio anatomical mesh, rather than the rejected
+procedural Liberty face or the earlier failed miniature face-patch graft.
+Eight deliberately restrained spatial strokes were placed on actual 3D face
+surface hits (front-facing mesh raycasts), modifying **2,102 base vertices**
+with a maximum base-vertex displacement of **0.129 m**. The changes reside in
+an editable Blender **shape key**; the original donor head remains recoverable
+in the same file. This is an **artist-inferred** exercise, not calibrated
+photogrammetry or historical survey depth.
+
+```bash
+blender --background --factory-startup --threads 6 --python-exit-code 1 \
+  --python scripts/blender_liberty_3d_sculpt_study.py -- \
+  --input .review/liberty-r59-whole-head/whole-head-sculpt.blend \
+  --output .review/liberty-r60-spatial-study --resolution 640
+
+# Then use the existing HAER studio generator to pack the three originals:
+blender --background --factory-startup --threads 6 --python-exit-code 1 \
+  --python scripts/blender_liberty_reference_studio.py -- \
+  --clay-blend .review/liberty-r60-spatial-study/anatomy-stroke-study.blend \
+  --reference-dir .review/liberty-haer \
+  --output .review/liberty-r60-studio
+```
+
+**Visual finding:** r60 is less caricatured than the rejected r59 broad-band
+pass and has modestly fuller lower lip/chin volumes in both side views, but
+these changes **do not close the underlying subject-likeness gap**. Both the
+real [HAER 237 right](https://www.loc.gov/pictures/item/ny1251.color.570006c/)
+and [HAER 241 left](https://www.loc.gov/pictures/item/ny1251.color.570010c/)
+head profiles show a much heavier continuous orbital overhang, a broad
+nearly vertical cheek-to-jaw plane, distinct alar-nostril geometry, larger
+projected sculpted lips, deep lip/chin undercut, a thick rounded lower chin,
+and characteristic hair/crown overlap. The r60 mesh is still an anatomically
+generic, bald CC0 human bust with no actual target-specific survey evidence.
+All side-by-side sheets are **qualitative**: HAER camera intrinsics and pose
+remain unknown. No measured comparison score is asserted.
+
+**Method decision: FREEZE donor-only procedural deformation.** The earlier
+r59 broad-band pass made a cartoonish brow, and this r60 more localized
+shape-key trial improved small volumes without establishing Bartholdi's
+unique installed-head anatomy. Following the Craft Director two-failed-trial
+trigger, do not apply a third parameter pass to this CC0 donor. Need a
+**rights-cleared actual installed-head scan/survey** or a genuinely skilled,
+reference-constrained manual head sculpt and camera fitting. The U.S. NPS
+[2019/2007 documentation](https://www.nps.gov/articles/laser-scan-lady-liberty.htm)
+confirms high-resolution surveys were performed, but no accessible licensed
+high-detail head mesh has been verified. The former [NPS virtual tour](https://home.nps.gov/articles/000/statue-of-liberty-tour.htm)
+has been unsupported since May 2025, and its panoramas would not themselves
+substitute for recoverable 3D surface. Production Statue code and r53 GLB
+remain unchanged; photo-faithful GLB release remains **HOLD**.
+
 ## r59 — isolated continuous anatomy sculpt foundation (**HOLD**)
 
 The earlier r41 experiment grafted a generic CC0 donor face into a separately
