@@ -48,11 +48,12 @@ class ComposerTests(unittest.TestCase):
     def test_schema_has_discriminated_component_types(self):
         schema = asset_json_schema()
         self.assertEqual(schema["properties"]["schema_version"]["const"], 2)
-        self.assertEqual(len(COMPONENT_REGISTRY), 8)
+        self.assertEqual(len(COMPONENT_REGISTRY), 9)
         self.assertEqual(set(COMPONENT_REGISTRY), {
             "solid.box", "solid.lathe", "solid.hollow-lathe",
             "solid.rounded-box", "mechanical.rod", "detail.radial-studs",
             "detail.linear-fasteners", "detail.panel-frame",
+            "assembly.service-panel",
         })
 
     def test_hollow_shade_is_a_closed_shell_with_an_open_center(self):

@@ -16,10 +16,11 @@ generates a labeled multi-view contact sheet and exposure metrics. Adding
 `--baseline` compares revisions and highlights pixel-level regressions; artistic
 quality still requires a human review. See [the visual QA guide](docs/ASSET_SPEC_V2.md#multi-view-visual-qa-pillow--optional-openimageio).
 
-The composer also includes true rounded-edge solids, four-part mitered panel
-trim and instanced oriented fastener rows. The
+The composer includes true rounded-edge solids, four-part mitered panel trim,
+oriented fastener rows and a one-declaration **service-panel assembly** with
+actual sealing rails, hollow metal washers and two captive fastener rows. The
 [precision-control-enclosure recipe](examples/precision-control-enclosure-v2.json)
-demonstrates 62 real hard-surface parts from fourteen short declarations, without
+demonstrates 80 real hard-surface parts from eleven short declarations, without
 writing any per-model Python or Blender code.
 
 For scanned or reviewed PBR materials, the generic `build-asset` command now

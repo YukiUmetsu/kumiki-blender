@@ -27,8 +27,12 @@ def _inspection_shots(plan: AssemblyPlan, spec: AssetSpec) -> tuple[QualityShot,
     full_scale = max(0.4, width*1.7, height*2.05, depth*1.8)
     primary_id = next((item.id for item in reversed(spec.components)
                        if not item.type.startswith("detail.")), None)
-    last = (next(part for part in reversed(plan.instances) if part.name == primary_id)
-            if primary_id is not None else plan.instances[-1])
+    primary_parts = (tuple(part for part in plan.instances
+                           if origin_component_id(part.name, spec.components) == primary_id)
+                     if primary_id is not None else ())
+    last = (next((part for part in primary_parts if part.name in
+                  (primary_id, f"{primary_id}-plate")), primary_parts[-1])
+            if primary_parts else plan.instances[-1])
     # The detail view targets the last authored primary piece, not a random
     # camera direction or a radial stud at the edge of the asset.
     coords = tuple(tuple(last.origin[a] + vertex[0]*last.axis_x[a] +
@@ -103,25 +107,29 @@ def build_assembly_scene(spec: AssetSpec, plan: AssemblyPlan, destination: Path,
         if component_id is None:
             raise RuntimeError(f"Unregistered generated component: {instance.name}")
         kind = component_type[component_id]
+        panel_hardware = (kind == "assembly.service-panel" and
+                          ("-washer-" in instance.name or "-fastener-" in instance.name))
+        panel_plate = kind == "assembly.service-panel" and instance.name.endswith("-plate")
         if key not in cache:
             mesh = bpy.data.meshes.new(f"Geometry / {instance.name}")
             mesh.from_pydata(instance.mesh.vertices, [], instance.mesh.faces)
             mesh.update()
             tile_size = assigned[role].tile_size_m if role in assigned else 1.5
             if kind in ("solid.lathe", "solid.hollow-lathe", "mechanical.rod",
-                        "detail.radial-studs", "detail.linear-fasteners"):
+                        "detail.radial-studs", "detail.linear-fasteners") or panel_hardware:
                 ensure_cylindrical_uvs(mesh, tile_size_m=tile_size)
                 # The worker intentionally has no original Pydantic inputs:
                 # distinguish six-sided hex heads from curved buttons by the
                 # compiled cap topology, preserving crisp hex facets.
-                smooth_sides = (kind != "detail.linear-fasteners" or
+                smooth_sides = ((kind != "detail.linear-fasteners" and
+                                 not (panel_hardware and "-fastener-" in instance.name)) or
                                 any(len(face.vertices) >= 16 for face in mesh.polygons))
                 for polygon in mesh.polygons:
                     if len(polygon.vertices) == 4 and smooth_sides:
                         polygon.use_smooth = True
             else:
                 ensure_metric_uvs(mesh, tile_size_m=tile_size)
-                if kind == "solid.rounded-box":
+                if kind == "solid.rounded-box" or panel_plate:
                     for polygon in mesh.polygons:
                         polygon.use_smooth = True
             mesh.materials.append(palette[role])
@@ -135,7 +143,18 @@ def build_assembly_scene(spec: AssetSpec, plan: AssemblyPlan, destination: Path,
         obj["kumiki_part"] = component_id
         obj["kumiki_component_type"] = kind
         obj["kumiki_material_role"] = role
-        if kind not in ("detail.radial-studs", "detail.linear-fasteners", "solid.rounded-box"):
+        if kind == "assembly.service-panel":
+            # The generated meshes already own their real edge shapes and
+            # fastener profile. A blanket bevel would obliterate thin seals,
+            # tiny washers and their machined chamfers.
+            if "-trim-" in instance.name:
+                bevel = obj.modifiers.new("Fine trim edge highlights", "BEVEL")
+                bevel.width = 0.0005
+                bevel.segments = 2
+                obj.modifiers.new("Weighted trim normals", "WEIGHTED_NORMAL")
+            elif panel_plate:
+                obj.modifiers.new("Weighted fillet normals", "WEIGHTED_NORMAL")
+        elif kind not in ("detail.radial-studs", "detail.linear-fasteners", "solid.rounded-box"):
             # Small real bevels give machined edges highlight response, without
             # smoothing the fasteners away or inflating a distant LOD.
             dimensions = [max(v[i] for v in instance.mesh.vertices)-

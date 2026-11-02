@@ -120,6 +120,7 @@ jobs:
           python -m kumiki_blender audit --model .review/ci/control-enclosure/model.glb --require-pbr-textures
           python -m kumiki_blender audit-revision --root .review/ci/control-enclosure
           python -c "import json; m=json.load(open('.review/ci/control-enclosure/manifest.json')); p=m['texture_packs'][0]; assert p['target']=='housing' and len(p['pack']['maps'])==3"
+          python -c "import json; m=json.load(open('.review/ci/control-enclosure/manifest.json')); assert m['named_parts']['assembly.service-panel']==37 and m['instances']==80"
           python -m kumiki_blender visual-qa \
             --revision .review/ci/control-enclosure --output .review/ci/control-enclosure-visual-qa
           test -s .review/ci/control-enclosure-visual-qa/contact-sheet.png

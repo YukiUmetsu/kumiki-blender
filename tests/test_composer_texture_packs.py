@@ -61,7 +61,7 @@ class ComposerTexturePackTests(unittest.TestCase):
                   patch("kumiki_blender.cli.subprocess.run", side_effect=fake_blender)):
                 self.assertEqual(main(["build-asset", "--spec", str(EXAMPLE),
                     "--texture-packs", str(recipe), "--output", str(revision)]), 0)
-            self.assertEqual(observed, [("precision-control-enclosure", 62)])
+            self.assertEqual(observed, [("precision-control-enclosure", 80)])
             self.assertFalse(revision.exists())
 
     def test_compiled_worker_accepts_pack_without_pydantic(self):

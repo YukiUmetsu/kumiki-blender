@@ -145,9 +145,53 @@ class PanelFrameComponent(StrictModel):
         return self
 
 
+class ServicePanelComponent(StrictModel):
+    """One physically layered manufacturing detail with separate material roles."""
+
+    type: Literal["assembly.service-panel"]
+    id: Slug
+    material: Slug
+    trim_material: Slug
+    gasket_material: Slug
+    fastener_material: Slug
+    size_m: tuple[Measure, Measure]
+    origin_m: Point3 = (0.0, 0.0, 0.0)
+    normal_axis: SurfaceAxis = "-y"
+    plate_depth_m: Measure = 0.006
+    trim_width_m: Measure = 0.015
+    trim_depth_m: Measure = 0.006
+    gasket_width_m: Measure = 0.002
+    gasket_depth_m: Measure = 0.001
+    head_radius_m: Measure = 0.0038
+    head_height_m: Measure = 0.003
+    fasteners_per_edge: Annotated[int, Field(ge=2, le=16)] = 5
+    head_style: Literal["button", "hex"] = "hex"
+
+    @model_validator(mode="after")
+    def check_clearance(self) -> "ServicePanelComponent":
+        w, h = self.size_m
+        t, seal = self.trim_width_m, self.gasket_width_m
+        washer_radius = self.head_radius_m * 1.25
+        if t * 2 + seal * 2 >= min(w, h):
+            raise ValueError("service panel trim and gasket leave no clear opening")
+        if washer_radius * 2 >= t * 0.85:
+            raise ValueError("service panel washers must fit inside the trim rail")
+        if min(w, h) / 2 <= self.plate_depth_m * 0.2:
+            raise ValueError("service panel is too small for its thickness")
+        usable_half_width = w/2 - t*1.65
+        if usable_half_width <= washer_radius:
+            raise ValueError("service panel is too narrow for its fastener edge margins")
+        if 2*usable_half_width / (self.fasteners_per_edge - 1) <= 2.6 * washer_radius:
+            raise ValueError("service panel fasteners overlap along the rail")
+        if self.gasket_depth_m >= self.trim_depth_m:
+            raise ValueError("service panel gasket must sit below the trim face")
+        return self
+
+
 Component = Annotated[
     Union[BoxComponent, RoundedBoxComponent, LatheComponent, HollowLatheComponent,
-          RodComponent, StudRingComponent, LinearFastenersComponent, PanelFrameComponent],
+          RodComponent, StudRingComponent, LinearFastenersComponent, PanelFrameComponent,
+          ServicePanelComponent],
     Field(discriminator="type"),
 ]
 
@@ -182,6 +226,11 @@ class AssetSpec(StrictModel):
         for component in self.components:
             if component.material not in self.materials:
                 raise ValueError(f"{component.id}: unknown material role {component.material!r}")
+            if isinstance(component, ServicePanelComponent):
+                for role in (component.trim_material, component.gasket_material,
+                             component.fastener_material):
+                    if role not in self.materials:
+                        raise ValueError(f"{component.id}: unknown material role {role!r}")
             if isinstance(component, RodComponent) and component.start_m == component.end_m:
                 raise ValueError(f"{component.id}: rod endpoints must differ")
             if isinstance(component, StudRingComponent) and component.stud_radius_m >= component.ring_radius_m:

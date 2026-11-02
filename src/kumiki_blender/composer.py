@@ -12,13 +12,14 @@ from typing import TYPE_CHECKING, Callable
 from .architecture_details import box_mesh
 from .architecture_geometry import (Mesh, MeshInstance, Vec3, audit_mesh, place_mesh,
                                     revolve_profile, world_vertices)
-from .craft_details import (detail_frame, fastener_head_mesh, mitered_panel_rails,
-                            rounded_box_mesh)
+from .craft_details import (annular_washer_mesh, detail_frame, fastener_head_mesh,
+                            mitered_panel_rails, rounded_box_mesh)
 
 if TYPE_CHECKING:
     from .asset_spec import (AssetSpec, BoxComponent, HollowLatheComponent, LatheComponent,
                              LinearFastenersComponent, PanelFrameComponent,
-                             RodComponent, RoundedBoxComponent, StudRingComponent)
+                             RodComponent, RoundedBoxComponent, ServicePanelComponent,
+                             StudRingComponent)
 
 
 class ComposerError(ValueError):
@@ -151,10 +152,60 @@ def _panel_frame(component: PanelFrameComponent) -> tuple[MeshInstance, ...]:
         component.size_m, component.trim_width_m, component.depth_m))
 
 
+def _service_panel(component: ServicePanelComponent) -> tuple[MeshInstance, ...]:
+    """Expand one declaration into a real panel, sealing seam and captive hardware.
+
+    The origin is the panel's rear center. All local Z distances point outward;
+    unlike a flat decal, each layer is closed geometry with a meaningful depth.
+    """
+    x, y, z = detail_frame(component.normal_axis)
+    origin = component.origin_m
+    panel_depth = component.plate_depth_m
+    trim_depth = component.trim_depth_m
+    washer_depth = min(trim_depth * 0.16, component.head_height_m * 0.26)
+    parts: list[MeshInstance] = []
+
+    def add(label: str, mesh: Mesh, local: Vec3, material: str) -> None:
+        position = tuple(origin[a] + x[a]*local[0] + y[a]*local[1] + z[a]*local[2]
+                         for a in range(3))
+        parts.append(place_mesh(mesh, name=f"{component.id}-{label}", origin=position,
+                                axis_x=x, axis_y=y, axis_z=z, material=material))
+
+    plate_size = (*component.size_m, panel_depth)
+    fillet = min(panel_depth * 0.22, component.trim_width_m * 0.12)
+    add("plate", rounded_box_mesh(plate_size, fillet, corner_segments=4),
+        (0, 0, panel_depth/2), component.material)
+    for label, mesh in mitered_panel_rails(
+            component.size_m, component.trim_width_m, trim_depth):
+        add(f"trim-{label}", mesh, (0, 0, panel_depth), component.trim_material)
+    opening = tuple(v - 2*component.trim_width_m for v in component.size_m)
+    for label, mesh in mitered_panel_rails(
+            opening, component.gasket_width_m, component.gasket_depth_m):
+        add(f"gasket-{label}", mesh, (0, 0, panel_depth), component.gasket_material)
+
+    washer = annular_washer_mesh(component.head_radius_m*1.25,
+                                 component.head_radius_m*0.7, washer_depth)
+    head = fastener_head_mesh(component.head_style, component.head_radius_m,
+                              component.head_height_m)
+    half_width, half_height = (v/2 for v in component.size_m)
+    x_span = half_width - component.trim_width_m*1.65
+    y_offset = half_height - component.trim_width_m/2
+    for edge, v in enumerate((y_offset, -y_offset)):
+        for i in range(component.fasteners_per_edge):
+            u = -x_span + 2*x_span*i/(component.fasteners_per_edge-1)
+            index = edge*component.fasteners_per_edge + i
+            add(f"washer-{index:03d}", washer,
+                (u, v, panel_depth+trim_depth), component.fastener_material)
+            add(f"fastener-{index:03d}", head,
+                (u, v, panel_depth+trim_depth+washer_depth), component.fastener_material)
+    return tuple(parts)
+
+
 _INSTANCE_SUFFIX = {
     "detail.radial-studs": r"-[0-9]{3}",
     "detail.linear-fasteners": r"-[0-9]{3}",
     "detail.panel-frame": r"-(?:top|right|bottom|left)",
+    "assembly.service-panel": r"-(?:plate|trim-(?:top|right|bottom|left)|gasket-(?:top|right|bottom|left)|washer-[0-9]{3}|fastener-[0-9]{3})",
 }
 
 
@@ -184,6 +235,7 @@ COMPONENT_REGISTRY: dict[str, ComponentDefinition] = {
         ComponentDefinition("detail.radial-studs", "Instanced circular fastener detail", _stud_ring),
         ComponentDefinition("detail.linear-fasteners", "Instanced surface-oriented machine fasteners", _linear_fasteners),
         ComponentDefinition("detail.panel-frame", "Four individually mitered raised frame rails", _panel_frame),
+        ComponentDefinition("assembly.service-panel", "Filleted panel, mitered trim, sealing gasket, captive washer and screws", _service_panel),
     )
 }
 

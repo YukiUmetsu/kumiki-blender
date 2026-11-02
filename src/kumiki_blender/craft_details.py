@@ -124,6 +124,29 @@ def fastener_head_mesh(style: str, radius_m: float, height_m: float) -> Mesh:
     return Mesh(vertices, tuple(faces))
 
 
+def annular_washer_mesh(outer_radius_m: float, inner_radius_m: float,
+                        height_m: float, *, radial_segments: int = 32) -> Mesh:
+    """A real hollow metal washer with inside and outside cylindrical walls."""
+    if (not all(math.isfinite(v) for v in (outer_radius_m, inner_radius_m, height_m)) or
+            not 0 < inner_radius_m < outer_radius_m or height_m <= 0 or
+            type(radial_segments) is not int or not 8 <= radial_segments <= 128):
+        raise GeometryError("Washer requires concentric positive radii and a positive height")
+    n = radial_segments
+    vertices = tuple((radius * math.cos(math.tau * i/n),
+                      radius * math.sin(math.tau * i/n), z)
+                     for radius, z in ((outer_radius_m, 0.0), (inner_radius_m, 0.0),
+                                       (outer_radius_m, height_m), (inner_radius_m, height_m))
+                     for i in range(n))
+    faces: list[tuple[int, ...]] = []
+    for i in range(n):
+        j = (i + 1) % n
+        faces.extend(((i, j, 2*n+j, 2*n+i),
+                      (n+j, n+i, 3*n+i, 3*n+j),
+                      (2*n+i, 2*n+j, 3*n+j, 3*n+i),
+                      (j, i, n+i, n+j)))
+    return Mesh(vertices, tuple(faces))
+
+
 _AXIS_FRAMES: dict[str, tuple[Vec3, Vec3, Vec3]] = {
     "+x": ((0, 1, 0), (0, 0, 1), (1, 0, 0)),
     "-x": ((0, -1, 0), (0, 0, 1), (-1, 0, 0)),

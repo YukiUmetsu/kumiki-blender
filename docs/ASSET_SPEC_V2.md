@@ -98,10 +98,11 @@ fidelity or GLB export.
 | `detail.radial-studs` | `id`, `material`, `center_m`, `ring_radius_m`, `stud_radius_m`, `stud_height_m`, `count` | Named, shared-mesh repeated fasteners |
 | `detail.linear-fasteners` | `id`, `material`, `start_m`, `end_m`, `count`, `head_radius_m`, `head_height_m` | Spaced, instanced button or hexagonal heads along an edge; optional `normal_axis` and `head_style` |
 | `detail.panel-frame` | `id`, `material`, `size_m`, `trim_width_m`, `depth_m` | Four independent 45° mitered rails with a real open center; optional `plane` and `origin_m` |
+| `assembly.service-panel` | `id`, `material`, `trim_material`, `gasket_material`, `fastener_material`, `size_m` | One recipe expands into a filleted skin, four mitered trim rails, four dark gasket rails and two rows of hollow washers with shaped screw heads |
 
 ### Hard-surface craftsmanship presets
 
-These three added types reduce the amount of mesh-generation code needed for
+These manufacturing-oriented types reduce the amount of mesh-generation code needed for
 product enclosures, furniture, equipment, books, display frames, instruments,
 and other hard-surface assets:
 
@@ -117,9 +118,31 @@ and other hard-surface assets:
   the physical head protrude from the chosen surface. `head_style` selects a
   faceted `hex` head or curved `button` head; both have actual solid geometry.
   Head spacing is validated before Blender runs.
+- **Service panel assembly:** Supplies one `size_m` and four separate material
+  roles for panel/trim/gasket/fasteners; the composer automatically generates
+  real fillets, metal trim, a thin seal reveal, annular washers and two hardware
+  rows. Use `normal_axis` for any of six outward directions; `origin_m` is the
+  back center. Set `fasteners_per_edge` (2–16) and optionally the metric layer
+  dimensions and head style. The schema validates seal thickness, clear panel
+  opening, washer fit and screw spacing before the Blender worker runs.
+
+For example, a **single** declaration generates 37 manifold, named parts:
+
+```json
+{"type":"assembly.service-panel","id":"instrument-face",
+ "material":"panel","trim_material":"trim","gasket_material":"seals",
+ "fastener_material":"screws","size_m":[0.48,0.25],
+ "origin_m":[0,-0.08,0.19],"normal_axis":"-y",
+ "fasteners_per_edge":7}
+```
+
+The extra material roles must exist in `materials`, including `seals` (typically
+dark and rough). This physically layered assembly is particularly useful for
+enclosures, instrument faces, access hatches and furniture panels. It describes
+manufactured geometry, **not** automatically reference-fitted design.
 
 The [precision-control-enclosure example](../examples/precision-control-enclosure-v2.json)
-combines fourteen high-level declarations into 62 real, named parts. All reusable
+combines eleven high-level declarations into 80 real, named parts. All reusable
 parts are validated and compiled by the same generic `build-asset` command;
 no new command or Blender script is needed per product. This is a **detail
 library**, not a substitute for survey-based shape reconstruction or physical
@@ -191,7 +214,7 @@ fidelity, or whether the composition is aesthetically compelling.
 
 ## Extension boundaries
 
-The current registry exposes eight reusable component types and one generic
+The current registry exposes nine reusable component types and one generic
 CLI/Blender adapter. It deliberately does not claim that an assembled desk
 lamp or control enclosure is a photo-faithful recreation. Next work should add
 controlled Geometry Nodes groups, surveyed reference alignment, materials

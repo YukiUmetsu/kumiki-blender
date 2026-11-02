@@ -11,10 +11,11 @@ from pydantic import ValidationError
 
 from kumiki_blender.architecture_geometry import audit_mesh, world_vertices
 from kumiki_blender.asset_spec import AssetSpec, load_asset_spec
+from kumiki_blender.blender_composer import _inspection_shots
 from kumiki_blender.composer import plan_assembly
 from kumiki_blender.compiled_plan import (CompiledPlanError, _canonical,
                                          load_compiled_plan, write_compiled_plan)
-from kumiki_blender.craft_details import (detail_frame, fastener_head_mesh,
+from kumiki_blender.craft_details import (annular_washer_mesh, detail_frame, fastener_head_mesh,
                                          mitered_panel_rails, rounded_box_mesh)
 
 
@@ -64,6 +65,16 @@ class CraftDetailsTests(unittest.TestCase):
             self.assertEqual(audit_mesh(head).boundary_edges, 0)
             self.assertGreater(audit_mesh(head).volume_m3, 0)
 
+    def test_actual_washer_has_a_hole_and_four_manifold_surfaces(self):
+        washer = annular_washer_mesh(0.00475, 0.00266, 0.0007)
+        report = audit_mesh(washer)
+        self.assertEqual(report.boundary_edges, 0)
+        self.assertEqual(report.nonmanifold_edges, 0)
+        self.assertAlmostEqual(report.volume_m3,
+                               math.pi * (0.00475**2 - 0.00266**2) * 0.0007,
+                               delta=1e-9)
+        self.assertGreater(min(math.hypot(x, y) for x, y, _ in washer.vertices), 0.002)
+
     def test_surface_frames_are_orthonormal_and_right_handed(self):
         for direction in ("+x", "-x", "+y", "-y", "+z", "-z"):
             with self.subTest(direction=direction):
@@ -76,20 +87,27 @@ class CraftDetailsTests(unittest.TestCase):
     def test_sample_expands_to_named_audited_product_details(self):
         spec = load_asset_spec(EXAMPLE)
         plan = plan_assembly(spec)
-        self.assertEqual(len(plan.instances), 62)
+        self.assertEqual(len(plan.instances), 80)
         self.assertEqual(dict(plan.named_parts), {
-            "solid.rounded-box": 2, "detail.panel-frame": 4,
-            "detail.linear-fasteners": 14, "solid.hollow-lathe": 3,
+            "solid.rounded-box": 1, "assembly.service-panel": 37,
+            "solid.hollow-lathe": 3,
             "detail.radial-studs": 36, "solid.lathe": 3,
         })
-        self.assertEqual(len({part.name for part in plan.instances}), 62)
+        self.assertEqual(len({part.name for part in plan.instances}), 80)
         self.assertEqual({part.material for part in plan.instances},
-                         {"housing", "panel", "trim", "screws", "controls", "markings"})
+                         {"housing", "panel", "trim", "seals", "screws", "controls", "markings"})
         for part in plan.instances:
             self.assertEqual(audit_mesh(part.mesh).boundary_edges, 0, part.name)
-        # The left/right front-facing fasteners actually protrude toward -Y.
-        fastener = next(p for p in plan.instances if p.name == "top-hex-screws-000")
-        self.assertLess(min(p[1] for p in world_vertices(fastener)), -0.102)
+        # Manufacturing details physically layer outwards in front of the base.
+        seal = next(p for p in plan.instances if p.name == "front-service-panel-gasket-top")
+        self.assertEqual(seal.material, "seals")
+        fastener = next(p for p in plan.instances if p.name == "front-service-panel-fastener-000")
+        self.assertEqual(fastener.axis_z, (0, -1, 0))
+        self.assertLess(min(p[1] for p in world_vertices(fastener)), -0.097)
+        self.assertEqual(sum("-washer-" in p.name for p in plan.instances), 14)
+        self.assertEqual(sum("-fastener-" in p.name for p in plan.instances), 14)
+        self.assertEqual(len({id(p.mesh) for p in plan.instances
+                              if "-washer-" in p.name}), 1)
         # Both bezel shells and scale marks use local +Z rotated toward -Y.
         bezel = next(p for p in plan.instances if p.name == "left-bezel")
         self.assertEqual(bezel.axis_z, (0, -1, 0))
@@ -109,11 +127,11 @@ class CraftDetailsTests(unittest.TestCase):
     def test_bounded_detail_inputs_reject_invalid_dimensions_and_spacing(self):
         mutations = (
             (0, "corner_radius_m", 0.08, "half the shortest"),
-            (2, "trim_width_m", 0.2, "half the shortest"),
-            (3, "head_radius_m", 0.04, "insufficient clearance"),
-            (4, "normal_axis", "diagonal", "normal_axis"),
-            (4, "count", 200, "less than or equal to 128"),
-            (4, "end_m", [0.205, -0.12, 0.073], "plane perpendicular"),
+            (1, "trim_width_m", 0.2, "trim and gasket"),
+            (1, "head_radius_m", 0.04, "washers must fit"),
+            (1, "normal_axis", "diagonal", "normal_axis"),
+            (1, "fasteners_per_edge", 200, "less than or equal to 16"),
+            (1, "gasket_depth_m", 0.012, "below the trim"),
         )
         for index, field, value, message in mutations:
             with self.subTest(index=index, field=field):
@@ -122,6 +140,28 @@ class CraftDetailsTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValidationError, message):
                     self.validated()
                 self.raw["components"][index][field] = original
+
+    def test_service_panel_checks_all_additional_material_roles(self):
+        self.raw["components"][1]["gasket_material"] = "missing"
+        with self.assertRaisesRegex(ValidationError, "unknown material role"):
+            self.validated()
+
+    def test_service_panel_orients_every_layer_on_six_faces(self):
+        for normal in ("+x", "-x", "+y", "-y", "+z", "-z"):
+            with self.subTest(normal=normal):
+                self.raw["components"][1]["normal_axis"] = normal
+                plan = plan_assembly(self.validated())
+                panel = next(p for p in plan.instances if p.name == "front-service-panel-plate")
+                self.assertEqual(panel.axis_z, detail_frame(normal)[2])
+
+    def test_standalone_panel_can_target_its_plate_for_detail_inspection(self):
+        self.raw["components"] = [self.raw["components"][1]]
+        spec = self.validated()
+        plan = plan_assembly(spec)
+        self.assertEqual(len(plan.instances), 37)
+        shots = {item.name: item for item in _inspection_shots(plan, spec)}
+        self.assertIn("detail", shots)
+        self.assertEqual(len(shots), 4)
 
     def test_compiled_detail_handoff_is_lossless_and_checks_expansion_names(self):
         spec = load_asset_spec(EXAMPLE)
@@ -132,13 +172,13 @@ class CraftDetailsTests(unittest.TestCase):
             parsed_spec, parsed_plan = load_compiled_plan(target)
             self.assertEqual(parsed_spec.asset_id, "precision-control-enclosure")
             self.assertEqual(parsed_plan.named_parts, plan.named_parts)
-            self.assertEqual(len(parsed_plan.instances), 62)
+            self.assertEqual(len(parsed_plan.instances), 80)
             self.assertEqual(parsed_plan.recipe_sha256, plan.recipe_sha256)
 
             raw = json.loads(target.read_text(encoding="utf-8"))
             name = next(item for item in raw["plan"]["instances"]
-                        if item["name"] == "front-mitered-trim-top")
-            name["name"] = "front-mitered-trim-malicious"
+                        if item["name"] == "front-service-panel-trim-top")
+            name["name"] = "front-service-panel-trim-malicious"
             raw["sha256"] = hashlib.sha256(_canonical({
                 k: v for k, v in raw.items() if k != "sha256"
             })).hexdigest()
