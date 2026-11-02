@@ -72,3 +72,19 @@ replacement and must not silently overwrite the approved r50 full GLB.
   the **nose bridge, upper/lower eyelids, mouth corners and strong chin** on
   the same anatomical cage. No facial likeness acceptance until those
   shapes agree in more than one registered camera.
+
+## Continuous flute and temple-root refinement
+
+The first candidate snapped each scalp vertex to the *nearest sampled guide
+point*. That quantized its longitudinal taper, potentially creating scalloped
+stone channels. The updated method uses a KD tree only to find candidate
+guide segments, then computes an exact closest point and arc-length fraction
+on those segments. The flute is therefore continuous between samples.
+
+The upper rows of both temple curtains now snap **inside** the actual
+anatomical scalp with a smooth falloff; small physical bevels soften the
+otherwise razor-sharp panel edges. The smoke test records the number of
+rooted vertices, the largest original root gap, and the groove projection
+method. These are still **overlapping meshes, not a single manifold solid**.
+A visually convincing seam, facial likeness and watertightness have **not**
+been demonstrated until the four-view Blender renders are inspected.

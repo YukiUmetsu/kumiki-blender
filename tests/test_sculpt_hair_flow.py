@@ -32,5 +32,32 @@ class SculptHairFlowTests(unittest.TestCase):
         self.assertTrue(all(math.isfinite(x) for point in curve for x in point))
 
 
+class ContinuousGrooveProjectionTests(unittest.TestCase):
+    def test_segment_projection_is_continuous_between_samples(self):
+        from kumiki_blender.sculpt_hair_flow import polyline_arc_lengths, nearest_polyline_segment
+        path = [(float(x),0.,0.) for x in range(5)]
+        lengths = polyline_arc_lengths(path)
+        for x in (1.49,1.50,1.51):
+            dist,arc = nearest_polyline_segment((x,.3,0),path,lengths,2)
+            self.assertAlmostEqual(dist,.3)
+            self.assertAlmostEqual(arc,x/4)
+
+    def test_curved_three_dimensional_path_and_end_taper(self):
+        from kumiki_blender.sculpt_hair_flow import polyline_arc_lengths, nearest_polyline_segment
+        path = [(0.,0.,0.),(0.,0.,1.),(1.,0.,1.)]
+        lengths = polyline_arc_lengths(path)
+        dist,arc = nearest_polyline_segment((.4,.2,1.),path,lengths,1)
+        self.assertAlmostEqual(dist,.2)
+        self.assertAlmostEqual(arc,.7)
+
+    def test_rejects_bad_guide_geometry(self):
+        from kumiki_blender.sculpt_hair_flow import polyline_arc_lengths, nearest_polyline_segment
+        with self.assertRaises(ValueError):
+            polyline_arc_lengths([(0.,0.,0.)]*2)
+        with self.assertRaises(ValueError):
+            polyline_arc_lengths([(0.,0.,0.),(float('nan'),0.,0.)])
+        with self.assertRaises(ValueError):
+            nearest_polyline_segment((0.,0.,0.),[(0.,0.,0.),(1.,0.,0.)],[0.,1.],5)
+
 if __name__ == '__main__':
     unittest.main()

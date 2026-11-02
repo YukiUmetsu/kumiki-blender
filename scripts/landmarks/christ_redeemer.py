@@ -1621,6 +1621,11 @@ def main():
                                if "anatomy-derived sculptable scalp" in ob.name)
                     metrics["carved_hair_vertices"]=int(scalp["carved_vertices"])
                     metrics["carved_hair_grooves"]=int(scalp["groove_count"])
+                    metrics["rooted_curtain_vertices"]=int(
+                        scalp["rooted_curtain_vertices"])
+                    metrics["max_root_snap_distance_m"]=round(
+                        float(scalp["max_root_snap_distance_m"]),5)
+                    metrics["groove_projection"]=str(scalp["groove_projection"])
                 metrics["hair_bounds_min_z_m"]=round(min(p.z for p in hair_points),3)
                 metrics["hair_bounds_max_z_m"]=round(max(p.z for p in hair_points),3)
                 metrics["hair_bounds_width_m"]=round(

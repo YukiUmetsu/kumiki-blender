@@ -50,3 +50,51 @@ def catmull_rom_3d(points, steps=14):
                                 for j in range(3)))
     result.append(tuple(points[-1]))
     return result
+
+
+def polyline_arc_lengths(points):
+    """Cumulative Euclidean arc lengths of a 3D sculpting guide.
+
+    Using physical arc length, rather than a Catmull-Rom sample index, keeps
+    groove taper uniform when the sculpting guide bends or stretches.
+    """
+    if len(points) < 2 or any(len(p) != 3 for p in points):
+        raise ValueError("A 3D polyline requires at least two points")
+    lengths = [0.0]
+    for a, b in zip(points, points[1:]):
+        if not all(math.isfinite(float(v)) for v in (*a, *b)):
+            raise ValueError("Polyline coordinates must be finite")
+        segment = math.sqrt(sum((float(y)-float(x))**2 for x,y in zip(a,b)))
+        lengths.append(lengths[-1]+segment)
+    if lengths[-1] <= 1e-10:
+        raise ValueError("Degenerate zero-length sculpting guide")
+    return lengths
+
+
+def nearest_polyline_segment(point, points, lengths, near_index, span=2):
+    """Return continuous distance and normalized arc position near a KD hit.
+
+    The KD tree selects a *sample point*, but carving directly from its index
+    creates stair-stepped, scalloped flutes. Here the candidate segment is
+    projected analytically, and its continuous arc position drives the taper.
+    The caller should try several nearby KD hits if guides cross.
+    """
+    if len(points) != len(lengths) or len(points) < 2:
+        raise ValueError("Guide and arc-length table sizes disagree")
+    if len(point) != 3 or not all(math.isfinite(float(v)) for v in point):
+        raise ValueError("Expected finite 3D query")
+    if not 0 <= near_index < len(points) or span < 1:
+        raise ValueError("Invalid guide sample index or span")
+    best = (math.inf, 0.0)
+    for i in range(max(0,near_index-span), min(len(points)-1,near_index+span)):
+        a, b = points[i], points[i+1]
+        direction = [float(b[j])-float(a[j]) for j in range(3)]
+        squared = sum(v*v for v in direction)
+        t = (min(1.0,max(0.0,sum((float(point[j])-float(a[j]))*direction[j]
+                                    for j in range(3))/squared)) if squared > 1e-18 else 0.0)
+        squared_distance = sum((float(point[j])-float(a[j])-t*direction[j])**2
+                               for j in range(3))
+        if squared_distance < best[0]:
+            progress = (lengths[i]+t*(lengths[i+1]-lengths[i]))/lengths[-1]
+            best = (squared_distance,progress)
+    return math.sqrt(best[0]),best[1]
