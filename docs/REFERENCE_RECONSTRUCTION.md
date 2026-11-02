@@ -229,12 +229,15 @@ Exit codes:
    region-specific anatomical landmarks, silhouettes, and actual scan
    deviations must be inspected before a production GLB is promoted.
 6. **Retopologize and bake.** Only after the high-resolution form is accepted,
-   bake normals/displacement to reusable medium/low-detail GLB exports.
+   use the new [licensed scan LOD worker](SCAN_LOD_BAKING.md) to decimate and
+   bake the source into portable normal/albedo/roughness-textured GLB previews.
+   Real displacement and handcrafted animation-ready retopology still need
+   specialist tools and review.
 
 **Remaining framework work:** real COLMAP evaluation on a licensed multi-angle
 statue dataset; robust arbitrary-photo feature retrieval/hloc; general
 survey/point-cloud intake beyond Sphinx; semantic/region-aware facial and
-drapery sculpt *editing* tools; close-up texture likeness QA; high/low LOD
-geometry and texture baking. Camera pose and
+drapery sculpt *editing* tools; close-up texture likeness QA; displacement
+baking and artist-controlled production retopology. Camera pose and
 silhouette tooling help artists measure shape mismatches, but do not themselves
 repair anatomy or recover unknown surface detail.

@@ -24,7 +24,7 @@ jobs:
       - name: Test photo-reference evidence and COLMAP worker boundary
         env:
           PYTHONPATH: src
-        run: python -m unittest tests.test_reconstruction_references tests.test_reconstruction_colmap tests.test_reconstruction_cli tests.test_reconstruction_cameras tests.test_reconstruction_silhouettes tests.test_reconstruction_landmarks -v
+        run: python -m unittest tests.test_reconstruction_references tests.test_reconstruction_colmap tests.test_reconstruction_cli tests.test_reconstruction_cameras tests.test_reconstruction_silhouettes tests.test_reconstruction_landmarks tests.test_reconstruction_lods -v
       - name: Test measured Khufu masonry and Sphinx source intake
         env:
           PYTHONPATH: src
@@ -135,6 +135,13 @@ jobs:
             .review/ci/desk-lamp/model.glb .review/ci/reference-camera-review
           test -s .review/ci/reference-camera-review/reference-review.blend
           test -s .review/ci/reference-camera-review/renders/test-angle-0.png
+      - name: Bake real high-poly scan detail into PBR LOD with Blender Cycles
+        run: |
+          blender --background --factory-startup --threads 2 --python-exit-code 1 \
+            --python scripts/smoke_scan_lods.py -- .review/ci/statue-lod-bake
+          python -m kumiki_blender audit --model .review/ci/statue-lod-bake/model-lod.glb --require-pbr-textures
+          python -c "from PIL import Image; im=Image.open('.review/ci/statue-lod-bake/maps/lod-00-normal.png').convert('RGB'); assert len(set(im.getdata())) > 10, 'Normal bake is flat or empty'"
+          test -s .review/ci/statue-lod-bake/scan-lod.blend
       - name: Audit portable GLB and immutable revision
         env:
           PYTHONPATH: src
@@ -185,6 +192,15 @@ jobs:
           path: |
             .review/ci/reference-camera-review/
             .review/ci/reference-scene-synthetic-input/
+          if-no-files-found: warn
+      - name: Upload first-party scan LOD bake and source/low comparison
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: statue-lod-bake-blender-qa
+          path: |
+            .review/ci/statue-lod-bake/
+            .review/ci/scan-lod-first-party-input/
           if-no-files-found: warn
 
   tests:

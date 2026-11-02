@@ -180,6 +180,19 @@ def main(argv: list[str] | None = None) -> int:
     landmark_parser.add_argument("--annotations", type=Path, required=True)
     landmark_parser.add_argument("--output", type=Path, required=True)
     landmark_parser.add_argument("--max-error-px", type=float, default=12.0)
+    for command in ("plan-scan-lods", "build-scan-lods"):
+        scan_parser = subcommands.add_parser(
+            command, help="Plan or bake licensed statue scan geometry into low-detail PBR GLBs")
+        scan_parser.add_argument("--source", type=Path, required=True, help="Reviewed local high-poly GLB")
+        scan_parser.add_argument("--provenance", type=Path, required=True,
+                                 help="Verified source rights/provenance JSON")
+        scan_parser.add_argument("--output", type=Path, required=True)
+        scan_parser.add_argument("--target-triangles", type=int, default=100_000)
+        scan_parser.add_argument("--map-size", type=int, default=1024)
+        scan_parser.add_argument("--ray-distance-m", type=float, default=0.05)
+        if command == "build-scan-lods":
+            scan_parser.add_argument("--render-previews", action="store_true")
+            scan_parser.add_argument("--blender", default="blender")
     source_parser = subcommands.add_parser("inspect-asset")
     source_parser.add_argument("--input", type=Path, required=True)
     texture_parser = subcommands.add_parser("inspect-texture-packs")
@@ -193,6 +206,41 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     try:
+        if args.command in ("plan-scan-lods", "build-scan-lods"):
+            from .reconstruction.lods import ScanLODSettings, plan_scan_lods
+            provenance = load_asset_provenance(args.provenance)
+            settings = ScanLODSettings(target_triangles=args.target_triangles,
+                                       map_size=args.map_size,
+                                       ray_distance_m=args.ray_distance_m,
+                                       render_previews=(args.command == "build-scan-lods" and args.render_previews))
+            planned = plan_scan_lods(args.source, provenance, args.output, settings)
+            if args.command == "plan-scan-lods":
+                print(json.dumps(planned, indent=2))
+                return 0
+            try:
+                import bpy  # type: ignore[import-not-found]
+            except ImportError:
+                executable = shutil.which(args.blender)
+                if not executable:
+                    raise RuntimeError(f"Blender executable not found: {args.blender}")
+                entry = Path(__file__).resolve().parents[2] / "scripts/blender_entry.py"
+                if not entry.is_file():
+                    raise RuntimeError("Scan baking requires scripts/blender_entry.py from a source checkout")
+                command = [executable, "--background", "--factory-startup", "--python-exit-code", "1",
+                           "--python", str(entry), "--", "build-scan-lods",
+                           "--source", str(args.source.resolve()),
+                           "--provenance", str(args.provenance.resolve()),
+                           "--output", str(args.output.resolve()),
+                           "--target-triangles", str(args.target_triangles),
+                           "--map-size", str(args.map_size),
+                           "--ray-distance-m", str(args.ray_distance_m)]
+                if args.render_previews:
+                    command.append("--render-previews")
+                return subprocess.run(command, check=False).returncode
+            from .reconstruction.blender_lods import bake_statue_lods
+            report = bake_statue_lods(args.source, provenance, args.output, settings, bpy_module=bpy)
+            print(json.dumps(report, indent=2))
+            return 0 if report["status"].startswith("lod-bake-candidate") else 3
         if args.command == "prepare-camera-plan":
             from .reconstruction.cameras import create_camera_plan
             from .reconstruction.references import ReferenceError

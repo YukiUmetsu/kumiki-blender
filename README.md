@@ -23,7 +23,10 @@ pixel-reprojection measurements. See the [full camera and mask workflow](docs/RE
 This is genuine multi-image camera/geometry *evidence*, not another procedural
 facial sculpt or automatic statue photogrammetry from arbitrary web photos.
 No technical score certifies facial likeness. Historical survey geometry,
-source-specific artistic sculpting and production GLB baking remain separate work.
+source-specific artistic sculpting and visual acceptance remain separate work.
+For a rights-cleared high-poly scan, use the new
+[`build-scan-lods` worker](docs/SCAN_LOD_BAKING.md) to create a smaller GLB
+with baked normal, base-color and roughness textures from the source mesh.
 
 ## New: Agent-authored AssetSpec v2 composer
 
