@@ -153,6 +153,23 @@ def main(argv: list[str] | None = None) -> int:
             photo_parser.add_argument("--undistort", action="store_true",
                                       help="Rectify camera intrinsics and image pixels for accurate Blender projection")
             photo_parser.add_argument("--max-image-size", type=int, default=4000)
+    for command in ("plan-dense-photos", "build-dense-photos"):
+        dense_parser = subcommands.add_parser(
+            command, help="Review or reconstruct a private dense statue mesh from registered cameras")
+        dense_parser.add_argument("--reconstruction", type=Path, required=True,
+                                  help="Successful reconstruct-photos --undistort revision")
+        dense_parser.add_argument("--output", type=Path, required=True,
+                                  help="New private, immutable dense-mesh revision")
+        dense_parser.add_argument("--backend", choices=("openmvs", "colmap"), default="openmvs",
+                                  help="OpenMVS CPU (default) or COLMAP CUDA GPU")
+        dense_parser.add_argument("--min-registered-images", type=int, default=8)
+        dense_parser.add_argument("--min-registered-fraction", type=float, default=0.60)
+        dense_parser.add_argument("--min-mesh-faces", type=int, default=1000)
+        dense_parser.add_argument("--timeout-seconds", type=int, default=7200)
+        dense_parser.add_argument("--no-refine", action="store_true",
+                                  help="OpenMVS: skip refined topology")
+        dense_parser.add_argument("--no-texture", action="store_true",
+                                  help="Skip the private image-to-mesh texture transfer")
     camera_parser = subcommands.add_parser(
         "prepare-camera-plan", help="Align sparse COLMAP cameras to sculpt-space 3D landmarks")
     camera_parser.add_argument("--reconstruction", type=Path, required=True)
@@ -193,6 +210,24 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     try:
+        if args.command in ("plan-dense-photos", "build-dense-photos"):
+            from .reconstruction.dense import (DenseSettings, build_dense_reconstruction,
+                                               plan_dense_reconstruction)
+            from .reconstruction.references import ReferenceError
+            try:
+                settings = DenseSettings(
+                    backend=args.backend, min_registered_images=args.min_registered_images,
+                    min_registered_fraction=args.min_registered_fraction,
+                    timeout_seconds=args.timeout_seconds, min_mesh_faces=args.min_mesh_faces,
+                    refine=not args.no_refine, texture=not args.no_texture)
+                report = (plan_dense_reconstruction(args.reconstruction, args.output, settings)
+                          if args.command == "plan-dense-photos" else
+                          build_dense_reconstruction(args.reconstruction, args.output, settings))
+            except ReferenceError as error:
+                raise RecipeError(str(error)) from error
+            print(json.dumps(report, indent=2))
+            return (0 if args.command == "plan-dense-photos" or
+                    report["status"].startswith("dense-mesh-candidate") else 3)
         if args.command == "prepare-camera-plan":
             from .reconstruction.cameras import create_camera_plan
             from .reconstruction.references import ReferenceError
