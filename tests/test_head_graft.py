@@ -1,5 +1,6 @@
 """Anatomical head graft preservation tests; synthetic, not monument likeness."""
 import unittest
+import numpy as np
 import trimesh
 from kumiki_blender.head_graft import graft_anatomical_head
 
@@ -77,6 +78,21 @@ class HeadGraftTests(unittest.TestCase):
         self.assertNotIn("Hair | mantle",result.graph.nodes_geometry)
         self.assertIn("Study | Hair | sculpted temple",result.graph.nodes_geometry)
         self.assertEqual(audit["donor_hair_meshes"],1)
+
+    def test_transfers_soapstone_material_with_metric_uv(self):
+        base,donor=self.make_scenes()
+        name="Head | integrated cheekbone jaw and cranium"
+        material=trimesh.visual.material.PBRMaterial(
+            name="Test | tessellated soapstone",baseColorFactor=[.67,.67,.65,1.])
+        original=base.geometry[name]
+        original.visual=trimesh.visual.TextureVisuals(
+            uv=np.zeros((len(original.vertices),2)),material=material)
+        result,audit=graft_anatomical_head(base,donor)
+        head=result.geometry["Head | anatomical quad-topology HOLD"]
+        self.assertEqual(head.visual.material.name,material.name)
+        self.assertGreater(np.ptp(head.visual.uv[:,0]),1.)
+        self.assertGreater(np.ptp(head.visual.uv[:,1]),1.)
+        self.assertIn("metric",audit["head_uv_projection"])
 
     def test_world_transform_is_respected(self):
         base,donor=self.make_scenes()

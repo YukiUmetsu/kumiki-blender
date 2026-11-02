@@ -128,3 +128,23 @@ The photo-residual comparison tool is
 `scripts/evaluate_christ_face_photos.py`; it requires two GLBs
 with **identical donor vertex topology** and the r59 annotations.
 Do not transfer the r59 vertex IDs to a different Blender study revision.
+
+## r62 stone material transfer (2026-11-02, HOLD)
+
+The anatomy checkpoint carried a neutral clay/copper-grey material unrelated
+to Christ the Redeemer. The GLB graft now copies the original r50 statue's
+**soapstone PBR albedo, normal and roughness maps** onto the donor head and
+creates new **metric cylindrical UVs** (0.72 m repeat). This retains the
+3 cm tesserae scale instead of stretching a single donor UV island over
+the entire 3-metre face. The original body and arm materials remain unchanged.
+
+Run `scripts/render_glb_head_qa.py <preview.glb> --output <folder> --materials`
+for a base-color textured QA view. VTK's base-color preview is not a
+Cycles-quality material review and does not yet evaluate all normal/roughness
+maps or reproduce the source photo's illumination.
+
+The actual r62 GLB was exported, reopened, and inspected:
+- Head material: `Warm light grey soapstone | 3 cm tesserae`
+- Embedded albedo texture: 768 × 768 pixels
+- Head metric UVs: approximately U -5.58..5.58, V 47.25..52.70
+- Anatomical mesh: 189,456 vertices; photo likeness and hair still **HOLD**

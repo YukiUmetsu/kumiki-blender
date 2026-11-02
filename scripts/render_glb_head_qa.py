@@ -17,6 +17,8 @@ def main():
     parser.add_argument('--size',type=int,default=850)
     parser.add_argument('--prefix',action='append',default=None,
                         help='Geometry name prefix to render; repeat. Default: Head |, Hair |, Face |')
+    parser.add_argument("--materials",action="store_true",
+                        help="Render embedded base-color PBR texture instead of neutral clay")
     args=parser.parse_args()
     if args.size<128 or args.size>4096:
         parser.error('size must be between 128 and 4096')
@@ -60,6 +62,14 @@ def main():
         poly=vtk.vtkPolyData()
         poly.SetPoints(points)
         poly.SetPolys(triangles)
+        material=getattr(mesh.visual,"material",None)
+        image=getattr(material,"baseColorTexture",None)
+        if args.materials and image is not None and getattr(mesh.visual,"uv",None) is not None:
+            tcoords=vtk.vtkFloatArray()
+            tcoords.SetNumberOfComponents(2)
+            for u,v in mesh.visual.uv:
+                tcoords.InsertNextTuple2(float(u),float(v))
+            poly.GetPointData().SetTCoords(tcoords)
         normals=vtk.vtkPolyDataNormals()
         normals.SetInputData(poly)
         normals.SetFeatureAngle(65)
@@ -73,6 +83,23 @@ def main():
         actor.GetProperty().SetInterpolationToPBR()
         actor.GetProperty().SetMetallic(.02)
         actor.GetProperty().SetRoughness(.86)
+        if args.materials and image is not None and getattr(mesh.visual,"uv",None) is not None:
+            from PIL import Image
+            from vtk.util.numpy_support import numpy_to_vtk
+            pixels=np.asarray(image.convert("RGB").transpose(Image.Transpose.FLIP_TOP_BOTTOM))
+            height,width=pixels.shape[:2]
+            vtk_image=vtk.vtkImageData()
+            vtk_image.SetDimensions(width,height,1)
+            scalars=numpy_to_vtk(pixels.reshape(-1,3),deep=True,array_type=vtk.VTK_UNSIGNED_CHAR)
+            scalars.SetNumberOfComponents(3)
+            vtk_image.GetPointData().SetScalars(scalars)
+            texture=vtk.vtkTexture()
+            texture.SetInputData(vtk_image)
+            texture.RepeatOn()
+            texture.InterpolateOn()
+            texture.UseSRGBColorSpaceOn()
+            actor.GetProperty().SetBaseColorTexture(texture)
+            actor.GetProperty().SetColor(1.,1.,1.)
         actors.append(actor)
     x,y,z=center
     views={
@@ -92,7 +119,7 @@ def main():
             light=vtk.vtkLight()
             light.SetPosition(*light_position)
             light.SetFocalPoint(*center)
-            light.SetIntensity(intensity)
+            light.SetIntensity(intensity*(2.2 if args.materials else 1.0))
             renderer.AddLight(light)
         window=vtk.vtkRenderWindow()
         window.SetOffScreenRendering(1)

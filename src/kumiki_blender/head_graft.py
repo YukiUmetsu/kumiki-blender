@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import math
+import copy
 
 
 def _modules():
@@ -60,7 +61,7 @@ def graft_anatomical_head(base_scene, donor_scene, *, alignment="world",
     bounds: uniform bounding-box diagnostic alignment for generic donor GLBs;
             never claim that this is photograph or survey registration.
     """
-    np, _ = _modules()
+    np, trimesh = _modules()
     if alignment not in ("world", "bounds"):
         raise ValueError("alignment must be world or bounds")
     base = base_scene.copy()
@@ -98,6 +99,20 @@ def graft_anatomical_head(base_scene, donor_scene, *, alignment="world",
         raise ValueError("Donor head height does not match the full figure")
     if abs(float(bounds[1,2]-old_max[2])) > .85:
         raise ValueError("Donor face depth is too far from original sculpt")
+
+    # The CC0 donor may carry unrelated neutral-clay/copper material.
+    # Transfer the original r50 soapstone PBR textures and reproject UVs
+    # in metres. Copying the donor's 0..1 UVs would make 3-cm tiles huge.
+    z_center=float((bounds[0,2]+bounds[1,2])/2)
+    angle=np.arctan2(head.vertices[:,0],head.vertices[:,2]-z_center)
+    radius=max(.65,float((bounds[1,0]-bounds[0,0])*.42))
+    uv=np.column_stack((angle*radius/.72,head.vertices[:,1]/.72))
+    original_material=getattr(old_head.visual,"material",None)
+    material=(copy.deepcopy(original_material) if original_material is not None
+              else trimesh.visual.material.PBRMaterial(
+                  name="Stone | neutral fallback",
+                  baseColorFactor=[.67,.67,.65,1.],roughnessFactor=.92))
+    head.visual=trimesh.visual.TextureVisuals(uv=uv,material=material)
 
     remove = [node for node in base.graph.nodes_geometry if
               node.startswith(("Head | integrated cheekbone","Face |"))
@@ -137,6 +152,8 @@ def graft_anatomical_head(base_scene, donor_scene, *, alignment="world",
         "preserved_nodes":len(keep),
         "preserved_body_sha256":original_digest,
         "donor_hair_meshes":donor_hair_count,
+        "head_material":head.visual.material.name,
+        "head_uv_projection":"metric cylindrical / 0.72 m repeat",
         "alignment":fit,
         "head_bounds_world_m":np.round(head.bounds,4).tolist(),
         "provenance":"Generic CC0 Blender Studio anatomy; NOT Christ scan",

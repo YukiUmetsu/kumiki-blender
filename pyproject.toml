@@ -17,7 +17,7 @@ composer = ["pydantic>=2.10,<3"]
 qa = ["Pillow>=11,<13"]
 reconstruction = ["numpy>=1.26", "scipy>=1.11"]
 preview = ["numpy>=1.26", "trimesh>=4.5"]
-head-qa = ["numpy>=1.26", "trimesh>=4.5", "vtk>=9.2"]
+head-qa = ["numpy>=1.26", "trimesh>=4.5", "vtk>=9.2", "Pillow>=11,<13"]
 
 [project.scripts]
 kumiki-blender = "kumiki_blender.cli:main"
