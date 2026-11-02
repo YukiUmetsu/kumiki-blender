@@ -29,6 +29,10 @@ jobs:
         env:
           PYTHONPATH: src
         run: python -m unittest tests.test_reconstruction_splats tests.test_reconstruction_splats_cli -v
+      - name: Install FFmpeg for Gaussian-splat video integration tests
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq ffmpeg
       - name: Test Gaussian-splat camera tours and FFmpeg video contract (mock GPU rasterizer)
         env:
           PYTHONPATH: src

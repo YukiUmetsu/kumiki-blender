@@ -64,10 +64,25 @@ for index, frame in enumerate(track['frames']):
         output.with_name('frame.%04d.webp' % index), lossless=True)
 ''')
         self.rasterizer.chmod(0o755)
+        self.fake_video_tools = {}
+        for name in ("ffmpeg", "ffprobe"):
+            stub = self.root / f"fake-{name}"
+            stub.write_text(f"#!{sys.executable}\nimport sys\nsys.exit(0)\n")
+            stub.chmod(0o755)
+            self.fake_video_tools[name] = stub
 
     def settings(self, **overrides):
-        return SplatVideoSettings(fps=24, seconds=2, width=256, height=256,
-                                  splat_transform=str(self.rasterizer), **overrides)
+        args = dict(fps=24, seconds=2, width=256, height=256,
+                    splat_transform=str(self.rasterizer),
+                    ffmpeg="ffmpeg" if shutil.which("ffmpeg") else str(self.fake_video_tools["ffmpeg"]),
+                    ffprobe="ffprobe" if shutil.which("ffprobe") else str(self.fake_video_tools["ffprobe"]))
+        args.update(overrides)
+        return SplatVideoSettings(**args)
+
+    def test_missing_external_encoder_still_fails_preflight(self):
+        with self.assertRaisesRegex(ReferenceError, "Video executable not found"):
+            plan_splat_video(self.ply, self.root / "out",
+                             self.settings(ffmpeg="nonexistent-ffmpeg-binary"))
 
     def test_camera_sample_trims_extreme_outliers(self):
         center, extent = _position_bounds(self.ply)
