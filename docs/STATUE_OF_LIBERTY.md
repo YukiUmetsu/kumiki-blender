@@ -1,5 +1,61 @@
 # Statue of Liberty — scan-assisted detail rebuild
 
+## r65 — non-procedural pivot: reference-based sculpting and photogrammetry feasibility (**HOLD**)
+
+The earlier Gaussian face, radial robe ripples and generated fold rods are
+**not an acceptable facial/cloth foundation**. No further generated facial
+features or drapery coefficients should be tuned. The next geometry must be an
+artist-directed sculpt constrained by **the installed monument** or a genuine
+photogrammetric reconstruction, not a re-skinned version of these shapes.
+
+**Reference scans: view-only.** The following are scans of *replicas*, used to
+understand actual sculpted undercuts, folds, and non-repeating structure.
+Their geometry, textures, topology, or derived camera data must **not** be
+imported, extracted, traced or redistributed in this project:
+
+| Reference | Real physical subject | Role |
+| --- | --- | --- |
+| [Maurice Svay (CC BY)](https://sketchfab.com/3d-models/statue-of-liberty-c461ed8724424ad99500fd058a0ab082) | ~3 m Arts et Métiers Paris replica | Broad face planes and robe silhouette |
+| [jerryfisher (CC BY)](https://sketchfab.com/3d-models/statue-of-liberty-6626abe1f3e8469a9d8f4b74d8aa2a71) | 19th-century bronze model | Fold curvature and cast details |
+| [3Dystopia (CC BY)](https://sketchfab.com/3d-models/statue-of-liberty-04a8e7b1ba9142ba8cebc6108cd5bb97) | Luxembourg Gardens replica | Full-body relationships |
+| [TRIANGLESCAN (paid preview)](https://sketchfab.com/3d-models/statue-of-liberty-auguste-bartholdi-1889-0fc2c8744b654cc6bc44a567158c53aa) | Paris 1889 Bartholdi replica | Close-up face, robe and crown rotation |
+
+The [NPS's high-detail 2019 survey](https://www.nps.gov/articles/laser-scan-lady-liberty.htm)
+depicts the original New York monument, but we have not located a public
+exterior mesh download. The 2017 authentic aerial LiDAR is too sparse around
+vertical sculptural features to replace a human face or cloth.
+
+**Actual-monument image reconstruction feasibility.** We ran CPU SIFT matching
+and incremental structure-from-motion using `pycolmap 4.2.1` on the already
+verified [LOC/HAER NY-138](https://www.loc.gov/item/ny1251/) photographs:
+
+- 6 installed-monument whole-head photos: **0 registered 3D reconstructions**.
+- All 11 photos including restoration-era facial details: **0 registered 3D reconstructions**.
+- The strongest pair, HAER-238 and HAER-239, has 920 feature matches, but
+  COLMAP classifies its geometry as **planar-or-panoramic**, not a reliable
+  triangulation baseline. The next pair has only 28 geometrically verified
+  matches. More match count did not produce trustworthy surface depth.
+- Result: **HOLD**. These photos are still valuable sculpt references, but
+  they cannot currently yield a reconstructed face mesh. Do not interpolate
+  them into a fake scan or mark the imagery as camera-calibrated.
+
+Run the repeatable no-model-generation experiment with:
+
+```bash
+PYTHONPATH=/path/to/pycolmap python3 scripts/liberty_haer_photogrammetry_probe.py \
+  --photos .review/liberty-haer --include-details \
+  --output .review/liberty-sfm-new-run
+```
+
+**Editable sculpt environment:** `scripts/blender_liberty_reference_studio.py`
+opens the current `.blend`, packs the 11 original installed-head photographs,
+preserves the current geometry as a **failed comparison candidate**, provides
+separate pose/anatomy reference boards, and embeds viewer links to the replica
+scans as text only. It adds no scan geometry and generates no new face. The
+current model and PR remain drafts. A near-final GLB should only be updated
+after a genuinely manually sculpted or adequately reconstructed face passes
+front, profile and three-quarter review.
+
 ## r64 — NPS-measured monument envelope + authentic NYC LiDAR intake (**opt-in; HOLD**)
 
 The existing default is **36.0 m from ground to flame**, while the installed
