@@ -12,8 +12,18 @@ from pathlib import Path
 from typing import Any
 
 from ...blender_output import create_model_scene, export_revision
+from ...glb_audit import audit_glb
 from ...shots import QualityShot
 from .blender_scene import _studio
+
+
+# Deliberately more legible at a small thumbnail than the geographic colorway:
+# cold volcanic blue-grey, evergreen green and obvious multi-pink sakura.
+ICONIC_BLUE_BASALT=(.115,.182,.278)
+ICONIC_WEATHERED_ROCK=(.205,.220,.265)
+ICONIC_TREE_LINE=(.082,.213,.145)
+SAKURA_PETAL_PALETTE=((.98,.46,.63),(.99,.67,.78),(.997,.83,.87),
+                      (.92,.34,.51),(.97,.70,.80))
 
 
 def plan_iconic_shots() -> tuple[QualityShot, ...]:
@@ -92,6 +102,109 @@ def _vertex_material(bpy: Any, name: str) -> Any:
     bsdf = next(n for n in mat.node_tree.nodes if n.type == "BSDF_PRINCIPLED")
     mat.node_tree.links.new(node.outputs["Color"], bsdf.inputs["Base Color"])
     return mat
+
+
+def _bake_portable_palette_textures(bpy: Any, objects: list[Any],
+                                    mats: dict[str, Any]) -> dict[str, dict[str, float | int]]:
+    """Bake iconic vertex colors as ordinary glTF PBR albedo textures.
+
+    Some GLB viewers silently ignore COLOR_0, making our pink sakura and
+    blue-green Fuji grey or white. Instead of storing a costly per-triangle
+    atlas for thousands of blossoms, project each material's colors onto its
+    best-fit 2D color plane. UV coordinates *encode pigment*, not position;
+    a small linear color-plane texture reproduces gradients without relying
+    on optional vertex-color rendering. Original pigments remain as a custom
+    point attribute in the editable .blend, but no COLOR_0 multiplies the
+    exported texture a second time in standards-compliant glTF viewers.
+    """
+    import numpy as np  # Blender ships NumPy.
+
+    report: dict[str, dict[str, float | int]] = {}
+    for key in ("ground_vertex", "flank_vertex", "snow_vertex", "blossom_vertex"):
+        mat=mats[key]
+        owners=[obj for obj in objects if obj.type=="MESH" and
+                any(candidate == mat for candidate in obj.data.materials)]
+        if not owners:
+            raise ValueError(f"Iconic material {key} has no mesh to color")
+        source=[]
+        for obj in owners:
+            attribute=obj.data.color_attributes.get("Albedo")
+            if attribute is None or attribute.domain!="POINT":
+                raise ValueError(f"{obj.name} is missing point-domain Albedo colors")
+            samples=np.empty(len(attribute.data)*4,dtype=np.float32)
+            attribute.data.foreach_get("color",samples)
+            source.append(samples.reshape(-1,4)[:,:3].copy())
+        colors=np.concatenate(source,axis=0).astype(np.float64)
+        mean=colors.mean(axis=0)
+        centered=colors-mean
+        covariance=(centered.T @ centered)/len(colors)
+        _,vectors=np.linalg.eigh(covariance)
+        basis=vectors[:,1:3]
+        projected=centered @ basis
+        minimum=projected.min(axis=0)
+        span=np.maximum(projected.max(axis=0)-minimum,1e-5)
+        reconstructed=mean+projected @ basis.T
+        max_error=float(np.max(np.abs(reconstructed-colors)))
+        rms_error=float(np.sqrt(np.mean((reconstructed-colors)**2)))
+        if rms_error>.055:
+            raise ValueError(f"Iconic color plane loses too much {key} pigment: {rms_error:.4f}")
+
+        # A linear color plane has no photographic pixel detail: 256² pixels
+        # suffice even for 8500 five-petal blossoms and their subtle gradients.
+        size=256
+        margin=.025
+        u=np.linspace(0,1,size,dtype=np.float64)
+        uv_u,uv_v=np.meshgrid(u,u)
+        position=np.stack((uv_u,uv_v),axis=-1)
+        projected_pixels=minimum+(position-margin)/(1-2*margin)*span
+        linear=np.clip(mean+projected_pixels @ basis.T,0,1)
+        srgb=np.where(linear<=.0031308,linear*12.92,
+                      1.055*np.power(linear,1/2.4)-.055)
+        pixels=np.empty((size,size,4),dtype=np.float32)
+        pixels[:,:,:3]=srgb
+        pixels[:,:,3]=1
+        image=bpy.data.images.new(f"Japan / embedded {key} PBR albedo",
+                                  width=size,height=size,alpha=True,float_buffer=False)
+        image.colorspace_settings.name="sRGB"
+        image.pixels.foreach_set(np.ascontiguousarray(pixels).ravel())
+        image.update()
+        image.pack()
+
+        offset=0
+        for obj,values in zip(owners,source):
+            count=len(values)
+            point_uv=margin+(projected[offset:offset+count]-minimum)/span*(1-2*margin)
+            offset+=count
+            mesh=obj.data
+            uv_layer=mesh.uv_layers.new(name="JapanColorUV")
+            indices=np.empty(len(mesh.loops),dtype=np.int32)
+            mesh.loops.foreach_get("vertex_index",indices)
+            uv_layer.data.foreach_set("uv",np.ascontiguousarray(
+                point_uv[indices],dtype=np.float32).ravel())
+            original=mesh.attributes.new(name="JapanOriginalAlbedoRGB",
+                                         type="FLOAT_VECTOR",domain="POINT")
+            original.data.foreach_set("vector",np.ascontiguousarray(
+                values,dtype=np.float32).ravel())
+            # A glTF baseColorTexture is *multiplied* by COLOR_0, so leaving
+            # the former vertex-color channel exported darkens the model.
+            mesh.color_attributes.remove(mesh.color_attributes["Albedo"])
+
+        bsdf=next(n for n in mat.node_tree.nodes if n.type=="BSDF_PRINCIPLED")
+        tex=mat.node_tree.nodes.new("ShaderNodeTexImage")
+        tex.image=image
+        tex.interpolation="Linear"
+        tex.extension="EXTEND"
+        uvmap=mat.node_tree.nodes.new("ShaderNodeUVMap")
+        uvmap.uv_map="JapanColorUV"
+        mat.node_tree.links.new(uvmap.outputs["UV"],tex.inputs["Vector"])
+        mat.node_tree.links.new(tex.outputs["Color"],bsdf.inputs["Base Color"])
+        for node in list(mat.node_tree.nodes):
+            if node.type=="VERTEX_COLOR":
+                mat.node_tree.nodes.remove(node)
+        report[key]={"vertices":len(colors),"texture_px":size,
+                     "rms_linear_rgb_error":round(rms_error,5),
+                     "max_linear_rgb_error":round(max_error,5)}
+    return report
 
 
 def _rounded_rectangle(t: float, width: float, depth: float, radius: float) -> tuple[float, float]:
@@ -188,12 +301,12 @@ def _mountain(bpy: Any, model: Any, mats: dict, divisions: int) -> list:
             h = _fuji_height(u, a)
             verts.append((radius*math.cos(a), .65+radius*.89*math.sin(a), h))
             value=math.sin(a*13+u*24)*math.sin(a*27-u*15)
-            # Muted blue basalt near the crest; rust-brown scree and exposed
-            # gullies at middle altitudes; conifer green at the foot.
-            base=_blend((.17,.196,.238),(.305,.245,.205),_ease(.24,.64,u))
+            # Blue-slate volcanic cone and dark evergreen foot: unmistakable
+            # iconic Fuji colors even in a small thumbnail or glTF viewer.
+            base=_blend(ICONIC_BLUE_BASALT,ICONIC_WEATHERED_ROCK,_ease(.24,.64,u))
             tree_line=(.70+.053*math.sin(7*a+.6)+.03*math.sin(17*a-1.4)
                        +.024*math.sin(4*a+.7))
-            base=_blend(base,(.10,.225,.135),_ease(tree_line,tree_line+.15,u))
+            base=_blend(base,ICONIC_TREE_LINE,_ease(tree_line,tree_line+.15,u))
             groove=max(0.,math.sin(23*a+2*math.sin(3*a)+u*2.8))**8
             t=.88+.20*value+.09*math.sin(7*a+u*11)-.20*groove
             colors.append(tuple(min(.93,max(.018,v*t)) for v in base))
@@ -407,7 +520,7 @@ def _sakura(bpy: Any, model: Any, mats: dict, *, origin: tuple[float,float],
                            center[2]+rng.uniform(-.16,.16)*rad),
                           rad*rng.uniform(.66,.89)))
     cloud_v=[];cloud_f=[];cloud_colors=[]
-    palette=((.98,.59,.69),(.99,.75,.81),(.997,.87,.88),(.92,.46,.57),(.97,.78,.79))
+    palette=SAKURA_PETAL_PALETTE
     for index,(center,rad) in enumerate(blobs):
         base=len(cloud_v)
         lat_count=8;lon_count=13
@@ -623,12 +736,19 @@ def build_iconic_fuji_scene(destination: Path, *, detail: str = "standard",
     objects.extend(_sakura(bpy,model,mats,origin=(3.48,.35),scale=.79,seed=89,
                            blossoms=flower_count-int(flower_count*.56)))
     objects.extend(_path_and_rocks(bpy,model,mats))
-    return export_revision(bpy,scene,camera,objects,plan_iconic_shots(),destination,
+    palette_report=_bake_portable_palette_textures(bpy,objects,mats)
+    manifest=export_revision(bpy,scene,camera,objects,plan_iconic_shots(),destination,
                            samples=12,metadata={
                                **spec,"generator":"hand-sculpted procedural Japan miniature",
+                               "portable_palette_albedo":palette_report,
                                "named_parts":{"mountain":1,"snow_crown":1,"summit_crater":1,
                                               "torii_gate":1,"flowering_sakura":2,"display_plinth":1},
                                "sakura_count":2,
                                "geographic_accuracy":False,
                                "editorial_intent":"Read as Fuji and Japan at thumbnail scale; not to survey scale",
                            })
+    audit_glb(destination / "model.glb",require_base_color_texture=True,
+              required_albedo_materials=tuple(mats[k].name for k in (
+                  "ground_vertex","flank_vertex","snow_vertex","blossom_vertex")),
+              forbid_color_texture_multiplication=True)
+    return manifest

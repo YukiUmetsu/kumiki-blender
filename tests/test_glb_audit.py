@@ -98,6 +98,24 @@ class GlbAuditTests(unittest.TestCase):
         with self.assertRaisesRegex(AuditError, "base-color texture"):
             audit_glb(self.path, require_base_color_texture=True)
 
+    def test_named_albedo_materials_require_textures_without_double_tint(self):
+        self.model["images"] = [{"bufferView": 0, "mimeType": "image/png"}]
+        self.model["textures"] = [{"source": 0}]
+        self.model["materials"][0]["pbrMetallicRoughness"] = {
+            "baseColorTexture": {"index": 0}}
+        primitive=self.model["meshes"][0]["primitives"][0]
+        primitive["material"]=0
+        primitive["attributes"]["TEXCOORD_0"]=1
+        write_glb(self.path,self.model)
+        self.assertEqual(audit_glb(self.path,required_albedo_materials=("steel",),
+                                   forbid_color_texture_multiplication=True)["materials"],1)
+        with self.assertRaisesRegex(AuditError,"missing embedded albedo"):
+            audit_glb(self.path,required_albedo_materials=("sakura",))
+        primitive["attributes"]["COLOR_0"]=2
+        write_glb(self.path,self.model)
+        with self.assertRaisesRegex(AuditError,"multiply.*COLOR_0"):
+            audit_glb(self.path,forbid_color_texture_multiplication=True)
+
 
 if __name__ == "__main__":
     unittest.main()

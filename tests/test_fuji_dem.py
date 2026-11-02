@@ -15,7 +15,10 @@ from kumiki_blender.geography.fuji.patches import (
 )
 from kumiki_blender.geography.fuji.blender_scene import (ROCK_NORMAL_TILES, _value_noise,
                                                         plan_fuji_shots, terrain_color)
-from kumiki_blender.geography.fuji.iconic_scene import iconic_spec, plan_iconic_shots, _snow_limit
+from kumiki_blender.geography.fuji.iconic_scene import (
+    ICONIC_BLUE_BASALT, ICONIC_TREE_LINE, SAKURA_PETAL_PALETTE,
+    iconic_spec, plan_iconic_shots, _snow_limit,
+)
 
 
 class FujiTerrainTests(unittest.TestCase):
@@ -242,6 +245,11 @@ class FujiTerrainTests(unittest.TestCase):
         self.assertEqual(plan_iconic_shots()[0].name,"hero")
         self.assertGreater(_snow_limit(.2),0.25)
         self.assertLess(_snow_limit(.2),.43)
+        self.assertGreater(ICONIC_BLUE_BASALT[2],ICONIC_BLUE_BASALT[0]*2)
+        self.assertGreater(ICONIC_TREE_LINE[1],ICONIC_TREE_LINE[0]*2)
+        self.assertGreater(len(SAKURA_PETAL_PALETTE),4)
+        self.assertTrue(all(pink[0]>pink[2] and pink[2]>pink[1]
+                            for pink in SAKURA_PETAL_PALETTE))
         with self.assertRaises(ValueError):
             iconic_spec("ultra")
 

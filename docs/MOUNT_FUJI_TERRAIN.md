@@ -12,6 +12,34 @@ The iconic model deliberately sacrifices realistic dimensions and geography.
 It is a miniature symbol rather than a topographic study. All landmarks and
 five-petal flowers are **actual exportable mesh**, not camera-facing sprites.
 
+## r11 — portable color for the iconic Sakura/Torii GLB
+
+The r10 miniature already had pink vertex-painted sakura, blue-grey/green
+volcanic slopes and a white snowcap in Blender. However, some downstream GLB
+viewers do not display glTF `COLOR_0`, making these important mesh parts appear
+flat white or grey. The realistic mountain's independent color repair did
+**not** fix the iconic GLB, so r11 applies a separate exporter-safe solution:
+
+- For **volcanic flanks, snowcap, spring garden, and sakura blossoms**, project
+  the original 3D vertex-color palette to a best-fit 2D color plane. Encode
+  each point's pigment as a UV coordinate, and pack a 256² sRGB color-plane
+  PNG into `pbrMetallicRoughness.baseColorTexture` for that material. This
+  preserves gradients using a compact, standard texture and does not require
+  viewer support for vertex colors.
+- Preserve the source pigment as `JapanOriginalAlbedoRGB` point data in the
+  editable `.blend`. Remove glTF `COLOR_0` from these textured meshes to avoid
+  a standards-compliant viewer **multiplying their colors twice**.
+- Tune the thumbnail palette slightly cooler (slate-blue Fuji) and brighter
+  pink (five distinct sakura petal shades). The torii remains lacquer red.
+- Verify the actual exported GLB by re-importing it into Blender after
+  removing the original source meshes and material images; render the hero,
+  sakura botanical close-up, and Fuji snow crown close-up. The four critical
+  materials must all have valid embedded albedo; no external texture paths.
+
+The unique symbolic silhouette and decorative geometry are unchanged. This
+fix does not claim photoreal cherry botany; it makes the art-directed colors
+survive a wider range of 3D viewers.
+
 ## r20 — user-photo winter palette and longer snow gullies
 
 Four supplied Mount Fuji photographs (`mt-fuji1` through `mt-fuji4`) are the
