@@ -112,6 +112,8 @@ def _color_refine_boundary(binary: Any, photo: Any, *, band_pixels: int,
     import numpy as np  # type: ignore[import-not-found]
 
     height, width = binary.shape
+    if photo.size != (width, height):
+        raise ReferenceError("Color boundary refinement requires an exactly rectified photo/mask pair")
     scale = min(1.0, max_side / max(width, height))
     small_w, small_h = max(8, round(width * scale)), max(8, round(height * scale))
     small_binary = cv2.resize(binary, (small_w, small_h),

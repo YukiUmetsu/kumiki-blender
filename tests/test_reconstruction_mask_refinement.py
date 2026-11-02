@@ -139,6 +139,9 @@ class MaskRefinementTests(unittest.TestCase):
         self.assertEqual(refined[35, 50], 255)  # high-confidence statue core retained
         self.assertEqual(refined[1, 1], 0)  # sure background remains background
         self.assertGreater(int(np.count_nonzero(initial != refined)), 0)
+        with self.assertRaisesRegex(ReferenceError, "exactly rectified"):
+            _color_refine_boundary(initial, Image.new("RGB", (99, 80)),
+                                   band_pixels=8, max_side=256, iterations=4)
 
     def test_color_guided_boundary_scales_back_without_changing_far_pixels(self):
         import cv2
