@@ -111,7 +111,8 @@ class DenseMvsTests(unittest.TestCase):
             raw = f"first-party-test-frame-{n}".encode()
             (images / filename).write_bytes(raw)
             entries.append({"filename": filename,
-                            "sha256": hashlib.sha256(raw).hexdigest()})
+                            "sha256": hashlib.sha256(raw).hexdigest(),
+                            "dimensions": [640, 480]})
         (self.sparse / "undistorted-reference-index.json").write_text(json.dumps({"images": entries}))
         (self.sparse / "reconstruction-report.json").write_text(json.dumps({
             "status": "candidate / visual-review-required", "asset_id": "test-statue",
@@ -188,6 +189,55 @@ class DenseMvsTests(unittest.TestCase):
         self.assertEqual(report["resolution_level"], 1)
         self.assertEqual(report["max_resolution"], 1600)
         self.assertEqual(report["number_views"], 8)
+
+    def _make_binary_masks(self):
+        from PIL import Image
+        masks = self.root / "private-rectified-masks"
+        masks.mkdir()
+        for index in range(10):
+            image = Image.new("L", (640, 480), 0)
+            image.paste(255, (120, 80, 510, 410))
+            image.save(masks / f"view-{index:02d}.jpg.mask.png")
+        return masks
+
+    def test_private_rectified_subject_masks_are_strictly_validated_and_snapshotted(self):
+        from PIL import Image
+        masks = self._make_binary_masks()
+        plan = plan_dense_reconstruction(
+            self.sparse, self.root / "mask-plan", DenseSettings(),
+            rectified_masks=masks, executables=self.executables)
+        self.assertEqual(len(plan["rectified_masks"]), 10)
+        output = self.root / "masked"
+        result = build_dense_reconstruction(
+            self.sparse, output, DenseSettings(refine=False, texture=False),
+            rectified_masks=masks, executables=self.executables)
+        self.assertTrue(result["status"].startswith("dense-mesh-candidate"), result)
+        self.assertEqual(len(list((output / "workspace/images").glob("*.mask.png"))), 10)
+        self.assertEqual((output / "workspace/images/view-00.jpg.mask.png").read_bytes(),
+                         (masks / "view-00.jpg.mask.png").read_bytes())
+
+        (masks / "view-01.jpg.mask.png").unlink()
+        with self.assertRaisesRegex(ReferenceError, "missing or linked"):
+            plan_dense_reconstruction(self.sparse, self.root / "badmask", DenseSettings(),
+                                      rectified_masks=masks, executables=self.executables)
+        Image.new("L", (640, 480), 255).save(masks / "view-01.jpg.mask.png")
+        with self.assertRaisesRegex(ReferenceError, "both black and white"):
+            plan_dense_reconstruction(self.sparse, self.root / "badmask", DenseSettings(),
+                                      rectified_masks=masks, executables=self.executables)
+
+    def test_resume_rejects_changed_private_mask_snapshot(self):
+        masks = self._make_binary_masks()
+        output = self.root / "masked-interrupted"
+        with patch.dict(os.environ, {"FAIL_MVS_STAGE": "DensifyPointCloud"}):
+            failed = build_dense_reconstruction(
+                self.sparse, output, DenseSettings(), rectified_masks=masks,
+                executables=self.executables)
+        self.assertEqual(failed["failed_stage"], "densify")
+        (output / "workspace/images/view-00.jpg.mask.png").write_bytes(b"tampered")
+        with self.assertRaisesRegex(ReferenceError, "Resume rectified mask changed"):
+            build_dense_reconstruction(self.sparse, output, DenseSettings(),
+                                       rectified_masks=masks, executables=self.executables,
+                                       resume=True)
 
     def test_gpu_colmap_always_copies_undistorted_workspace(self):
         output = self.root / "dense-r02"

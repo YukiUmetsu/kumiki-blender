@@ -160,6 +160,8 @@ def main(argv: list[str] | None = None) -> int:
             command, help="Review or reconstruct a private dense statue mesh from registered cameras")
         dense_parser.add_argument("--reconstruction", type=Path, required=True,
                                   help="Successful reconstruct-photos --undistort revision")
+        dense_parser.add_argument("--rectified-masks", type=Path,
+                                  help="Private binary grayscale <photo>.mask.png files matching every rectified image")
         dense_parser.add_argument("--output", type=Path, required=True,
                                   help="New private, immutable dense-mesh revision")
         dense_parser.add_argument("--backend", choices=("openmvs", "colmap"), default="openmvs",
@@ -191,6 +193,8 @@ def main(argv: list[str] | None = None) -> int:
         review_dense.add_argument("--max-mesh-faces", type=int, default=5_000_000)
         review_dense.add_argument("--matched-views", type=int, default=0,
                                   help="Render calibrated dense-mesh views against pinned rectified photos (0–12)")
+        review_dense.add_argument("--matched-resolution-percent", type=int, default=100,
+                                  help="Photo-matched preview resolution percentage; 100 retains full camera pixels")
         if command == "render-dense-blender-review":
             review_dense.add_argument("--no-renders", action="store_true")
             review_dense.add_argument("--blender", default="blender")
@@ -241,7 +245,8 @@ def main(argv: list[str] | None = None) -> int:
             try:
                 planned = plan_dense_blender_review(
                     args.dense_revision, args.output, max_mesh_faces=args.max_mesh_faces,
-                    matched_views=args.matched_views)
+                    matched_views=args.matched_views,
+                    matched_resolution_percent=args.matched_resolution_percent)
                 if args.command == "plan-dense-blender-review":
                     print(json.dumps(planned, indent=2))
                     return 0
@@ -261,14 +266,16 @@ def main(argv: list[str] | None = None) -> int:
                            "--dense-revision", str(args.dense_revision.resolve()),
                            "--output", str(args.output.resolve()),
                            "--max-mesh-faces", str(args.max_mesh_faces),
-                           "--matched-views", str(args.matched_views)]
+                           "--matched-views", str(args.matched_views),
+                           "--matched-resolution-percent", str(args.matched_resolution_percent)]
                 if args.no_renders:
                     command.append("--no-renders")
                 return subprocess.run(command, check=False).returncode
             report = build_dense_blender_review(
                 args.dense_revision, args.output, bpy_module=bpy,
                 render_previews=not args.no_renders, max_mesh_faces=args.max_mesh_faces,
-                matched_views=args.matched_views)
+                matched_views=args.matched_views,
+                matched_resolution_percent=args.matched_resolution_percent)
             print(json.dumps(report, indent=2))
             return 0 if report["status"].startswith("private-Blender-mesh-candidate") else 3
         if args.command in ("plan-dense-photos", "build-dense-photos"):
@@ -284,9 +291,11 @@ def main(argv: list[str] | None = None) -> int:
                     max_resolution=args.max_resolution, number_views=args.number_views,
                     refine_decimate=args.refine_decimate,
                     refine=not args.no_refine, texture=not args.no_texture)
-                report = (plan_dense_reconstruction(args.reconstruction, args.output, settings)
+                report = (plan_dense_reconstruction(args.reconstruction, args.output, settings,
+                                                    rectified_masks=args.rectified_masks)
                           if args.command == "plan-dense-photos" else
                           build_dense_reconstruction(args.reconstruction, args.output, settings,
+                                                     rectified_masks=args.rectified_masks,
                                                      resume=args.resume))
             except ReferenceError as error:
                 raise RecipeError(str(error)) from error

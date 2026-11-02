@@ -10,6 +10,10 @@ private texture projection to produce a mesh for artistic inspection.
 - Photos must depict the **same actual statue** with strong overlap, consistent
   geometry and sharp views of the front, profiles, back, head and drapery.
   Unrelated web photos and photos of different restorations may not register.
+- In busy outdoor scenes, manually verify **binary subject masks for the
+  undistorted photographs**. Without masks, real dense MVS reconstructs
+  nearby branches, pavement and ground alongside the monument. Geometry
+  detail and foreground isolation are separate problems.
 - Run the existing photo-dossier workflow using the --undistort option first.
   The dense builder requires at least 8 registered independent photos and 60%
   registration by default; these are minimum gates, not enough evidence to
@@ -56,6 +60,16 @@ private texture projection to produce a mesh for artistic inspection.
       --reconstruction .review/statue/sparse-r01 \
       --output .review/statue/dense-r01 --backend openmvs
 
+    # If the monument has foliage/sky/pedestrians behind it, prepare an
+    # exact-size rectified mask for EVERY undistorted registered image:
+    # /private/masks/img-0001.jpg.mask.png, etc. Use grayscale 255=keep,
+    # 0=exclude. Verify edges manually in the rectified image coordinate
+    # frame. OpenMVS reads these alongside the private image snapshot.
+    kumiki-blender build-dense-photos \
+      --reconstruction .review/statue/sparse-r01 \
+      --rectified-masks /private/masks \
+      --output .review/statue/dense-subject-only-r01 --backend openmvs
+
     # On a supported GPU, use COLMAP PatchMatch instead.
     kumiki-blender build-dense-photos \
       --reconstruction .review/statue/sparse-r01 \
@@ -67,6 +81,13 @@ private texture projection to produce a mesh for artistic inspection.
     kumiki-blender plan-dense-blender-review \
       --dense-revision .review/statue/dense-r01 \
       --output .review/statue/blender-review-r01 --matched-views 4
+
+    # Quick lower-resolution diagnostic only; use the 100% default for
+    # final feathers, eyelids, carved lettering and hair-line inspection.
+    kumiki-blender render-dense-blender-review \
+      --dense-revision .review/statue/dense-r01 \
+      --output .review/statue/blender-review-fast-r01 \
+      --matched-views 4 --matched-resolution-percent 40
     kumiki-blender render-dense-blender-review \
       --dense-revision .review/statue/dense-r01 \
       --output .review/statue/blender-review-r01 --matched-views 4
@@ -88,6 +109,12 @@ You may explicitly add `--no-refine` while resuming if refinement has not
 yet begun in the recorded pipeline; this keeps the original high-resolution
 surface as the reviewed mesh. Texturing uses OpenMVS OBJ export with actual
 UV-compatible texture atlases rather than an assumed .mvs project archive.
+Rectified mask files must be genuine grayscale PNGs (binary 0/255, both
+present, exact dimensions), with exact `<photo filename>.mask.png` names.
+They are SHA-pinned, copied only into the private MVS workspace, checked on
+resume, and remain absent from Git. Do **not** reuse original distorted-image
+masks by simply resizing them: regenerate/warp them in the exact rectified
+camera grid and inspect the boundary before reconstruction.
 Loosening thresholds does not improve a weak reconstruction. Each stage logs
 its command and stdout/stderr. Failures preserve a diagnostic report instead
 of silently promoting an unusable mesh.
@@ -113,7 +140,9 @@ three 320px neutral-studio views from fixed local axes. With
 `--matched-views 1..12` it also validates hashes of selected original
 rectified photos, creates calibrated Blender perspective cameras in the
 **same COLMAP frame as the dense PLY** and renders photo-matched clay views;
-each preview identifies the pinned corresponding photograph in the private
+the default 100% camera resolution preserves fine-detail inspection
+(adjust `--matched-resolution-percent` to 10–100 for drafts).
+Each preview identifies the pinned corresponding photograph in the private
 report. These cameras do not require survey anchors until the mesh is
 transformed into an independent Blender world coordinate system. The GLB is for
 **local artistic review only**, never an authorization to redistribute the

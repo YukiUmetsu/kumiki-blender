@@ -89,6 +89,7 @@ def _check_regular(path: Path, root: Path) -> None:
 
 def plan_dense_reconstruction(reconstruction: str | Path, output: str | Path,
                               settings: DenseSettings, *,
+                              rectified_masks: str | Path | None = None,
                               executables: dict[str, str] | None = None) -> dict[str, Any]:
     """Non-mutating preflight; requires registered, rectified camera evidence."""
     settings.validate()
@@ -142,6 +143,36 @@ def plan_dense_reconstruction(reconstruction: str | Path, output: str | Path,
         if _sha256(path) != expected:
             raise ReferenceError(f"Rectified photo changed since reconstruction: {name}")
         verified.append(name)
+    masks = []
+    mask_source = None
+    if rectified_masks is not None:
+        mask_source = Path(rectified_masks).resolve()
+        if (Path(rectified_masks).is_symlink() or not mask_source.is_dir()
+                or mask_source.is_relative_to(source / "undistorted/images")):
+            raise ReferenceError("Rectified masks need a regular private directory outside rectified images")
+        try:
+            from PIL import Image, UnidentifiedImageError
+        except ImportError as error:
+            raise ReferenceError("Rectified mask QA requires Pillow (install the qa extra)") from error
+        for entry in images:
+            name = entry["filename"]
+            dimensions = entry.get("dimensions")
+            path = mask_source / (name + ".mask.png")
+            _check_regular(path, mask_source)
+            try:
+                with Image.open(path) as image:
+                    image.load()
+                    if (image.format != "PNG" or image.mode not in ("L", "1")
+                            or list(image.size) != dimensions):
+                        raise ReferenceError(f"Mask {name} must be grayscale PNG at exact rectified dimensions")
+                    colors = image.convert("L").getcolors(maxcolors=3)
+                    if (colors is None or {value for _, value in colors} != {0, 255}):
+                        raise ReferenceError(f"Mask {name} must contain both black and white binary pixels")
+            except ReferenceError:
+                raise
+            except (OSError, UnidentifiedImageError, ValueError) as error:
+                raise ReferenceError(f"Cannot decode rectified binary mask {name}") from error
+            masks.append({"filename": name, "path": str(path), "sha256": _sha256(path)})
     if executables is None:
         needed = (("InterfaceCOLMAP", "DensifyPointCloud", "ReconstructMesh") +
                   (("RefineMesh",) if settings.refine else ()) +
@@ -161,6 +192,8 @@ def plan_dense_reconstruction(reconstruction: str | Path, output: str | Path,
         "independent_images": staged_count,
         "registered_fraction": round(count / staged_count, 6),
         "undistorted_images": verified,
+        "rectified_mask_source": str(mask_source) if mask_source is not None else None,
+        "rectified_masks": masks,
         "executables": executables,
         "timeout_seconds": settings.timeout_seconds,
         "min_mesh_faces": settings.min_mesh_faces,
@@ -218,6 +251,7 @@ def _execute(command: list[str], log: Path, timeout_seconds: int) -> int:
 
 def build_dense_reconstruction(reconstruction: str | Path, output: str | Path,
                                settings: DenseSettings, *,
+                               rectified_masks: str | Path | None = None,
                                executables: dict[str, str] | None = None,
                                resume: bool = False) -> dict[str, Any]:
     """Reconstruct a private candidate mesh and checkpoint every external stage."""
@@ -230,15 +264,18 @@ def build_dense_reconstruction(reconstruction: str | Path, output: str | Path,
         # Full original camera/image hash preflight still runs. The placeholder
         # is never created; this preserves the plan's no-overwrite contract.
         plan = plan_dense_reconstruction(reconstruction, target / ".resume-preflight",
-                                         settings, executables=executables)
+                                         settings, rectified_masks=rectified_masks,
+                                         executables=executables)
         plan["output"] = str(target)
         report = _json(target / "dense-report.json")
         if report.get("status") != "review-required" or not isinstance(report.get("commands"), list):
             raise ReferenceError("Only an incomplete dense revision may be resumed")
         for key in ("source_revision", "asset_id", "manifest_sha256", "backend",
                     "registered_images", "independent_images",
-                    "resolution_level", "max_resolution", "number_views"):
-            if report.get(key) != plan.get(key):
+                    "resolution_level", "max_resolution", "number_views",
+                    "rectified_mask_source", "rectified_masks"):
+            previous = report.get(key, [] if key == "rectified_masks" else None)
+            if previous != plan.get(key):
                 raise ReferenceError(f"Resume cannot change existing dense input/settings: {key}")
         prior = {step.get("stage") for step in report["commands"]
                  if isinstance(step, dict)}
@@ -263,17 +300,26 @@ def build_dense_reconstruction(reconstruction: str | Path, output: str | Path,
             _check_regular(staged, target)
             if _sha256(staged) != _sha256(Path(plan["source_revision"]) / "undistorted/images" / name):
                 raise ReferenceError(f"Resume workspace image changed: {name}")
+        for entry in plan["rectified_masks"]:
+            snapshot = workspace / "images" / (entry["filename"] + ".mask.png")
+            _check_regular(snapshot, target)
+            if _sha256(snapshot) != entry["sha256"]:
+                raise ReferenceError(f"Resume rectified mask changed: {entry['filename']}")
         report["resumed_from"] = {"failed_stage": report.get("failed_stage"),
                                   "exit_code": report.get("exit_code")}
         report.update({"status": "review-required", "failed_stage": None,
                        "exit_code": None, "refine_decimate": plan["refine_decimate"],
-                       "refine": plan["refine"], "texture": plan["texture"]})
+                       "refine": plan["refine"], "texture": plan["texture"],
+                       "rectified_mask_source": plan["rectified_mask_source"],
+                       "rectified_masks": plan["rectified_masks"]})
         report.pop("error", None)
         report["resume_skipped_stages"] = []
         previous_stages = {step.get("stage") for step in report["commands"]
                            if isinstance(step, dict)}
     else:
-        plan = plan_dense_reconstruction(reconstruction, output, settings, executables=executables)
+        plan = plan_dense_reconstruction(reconstruction, output, settings,
+                                         rectified_masks=rectified_masks,
+                                         executables=executables)
         target.mkdir(parents=True, exist_ok=False)
         (target / "logs").mkdir()
         report = {**plan, "status": "review-required", "commands": [],
@@ -314,6 +360,11 @@ def build_dense_reconstruction(reconstruction: str | Path, output: str | Path,
                 if path.is_symlink():
                     raise ReferenceError(f"Linked COLMAP input is unsupported: {path.name}")
             shutil.copytree(source / "undistorted", workspace)
+            for mask in plan["rectified_masks"]:
+                destination = workspace / "images" / (mask["filename"] + ".mask.png")
+                shutil.copy2(mask["path"], destination)
+                if _sha256(destination) != mask["sha256"]:
+                    raise ReferenceError(f"Rectified mask changed while staging: {mask['filename']}")
         except (OSError, ReferenceError) as error:
             report.update(failed_stage="copy_workspace", error=str(error), exit_code=2)
             return checkpoint()

@@ -75,6 +75,7 @@ class DenseBlenderReviewTests(unittest.TestCase):
         self.assertIn("render-dense-blender-review", command)
         self.assertIn("--no-renders", command)
         self.assertIn("--matched-views", command)
+        self.assertIn("--matched-resolution-percent", command)
         self.assertFalse(output.exists())
 
     def _prepare_pinned_sparse_cameras(self):
@@ -114,6 +115,7 @@ class DenseBlenderReviewTests(unittest.TestCase):
                                                   [0.0, -1.0, 0.0],
                                                   [0.0, 0.0, -1.0]])
         self.assertEqual(first["intrinsics"]["fx_px"], 600.0)
+        self.assertEqual(record["matched_resolution_percent"], 100)
         self.assertFalse((self.root / "review").exists())
         (images / "view-00.jpg").write_text("changed photo")
         with self.assertRaisesRegex(ReferenceError, "changed since reconstruction"):
@@ -126,6 +128,10 @@ class DenseBlenderReviewTests(unittest.TestCase):
             with self.subTest(invalid=invalid), self.assertRaisesRegex(ReferenceError, "0–12"):
                 plan_dense_blender_review(self.dense, self.root / "review",
                                           matched_views=invalid)
+        for invalid in (0, 101, 99.5, False):
+            with self.subTest(invalid=invalid), self.assertRaisesRegex(ReferenceError, "10–100"):
+                plan_dense_blender_review(self.dense, self.root / "review",
+                                          matched_resolution_percent=invalid)
 
 
 if __name__ == "__main__":

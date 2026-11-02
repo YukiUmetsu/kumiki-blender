@@ -14,7 +14,9 @@ def main() -> None:
     output = Path(sys.argv[sys.argv.index("--") + 1]).resolve()
     root = Path(__file__).resolve().parents[1]
     sys.path.insert(0, str(root / "src"))
-    fixture = output.parent / "dense-blender-first-party-input"
+    # Key the fixture by review output so separate smoke invocations do not
+    # collide with another independent CI/local revision in the same folder.
+    fixture = output.with_name(output.name + "-first-party-input")
     fixture.mkdir(parents=True, exist_ok=False)
     bpy.ops.wm.read_factory_settings(use_empty=True)
     bpy.ops.mesh.primitive_uv_sphere_add(segments=48, ring_count=24)

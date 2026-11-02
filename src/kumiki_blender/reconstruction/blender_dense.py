@@ -71,7 +71,8 @@ def _matched_scan_cameras(report: dict[str, Any], count: int) -> list[dict[str, 
 
 def plan_dense_blender_review(dense_revision: str | Path, output: str | Path,
                               *, max_mesh_faces: int = 5_000_000,
-                              matched_views: int = 0) -> dict[str, Any]:
+                              matched_views: int = 0,
+                              matched_resolution_percent: int = 100) -> dict[str, Any]:
     """Check a dense mesh has not changed since its reconstruction report."""
     root = Path(dense_revision).resolve()
     target = Path(output).resolve()
@@ -83,6 +84,9 @@ def plan_dense_blender_review(dense_revision: str | Path, output: str | Path,
         raise ReferenceError("max_mesh_faces must be 100–10,000,000")
     if type(matched_views) is not int or not 0 <= matched_views <= 12:
         raise ReferenceError("matched_views must be 0–12")
+    if (type(matched_resolution_percent) is not int
+            or not 10 <= matched_resolution_percent <= 100):
+        raise ReferenceError("matched_resolution_percent must be 10–100")
     report = _json(root / "dense-report.json")
     mesh = report.get("mesh")
     if (not isinstance(report.get("status"), str)
@@ -115,6 +119,7 @@ def plan_dense_blender_review(dense_revision: str | Path, output: str | Path,
     return {"source_revision": str(root), "source_ply": str(path), "source_sha256": actual,
             "output": str(target), "faces": counts["faces"], "vertices": counts["vertices"],
             "matched_cameras": cameras,
+            "matched_resolution_percent": matched_resolution_percent,
             "status": "preflight-only / Blender-review-required",
             "distribution_allowed": False}
 
@@ -166,12 +171,13 @@ def _preview_axes(bpy: Any, obj: Any, target: Path) -> list[str]:
     return paths
 
 
-def _preview_matched(bpy: Any, target: Path, entries: list[dict[str, Any]]) -> list[str]:
+def _preview_matched(bpy: Any, target: Path, entries: list[dict[str, Any]],
+                     resolution_percent: int) -> list[str]:
     """Clay renders from rectified photo cameras, in the unscaled scan frame."""
     from mathutils import Matrix  # type: ignore[import-not-found]
 
     scene = bpy.context.scene
-    scene.render.resolution_percentage = 40
+    scene.render.resolution_percentage = resolution_percent
     output = []
     for index, entry in enumerate(entries):
         intr = entry["intrinsics"]
@@ -207,11 +213,13 @@ def _preview_matched(bpy: Any, target: Path, entries: list[dict[str, Any]]) -> l
 def build_dense_blender_review(dense_revision: str | Path, output: str | Path,
                                *, bpy_module: Any, render_previews: bool = True,
                                max_mesh_faces: int = 5_000_000,
-                               matched_views: int = 0) -> dict[str, Any]:
+                               matched_views: int = 0,
+                               matched_resolution_percent: int = 100) -> dict[str, Any]:
     """Save a private editable .blend and GLB; neither clears photo rights."""
     plan = plan_dense_blender_review(dense_revision, output,
                                      max_mesh_faces=max_mesh_faces,
-                                     matched_views=matched_views)
+                                     matched_views=matched_views,
+                                     matched_resolution_percent=matched_resolution_percent)
     bpy = bpy_module
     if tuple(bpy.app.version) < (4, 2, 0):
         raise ReferenceError("Dense Blender review requires Blender 4.2+")
@@ -256,7 +264,7 @@ def build_dense_blender_review(dense_revision: str | Path, output: str | Path,
             record["previews"] = _preview_axes(bpy, obj, target)
             if plan["matched_cameras"]:
                 record["photo_matched_previews"] = _preview_matched(
-                    bpy, target, plan["matched_cameras"])
+                    bpy, target, plan["matched_cameras"], matched_resolution_percent)
         bpy.ops.wm.save_as_mainfile(filepath=str(target / "private-dense-review.blend"))
         for item in bpy.context.selected_objects:
             item.select_set(False)
