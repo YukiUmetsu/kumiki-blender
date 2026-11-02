@@ -22,6 +22,12 @@ import bpy
 from mathutils import Matrix, Vector
 from mathutils.bvhtree import BVHTree
 
+# The Blender entry script lives in scripts/landmarks, while the shared
+# sculpting primitives are part of the installable src/ package.
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from carved_hair import sculpt_carved_hair_from_anatomy
+
 TAU = math.tau
 STONE = None
 CARVING = None
@@ -1082,7 +1088,7 @@ def sculpt_scalp_surface_from_anatomy(head):
     return ob
 
 
-def sculpt_reference_guided_hair(head):
+def sculpt_reference_guided_hair(head, crown_locks=True):
     """Artist-traced, surface-following stone locks; no procedural hair mask.
 
     Guides are hand-placed against genuine monument front/low oblique photos:
@@ -1149,7 +1155,7 @@ def sculpt_reference_guided_hair(head):
     ]
     bvh = BVHTree.FromObject(head, bpy.context.evaluated_depsgraph_get())
     for sign in (-1, 1):
-        for line_no, guide in enumerate(crown_guides):
+        for line_no, guide in enumerate(crown_guides if crown_locks else ()):
             path = catmull([(sign*x,y,z) for x,y,z in guide], 18)
             anchors = []
             normals = []
@@ -1230,7 +1236,7 @@ def sculpt_reference_guided_hair(head):
 
 
 def build_anatomical_head_study(path, integrated_hair=False, scalp_surface_hair=False,
-                                guided_hair=False):
+                                guided_hair=False, carved_hair=False):
     """Prototype a real quad-topology head instead of more 2D face relief.
 
     The selected path must be a rights-cleared anatomical OBJ with one
@@ -1346,6 +1352,10 @@ def build_anatomical_head_study(path, integrated_hair=False, scalp_surface_hair=
         parts.append(sculpt_scalp_surface_from_anatomy(head))
     if guided_hair:
         parts.extend(sculpt_reference_guided_hair(head))
+    if carved_hair:
+        parts.extend(sculpt_carved_hair_from_anatomy(
+            head, curtain_builder=sculpt_reference_guided_hair,
+            scalp_builder=sculpt_scalp_surface_from_anatomy))
     # Newly created loft objects can carry stale matrix_world values until
     # a dependency-graph update. Applying the gaze tilt first accidentally
     # put the entire hair volume near the scene origin, outside every camera.
@@ -1548,6 +1558,8 @@ def main():
                    help="Clay-only anatomy-surface retopology study (not loft hair)")
     p.add_argument("--guided-hair",action="store_true",
                    help="Clay-only artist-traced crown and neck hair study")
+    p.add_argument("--carved-hair",action="store_true",
+                   help="Clay-only scalp-topology hair with real carved crown grooves")
     p.add_argument("--samples",type=int,default=16)
     p.add_argument("--size",type=int,default=720)
     p.add_argument("--shot",action="append",choices=("front","profile","three_quarter",
@@ -1567,12 +1579,16 @@ def main():
         p.error("--scalp-surface-hair requires --head-study --face-method anatomical")
     if args.guided_hair and (not args.head_study or FACE_METHOD != "anatomical"):
         p.error("--guided-hair requires --head-study --face-method anatomical")
-    if sum((args.scalp_surface_hair,args.integrated_hair,args.guided_hair)) > 1:
+    if args.carved_hair and (not args.head_study or FACE_METHOD != "anatomical"):
+        p.error("--carved-hair requires --head-study --face-method anatomical")
+    if sum((args.scalp_surface_hair,args.integrated_hair,
+            args.guided_hair,args.carved_hair)) > 1:
         p.error("Choose one hair reconstruction study")
     if args.head_study:
         if FACE_METHOD == "anatomical":
             build_anatomical_head_study(args.anatomy_base,args.integrated_hair,
-                                       args.scalp_surface_hair,args.guided_hair)
+                                       args.scalp_surface_hair,args.guided_hair,
+                                       args.carved_hair)
         else:
             build_head_study()
         head=next(ob for ob in bpy.data.objects
@@ -1590,7 +1606,8 @@ def main():
             metrics["integrated_hair"]=args.integrated_hair
             metrics["scalp_surface_hair"]=args.scalp_surface_hair
             metrics["guided_hair"]=args.guided_hair
-            if args.integrated_hair or args.scalp_surface_hair or args.guided_hair:
+            metrics["carved_hair"]=args.carved_hair
+            if args.integrated_hair or args.scalp_surface_hair or args.guided_hair or args.carved_hair:
                 hair_objs=[obj for obj in bpy.data.objects
                            if obj.name.startswith("Hair | ")]
                 hair_points=[obj.matrix_world @ v.co
@@ -1599,6 +1616,11 @@ def main():
                        8 if args.guided_hair else 3)
                 assert len(hair_objs)==count and hair_points
                 metrics["hair_surface_vertices"]=len(hair_points)
+                if args.carved_hair:
+                    scalp=next(ob for ob in hair_objs
+                               if "anatomy-derived sculptable scalp" in ob.name)
+                    metrics["carved_hair_vertices"]=int(scalp["carved_vertices"])
+                    metrics["carved_hair_grooves"]=int(scalp["groove_count"])
                 metrics["hair_bounds_min_z_m"]=round(min(p.z for p in hair_points),3)
                 metrics["hair_bounds_max_z_m"]=round(max(p.z for p in hair_points),3)
                 metrics["hair_bounds_width_m"]=round(
