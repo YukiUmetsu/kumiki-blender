@@ -188,3 +188,35 @@ Next required work is to calibrate **actual monument** front/profile/oblique
 reference cameras or secure authorized high-detail survey data, then fit the
 source-specific facial planes and close the eyelid anatomy. Neither the donor
 license nor a 52k-vertex sculpt is evidence of target likeness.
+
+### Hand-traced crown locks and temple sheets — November 2026 HOLD
+
+The distinct `--guided-hair` experiment abandons the threshold-selected scalp
+patch: six artist-directed, surface-projected stone locks follow the crown,
+and two separately retopologized ruled sheets trace narrow temple-to-neck
+control edges. The work uses the CC0 donor only. The control edges are
+*hand-interpreted* from genuine photographs, **not registered measurements**.
+
+```bash
+blender -b --factory-startup --python scripts/landmarks/christ_redeemer.py -- \
+  --head-study --face-method anatomical --guided-hair --verify \
+  --views .review/christ_redeemer/guided-hair \
+  --shot head_front --shot head_profile --shot head_three_quarter --shot head_low
+```
+
+- **r15 / rejected:** crown locks start to show the reference's center-parted
+  sweep, but the two large side panels stand upright above the head and form
+  triangular capes in profile. Facial anatomy remains generic.
+- **r16 / rejected:** manually redrawn panel edges eliminate the standing
+  horns and reduce sagittal thickness, but the long locks still read as
+  separate, stiff ribbons running off the skull. Their roots and tips show
+  discontinuities in three-quarter/profile views, and the frontal eye, nose,
+  jaw and lip features remain unlike the monument.
+
+**Two actual four-angle clay render passes failed. The guided-sheet hair
+representation is frozen; do not attempt a third spline-width correction.**
+The default full-figure GLB is unchanged. The optional Blender study is
+editable for an artist, but is not a photographically accepted likeness.
+Next reconstruct the face and hair silhouette *together* in a registered
+camera space using a sculpted shared control cage and verified source images,
+or obtain explicit reuse rights for a high-resolution survey of the monument.

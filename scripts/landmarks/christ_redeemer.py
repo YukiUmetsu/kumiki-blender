@@ -20,6 +20,7 @@ from pathlib import Path
 
 import bpy
 from mathutils import Matrix, Vector
+from mathutils.bvhtree import BVHTree
 
 TAU = math.tau
 STONE = None
@@ -1081,7 +1082,155 @@ def sculpt_scalp_surface_from_anatomy(head):
     return ob
 
 
-def build_anatomical_head_study(path, integrated_hair=False, scalp_surface_hair=False):
+def sculpt_reference_guided_hair(head):
+    """Artist-traced, surface-following stone locks; no procedural hair mask.
+
+    Guides are hand-placed against genuine monument front/low oblique photos:
+    short, center-parted crown striations and long narrow temple curtains.
+    Each crown lock is projected onto the anatomical surface, not an oval
+    loft or an expanded scalp mask. This is still an *unregistered* study.
+    """
+    objects = []
+
+    def catmull(points, resolution):
+        result = []
+        for i in range(len(points)-1):
+            a = points[max(0, i-1)]
+            b = points[i]
+            c = points[i+1]
+            d = points[min(len(points)-1, i+2)]
+            for step in range(resolution):
+                t = step/resolution
+                result.append(tuple(.5*((2*b[j])+(-a[j]+c[j])*t+
+                                      (2*a[j]-5*b[j]+4*c[j]-d[j])*t*t+
+                                      (-a[j]+3*b[j]-3*c[j]+d[j])*t*t*t)
+                                    for j in range(len(b))))
+        result.append(tuple(points[-1]))
+        return result
+
+    def mesh_object(name, positions, faces):
+        mesh = bpy.data.meshes.new(name)
+        mesh.from_pydata(positions, [], faces)
+        mesh.update()
+        obj = bpy.data.objects.new(name, mesh)
+        bpy.context.collection.objects.link(obj)
+        obj.data.materials.append(STONE)
+        for face in mesh.polygons:
+            face.use_smooth = True
+        obj.scale = (11., 11., 11.)
+        obj.location = (0, 0, 34.03)
+        objects.append(obj)
+        return obj
+
+    # The monument's ears are largely concealed by continuous carved hair.
+    # Retain their anatomical understructure, but bury the donor's projecting
+    # pinnae beneath the new curtain instead of adding decorative ear tubes.
+    for v in head.data.vertices:
+        p = v.co
+        side = min(1., max(0., (abs(p.x)-.083)/.026))
+        height = min(1., max(0., (p.z-.205)/.025),
+                     max(0., (.304-p.z)/.034))
+        rear = min(1., max(0., (p.y+.068)/.080))
+        weight = side*side*(3-2*side)*height*rear
+        p.x -= math.copysign(.010*weight, p.x)
+        p.y += .007*weight
+    head.data.update()
+
+    # Hand-authored 3D flow lines: x (lateral), y (front/rear), z (height).
+    # These are not claimed to be surveyed points. The shallow sculpt strips
+    # follow the actual skin surface through a BVH projection.
+    crown_guides = [
+        [(.008,-.010,.378), (.027,-.078,.363), (.052,-.110,.351),
+         (.080,-.100,.334), (.102,-.078,.300), (.112,-.053,.270)],
+        [(.005,.018,.374), (.023,-.045,.369), (.050,-.091,.354),
+         (.077,-.082,.334), (.102,-.056,.298), (.115,-.031,.262)],
+        [(.011,.049,.359), (.028,-.013,.360), (.056,-.062,.351),
+         (.086,-.060,.327), (.109,-.025,.288), (.123,-.005,.253)],
+    ]
+    bvh = BVHTree.FromObject(head, bpy.context.evaluated_depsgraph_get())
+    for sign in (-1, 1):
+        for line_no, guide in enumerate(crown_guides):
+            path = catmull([(sign*x,y,z) for x,y,z in guide], 18)
+            anchors = []
+            normals = []
+            for pt in path:
+                result = bvh.find_nearest(Vector(pt))
+                if result[0] is None:
+                    raise ValueError("Crown guide left the head surface")
+                anchors.append(result[0])
+                normals.append(result[1].normalized())
+            vertices = []
+            sides = 10
+            for i, (surface, normal) in enumerate(zip(anchors, normals)):
+                tangent = (anchors[min(i+1,len(anchors)-1)] -
+                           anchors[max(i-1,0)]).normalized()
+                across = normal.cross(tangent).normalized()
+                end_taper = min(1., i/9, (len(anchors)-1-i)/12)
+                for k in range(sides+1):
+                    u = 2*k/sides-1
+                    offset = across*(.009*end_taper*u)
+                    nearby = bvh.find_nearest(surface+offset)
+                    basal = nearby[0] if nearby[0] is not None else surface+offset
+                    uplift = (.0005 + .0045*(1-u*u)**2)*end_taper
+                    vertices.append(tuple(basal+normal*uplift))
+            faces = [(i*(sides+1)+k, (i+1)*(sides+1)+k,
+                      (i+1)*(sides+1)+k+1, i*(sides+1)+k+1)
+                     for i in range(len(path)-1) for k in range(sides)]
+            mesh_object("Hair | %s | traced crown lock %d"%(sign,line_no+1),
+                        vertices,faces)
+
+        # These longitudinal control edges describe the narrow temple-to-
+        # nape outline observed in real photographs. Unlike the rejected
+        # closed-ellipse lofts this is one ruled stone sheet per side, with
+        # nonperiodic carved flutes and edges tucked into the skull/neck.
+        # (z, anterior x/y, posterior x/y), in donor metres.
+        sections = [
+            # Both edges begin together below the crown. The first clay
+            # iteration erroneously opened a 1.3 m sagittal cape and two
+            # horn-like upper corners; genuine photographs show narrow,
+            # scalp-hugging locks instead.
+            (.345, .093,-.074, .094,-.073),
+            (.315, .100,-.062, .110,-.038),
+            (.286, .103,-.058, .118,-.020),
+            (.249, .103,-.052, .126,+.003),
+            (.204, .101,-.039, .134,+.018),
+            (.160, .104,-.029, .136,+.036),
+            (.113, .108,-.014, .138,+.055),
+            (.066, .111,+.017, .138,+.073),
+            (.029, .124,+.070, .132,+.081),
+        ]
+        rows = catmull(sections, 13)
+        width_segments = 36
+        vertices = []
+        for row_index, (z,fx,fy,bx,by) in enumerate(rows):
+            longitudinal = row_index/(len(rows)-1)
+            tip = min(1., (1-longitudinal)/.055)
+            for j in range(width_segments+1):
+                u = j/width_segments
+                x = sign*((1-u)*fx+u*bx)
+                y = (1-u)*fy+u*by
+                # A slight front-side sculpt belly follows the temples;
+                # 3 uneven groove tracks reproduce carved hair, not waves.
+                broad = .008*math.sin(math.pi*u)**2
+                channel = sum(.0035*math.exp(-((u-(center+
+                             .025*math.sin(longitudinal*3+center*5)))/.027)**2)
+                              for center in (.19,.47,.76))
+                y -= (broad-channel)*tip
+                x *= 1.-(.035*u*(1-tip))
+                vertices.append((x,y,z+.002*math.sin(math.pi*u)))
+        faces = [(i*(width_segments+1)+k, (i+1)*(width_segments+1)+k,
+                  (i+1)*(width_segments+1)+k+1, i*(width_segments+1)+k+1)
+                 for i in range(len(rows)-1) for k in range(width_segments)]
+        panel = mesh_object("Hair | %s | hand-guided temple curtain"%sign,
+                            vertices,faces)
+        thickness = panel.modifiers.new("Thin continuous carved stone", "SOLIDIFY")
+        thickness.thickness = .008
+        thickness.offset = -1
+    return objects
+
+
+def build_anatomical_head_study(path, integrated_hair=False, scalp_surface_hair=False,
+                                guided_hair=False):
     """Prototype a real quad-topology head instead of more 2D face relief.
 
     The selected path must be a rights-cleared anatomical OBJ with one
@@ -1195,6 +1344,8 @@ def build_anatomical_head_study(path, integrated_hair=False, scalp_surface_hair=
         parts.extend(sculpted_anatomical_hair_mantle())
     if scalp_surface_hair:
         parts.append(sculpt_scalp_surface_from_anatomy(head))
+    if guided_hair:
+        parts.extend(sculpt_reference_guided_hair(head))
     # Newly created loft objects can carry stale matrix_world values until
     # a dependency-graph update. Applying the gaze tilt first accidentally
     # put the entire hair volume near the scene origin, outside every camera.
@@ -1395,6 +1546,8 @@ def main():
                    help="Clay-only continuous scalp and neck hair-mass study")
     p.add_argument("--scalp-surface-hair",action="store_true",
                    help="Clay-only anatomy-surface retopology study (not loft hair)")
+    p.add_argument("--guided-hair",action="store_true",
+                   help="Clay-only artist-traced crown and neck hair study")
     p.add_argument("--samples",type=int,default=16)
     p.add_argument("--size",type=int,default=720)
     p.add_argument("--shot",action="append",choices=("front","profile","three_quarter",
@@ -1412,12 +1565,14 @@ def main():
         p.error("--integrated-hair requires --head-study --face-method anatomical")
     if args.scalp_surface_hair and (not args.head_study or FACE_METHOD != "anatomical"):
         p.error("--scalp-surface-hair requires --head-study --face-method anatomical")
-    if args.scalp_surface_hair and args.integrated_hair:
-        p.error("Choose one hair reconstruction foundation")
+    if args.guided_hair and (not args.head_study or FACE_METHOD != "anatomical"):
+        p.error("--guided-hair requires --head-study --face-method anatomical")
+    if sum((args.scalp_surface_hair,args.integrated_hair,args.guided_hair)) > 1:
+        p.error("Choose one hair reconstruction study")
     if args.head_study:
         if FACE_METHOD == "anatomical":
             build_anatomical_head_study(args.anatomy_base,args.integrated_hair,
-                                       args.scalp_surface_hair)
+                                       args.scalp_surface_hair,args.guided_hair)
         else:
             build_head_study()
         head=next(ob for ob in bpy.data.objects
@@ -1434,12 +1589,15 @@ def main():
         if FACE_METHOD == "anatomical":
             metrics["integrated_hair"]=args.integrated_hair
             metrics["scalp_surface_hair"]=args.scalp_surface_hair
-            if args.integrated_hair or args.scalp_surface_hair:
+            metrics["guided_hair"]=args.guided_hair
+            if args.integrated_hair or args.scalp_surface_hair or args.guided_hair:
                 hair_objs=[obj for obj in bpy.data.objects
                            if obj.name.startswith("Hair | ")]
                 hair_points=[obj.matrix_world @ v.co
                              for obj in hair_objs for v in obj.data.vertices]
-                assert len(hair_objs)==(1 if args.scalp_surface_hair else 3) and hair_points
+                count=(1 if args.scalp_surface_hair else
+                       8 if args.guided_hair else 3)
+                assert len(hair_objs)==count and hair_points
                 metrics["hair_surface_vertices"]=len(hair_points)
                 metrics["hair_bounds_min_z_m"]=round(min(p.z for p in hair_points),3)
                 metrics["hair_bounds_max_z_m"]=round(max(p.z for p in hair_points),3)
