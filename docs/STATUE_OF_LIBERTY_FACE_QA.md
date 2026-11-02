@@ -1,5 +1,26 @@
 # Statue of Liberty — reference-calibrated facial acceptance gate
 
+## r62 — independent profile-loft clay experiment rejected (**HOLD**)
+
+A fresh, source-specific 3D loft was trialed as a genuinely different
+foundation from the frozen CC0 human donor and old Gaussian relief mask.
+It followed hand-observed silhouette points in the actual installed-head
+[HAER 241 profile](https://www.loc.gov/pictures/item/ny1251.color.570010c/)
+and used the NPS **5.26 m chin-to-cranium height** and **3.05 m head width**.
+The frontal breadth, orbital depth, ears and back of the head, however,
+remained **artist-inferred** because the archival camera was uncalibrated and
+the six-view parallax feasibility audit recovered no 3D survey coordinates.
+
+Two neutral-clay trials were visually inspected in front and both profile
+views. The initial linear contour interpolation formed visibly stacked facial
+shelves. Monotone-cubic interpolation removed some banding but left an
+implausibly cylindrical mask: indistinct eyes, nose and mouth, incorrect
+cheek/jaw depth, and no Bartholdi-like anatomical proportions. **Both trials
+failed** the qualitative likeness gate. The disposable loft study was not
+retained as a production generator or released as a GLB. Independent code
+for the statue's foot-and-chain sculpture proceeds separately; it **does not
+lift the facial HOLD** or claim a photo-faithful monument reconstruction.
+
 ## r61 — actual-head archival anatomy atlas + parallax feasibility (**HOLD**)
 
 This iteration changes the **source evidence and sculpt workbench**, not the

@@ -181,6 +181,37 @@ class LibertyTests(unittest.TestCase):
         with self.assertRaises(LibertyError):
             make_liberty_study(detailed_face=1)
 
+    def test_detailed_feet_have_open_broken_shackle_and_both_foot_chains(self):
+        """Opt-in sculptural details follow NPS right/left spatial semantics."""
+        original = {part.name for part in make_liberty_study().instances}
+        self.assertNotIn("liberty-feet-right-broken-shackle", original)
+        pieces = {part.name: part for part in make_liberty_study(
+            detailed_feet=True).instances}
+        self.assertIn("liberty-feet-right-broken-shackle", pieces)
+        self.assertIn("liberty-feet-left-chain-01-broken", pieces)
+        self.assertEqual(sum("-toe-" in name for name in pieces), 10)
+        self.assertEqual(sum("-chain-" in name for name in pieces), 4)
+        self.assertEqual(dict(make_liberty_study(detailed_feet=True).part_counts)["feet"], 19)
+        shackle = pieces["liberty-feet-right-broken-shackle"].mesh
+        left_end = pieces["liberty-feet-left-chain-01-broken"].mesh
+        self.assertLess(sum(p[0] for p in shackle.vertices)/len(shackle.vertices), 0.)
+        self.assertGreater(sum(p[0] for p in left_end.vertices)/len(left_end.vertices), 0.)
+        # Exposed rings have no opening in their *surface* manifold: a split
+        # link is a curved, capped open-ended bar, not a torn open mesh.
+        for name, part in pieces.items():
+            if "liberty-feet-" in name:
+                with self.subTest(name=name):
+                    report = audit_mesh(part.mesh)
+                    self.assertEqual(report.boundary_edges, 0)
+                    self.assertEqual(report.nonmanifold_edges, 0)
+                    self.assertGreater(report.volume_m3, 0.)
+        smaller = make_liberty_study(scale=.5, include_pedestal=False,
+                                     detailed_feet=True)
+        self.assertTrue(dict(smaller.parameters)["detailed_feet"])
+        self.assertLess(smaller.bounds_min[2], .15)
+        with self.assertRaises(LibertyError):
+            make_liberty_study(detailed_feet=1)
+
     def test_export_parts_are_closed_meshes_and_have_unique_semantic_names(self):
         study = make_liberty_study()
         self.assertLess(len(study.instances), 700)

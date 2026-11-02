@@ -109,6 +109,8 @@ def main(argv: list[str] | None = None) -> int:
                                     help="Use a perforated 25-window diadem and seven faceted rays")
             subcommand.add_argument("--detailed-face", action="store_true",
                                     help="Try one continuous sculpted head surface instead of facial tubes")
+            subcommand.add_argument("--detailed-feet", action="store_true",
+                                    help="Add sculpted sandals and the broken shackle and chain")
     scan_face_parser = subcommands.add_parser(
         "build-liberty-scan-face", help="Licensed photogrammetry face-detail QA checkpoint")
     scan_face_parser.add_argument("--source", type=Path, required=True)
@@ -218,7 +220,8 @@ def main(argv: list[str] | None = None) -> int:
                                        include_pedestal=not args.no_pedestal,
                                        detailed_tablet=(args.command == "build-liberty" and args.detailed_tablet),
                                        detailed_crown=(args.command == "build-liberty" and args.detailed_crown),
-                                       detailed_face=(args.command == "build-liberty" and args.detailed_face))
+                                       detailed_face=(args.command == "build-liberty" and args.detailed_face),
+                                       detailed_feet=(args.command == "build-liberty" and args.detailed_feet))
             if args.command == "plan-liberty":
                 print(json.dumps({
                     "asset_id": study.asset_id, "generator": "procedural-statue-of-liberty",

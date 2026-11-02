@@ -274,6 +274,20 @@ def build_liberty_scene(study: LibertyStudy, destination: Path, *,
             QualityShot("face-detail-profile", face_pos(7.2, -.3, 26.67),
                         face_pos(0, 0, 26.67), 3.7*parameters["scale"]),
         )
+    if parameters.get("detailed_feet"):
+        def feet_pos(x: float, y: float, z: float) -> tuple[float, float, float]:
+            return (x*parameters["scale"], y*parameters["scale"],
+                    (z+offset)*parameters["scale"])
+        shots += (
+            QualityShot("feet-shackle-front", feet_pos(0, -8.5, 11.4),
+                        feet_pos(0, -2.04, 9.87), 5.6*parameters["scale"]),
+            QualityShot("feet-shackle-oblique", feet_pos(-5.1, -7.3, 12.6),
+                        feet_pos(-.35, -2.04, 9.85), 5.5*parameters["scale"]),
+            QualityShot("feet-left-broken-link", feet_pos(5.0, -5.4, 11.35),
+                        feet_pos(1.80, -2.43, 9.78), 2.9*parameters["scale"]),
+            QualityShot("feet-right-broken-shackle", feet_pos(-4.9, -5.6, 11.6),
+                        feet_pos(-.82, -2.27, 9.80), 3.3*parameters["scale"]),
+        )
     metadata = {
         "asset_id": study.asset_id,
         "generator": "kumiki-blender/procedural-statue-of-liberty",
@@ -289,6 +303,7 @@ def build_liberty_scene(study: LibertyStudy, destination: Path, *,
         "detailed_torch": detailed_torch,
         "detailed_tablet": bool(parameters.get("detailed_tablet")),
         "detailed_crown": bool(parameters.get("detailed_crown")),
+        "detailed_feet": bool(parameters.get("detailed_feet")),
         "detailed_torch_fit": ({"origin": torch_fit.origin,
                                "radial_scale": torch_fit.radial_scale,
                                "height_scale": torch_fit.height_scale}

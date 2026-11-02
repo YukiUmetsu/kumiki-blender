@@ -177,7 +177,8 @@ def _gown() -> Mesh:
 def make_liberty_study(*, scale: float = 1., include_pedestal: bool = True,
                        detailed_tablet: bool = False,
                        detailed_crown: bool = False,
-                       detailed_face: bool = False) -> LibertyStudy:
+                       detailed_face: bool = False,
+                       detailed_feet: bool = False) -> LibertyStudy:
     """Make the original, reference-guided statue and optional 8.9m pedestal."""
     if (isinstance(scale, bool) or not isinstance(scale, (int, float)) or
             not math.isfinite(scale) or not .05 <= scale <= 20):
@@ -190,6 +191,8 @@ def make_liberty_study(*, scale: float = 1., include_pedestal: bool = True,
         raise LibertyError("detailed_crown must be a boolean")
     if type(detailed_face) is not bool:
         raise LibertyError("detailed_face must be a boolean")
+    if type(detailed_feet) is not bool:
+        raise LibertyError("detailed_feet must be a boolean")
     result: list[MeshInstance] = []
 
     def put(name: str, mesh: Mesh, material: str = "patina") -> None:
@@ -246,6 +249,10 @@ def make_liberty_study(*, scale: float = 1., include_pedestal: bool = True,
         pass
 
     box("statue-footplate", (6.36, 5.78, .28), (0, .02, 9.44), "patina")
+    if detailed_feet:
+        from .liberty_feet import foot_detail_parts
+        for name, mesh, material in foot_detail_parts():
+            put(name, mesh, material)
     put("gown-underrobe", _gown())
 
     # The overfold is a descending diagonal sash, with a detached rolled hem.
@@ -532,7 +539,7 @@ def make_liberty_study(*, scale: float = 1., include_pedestal: bool = True,
     verts = [v for part in scaled for v in world_vertices(part)]
     bounds_min = tuple(min(p[k] for p in verts) for k in range(3))
     bounds_max = tuple(max(p[k] for p in verts) for k in range(3))
-    families = ("pedestal", "gown", "head", "hair", "crown", "torch", "tablet", "arm", "sleeve")
+    families = ("pedestal", "gown", "head", "hair", "crown", "torch", "tablet", "arm", "sleeve", "feet")
     counts = tuple((family, sum(part.name.startswith("liberty-"+family) for part in scaled))
                    for family in families)
     return LibertyStudy("statue-of-liberty-procedural", tuple(scaled), bounds_min,
@@ -540,4 +547,5 @@ def make_liberty_study(*, scale: float = 1., include_pedestal: bool = True,
                                              ("include_pedestal", include_pedestal),
                                              ("detailed_tablet", detailed_tablet),
                                              ("detailed_crown", detailed_crown),
-                                             ("detailed_face", detailed_face)))
+                                             ("detailed_face", detailed_face),
+                                             ("detailed_feet", detailed_feet)))

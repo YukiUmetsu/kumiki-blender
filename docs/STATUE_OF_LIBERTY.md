@@ -1,5 +1,47 @@
 # Statue of Liberty — scan-assisted detail rebuild
 
+## r62 — restored broken shackle, sculpted sandals and chain (**opt-in study**)
+
+The model previously omitted a defining sculptural feature at Liberty's feet.
+The National Park Service's [abolition history](https://www.nps.gov/stli/learn/historyculture/abolition.htm)
+describes a **broken shackle at her right foot**, a chain passing out of view
+under the robe, and its **broken end link reappearing in front of her left
+foot**. The [NPS fact sheet](https://www.nps.gov/stli/learn/statue-of-liberty-facts.htm)
+also confirms that her **right heel is raised**. Primary photo sources used:
+
+- [HAER 255](https://www.loc.gov/pictures/item/ny1251.color.570024c/),
+  Jet Lowe (1984), shows the *installed* right foot, the broad curved shackle
+  and the wide copper chain straps beside the drapery.
+- [HAER 256](https://www.loc.gov/pictures/item/ny1251.color.570025c/),
+  Jet Lowe (1984), is a closer view of the articulated toes and sandal sole.
+- [NPS photographic account](https://www.nps.gov/stli/learn/historyculture/abolition.htm)
+  gives another legible view of the copper toe and chain construction.
+
+The new `--detailed-feet` flag adds editable, named, closed 3D forms: a raised
+right and resting left foot with five tapered toes each and sandal-sole edge;
+the open/capped curved shackle at the right foot; two discontinuous lengths of
+wide, flattened, slightly inclined interlocking links; and a visibly open
+broken link at the left end. The camera plan adds front, oblique, split-link
+and shackle close-ups. It defaults **off**, preserving the existing GLB
+recipe until the whole statue passes reconstruction review.
+
+This is **illustrative reference-led sculpture**, not a direct 3D scan:
+individual toe, loop and placement dimensions are artist-estimated from
+uncalibrated photographs. The experimental body/face still fails the
+photo-faithful acceptance gate recorded in
+[face QA](STATUE_OF_LIBERTY_FACE_QA.md). The broken-chain detail can be
+inspected independently; it does **not** certify the monument's likeness.
+
+```bash
+KUMIKI_RENDER_PROFILE=smoke blender --background --factory-startup \
+  --threads 6 --python-exit-code 1 --python scripts/blender_entry.py -- \
+  build-liberty --detailed-feet --detailed-torch \
+  --detailed-tablet --detailed-crown --detailed-face \
+  --output .review/landmarks/statues/statue-of-liberty/r62-broken-shackle
+PYTHONPATH=src python3 -m kumiki_blender audit-revision \
+  --root .review/landmarks/statues/statue-of-liberty/r62-broken-shackle
+```
+
 ## r56 — authentic-foundation and multi-view hold gate
 
 The stricter updated Blender 3D Craft Director workflow now blocks any claim
