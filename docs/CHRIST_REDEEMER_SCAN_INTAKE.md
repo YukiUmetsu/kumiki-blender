@@ -220,3 +220,39 @@ editable for an artist, but is not a photographically accepted likeness.
 Next reconstruct the face and hair silhouette *together* in a registered
 camera space using a sculpted shared control cage and verified source images,
 or obtain explicit reuse rights for a high-resolution survey of the monument.
+
+### First camera-fitting diagnostic — November 2026 (HOLD)
+
+The reusable `camera_registration.py` perspective solver fits 3D head-surface
+points to annotated pixels from a photo of the **actual Rio monument**. Its
+sculpt-pixel probing script uses ray casts into the donor's *real quad mesh*,
+not guessed 3D depths. The self-contained [front annotation JSON](CHRIST_REDEEMER_FRONT_ANCHORS_R16.json)
+records 15 paired photo/model pixels and source provenance without embedding
+the copyrighted reference photograph. The [fit report](CHRIST_REDEEMER_FRONT_CAMERA_FIT_R16.json)
+records projected points, camera parameters and residuals.
+
+```bash
+# Open the separately saved r16 HOLD `.blend` from the review handoff.
+blender -b /path/to/christ_redeemer_guided_hair_hold.blend \
+  --python scripts/landmarks/probe_face_anchor_pixels.py -- \
+  --input docs/CHRIST_REDEEMER_FRONT_ANCHORS_R16.json \
+  --output .review/christ_redeemer/front-anchors-3d.json
+PYTHONPATH=src python scripts/fit_reference_camera.py \
+  .review/christ_redeemer/front-anchors-3d.json \
+  --output .review/christ_redeemer/front-camera-fit.json
+```
+
+The initial fit reaches **28.738 px RMS / 67.384 px maximum reprojection
+error** at 1536 × 1024 source resolution; the optimized camera also hits its
+allowed distance/target bounds. The chin anchor misses by **67.38 px**, nose
+bridge by **42.3 px**, and outer eyelids by roughly **31–40 px**. This result
+is **not** a valid camera registration and must not be used for an aligned
+photo overlay or claimed as survey-level evidence. Manual point annotation,
+unknown lens distortion and fundamentally inaccurate donor face geometry
+all contribute; individual residuals cannot yet be attributed to a specific
+mesh deformation.
+
+Before accepting any facial sculpt, capture a second independent authentic
+profile/oblique view with enough overlapping facial points, refine the
+landmark correspondences, and fit per-photo perspective cameras. Then
+sculpt the **shared 3D facial and hair silhouette** against all views.

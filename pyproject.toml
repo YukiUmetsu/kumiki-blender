@@ -12,6 +12,9 @@ license = "MIT"
 authors = [{name = "Yuki Umetsu"}]
 dependencies = []
 
+[project.optional-dependencies]
+reconstruction = ["numpy>=1.26", "scipy>=1.11"]
+
 [project.scripts]
 kumiki-blender = "kumiki_blender.cli:main"
 
