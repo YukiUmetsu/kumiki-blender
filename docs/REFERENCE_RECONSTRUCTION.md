@@ -169,6 +169,38 @@ scored cameras, missing renders, poor masks or low IoU require review. Even
 perfect IoU is **not** a photorealism or historical-fidelity certificate:
 sculptors still need face, eyes, hair, drapery, and authentic close-up study.
 
+## Measure region-specific facial, hair and drapery likeness
+
+Silhouette IoU can miss a completely wrong face inside a correct head outline.
+The `landmark-qa` tool measures *where the sculpt puts identified 3D points*
+against manually annotated pixels of the **same points** in registered photos.
+Copy [`examples/monument-landmarks.example.json`](../examples/monument-landmarks.example.json)
+and replace its illustrative identifiers and numbers with true evidence:
+
+- `required_regions`: e.g. `face`, `hair`, `ear`, `chin`, `drapery`.
+- Each `measurement` identifies a registered `image_id`, a `region`, a stable
+  `landmark_id`, the fixed sculpt coordinate `sculpt_xyz_m`, and where that
+  physical feature occurs in the reference image as `image_xy_px`.
+- Repeated observations of a landmark must use the **same** 3D coordinate;
+  use the rectified image when a COLMAP `--undistort` run created new camera
+  intrinsics. Do not interpolate unknown or occluded points.
+- Each region requires at least three distinct landmarks across at least two
+  camera viewpoints; at least three registered images must be annotated for
+  a provisional threshold candidate. Missing coverage cannot pass silently.
+
+```bash
+kumiki-blender landmark-qa \
+  --plan .review/monument/camera-plan-r01/camera-plan.json \
+  --annotations /path/to/monument/annotated-landmarks.json \
+  --output .review/monument/landmark-qa-r01 --max-error-px 8
+```
+
+The report lists per-point image projection, pixel error, camera depth,
+per-region median/max error, and regions with insufficient viewpoints. It
+marks behind-camera landmarks as mismatches rather than fabricating scores.
+It is a measurement aid for sculpt correction, not an automatic editor or
+guarantee of accuracy; the point must be correctly identified in both places.
+
 Exit codes:
 
 - `0`: intake audit ran, or COLMAP produced a sparse **candidate** with at
@@ -202,7 +234,7 @@ Exit codes:
 **Remaining framework work:** real COLMAP evaluation on a licensed multi-angle
 statue dataset; robust arbitrary-photo feature retrieval/hloc; general
 survey/point-cloud intake beyond Sphinx; semantic/region-aware facial and
-drapery sculpt tools; landmark correspondence errors and close-up texture
-likeness QA; high/low LOD geometry and texture baking. Camera pose and
+drapery sculpt *editing* tools; close-up texture likeness QA; high/low LOD
+geometry and texture baking. Camera pose and
 silhouette tooling help artists measure shape mismatches, but do not themselves
 repair anatomy or recover unknown surface detail.

@@ -17,8 +17,9 @@ kumiki-blender reconstruct-photos --manifest /path/to/references.json \
 
 Then use `prepare-camera-plan` with manually matched 3D landmark coordinates,
 `render-reference-scene` for an editable Blender scene with the registered
-photo cameras, and `silhouette-qa` to compare neutral-clay renders against
-manually checked statue masks. See the [full camera and mask workflow](docs/REFERENCE_RECONSTRUCTION.md).
+photo cameras, `silhouette-qa` to compare neutral-clay renders against
+manually checked statue masks, and `landmark-qa` for face/hair/drapery
+pixel-reprojection measurements. See the [full camera and mask workflow](docs/REFERENCE_RECONSTRUCTION.md).
 This is genuine multi-image camera/geometry *evidence*, not another procedural
 facial sculpt or automatic statue photogrammetry from arbitrary web photos.
 No technical score certifies facial likeness. Historical survey geometry,

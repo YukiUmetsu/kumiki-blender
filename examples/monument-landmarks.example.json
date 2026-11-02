@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "asset_id": "your-statue-id",
+  "required_regions": ["face", "drapery"],
+  "measurements": [
+    {
+      "image_id": "front",
+      "region": "face",
+      "landmark_id": "nose-tip",
+      "sculpt_xyz_m": [0.0, 0.0, 1.8],
+      "image_xy_px": [850.0, 620.0]
+    },
+    {
+      "image_id": "front-left",
+      "region": "face",
+      "landmark_id": "nose-tip",
+      "sculpt_xyz_m": [0.0, 0.0, 1.8],
+      "image_xy_px": [940.0, 650.0]
+    }
+  ]
+}

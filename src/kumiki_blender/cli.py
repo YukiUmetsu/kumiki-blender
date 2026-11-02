@@ -174,6 +174,12 @@ def main(argv: list[str] | None = None) -> int:
     mask_parser.add_argument("--renders", type=Path, required=True)
     mask_parser.add_argument("--output", type=Path, required=True)
     mask_parser.add_argument("--min-iou", type=float, default=0.8)
+    landmark_parser = subcommands.add_parser(
+        "landmark-qa", help="Measure sculpt 3D landmark reprojection error in registered photos")
+    landmark_parser.add_argument("--plan", type=Path, required=True)
+    landmark_parser.add_argument("--annotations", type=Path, required=True)
+    landmark_parser.add_argument("--output", type=Path, required=True)
+    landmark_parser.add_argument("--max-error-px", type=float, default=12.0)
     source_parser = subcommands.add_parser("inspect-asset")
     source_parser.add_argument("--input", type=Path, required=True)
     texture_parser = subcommands.add_parser("inspect-texture-packs")
@@ -208,6 +214,16 @@ def main(argv: list[str] | None = None) -> int:
                 raise RecipeError(str(error)) from error
             print(json.dumps(report, indent=2))
             return 0 if report["status"].startswith("mask-threshold-candidate") else 3
+        if args.command == "landmark-qa":
+            from .reconstruction.landmarks import check_landmark_reprojection
+            from .reconstruction.references import ReferenceError
+            try:
+                report = check_landmark_reprojection(args.plan, args.annotations, args.output,
+                                                     max_error_px=args.max_error_px)
+            except ReferenceError as error:
+                raise RecipeError(str(error)) from error
+            print(json.dumps(report, indent=2))
+            return 0 if report["status"].startswith("reprojection-threshold-candidate") else 3
         if args.command == "render-reference-scene":
             from .reconstruction.blender_reference import load_camera_plan
             from .reconstruction.references import ReferenceError

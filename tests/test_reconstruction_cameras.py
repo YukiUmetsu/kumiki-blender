@@ -12,7 +12,7 @@ from unittest.mock import patch, Mock
 
 from PIL import Image
 
-from kumiki_blender.reconstruction.cameras import create_camera_plan
+from kumiki_blender.reconstruction.cameras import create_camera_plan, fit_similarity
 from kumiki_blender.reconstruction.blender_reference import load_camera_plan
 from kumiki_blender.reconstruction.references import ReferenceError
 from kumiki_blender.cli import main
@@ -79,6 +79,20 @@ class CameraPlanTests(unittest.TestCase):
         self.assertAlmostEqual(rotation[1][0], 1, places=7)
         self.assertAlmostEqual(rotation[2][2], -1, places=7)
         self.assertEqual(json.loads((self.root / "camera-plan/camera-plan.json").read_text()), report)
+
+    def test_similarity_preserves_proper_rotation_for_half_turn_but_not_reflection(self):
+        source = [(0., 0., 0.), (1., 0., 0.), (0., 1., 0.), (0., 0., 1.)]
+        target = [(2*x+3, -2*y+5, -2*z+7) for x, y, z in source]
+        scale, rotation, translation, rms = fit_similarity(list(zip(source, target)))
+        self.assertAlmostEqual(scale, 2, places=7)
+        self.assertAlmostEqual(rms, 0, places=7)
+        self.assertAlmostEqual(rotation[0][0], 1, places=7)
+        self.assertAlmostEqual(rotation[1][1], -1, places=7)
+        self.assertAlmostEqual(rotation[2][2], -1, places=7)
+        self.assertEqual(tuple(round(v) for v in translation), (3, 5, 7))
+        reflected = [(-x+3, y+5, z+7) for x, y, z in source]
+        _, _, _, reflection_rms = fit_similarity(list(zip(source, reflected)))
+        self.assertGreater(reflection_rms, 0.1)
 
     def test_output_is_new_and_does_not_copy_source_photos(self):
         target = self.root / "camera-plan"
