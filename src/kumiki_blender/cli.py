@@ -22,6 +22,8 @@ from .egypt_map import CITY_MARKERS, LABELS, RIVER_CHANNELS, EgyptMapSpec
 from .glb_audit import AuditError, audit_glb
 from .lattice import make_lattice_tower
 from .landmark_scan import prepare_sphinx_scan
+from .liberty import LibertyError, make_liberty_study
+from .liberty_scan import ScanSourceError, verify_scan_source
 from .material_overrides import load_material_overrides, verify_material_overrides
 from .material_packs import load_texture_packs, verify_texture_targets
 from .portico import PorticoError, make_portico_study
@@ -110,6 +112,30 @@ def main(argv: list[str] | None = None) -> int:
         subcommand.add_argument("--detail", choices=("standard", "high"), default="standard")
         if command == "build-egypt-map":
             subcommand.add_argument("--output", type=Path, required=True)
+    for command in ("plan-liberty", "build-liberty"):
+        subcommand = subcommands.add_parser(command, help="Procedural Statue of Liberty sculpt and pedestal")
+        subcommand.add_argument("--scale", type=float, default=1.0)
+        subcommand.add_argument("--no-pedestal", action="store_true")
+        subcommand.add_argument("--monument-proportions", action="store_true",
+                                help="NPS-measured monument heights and landmark widths (experimental)")
+        if command == "build-liberty":
+            subcommand.add_argument("--output", type=Path, required=True)
+            subcommand.add_argument("--detailed-torch", action="store_true",
+                                    help="Replace legacy flame/gallery with editable cast-detail torch")
+            subcommand.add_argument("--detailed-tablet", action="store_true",
+                                    help="Use the keystone tablet, serif date and curled supporting hand")
+            subcommand.add_argument("--detailed-crown", action="store_true",
+                                    help="Use a perforated 25-window diadem and seven faceted rays")
+            subcommand.add_argument("--detailed-face", action="store_true",
+                                    help="Try one continuous sculpted head surface instead of facial tubes")
+            subcommand.add_argument("--detailed-feet", action="store_true",
+                                    help="Add sculpted sandals and the broken shackle and chain")
+            subcommand.add_argument("--detailed-drapery", action="store_true",
+                                    help="Use continuous broad cloth folds instead of pleat wires")
+    scan_face_parser = subcommands.add_parser(
+        "build-liberty-scan-face", help="Licensed photogrammetry face-detail QA checkpoint")
+    scan_face_parser.add_argument("--source", type=Path, required=True)
+    scan_face_parser.add_argument("--output", type=Path, required=True)
     column_parser = subcommands.add_parser("plan-classical-column")
     column_parser.add_argument("--order", choices=("tuscan", "doric", "ionic"), default="ionic")
     column_parser.add_argument("--height", type=float, default=4.55)
@@ -318,6 +344,54 @@ def main(argv: list[str] | None = None) -> int:
             from .blender_biplane import build_biplane_scene
             print(json.dumps(build_biplane_scene(model, output, bpy_module=bpy), indent=2))
             return 0
+        if args.command in ("plan-liberty", "build-liberty"):
+            if (args.command == "build-liberty" and args.monument_proportions and
+                    (args.detailed_tablet or args.detailed_torch)):
+                raise RecipeError("--monument-proportions cannot yet be combined with "
+                                  "--detailed-tablet or --detailed-torch; their supplementary "
+                                  "Blender objects still use the illustrative coordinate frame")
+            study = make_liberty_study(scale=args.scale,
+                                       include_pedestal=not args.no_pedestal,
+                                       detailed_tablet=(args.command == "build-liberty" and args.detailed_tablet),
+                                       detailed_crown=(args.command == "build-liberty" and args.detailed_crown),
+                                       detailed_face=(args.command == "build-liberty" and args.detailed_face),
+                                       detailed_feet=(args.command == "build-liberty" and args.detailed_feet),
+                                       detailed_drapery=(args.command == "build-liberty" and args.detailed_drapery),
+                                       monument_proportions=args.monument_proportions)
+            if args.command == "plan-liberty":
+                print(json.dumps({
+                    "asset_id": study.asset_id, "generator": "procedural-statue-of-liberty",
+                    "named_parts": dict(study.part_counts),
+                    "crown_rays": sum("crown-ray-" in p.name for p in study.instances),
+                    "instances": len(study.instances),
+                    "bounds_m": [study.bounds_min, study.bounds_max],
+                }, indent=2))
+                return 0
+            output = args.output.resolve()
+            if output.exists() or output.is_symlink():
+                raise LibertyError(f"Output already exists: {output}. Choose a new revision.")
+            try:
+                import bpy  # type: ignore[import-not-found]
+            except ImportError as error:
+                raise RuntimeError("Building Liberty requires Blender 4.2+: run via scripts/blender_entry.py") from error
+            from .blender_liberty import build_liberty_scene
+            print(json.dumps(build_liberty_scene(
+                study, output, bpy_module=bpy,
+                detailed_torch=args.detailed_torch), indent=2))
+            return 0
+        if args.command == "build-liberty-scan-face":
+            provenance = verify_scan_source(args.source)
+            output = args.output.resolve()
+            if output.exists() or output.is_symlink():
+                raise ScanSourceError(f"Output already exists: {output}. Choose a new revision.")
+            try:
+                import bpy  # type: ignore[import-not-found]
+            except ImportError as error:
+                raise RuntimeError("Building the scan-assisted face requires Blender 4.2+") from error
+            from .blender_liberty_scan import build_liberty_scan_face_scene
+            print(json.dumps(build_liberty_scan_face_scene(
+                args.source.resolve(), output, provenance, bpy_module=bpy), indent=2))
+            return 0
         if args.command == "audit":
             print(json.dumps(audit_glb(args.model, require_pbr_textures=args.require_pbr_textures), indent=2))
             return 0
@@ -505,7 +579,9 @@ def main(argv: list[str] | None = None) -> int:
         manifest = build_scene(recipe, plan, output, bpy_module=bpy)
         print(json.dumps(manifest, indent=2))
         return 0
-    except (CatalogError, RecipeError, PorticoError, FacadeError, MonumentError, GeometryError, AssetImportError, RenderProfileError, RevisionAuditError, AuditError, ExportAuditError,
+    except (CatalogError, RecipeError, PorticoError, FacadeError, MonumentError, LibertyError,
+            ScanSourceError,
+            GeometryError, AssetImportError, RenderProfileError, RevisionAuditError, AuditError, ExportAuditError,
             SurfaceError, RuntimeError, OSError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 2

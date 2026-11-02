@@ -81,6 +81,23 @@ class RevisionAuditTests(unittest.TestCase):
             with self.assertRaisesRegex(RevisionAuditError, "GLB audit"):
                 audit_revision(folder)
 
+    def test_detailed_multi_angle_reviews_allow_32_views_but_not_unbounded_lists(self):
+        with tempfile.TemporaryDirectory() as directory:
+            folder = Path(directory)
+            manifest = create_revision(folder)
+            for number in range(2, 32):
+                name = f"previews/angle-{number:02d}.png"
+                data = b"\x89PNG\r\n\x1a\nview" + bytes([number])
+                (folder / name).write_bytes(data)
+                manifest["files"]["quality_views"].append(name)
+                manifest["output_bytes"][name] = len(data)
+            (folder / "manifest.json").write_text(json.dumps(manifest))
+            self.assertTrue(audit_revision(folder)["verified"])
+            manifest["files"]["quality_views"].append("previews/angle-32.png")
+            (folder / "manifest.json").write_text(json.dumps(manifest))
+            with self.assertRaisesRegex(RevisionAuditError, "invalid source/model/preview"):
+                audit_revision(folder)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -23,4 +23,4 @@ kumiki-blender = "kumiki_blender.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-kumiki_blender = ["assets/*/*/*/asset.json"]
+kumiki_blender = ["assets/*/*/*/asset.json", "assets/*/*/*/scan_source.json"]

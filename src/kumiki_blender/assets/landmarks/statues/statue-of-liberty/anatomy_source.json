@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "source_id": "blender-studio-human-base-meshes-v1.2.0-realistic-head-sculpt",
+  "author": "Dan Ulrich / Blender Studio",
+  "title": "Human Base Meshes v1.2.0 — Head (Sculpting), Realistic",
+  "license": "CC0-1.0",
+  "license_url": "https://creativecommons.org/publicdomain/zero/1.0/",
+  "original_url": "https://www.blender.org/download/demo-files/",
+  "download_url": "https://download.blender.org/demo/asset-bundles/human-base-meshes/human-base-meshes-bundle-v1.2.0.zip",
+  "archive_sha256": "b7421350cbad8425dd1ba93c4248867a1c236cc8a3a3dc140d4c2a03144c4bad",
+  "archive_size_bytes": 49674480,
+  "member": "human_base_meshes_bundle.blend",
+  "sha256": "6ce3e6523c08d8756f211c134d6aaae244cccf6d4c235b75df3f881b31ad946b",
+  "size_bytes": 48493802,
+  "usage": "High-resolution anatomically grounded donor for an experimental face-only sculpt checkpoint; not a likeness scan of Bartholdi's statue",
+  "attribution": "Human Base Meshes v1.2.0, realistic sculpting head by Dan Ulrich / Blender Studio, released CC0 1.0."
+}

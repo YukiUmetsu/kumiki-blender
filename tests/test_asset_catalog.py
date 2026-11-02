@@ -25,11 +25,12 @@ class CatalogTests(unittest.TestCase):
         self.assertEqual(len(ids), len(self.entries))
         # The discovery registry is intentionally open-ended: adding a new
         # categorized model must not break tests for existing families.
-        self.assertGreaterEqual(len(self.entries), 9)
+        self.assertGreaterEqual(len(self.entries), 10)
         self.assertTrue({"red-vintage-biplane", "lattice-observation-tower",
                          "stone-facade", "classical-column", "modular-portico",
                          "giza-pyramid-study", "giza-sphinx-study",
-                         "giza-ensemble-study", "egypt-relief-atlas"} <= ids)
+                         "giza-ensemble-study", "egypt-relief-atlas",
+                         "statue-of-liberty"} <= ids)
         validate_sources(self.entries, Path(__file__).resolve().parents[1])
         for entry in self.entries:
             self.assertTrue(entry.manifest.startswith("src/kumiki_blender/assets/"))
@@ -42,7 +43,10 @@ class CatalogTests(unittest.TestCase):
         self.assertEqual(len(search_assets(self.entries, "giza")), 3)
         self.assertEqual([entry.asset_id for entry in search_assets(
             self.entries, "Egypt terrain")], ["egypt-relief-atlas"])
-        self.assertEqual(len(search_assets(self.entries, category="landmarks")), 3)
+        self.assertEqual(len(search_assets(self.entries, category="landmarks")), 4)
+        liberty = search_assets(self.entries, "lady liberty")
+        self.assertEqual([item.asset_id for item in liberty], ["statue-of-liberty"])
+        self.assertEqual(liberty[0].subcategory, "statues")
         self.assertEqual(len(search_assets(self.entries, rigged=True)), 1)
         self.assertEqual([entry.asset_id for entry in search_assets(
             self.entries, tag="column")], ["classical-column"])
@@ -55,6 +59,9 @@ class CatalogTests(unittest.TestCase):
         plane = find_asset(self.entries, "red-vintage-biplane")
         self.assertEqual(revision_path(plane, "r002").as_posix(),
                          ".review/vehicles/aircraft/red-vintage-biplane/r002")
+        liberty = find_asset(self.entries, "statue-of-liberty")
+        self.assertEqual(revision_path(liberty, "r02").as_posix(),
+                         ".review/landmarks/statues/statue-of-liberty/r02")
         for invalid in ("../x", "../../r01", "R01", ".hidden", "r1", "r01/other"):
             with self.subTest(invalid=invalid), self.assertRaises(CatalogError):
                 revision_path(plane, invalid)
@@ -63,6 +70,7 @@ class CatalogTests(unittest.TestCase):
         for args in (("catalog", "categories"), ("catalog", "list", "--rigged"),
                      ("catalog", "search", "ancient", "pyramid"),
                      ("catalog", "show", "red-vintage-biplane"),
+                     ("catalog", "show", "statue-of-liberty"),
                      ("catalog", "validate")):
             with self.subTest(args=args):
                 stream = io.StringIO()
@@ -89,6 +97,13 @@ class CatalogTests(unittest.TestCase):
                 self.assertEqual(main(["catalog", "build", "classical-column",
                                        "--root", str(root)]), 2)
             self.assertIn("reusable component", stream.getvalue())
+            liberty_target = root / "landmarks" / "statues" / "statue-of-liberty" / "r01"
+            stream = io.StringIO()
+            with contextlib.redirect_stderr(stream):
+                self.assertEqual(main(["catalog", "build", "statue-of-liberty",
+                                       "--root", str(root)]), 2)
+            self.assertIn("requires Blender", stream.getvalue())
+            self.assertFalse(liberty_target.exists())
 
     def test_malformed_manifests_fail_instead_of_being_silently_indexed(self):
         original = json.loads((CATALOG_ROOT / "vehicles" / "aircraft" /

@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "source_id": "jerryfisher-liberty-bronze-photogrammetry",
+  "title": "Statue Of Liberty Bronze Model",
+  "author": "jerryfisher",
+  "original_url": "https://sketchfab.com/3d-models/statue-of-liberty-bronze-model-5b9aa58d51624f01b9009b52379bf18a",
+  "license": "CC-BY-4.0",
+  "license_url": "https://creativecommons.org/licenses/by/4.0/",
+  "download_url": "https://huggingface.co/datasets/allenai/objaverse/resolve/main/glbs/000-057/5b9aa58d51624f01b9009b52379bf18a.glb",
+  "download_repository": "allenai/objaverse (Sketchfab model-ID mirror)",
+  "sha256": "e9c789977604980d410e30b95e02208ca6e46d053f44bc0f5c5030877eaa5fe8",
+  "size_bytes": 12340024,
+  "description": "Photogrammetry of a nineteenth-century bronze Statue of Liberty miniature, not a surveyed scan of the full-size monument.",
+  "limitations": "Historical miniature proportions, weathering and sculpted details differ from the actual monument; manual artistic review required.",
+  "attribution": "Statue Of Liberty Bronze Model by jerryfisher, CC BY 4.0. Source: https://sketchfab.com/3d-models/statue-of-liberty-bronze-model-5b9aa58d51624f01b9009b52379bf18a. Modified by Kumiki Blender (reorientation, local anatomical face relief, material treatment and visual QA staging)."
+}

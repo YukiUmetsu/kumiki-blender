@@ -7,7 +7,7 @@ on:
 
 jobs:
   focused-tests:
-    name: Focused Egypt, Sphinx and asset catalog tests (Python 3.11)
+    name: Focused Egypt, Sphinx, Liberty and asset catalog tests (Python 3.11)
     if: github.event_name != 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
@@ -38,6 +38,11 @@ jobs:
             tests.test_landmark_scan \
             tests.test_sphinx_sculpt \
             tests.test_egypt_map \
+            tests.test_liberty \
+            tests.test_liberty_scan \
+            tests.test_liberty_face_region \
+            tests.test_liberty_torch_placement \
+            tests.test_liberty_torch_flame \
             tests.test_cli.CLITests.test_sphinx_scan_build_preflights_rights_and_pairs_without_blender \
             tests.test_cli.CLITests.test_sphinx_scan_build_passes_prepared_record_to_blender \
             tests.test_asset_catalog
@@ -429,7 +434,7 @@ jobs:
           include-hidden-files: true
 
   blender-focused:
-    name: Khufu pyramid, procedural Sphinx and sourced-Sphinx Blender QA
+    name: Khufu, Sphinx and Liberty Blender QA
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -495,6 +500,13 @@ jobs:
             --sphinx-source .review/ci/first-party-sphinx-proxy.glb \
             --sphinx-provenance examples/first-party-sphinx-scan.json \
             --output .review/ci/sphinx-scan-integration
+      - name: Render procedural Statue of Liberty and detail views
+        env:
+          KUMIKI_RENDER_PROFILE: smoke
+        run: |
+          blender --background --factory-startup --threads 1 --python-exit-code 1 \
+            --python scripts/blender_entry.py -- \
+            build-liberty --detailed-torch --detailed-tablet --detailed-crown --output .review/ci/liberty
       - name: Audit Khufu export, Sphinx sculpt union and previews
         env:
           PYTHONPATH: src
@@ -502,8 +514,10 @@ jobs:
           python -m kumiki_blender audit-revision --root .review/ci/khufu-petrie
           python -m kumiki_blender audit-revision --root .review/ci/sphinx-procedural
           python -m kumiki_blender audit-revision --root .review/ci/sphinx-scan-integration
+          python -m kumiki_blender audit-revision --root .review/ci/liberty
           python -m kumiki_blender audit --model .review/ci/khufu-petrie/model.glb --require-pbr-textures
           python -m kumiki_blender audit --model .review/ci/sphinx-procedural/model.glb --require-pbr-textures
+          python -m kumiki_blender audit --model .review/ci/liberty/model.glb --require-pbr-textures
           # The deliberately small first-party Sphinx proxy has no PBR maps;
           # preserve a static-mesh/attribution gate without treating it as a
           # production-quality scan.
@@ -518,6 +532,22 @@ jobs:
           test -s .review/ci/sphinx-scan-integration/previews/sphinx.png
           test -s .review/ci/sphinx-scan-integration/previews/sphinx-profile.png
           test -s .review/ci/sphinx-scan-integration/previews/sphinx-face.png
+          test -s .review/ci/liberty/previews/front.png
+          test -s .review/ci/liberty/previews/side.png
+          test -s .review/ci/liberty/previews/rear.png
+          test -s .review/ci/liberty/previews/face.png
+          test -s .review/ci/liberty/previews/tablet.png
+          test -s .review/ci/liberty/previews/torch.png
+          test -s .review/ci/liberty/previews/torch-flame-front.png
+          test -s .review/ci/liberty/previews/torch-grip-front.png
+          test -s .review/ci/liberty/previews/torch-grip-profile.png
+          test -s .review/ci/liberty/previews/tablet-detail-front.png
+          test -s .review/ci/liberty/previews/tablet-detail-profile.png
+          test -s .review/ci/liberty/previews/tablet-grip-detail.png
+          test -s .review/ci/liberty/previews/crown-rays-front.png
+          test -s .review/ci/liberty/previews/crown-band-front.png
+          test -s .review/ci/liberty/previews/crown-band-oblique.png
+          test -s .review/ci/liberty/previews/crown-ray-profile.png
       - name: Upload focused Blender previews and source artifacts
         if: always()
         uses: actions/upload-artifact@v4
@@ -555,4 +585,8 @@ jobs:
             .review/ci/sphinx-procedural/previews/sphinx-face.png \
             .review/ci/sphinx-scan-integration/previews/sphinx.png \
             .review/ci/sphinx-scan-integration/previews/sphinx-profile.png \
-            .review/ci/sphinx-scan-integration/previews/sphinx-face.png
+            .review/ci/sphinx-scan-integration/previews/sphinx-face.png \
+            .review/ci/liberty/preview.png \
+            .review/ci/liberty/previews/face.png \
+            .review/ci/liberty/previews/tablet.png \
+            .review/ci/liberty/previews/torch.png

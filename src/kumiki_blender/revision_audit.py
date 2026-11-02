@@ -44,7 +44,7 @@ def audit_revision(root: str | Path) -> dict[str, Any]:
     if (not isinstance(source, str) or not source.endswith(".blend")
             or not isinstance(model, str) or not model.endswith(".glb")
             or not isinstance(preview, str) or not preview.endswith(".png")
-            or not isinstance(views, list) or not 1 <= len(views) <= 16
+            or not isinstance(views, list) or not 1 <= len(views) <= 32
             or any(not isinstance(view, str) or not view.endswith(".png") for view in views)
             or views[0] != preview):
         raise RevisionAuditError("Manifest has invalid source/model/preview entries")

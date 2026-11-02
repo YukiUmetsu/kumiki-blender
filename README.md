@@ -214,6 +214,147 @@ KUMIKI_RENDER_PROFILE=smoke blender --background --factory-startup --python-exit
 
 The dimensions are reference-derived estimates, not measurements of any known aircraft. See the [aircraft authoring and rig guide](docs/VINTAGE_BIPLANE.md) for design choices, surface specifications, controls and export verification.
 
+## Statue of Liberty — licensed-scan face rebuild (in review)
+
+The original `plan-liberty` / `build-liberty` procedural model is a **stylized
+prototype**, not a convincing facial likeness. Its geometric primitives are
+inadequate for the photographed eyelids, hair, hands and drapery. The new
+scan-assisted **face checkpoint** is built from a checksum-verified, CC BY 4.0
+photogrammetry scan of a nineteenth-century bronze model by **jerryfisher**.
+It preserves scanned facial topology, adaptively subdivides the swept forelock
+only, adds restrained eye/nose/lip and swept-hair surface carving,
+and applies an embedded verdigris-copper PBR material. Eleven QA cameras
+include two tight eye/mouth macro views and a complete figure reference.
+The scanned miniature is not a measured capture of the full-size statue.
+
+```bash
+python3 scripts/fetch_liberty_scan.py --output .review/_sources/liberty-bronze.glb
+KUMIKI_RENDER_PROFILE=smoke blender --background --factory-startup \
+  --python-exit-code 1 --python scripts/blender_entry.py -- \
+  build-liberty-scan-face --source .review/_sources/liberty-bronze.glb \
+  --output .review/landmarks/statues/statue-of-liberty/r15
+```
+
+The binary source remains outside git. The origin, CC BY license, exact SHA-256,
+credit and modifications are documented in
+[`scan_source.json`](src/kumiki_blender/assets/landmarks/statues/statue-of-liberty/scan_source.json)
+and retained in Blender/GLB metadata. The first checkpoint still requires
+human review of the eyes, brow, nose, lips and hair against the supplied photos
+before this scan becomes the basis for the full statue.
+
+A separate **anatomical face experiment** now tests a second foundation:
+Dan Ulrich / Blender Studio's official **CC0 Human Base Meshes** realistic
+sculpting head, with genuine eye/lip/nose geometry, paired with the licensed
+bronze-miniature body and crown. `scripts/fetch_liberty_anatomy.py` verifies
+the exact 49 MB CC0 archive, and
+`scripts/blender_liberty_anatomy_review.py -- ... --carve --export` produces
+an inspectable editable `.blend`, portable `.glb`, and neutral-clay front,
+three-quarter and profile renders. **Visual acceptance is still blocked**:
+the profile connection, brow/forehead integration and historic likeness are
+not finished. The main statue generator remains unchanged. See the
+[face graft review and source ledger](docs/STATUE_OF_LIBERTY.md).
+
+The opt-in `--conform` variant keeps the donor's sculpted eye, nose and lip
+topology while removing the rectangular forehead/neck slab, fitting its outer
+face to the bronze depth, and forming a narrower classical gaze. It is a
+separate **unapproved** face checkpoint, not the full-body asset:
+
+```bash
+blender -b -t 6 --python-exit-code 1 \
+  --python scripts/blender_liberty_anatomy_review.py -- \
+  .review/_sources/liberty-bronze.glb \
+  .review/_sources/human-base-meshes.blend \
+  .review/landmarks/statues/statue-of-liberty/r23-conformed \
+  --conform --export
+```
+
+### Detailed torch and gripping hand (opt-in)
+
+The sculptural torch study can now replace the old procedural flame and
+gallery **without** removing the palm, thumb or four curved grip fingers.
+It fits its shaft and gallery to the original hand position and uses closed
+layered gold-copper flame geometry, a fluted neck, a pierced baluster ring,
+cast diagonal braces and PBR materials. The default `build-liberty` remains
+unchanged while front/profile/low-angle close-ups are evaluated:
+
+```bash
+KUMIKI_RENDER_PROFILE=smoke blender --background --factory-startup \
+  --python-exit-code 1 --python scripts/blender_entry.py -- \
+  build-liberty --detailed-torch \
+  --output .review/landmarks/statues/statue-of-liberty/r29-torch
+```
+
+The output includes editable `.blend`, portable GLB, manifest and dedicated
+flame/grip QA renders. This is a better detailed illustration, **not yet a
+measured photomatch** of the original torch or a finished hand sculpt.
+
+### Keystone tablet and supporting left hand (opt-in)
+
+`--detailed-tablet` replaces the original rectangular slab and detached
+finger-pegs with a tapered, chamfered tablet and a continuous wrist, palm,
+four curling fingers and thumb. The serif `JULY IV / MDCCLXXVI` date is a
+separate editable shallow copper-dark relief mesh, aligned to the new face.
+The dimensions are proportioned against the National Park Service's published
+tablet measurements but **not surveyed**; the lettering is not Boolean-carved.
+
+```bash
+KUMIKI_RENDER_PROFILE=smoke blender --background --factory-startup \
+  --python-exit-code 1 --python scripts/blender_entry.py -- \
+  build-liberty --detailed-torch --detailed-tablet \
+  --output .review/landmarks/statues/statue-of-liberty/r31-tablet-grip
+```
+
+This includes three new close-up inspections of the tablet face, wedge profile
+and hand contact. Both detail flags are optional and independent; the legacy
+`build-liberty` geometry remains reproducible.
+
+### Perforated diadem and faceted crown rays (opt-in)
+
+`--detailed-crown` replaces the dark cylindrical "window" inserts with one
+connected copper shell containing **25 actual through-openings**. It also
+uses smoothly beaded elliptical rims and seven wide, faceted tapered sheet
+ray meshes with raised central folds instead of thin rods. The associated
+hair pass replaces 26 freestanding strands with a single flowing, sculpted
+forelock volume whose relief is part of its surface; the synthetic temple
+stripe cords are also removed. This improves the crown/hair silhouette,
+but is not a surveyed reconstruction or an approved facial likeness.
+
+```bash
+KUMIKI_RENDER_PROFILE=smoke blender --background --factory-startup \
+  --python-exit-code 1 --python scripts/blender_entry.py -- \
+  build-liberty --detailed-torch --detailed-tablet --detailed-crown \
+  --output .review/landmarks/statues/statue-of-liberty/r34-crown-hair
+```
+
+Four additional close-up views inspect the rays, window band, oblique seams,
+and paper-thin profile. The three detail flags may be combined or used alone.
+
+### Earlier procedural prototype
+
+`liberty.py` creates a reference-guided, full 360° Statue of Liberty sculpture
+using closed, semantic meshes: a mathematically shaped face with individual eye/lip/
+nose/ear elements, swept textured coiffure, seven diadem rays, layered diagonal
+robe and repeated synthetic pleats, raised torch arm with individual curled fingers,
+tilted 1776 tablet, gilded flame, and four-sided masonry pedestal. The Blender
+adapter adds a raised Roman numeral inscription, oxidized copper PBR colors,
+seven cinematic QA cameras and the normal immutable `.blend`/`.glb` export.
+
+```bash
+PYTHONPATH=src python3 -m kumiki_blender catalog show statue-of-liberty
+PYTHONPATH=src python3 -m kumiki_blender plan-liberty
+KUMIKI_RENDER_PROFILE=smoke blender --background --factory-startup \
+  --python-exit-code 1 --python scripts/blender_entry.py -- \
+  catalog build statue-of-liberty --revision r01
+```
+
+Use `--no-pedestal` for the freestanding figure and `--scale 0.5` for a
+half-size asset. This is an **original illustrated study**, not a measured scan
+or independently validated portrait likeness. For photographic feature mapping,
+camera QA and limitations, see [Statue of Liberty guide](docs/STATUE_OF_LIBERTY.md).
+Its categorized revision is stored under
+`.review/landmarks/statues/statue-of-liberty/r01/`; the existing `build-liberty`
+command remains available for custom scale and destination options.
+
 ## Reusable PBR surfaces
 
 The pure Python material catalog defines physically distinct presets for painted structural steel, galvanized metal, concrete, stone, timber and optical glass. Recipes may override sRGB color and roughness without mutating shared presets. A plain, untextured `studio-matte` surface is available for presentation floors, keeping floor noise separate from the modeled object.

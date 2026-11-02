@@ -90,7 +90,7 @@ def make_pbr_maps(kind: str, color: str, roughness: float, *, resolution: int = 
     manufactured-surface microvariation without replacing measured reference
     textures when a specific building requires historically correct materials.
     """
-    if kind not in {"natural-stone", "weathered-stone", "cast-concrete", "painted-steel", "galvanized-steel", "timber"}:
+    if kind not in {"natural-stone", "weathered-stone", "cast-concrete", "painted-steel", "galvanized-steel", "verdigris-copper", "timber"}:
         raise ValueError("Unsupported procedural PBR material kind")
     if not isinstance(color, str) or len(color) != 7 or color[0] != "#":
         raise ValueError("Expected six-digit hexadecimal sRGB")
@@ -110,9 +110,11 @@ def make_pbr_maps(kind: str, color: str, roughness: float, *, resolution: int = 
               for i in range(resolution * resolution)]
     albedo, rough, normal = bytearray(), bytearray(), bytearray()
     color_variance = {"natural-stone": 0.30, "weathered-stone": 0.30, "cast-concrete": 0.17,
-                      "painted-steel": 0.055, "galvanized-steel": 0.09, "timber": 0.24}[kind]
+                      "painted-steel": 0.055, "galvanized-steel": 0.09,
+                      "verdigris-copper": 0.21, "timber": 0.24}[kind]
     bump_strength = {"natural-stone": 3.0, "weathered-stone": 3.4, "cast-concrete": 2.4,
-                     "painted-steel": 0.42, "galvanized-steel": 1.1, "timber": 1.7}[kind]
+                     "painted-steel": 0.42, "galvanized-steel": 1.1,
+                     "verdigris-copper": 1.5, "timber": 1.7}[kind]
     for index, h in enumerate(height):
         x, y = index % resolution, index // resolution
         variation = (h - 0.5) * color_variance
@@ -120,8 +122,24 @@ def make_pbr_maps(kind: str, color: str, roughness: float, *, resolution: int = 
         if kind == "weathered-stone":
             weathering = _stone_weathering(x / resolution, y / resolution, seed)
             variation -= weathering * 0.20 * weathering_strength
-        for channel in base:
-            albedo.append(_clamp(channel * (1 + variation)))
+        if kind == "verdigris-copper":
+            u, v = x / resolution, y / resolution
+            # Ancient oxidized copper varies between mint malachite, dark
+            # turquoise and shaded grey. Avoid brown rust or green wallpaper.
+            oxide = (0.52 * _tile_noise(u, v, 4, seed + 131)
+                     + 0.30 * _tile_noise(u, v, 15, seed + 179)
+                     + 0.18 * _tile_noise(u, v, 39, seed + 221))
+            weathering = _stone_weathering(u, v, seed + 257)
+            age = (oxide - 0.5) * 0.42 * weathering_strength
+            mineral = weathering * 0.13 * weathering_strength
+            albedo.extend((
+                _clamp(base[0] * (1 + variation - age - mineral)),
+                _clamp(base[1] * (1 + variation*.65 + age*.25 - mineral*.45)),
+                _clamp(base[2] * (1 + variation*.65 + age*.65 - mineral*.60)),
+            ))
+        else:
+            for channel in base:
+                albedo.append(_clamp(channel * (1 + variation)))
         local_roughness = max(0.02, min(1, roughness + (h - 0.5) * color_variance * 0.75
                                        + weathering * 0.14 * weathering_strength))
         rough.extend([_clamp(local_roughness * 255)] * 3)

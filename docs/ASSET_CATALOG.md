@@ -30,6 +30,7 @@ src/kumiki_blender/assets/
 │   ├── giza-pyramid-study/asset.json
 │   ├── giza-sphinx-study/asset.json
 │   └── giza-ensemble-study/asset.json
+├── landmarks/statues/statue-of-liberty/asset.json
 └── vehicles/aircraft/red-vintage-biplane/asset.json
 ```
 
