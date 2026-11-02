@@ -44,7 +44,7 @@ The [anatomical head graft and real-photo fitting workflow](docs/CHRIST_REDEEMER
 now produces **provisional full-figure GLB previews** with a dense CC0 donor
 head, metric soapstone materials, two-view facial residuals, and four-view
 geometry QA. [Carved-hair QA](docs/CHRIST_REDEEMER_CARVED_HAIR.md) remains
-on visual HOLD; [licensed scan references](docs/CHRIST_REDEEMER_SCAN_INTAKE.md)
+on visual HOLD; [licensed scan references](docs/CHRIST_REDEEMER_SCAN_INTAKE.md) and a [rights-gated 3D scan registration CLI](docs/CHRIST_REDEEMER_SCAN_REGISTRATION.md)
 are tracked separately. The original production export is unchanged.
 
 ## Find models in the categorized asset catalog
