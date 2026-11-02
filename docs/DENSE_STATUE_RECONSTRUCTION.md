@@ -14,6 +14,10 @@ private texture projection to produce a mesh for artistic inspection.
   undistorted photographs**. Without masks, real dense MVS reconstructs
   nearby branches, pavement and ground alongside the monument. Geometry
   detail and foreground isolation are separate problems.
+- Optional CPU foreground-mask preparation (`pip install 'kumiki-blender[masks]'`)
+  uses OpenCV GrabCut on the *registered/rectified* photos. This is a starting
+  silhouette, not an autonomous guarantee: trees, matching stone and occluded
+  arms can be misclassified. Review each generated red overlay before MVS.
 - Run the existing photo-dossier workflow using the --undistort option first.
   The dense builder requires at least 8 registered independent photos and 60%
   registration by default; these are minimum gates, not enough evidence to
@@ -54,6 +58,21 @@ private texture projection to produce a mesh for artistic inspection.
     kumiki-blender plan-dense-photos \
       --reconstruction .review/statue/sparse-r01 \
       --output .review/statue/dense-r01
+
+    # For outdoor statues, generate all rectified subject-mask CANDIDATES first.
+    # Every photo gets a binary mask and a red-highlight review JPEG.
+    # The default center box is only an initial suggestion; inspect EVERY
+    # overlay and refine camera-specific hints for thin arms, hair, etc.
+    kumiki-blender prepare-dense-masks \
+      --reconstruction .review/statue/sparse-r01 \
+      --output .review/statue/masks-r01 \
+      --guides /private/statue/mask-guides.json
+
+    # Use only reviewed masks; OpenMVS consumes <rectified-filename>.mask.png.
+    kumiki-blender build-dense-photos \
+      --reconstruction .review/statue/sparse-r01 \
+      --rectified-masks .review/statue/masks-r01/masks \
+      --output .review/statue/dense-masked-r01 --backend openmvs
 
     # CPU-capable OpenMVS meshing + refinement + texturing.
     kumiki-blender build-dense-photos \
@@ -100,6 +119,21 @@ private texture projection to produce a mesh for artistic inspection.
       --output .review/statue/blender-textured-review-r01 \
       --textured --matched-views 4
 
+    # A separate, non-destructive atlas correction revision: originals and
+    # UV faces are unchanged. Black/uncovered texels remain black.
+    kumiki-blender finish-dense-textures \
+      --dense-revision .review/statue/dense-masked-r01 \
+      --output .review/statue/texture-finish-r01 \
+      --exposure-ev 0.65 --gamma 1.12 --shadow-lift 0.06 \
+      --saturation 1.05 --neutralize-cast
+
+    # Blender imports the same verified OBJ/MTL/UVs with the corrected atlases
+    # and packs them into the private .blend and GLB.
+    kumiki-blender render-dense-blender-review \
+      --dense-revision .review/statue/dense-masked-r01 \
+      --texture-finish .review/statue/texture-finish-r01 \
+      --output .review/statue/blender-finished-r01 --textured --matched-views 4
+
 Options include --min-registered-images, --min-registered-fraction,
 --min-mesh-faces, --timeout-seconds, --no-refine (OpenMVS) and --no-texture.
 For large statues, `--resolution-level 0` (default) preserves rectified
@@ -126,6 +160,16 @@ reused, not recomputed. This does not replace the original high-poly detail
 review or prove that the UV LOD captures thin features.
 Rectified mask files must be genuine grayscale PNGs (binary 0/255, both
 present, exact dimensions), with exact `<photo filename>.mask.png` names.
+`prepare-dense-masks` generates those files with an `approved_for_reconstruction:
+false` QA report, SHA-256 input/output pins and per-image red overlays under
+`review/`; it does *not* silently approve its own segmentation. Use
+`--guides` with the schema in
+[`examples/statue-mask-guides.example.json`](../examples/statue-mask-guides.example.json):
+normalized 0–1 boxes and optional foreground/background seed points can be
+specified for each rectified filename, with a common default. A default
+center box is available for quick drafts; use `--max-side` and `--iterations`
+to control CPU cost. Refine bad images in a **new output revision**; masks
+that include trees or truncate the statue produce contaminated geometry.
 They are SHA-pinned, copied only into the private MVS workspace, checked on
 resume, and remain absent from Git. Do **not** reuse original distorted-image
 masks by simply resizing them: regenerate/warp them in the exact rectified
@@ -169,6 +213,17 @@ private-textured-review.blend and private-textured-review.glb. The neutral
 high-poly PLY remains separate and unmodified. Real photo atlases can still
 contain dark patches, empty-color regions and exposure seams; review these
 against authentic photos before declaring a texture finished.
+`finish-dense-textures` applies bounded exposure EV, gamma, saturation,
+optional sampled cast-neutralization and shadow lift to an independent
+OBJ/MTL/atlas revision; it protects near-black/uncovered atlas texels and
+reports their approximate coverage, plus original/corrected side-by-side
+`review/` previews. All original source files, UVs and face
+indices remain untouched. `--texture-finish` requires `--textured` and
+verifies both original and corrected content hashes before Blender import.
+This can improve dark overall exposure and broad color cast, but **cannot
+invent missing photographs, paint empty atlas patches or eliminate every
+projection seam**. Use the original-versus-corrected Blender views for
+artistic approval; the correction remains private by default.
 
 Open the PLY in Blender and compare front/profile/three-quarter views against
 authentic photos, especially eyes, chin, mouth, ears, hair and deep garment

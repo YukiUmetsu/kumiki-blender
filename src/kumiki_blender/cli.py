@@ -189,6 +189,26 @@ def main(argv: list[str] | None = None) -> int:
         if command == "build-dense-photos":
             dense_parser.add_argument("--resume", action="store_true",
                                       help="Resume an incomplete OpenMVS revision without repeating completed stages")
+    photo_mask_parser = subcommands.add_parser(
+        "prepare-dense-masks", help="Create inspectable rectified foreground mask candidates with CPU GrabCut")
+    photo_mask_parser.add_argument("--reconstruction", type=Path, required=True)
+    photo_mask_parser.add_argument("--output", type=Path, required=True)
+    photo_mask_parser.add_argument("--guides", type=Path, help="Optional per-photo normalized boxes and seed points JSON")
+    photo_mask_parser.add_argument("--center-box", type=float, nargs=4,
+                                   default=(0.12, 0.04, 0.88, 0.96),
+                                   metavar=("LEFT", "TOP", "RIGHT", "BOTTOM"))
+    photo_mask_parser.add_argument("--max-side", type=int, default=1280)
+    photo_mask_parser.add_argument("--iterations", type=int, default=5)
+    texture_finish_parser = subcommands.add_parser(
+        "finish-dense-textures", help="Non-destructive UV-atlas exposure, shadow and cast correction")
+    texture_finish_parser.add_argument("--dense-revision", type=Path, required=True)
+    texture_finish_parser.add_argument("--output", type=Path, required=True)
+    texture_finish_parser.add_argument("--exposure-ev", type=float, default=0.0)
+    texture_finish_parser.add_argument("--gamma", type=float, default=1.0)
+    texture_finish_parser.add_argument("--saturation", type=float, default=1.0)
+    texture_finish_parser.add_argument("--shadow-lift", type=float, default=0.0)
+    texture_finish_parser.add_argument("--neutralize-cast", action="store_true")
+    texture_finish_parser.add_argument("--protect-black", type=int, default=12)
     for command in ("plan-dense-blender-review", "render-dense-blender-review"):
         review_dense = subcommands.add_parser(
             command, help="Inspect or create a private editable Blender scene from a dense PLY")
@@ -201,6 +221,8 @@ def main(argv: list[str] | None = None) -> int:
                                   help="Photo-matched preview resolution percentage; 100 retains full camera pixels")
         review_dense.add_argument("--textured", action="store_true",
                                   help="Import pinned OpenMVS OBJ/MTL/atlas as private UV-textured Blender/GLB review")
+        review_dense.add_argument("--texture-finish", type=Path,
+                                  help="Use hash-pinned corrected UV atlas revision (requires --textured)")
         if command == "render-dense-blender-review":
             review_dense.add_argument("--no-renders", action="store_true")
             review_dense.add_argument("--blender", default="blender")
@@ -263,6 +285,35 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     try:
+        if args.command == "prepare-dense-masks":
+            from .reconstruction.masking import generate_rectified_masks
+            from .reconstruction.references import ReferenceError
+            try:
+                report = generate_rectified_masks(
+                    args.reconstruction, args.output, guides=args.guides,
+                    center_box=tuple(args.center_box), max_side=args.max_side,
+                    iterations=args.iterations)
+            except ReferenceError as error:
+                raise RecipeError(str(error)) from error
+            print(json.dumps(report, indent=2))
+            return 0
+        if args.command == "finish-dense-textures":
+            from .reconstruction.references import ReferenceError
+            from .reconstruction.texture_finish import (TextureFinishSettings,
+                                                       finish_dense_textures)
+            try:
+                report = finish_dense_textures(args.dense_revision, args.output,
+                                                TextureFinishSettings(
+                                                    exposure_ev=args.exposure_ev,
+                                                    gamma=args.gamma,
+                                                    saturation=args.saturation,
+                                                    shadow_lift=args.shadow_lift,
+                                                    neutralize_cast=args.neutralize_cast,
+                                                    protect_black=args.protect_black))
+            except ReferenceError as error:
+                raise RecipeError(str(error)) from error
+            print(json.dumps(report, indent=2))
+            return 0
         if args.command in ("plan-dense-blender-review", "render-dense-blender-review"):
             from .reconstruction.blender_dense import (build_dense_blender_review,
                                                        plan_dense_blender_review)
@@ -272,7 +323,7 @@ def main(argv: list[str] | None = None) -> int:
                     args.dense_revision, args.output, max_mesh_faces=args.max_mesh_faces,
                     matched_views=args.matched_views,
                     matched_resolution_percent=args.matched_resolution_percent,
-                    textured=args.textured)
+                    textured=args.textured, texture_finish=args.texture_finish)
                 if args.command == "plan-dense-blender-review":
                     print(json.dumps(planned, indent=2))
                     return 0
@@ -296,6 +347,8 @@ def main(argv: list[str] | None = None) -> int:
                            "--matched-resolution-percent", str(args.matched_resolution_percent)]
                 if args.textured:
                     command.append("--textured")
+                if args.texture_finish:
+                    command.extend(["--texture-finish", str(args.texture_finish.resolve())])
                 if args.no_renders:
                     command.append("--no-renders")
                 return subprocess.run(command, check=False).returncode
@@ -304,7 +357,7 @@ def main(argv: list[str] | None = None) -> int:
                 render_previews=not args.no_renders, max_mesh_faces=args.max_mesh_faces,
                 matched_views=args.matched_views,
                 matched_resolution_percent=args.matched_resolution_percent,
-                textured=args.textured)
+                textured=args.textured, texture_finish=args.texture_finish)
             print(json.dumps(report, indent=2))
             return 0 if report["status"].startswith("private-Blender-mesh-candidate") else 3
         if args.command in ("plan-dense-photos", "build-dense-photos"):

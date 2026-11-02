@@ -12,7 +12,7 @@ from kumiki_blender.blender_import import imported_bounds
 from kumiki_blender.blender_output import aim_at
 from kumiki_blender.glb_audit import audit_glb
 
-from .dense import _json, _ply_counts
+from .dense import _json, _ply_counts, _sha256
 from .references import ReferenceError
 
 
@@ -88,6 +88,43 @@ def _textured_obj_plan(root: Path, report: dict[str, Any],
             "textured_faces": face_count}
 
 
+def _finished_texture_plan(root: Path, dense_report: dict[str, Any],
+                           texture_finish: str | Path, max_faces: int) -> dict[str, Any]:
+    """Pin a non-destructive corrected atlas without trusting its filesystem links."""
+    original = _textured_obj_plan(root, dense_report, max_faces)
+    finish = Path(texture_finish).resolve()
+    if Path(texture_finish).is_symlink() or not finish.is_dir():
+        raise ReferenceError("Finished texture revision is missing or linked")
+    record = _json(finish / "texture-finish-report.json")
+    if (record.get("status") != "candidate / corrected-atlas-artistic-review-required"
+            or record.get("source_dense_revision") != str(root)
+            or record.get("source_dense_report_sha256") != _sha256(root / "dense-report.json")
+            or record.get("source_obj_sha256") != original["source_obj_sha256"]
+            or record.get("source_mtl_sha256") != _sha256(Path(original["source_mtl"]))):
+        raise ReferenceError("Finished texture source or provenance differs from original dense mesh")
+    original_atlases = {Path(item["path"]).name: item["sha256"]
+                        for item in original["texture_atlases"]}
+    expected = record.get("source_texture_atlases")
+    if (not isinstance(expected, list) or
+            {item.get("name"): item.get("sha256") for item in expected if isinstance(item, dict)}
+            != original_atlases):
+        raise ReferenceError("Finished texture original atlas provenance has changed")
+    obj_record, mtl_record = record.get("textured_obj"), record.get("mtl")
+    if (not isinstance(obj_record, dict) or not isinstance(mtl_record, dict)
+            or obj_record.get("path") != Path(original["source_obj"]).name
+            or mtl_record.get("path") != Path(original["source_mtl"]).name):
+        raise ReferenceError("Finished texture OBJ/MTL does not match the pinned original")
+    finished = _textured_obj_plan(finish, record, max_faces)
+    if (finished["source_obj_sha256"] != original["source_obj_sha256"]
+            or _sha256(Path(finished["source_mtl"])) != mtl_record.get("sha256")
+            or mtl_record["sha256"] != record["source_mtl_sha256"]
+            or finished["textured_faces"] != original["textured_faces"]):
+        raise ReferenceError("Finished texture geometry or MTL changed since original")
+    return {**finished, "texture_finish_revision": str(finish),
+            "texture_finish_settings": record.get("settings"),
+            "texture_quality_verified": False}
+
+
 def _matched_scan_cameras(report: dict[str, Any], count: int) -> list[dict[str, Any]]:
     """Camera poses and the dense PLY share COLMAP coordinates: no sculpt anchors."""
     from .cameras import (_matmul, _matvec, _quat_matrix, _read_intrinsics,
@@ -145,7 +182,8 @@ def plan_dense_blender_review(dense_revision: str | Path, output: str | Path,
                               *, max_mesh_faces: int = 5_000_000,
                               matched_views: int = 0,
                               matched_resolution_percent: int = 100,
-                              textured: bool = False) -> dict[str, Any]:
+                              textured: bool = False,
+                              texture_finish: str | Path | None = None) -> dict[str, Any]:
     """Check a dense mesh has not changed since its reconstruction report."""
     root = Path(dense_revision).resolve()
     target = Path(output).resolve()
@@ -162,6 +200,8 @@ def plan_dense_blender_review(dense_revision: str | Path, output: str | Path,
         raise ReferenceError("matched_resolution_percent must be 10–100")
     if type(textured) is not bool:
         raise ReferenceError("textured must be a boolean")
+    if texture_finish is not None and not textured:
+        raise ReferenceError("A finished texture revision requires --textured")
     report = _json(root / "dense-report.json")
     mesh = report.get("mesh")
     if (not isinstance(report.get("status"), str)
@@ -191,7 +231,9 @@ def plan_dense_blender_review(dense_revision: str | Path, output: str | Path,
     if counts["faces"] > max_mesh_faces:
         raise ReferenceError("Dense mesh exceeds Blender review's face budget; split the scan")
     cameras = _matched_scan_cameras(report, matched_views) if matched_views else []
-    texture_plan = _textured_obj_plan(root, report, max_mesh_faces) if textured else {}
+    texture_plan = (_finished_texture_plan(root, report, texture_finish, max_mesh_faces)
+                    if textured and texture_finish is not None else
+                    _textured_obj_plan(root, report, max_mesh_faces) if textured else {})
     return {"source_revision": str(root), "source_ply": str(path), "source_sha256": actual,
             "output": str(target), "faces": counts["faces"], "vertices": counts["vertices"],
             "matched_cameras": cameras,
@@ -292,13 +334,14 @@ def build_dense_blender_review(dense_revision: str | Path, output: str | Path,
                                max_mesh_faces: int = 5_000_000,
                                matched_views: int = 0,
                                matched_resolution_percent: int = 100,
-                               textured: bool = False) -> dict[str, Any]:
+                               textured: bool = False,
+                               texture_finish: str | Path | None = None) -> dict[str, Any]:
     """Save a private editable .blend and GLB; neither clears photo rights."""
     plan = plan_dense_blender_review(dense_revision, output,
                                      max_mesh_faces=max_mesh_faces,
                                      matched_views=matched_views,
                                      matched_resolution_percent=matched_resolution_percent,
-                                     textured=textured)
+                                     textured=textured, texture_finish=texture_finish)
     bpy = bpy_module
     if tuple(bpy.app.version) < (4, 2, 0):
         raise ReferenceError("Dense Blender review requires Blender 4.2+")
