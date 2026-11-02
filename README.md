@@ -1,5 +1,15 @@
 # Kumiki Blender
 
+## New: start statue faces from existing anatomical head meshes
+
+The [anatomical head-base fitting workflow](docs/ANATOMICAL_HEAD_BASES.md)
+accepts a reviewed static human-head GLB, checks source rights, fits a proper
+3D transform against manually verified statue landmarks, and optionally adds
+a non-destructive local sculpt shape key. Run `plan-head-base --manifest ...`
+without Blender, then `build-head-base --manifest ... --output ...` to export an
+editable `.blend`, an aligned GLB and QA views. This is **not** automatic
+photo-fidelity reconstruction; front/profile artistic review remains required.
+
 ## New: reference-driven statue reconstruction evidence
 
 For the Sphinx, Statue of Liberty, Christ the Redeemer, and future monuments,

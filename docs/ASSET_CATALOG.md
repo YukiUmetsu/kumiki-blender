@@ -26,6 +26,7 @@ src/kumiki_blender/assets/
 │   └── components/{classical-column,modular-portico}/asset.json
 ├── infrastructure/towers/lattice-observation-tower/asset.json
 ├── geography/maps/egypt-relief-atlas/asset.json
+├── characters/people/makehuman-neutral-head/asset.json
 ├── landmarks/monuments/
 │   ├── giza-pyramid-study/asset.json
 │   ├── giza-sphinx-study/asset.json
@@ -64,6 +65,7 @@ those contexts without symlinks or duplicate assets.
 PYTHONPATH=src python3 -m kumiki_blender catalog list
 PYTHONPATH=src python3 -m kumiki_blender catalog categories
 PYTHONPATH=src python3 -m kumiki_blender catalog search Giza
+PYTHONPATH=src python3 -m kumiki_blender catalog search anatomical head
 PYTHONPATH=src python3 -m kumiki_blender catalog search old plane
 PYTHONPATH=src python3 -m kumiki_blender catalog list --tag stone
 PYTHONPATH=src python3 -m kumiki_blender catalog list --rigged
@@ -91,7 +93,11 @@ blender --background --factory-startup --python-exit-code 1 \
 ```
 
 The catalog delegates to the **existing** `build-biplane`, `build-egypt-map`, `build-monument`,
-`build-facade`, `build-portico`, or recipe-based `build` pipeline. It will not
+`build-facade`, `build-portico`, recipe-based `build`, or verified MakeHuman head
+source pipeline. The last one **explicitly downloads** a hash-pinned CC0
+graphical OBJ when its catalog build is requested; it does not bundle external
+binary assets in git. See [anatomical head bases](ANATOMICAL_HEAD_BASES.md).
+The catalog will not
 overwrite an existing revision, and adding a category does not change the
 geometry engine. A component without a standalone build command is marked
 `"build": null` and exposes its plan API instead.

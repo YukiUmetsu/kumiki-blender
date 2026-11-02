@@ -20,7 +20,8 @@ _REVISION = re.compile(r"r[0-9]{2,6}\Z")
 _PLAN_COMMANDS = {"validate", "plan-portico", "plan-facade", "plan-monument",
                   "plan-biplane", "plan-classical-column", "plan-egypt-map", "plan-fuji"}
 _BUILD_COMMANDS = {"build", "build-portico", "build-facade",
-                   "build-monument", "build-biplane", "build-egypt-map", "build-fuji"}
+                   "build-monument", "build-biplane", "build-egypt-map", "build-fuji",
+                   "prepare-makehuman-head"}
 
 
 class CatalogError(ValueError):

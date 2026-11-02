@@ -30,6 +30,8 @@ from .recipe import RecipeError, load_recipe
 from .render_profiles import RenderProfileError
 from .revision_audit import RevisionAuditError, audit_revision
 from .surfaces import SurfaceError
+from .reconstruction.head_base import HeadFitError
+from .head_sources.makehuman import MakeHumanSourceError
 from .vintage_biplane import make_biplane
 
 
@@ -229,6 +231,25 @@ def main(argv: list[str] | None = None) -> int:
     landmark_parser.add_argument("--annotations", type=Path, required=True)
     landmark_parser.add_argument("--output", type=Path, required=True)
     landmark_parser.add_argument("--max-error-px", type=float, default=12.0)
+    for command in ("plan-head-base", "build-head-base"):
+        head_parser = subcommands.add_parser(
+            command, help="Align an existing licensed anatomical human-head GLB to statue landmarks")
+        head_parser.add_argument("--manifest", type=Path, required=True,
+                                 help="Local source GLB, rights, target and anatomical landmark correspondence")
+        if command == "build-head-base":
+            head_parser.add_argument("--output", type=Path, required=True)
+            head_parser.add_argument("--blender", default="blender")
+    makehuman_parser = subcommands.add_parser(
+        "prepare-makehuman-head", help="Prepare an official, pinned CC0 MakeHuman head base")
+    makehuman_input = makehuman_parser.add_mutually_exclusive_group(required=True)
+    makehuman_input.add_argument("--source-obj", type=Path,
+                                 help="Previously downloaded official MakeHuman base.obj (exact hash required)")
+    makehuman_input.add_argument("--download", action="store_true",
+                                 help="Explicitly download the pinned CC0 source to a local cache")
+    makehuman_parser.add_argument("--cache", type=Path,
+                                  default=Path(".review/source-cache/makehuman/base.obj"))
+    makehuman_parser.add_argument("--output", type=Path, required=True)
+    makehuman_parser.add_argument("--blender", default="blender")
     source_parser = subcommands.add_parser("inspect-asset")
     source_parser.add_argument("--input", type=Path, required=True)
     texture_parser = subcommands.add_parser("inspect-texture-packs")
@@ -311,6 +332,71 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(report, indent=2))
             return (0 if args.command == "plan-dense-photos" or
                     report["status"].startswith("dense-mesh-candidate") else 3)
+        if args.command == "prepare-makehuman-head":
+            from .head_sources.makehuman import (fetch_makehuman_obj,
+                                                 load_body_mesh, verify_makehuman_obj)
+            output = args.output.resolve()
+            if output.exists() or args.output.is_symlink():
+                raise MakeHumanSourceError(f"Output revision already exists: {output}")
+            source = (fetch_makehuman_obj(args.cache) if args.download
+                      else verify_makehuman_obj(args.source_obj))
+            vertices, faces = load_body_mesh(source)
+            if len(vertices) < 10000 or len(faces) < 10000:
+                raise MakeHumanSourceError("Unexpectedly sparse official body topology")
+            try:
+                import bpy  # type: ignore[import-not-found]
+            except ImportError:
+                executable = shutil.which(args.blender)
+                if executable is None:
+                    raise RuntimeError(f"Blender executable not found: {args.blender}")
+                entry = Path(__file__).resolve().parents[2] / "scripts/blender_entry.py"
+                if not entry.is_file():
+                    raise RuntimeError("Blender build requires scripts/blender_entry.py from a source checkout")
+                completed = subprocess.run([
+                    executable, "--background", "--factory-startup", "--python-exit-code", "1",
+                    "--python", str(entry), "--", "prepare-makehuman-head",
+                    "--source-obj", str(source.path), "--output", str(output),
+                ], check=False)
+                return completed.returncode
+            from .blender_head_sources import build_makehuman_head
+            print(json.dumps(build_makehuman_head(source, output, bpy_module=bpy), indent=2))
+            return 0
+        if args.command in ("plan-head-base", "build-head-base"):
+            from .reconstruction.head_base import (
+                fit_head_landmarks, head_deformation_field, load_head_fit_plan,
+            )
+            plan = load_head_fit_plan(args.manifest)
+            fit = fit_head_landmarks(plan)
+            head_deformation_field(plan, fit)  # Refuse unstable local corrections before Blender.
+            if args.command == "plan-head-base":
+                print(json.dumps({**fit.to_report(), "fit_mode": plan.fit_mode,
+                                  "mesh_name": plan.mesh_name,
+                                  "source_front_axis": plan.source_front_axis,
+                                  "head_source_asset_id": plan.provenance.asset_id}, indent=2))
+                return 0
+            output = args.output.resolve()
+            if args.output.is_symlink() or output.exists():
+                raise HeadFitError(f"Output revision already exists: {output}")
+            try:
+                import bpy  # type: ignore[import-not-found]
+            except ImportError:
+                executable = shutil.which(args.blender)
+                if executable is None:
+                    raise RuntimeError(f"Blender executable not found: {args.blender}")
+                entry = Path(__file__).resolve().parents[2] / "scripts/blender_entry.py"
+                if not entry.is_file():
+                    raise RuntimeError("Blender build requires scripts/blender_entry.py from a source checkout")
+                completed = subprocess.run([
+                    executable, "--background", "--factory-startup", "--python-exit-code", "1",
+                    "--python", str(entry), "--", "build-head-base",
+                    "--manifest", str(args.manifest.resolve()), "--output", str(output),
+                ], check=False)
+                return completed.returncode
+            from .blender_import import build_imported_scene
+            result = build_imported_scene(plan.source_glb, plan.provenance, output,
+                                          head_fit=plan, bpy_module=bpy)
+            print(json.dumps(result, indent=2))
+            return 0
         if args.command == "prepare-camera-plan":
             from .reconstruction.cameras import create_camera_plan
             from .reconstruction.references import ReferenceError
@@ -810,7 +896,7 @@ def main(argv: list[str] | None = None) -> int:
         manifest = build_scene(recipe, plan, output, bpy_module=bpy)
         print(json.dumps(manifest, indent=2))
         return 0
-    except (CatalogError, RecipeError, PorticoError, FacadeError, MonumentError, GeometryError, AssetImportError, RenderProfileError, RevisionAuditError, AuditError, ExportAuditError,
+    except (CatalogError, RecipeError, PorticoError, FacadeError, MonumentError, GeometryError, AssetImportError, HeadFitError, MakeHumanSourceError, RenderProfileError, RevisionAuditError, AuditError, ExportAuditError,
             SurfaceError, RuntimeError, OSError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 2

@@ -1,0 +1,18 @@
+{
+  "schema_version": 1,
+  "id": "makehuman-neutral-head",
+  "title": "MakeHuman CC0 Neutral Anatomical Head",
+  "description": "Verified official MakeHuman body topology, isolated as an editable human head and neck for statue sculpting. Source is CC0, not a specific historical likeness.",
+  "kind": "imported",
+  "tags": ["head", "face", "human", "anatomy", "statue", "sculpt", "cc0", "makehuman"],
+  "aliases": ["neutral-head", "anatomical-head", "portrait-base"],
+  "rigged": false,
+  "animated": false,
+  "sources": [
+    "src/kumiki_blender/head_sources/makehuman.py",
+    "src/kumiki_blender/blender_head_sources.py",
+    "docs/ANATOMICAL_HEAD_BASES.md"
+  ],
+  "plan": null,
+  "build": ["prepare-makehuman-head", "--download"]
+}
