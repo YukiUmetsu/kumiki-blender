@@ -28,7 +28,7 @@ jobs:
       - name: Test anatomical head-base alignment and CLI preflight
         env:
           PYTHONPATH: src
-        run: python -m unittest tests.test_head_base tests.test_head_base_cli -v
+        run: python -m unittest tests.test_head_base tests.test_head_base_cli tests.test_makehuman_source tests.test_makehuman_cli -v
       - name: Test measured Khufu masonry and Sphinx source intake
         env:
           PYTHONPATH: src

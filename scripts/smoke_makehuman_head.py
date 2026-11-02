@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from pathlib import Path
 import sys
@@ -19,11 +20,16 @@ def main(path: Path) -> None:
     assert manifest["mesh_diagnostic"]["nonmanifold_edges"] == 0
     provenance = json.loads((path / "head-provenance.json").read_text(encoding="utf-8"))
     assert provenance["license"] == "CC0-1.0" and provenance["redistribution_allowed"]
+    assert provenance["expected_sha256"] == hashlib.sha256((path / "model.glb").read_bytes()).hexdigest()
     for filename in ("source.blend", "model.glb", "preview.png", "previews/front.png",
                      "previews/profile.png", "previews/three-quarter.png", "head-provenance.json"):
         assert (path / filename).stat().st_size > 200, filename
+    # Factory startup includes a default cube. Count only objects created by
+    # importing the portable GLB, never pre-existing Blender scene objects.
+    before = {item.as_pointer() for item in bpy.data.objects}
     bpy.ops.import_scene.gltf(filepath=str(path / "model.glb"))
-    meshes = [item for item in bpy.context.scene.objects if item.type == "MESH"]
+    meshes = [item for item in bpy.data.objects
+              if item.as_pointer() not in before and item.type == "MESH"]
     assert len(meshes) == 1, f"Unexpected additional body/helper meshes: {len(meshes)}"
     head = meshes[0]
     assert head.get("kumiki_part") == "anatomical_head"
