@@ -99,6 +99,8 @@ def main(argv: list[str] | None = None) -> int:
         subcommand = subcommands.add_parser(command, help="Procedural Statue of Liberty sculpt and pedestal")
         subcommand.add_argument("--scale", type=float, default=1.0)
         subcommand.add_argument("--no-pedestal", action="store_true")
+        subcommand.add_argument("--monument-proportions", action="store_true",
+                                help="NPS-measured monument heights and landmark widths (experimental)")
         if command == "build-liberty":
             subcommand.add_argument("--output", type=Path, required=True)
             subcommand.add_argument("--detailed-torch", action="store_true",
@@ -218,13 +220,19 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(build_biplane_scene(model, output, bpy_module=bpy), indent=2))
             return 0
         if args.command in ("plan-liberty", "build-liberty"):
+            if (args.command == "build-liberty" and args.monument_proportions and
+                    (args.detailed_tablet or args.detailed_torch)):
+                raise RecipeError("--monument-proportions cannot yet be combined with "
+                                  "--detailed-tablet or --detailed-torch; their supplementary "
+                                  "Blender objects still use the illustrative coordinate frame")
             study = make_liberty_study(scale=args.scale,
                                        include_pedestal=not args.no_pedestal,
                                        detailed_tablet=(args.command == "build-liberty" and args.detailed_tablet),
                                        detailed_crown=(args.command == "build-liberty" and args.detailed_crown),
                                        detailed_face=(args.command == "build-liberty" and args.detailed_face),
                                        detailed_feet=(args.command == "build-liberty" and args.detailed_feet),
-                                       detailed_drapery=(args.command == "build-liberty" and args.detailed_drapery))
+                                       detailed_drapery=(args.command == "build-liberty" and args.detailed_drapery),
+                                       monument_proportions=args.monument_proportions)
             if args.command == "plan-liberty":
                 print(json.dumps({
                     "asset_id": study.asset_id, "generator": "procedural-statue-of-liberty",

@@ -22,6 +22,22 @@ from .surfaces import PBRSurface, get_surface
 def plan_liberty_shots(study: LibertyStudy) -> tuple[QualityShot, ...]:
     """Front, back, profile, face, torch and tablet all receive dedicated QA."""
     scale = dict(study.parameters)["scale"]
+    if dict(study.parameters).get("monument_proportions"):
+        offset = 0 if dict(study.parameters)["include_pedestal"] else -46.94
+
+        def measured(x: float, y: float, z: float) -> tuple[float, float, float]:
+            return (x*scale, y*scale, (z+offset)*scale)
+
+        return (
+            # 16:9 renders need ortho width ~height*16/9, plus breathing room.
+            QualityShot("hero", measured(48, -94, 66), measured(0, 0, 46.5), 210*scale),
+            QualityShot("front", measured(0, -115, 47), measured(0, 0, 46.5), 200*scale),
+            QualityShot("side", measured(115, 0, 47), measured(0, 0, 46.5), 200*scale),
+            QualityShot("rear", measured(0, 115, 47), measured(0, 0, 46.5), 200*scale),
+            QualityShot("face", measured(4, -26, 79.4), measured(0, 0, 79.4), 12.5*scale),
+            QualityShot("tablet", measured(9.2, -27, 69.8), measured(7.0, -1, 70), 14*scale),
+            QualityShot("torch", measured(-7, -26, 90), measured(-7.15, 0, 90), 13*scale),
+        )
     offset = 0 if dict(study.parameters)["include_pedestal"] else -9.30
 
     def pos(x: float, y: float, z: float) -> tuple[float, float, float]:
@@ -167,7 +183,8 @@ def build_liberty_scene(study: LibertyStudy, destination: Path, *,
         objects.append(obj)
 
     parameters = dict(study.parameters)
-    offset = 0 if parameters["include_pedestal"] else -9.30
+    offset = (0 if parameters["include_pedestal"] else
+              -46.94 if parameters.get("monument_proportions") else -9.30)
     objects.extend(_tablet_lettering(bpy, model, palette["patina-shadow"],
                                      parameters["scale"], offset,
                                      parameters.get("detailed_tablet", False)))
@@ -211,6 +228,8 @@ def build_liberty_scene(study: LibertyStudy, destination: Path, *,
     background.inputs["Strength"].default_value = .55
     scene.world = world
 
+    measured_frame = bool(parameters.get("monument_proportions"))
+
     def area(name: str, location: tuple[float, float, float], power: float,
              color: tuple[float, float, float], size: float) -> None:
         from .blender_output import aim_at
@@ -222,11 +241,16 @@ def build_liberty_scene(study: LibertyStudy, destination: Path, *,
         light = bpy.data.objects.new(name, light_data)
         stage.objects.link(light)
         light.location = tuple(p*parameters["scale"] for p in location)
-        aim_at(light, (0, 0, (18+offset)*parameters["scale"]))
+        aim_at(light, (0, 0, (47 if measured_frame else 18+offset)*parameters["scale"]))
 
-    area("Key / broad overcast studio", (-16, -23, 32+offset), 6800, (0.86, .94, 1.0), 15)
-    area("Fill / pale aqua bounce", (18, -8, 21+offset), 4200, (.61, .80, .87), 11)
-    area("Rim / warm autumn", (8, 14, 30+offset), 7800, (1.0, .81, .60), 12)
+    if measured_frame:
+        area("Key / broad overcast studio", (-36, -52, 79), 22000, (0.86, .94, 1.0), 27)
+        area("Fill / pale aqua bounce", (36, -19, 54), 15000, (.61, .80, .87), 24)
+        area("Rim / warm autumn", (22, 34, 74), 27000, (1.0, .81, .60), 27)
+    else:
+        area("Key / broad overcast studio", (-16, -23, 32+offset), 6800, (0.86, .94, 1.0), 15)
+        area("Fill / pale aqua bounce", (18, -8, 21+offset), 4200, (.61, .80, .87), 11)
+        area("Rim / warm autumn", (8, 14, 30+offset), 7800, (1.0, .81, .60), 12)
 
     camera_data = bpy.data.cameras.new("Camera / Liberty cinematic inspection")
     camera_data.type = "ORTHO"
@@ -248,7 +272,7 @@ def build_liberty_scene(study: LibertyStudy, destination: Path, *,
             QualityShot("tablet-grip-detail", tablet_pos(5.8, -5.8, 22.3),
                         tablet_pos(4.27, -.9, 22.35), 2.35*parameters["scale"]),
         )
-    if parameters.get("detailed_crown"):
+    if parameters.get("detailed_crown") and not measured_frame:
         def crown_pos(x: float, y: float, z: float) -> tuple[float, float, float]:
             return (x*parameters["scale"], y*parameters["scale"],
                     (z+offset)*parameters["scale"])
@@ -262,7 +286,7 @@ def build_liberty_scene(study: LibertyStudy, destination: Path, *,
             QualityShot("crown-ray-profile", crown_pos(8, -.75, 30.05),
                         crown_pos(0, 0, 30.0), 8.0*parameters["scale"]),
         )
-    if parameters.get("detailed_face"):
+    if parameters.get("detailed_face") and not measured_frame:
         def face_pos(x: float, y: float, z: float) -> tuple[float, float, float]:
             return (x*parameters["scale"], y*parameters["scale"],
                     (z+offset)*parameters["scale"])
@@ -274,7 +298,17 @@ def build_liberty_scene(study: LibertyStudy, destination: Path, *,
             QualityShot("face-detail-profile", face_pos(7.2, -.3, 26.67),
                         face_pos(0, 0, 26.67), 3.7*parameters["scale"]),
         )
-    if parameters.get("detailed_feet"):
+    if parameters.get("detailed_feet") and measured_frame:
+        def feet_pos(x: float, y: float, z: float) -> tuple[float, float, float]:
+            return (x*parameters["scale"], y*parameters["scale"],
+                    (z+offset)*parameters["scale"])
+        shots += (
+            QualityShot("feet-shackle-front", feet_pos(0, -19, 50),
+                        feet_pos(0, -3, 48.4), 13.5*parameters["scale"]),
+            QualityShot("feet-shackle-oblique", feet_pos(-14, -17, 52),
+                        feet_pos(-1.1, -3.4, 49), 13.5*parameters["scale"]),
+        )
+    elif parameters.get("detailed_feet"):
         def feet_pos(x: float, y: float, z: float) -> tuple[float, float, float]:
             return (x*parameters["scale"], y*parameters["scale"],
                     (z+offset)*parameters["scale"])
@@ -288,7 +322,21 @@ def build_liberty_scene(study: LibertyStudy, destination: Path, *,
             QualityShot("feet-right-broken-shackle", feet_pos(-4.9, -5.6, 11.6),
                         feet_pos(-.82, -2.27, 9.80), 3.3*parameters["scale"]),
         )
-    if parameters.get("detailed_drapery"):
+    if parameters.get("detailed_drapery") and measured_frame:
+        def drape_pos(x: float, y: float, z: float) -> tuple[float, float, float]:
+            return (x*parameters["scale"], y*parameters["scale"],
+                    (z+offset)*parameters["scale"])
+        shots += (
+            QualityShot("drapery-front", drape_pos(0, -40, 64),
+                        drape_pos(0, 0, 65), 31*parameters["scale"]),
+            QualityShot("drapery-threequarter", drape_pos(26, -35, 64),
+                        drape_pos(0, 0, 65), 31*parameters["scale"]),
+            QualityShot("drapery-profile", drape_pos(43, 0, 64),
+                        drape_pos(0, 0, 65), 31*parameters["scale"]),
+            QualityShot("drapery-raised-sleeve", drape_pos(-13, -24, 72),
+                        drape_pos(-5, 0, 73), 13.5*parameters["scale"]),
+        )
+    elif parameters.get("detailed_drapery"):
         def drape_pos(x: float, y: float, z: float) -> tuple[float, float, float]:
             return (x*parameters["scale"], y*parameters["scale"],
                     (z+offset)*parameters["scale"])
@@ -309,7 +357,8 @@ def build_liberty_scene(study: LibertyStudy, destination: Path, *,
         "provenance": "Original procedural sculpture derived from user-supplied photos; not a surveyed photogrammetry scan",
         "render_profile": {"name": profile.name, "width": profile.width,
                            "height": profile.height, "samples": profile.samples},
-        "units": "meters (illustrative proportions)",
+        "units": ("meters (NPS dimension-constrained approximation)"
+                  if measured_frame else "meters (illustrative proportions)"),
         "native_axes": "Blender Z-up, front -Y",
         "named_parts": dict(study.part_counts),
         "bounds_m": [study.bounds_min, study.bounds_max],
@@ -319,6 +368,7 @@ def build_liberty_scene(study: LibertyStudy, destination: Path, *,
         "detailed_crown": bool(parameters.get("detailed_crown")),
         "detailed_feet": bool(parameters.get("detailed_feet")),
         "detailed_drapery": bool(parameters.get("detailed_drapery")),
+        "monument_proportions": measured_frame,
         "detailed_torch_fit": ({"origin": torch_fit.origin,
                                "radial_scale": torch_fit.radial_scale,
                                "height_scale": torch_fit.height_scale}

@@ -179,7 +179,8 @@ def make_liberty_study(*, scale: float = 1., include_pedestal: bool = True,
                        detailed_crown: bool = False,
                        detailed_face: bool = False,
                        detailed_feet: bool = False,
-                       detailed_drapery: bool = False) -> LibertyStudy:
+                       detailed_drapery: bool = False,
+                       monument_proportions: bool = False) -> LibertyStudy:
     """Make the original, reference-guided statue and optional 8.9m pedestal."""
     if (isinstance(scale, bool) or not isinstance(scale, (int, float)) or
             not math.isfinite(scale) or not .05 <= scale <= 20):
@@ -196,6 +197,8 @@ def make_liberty_study(*, scale: float = 1., include_pedestal: bool = True,
         raise LibertyError("detailed_feet must be a boolean")
     if type(detailed_drapery) is not bool:
         raise LibertyError("detailed_drapery must be a boolean")
+    if type(monument_proportions) is not bool:
+        raise LibertyError("monument_proportions must be a boolean")
     result: list[MeshInstance] = []
 
     def put(name: str, mesh: Mesh, material: str = "patina") -> None:
@@ -544,9 +547,15 @@ def make_liberty_study(*, scale: float = 1., include_pedestal: bool = True,
             (x+.26*math.cos(theta), y+.21*math.sin(theta), 35.56+.14*(i%4)),
         ], [.18, .15, .09, .012], 10), "flame-gold")
 
+    # Optional NPS-dimensional blockout is a separate representation from
+    # the old illustrative-meter composition, not an implicit breaking change.
+    if monument_proportions:
+        from .liberty_monument_proportions import apply_monument_proportions
+        result = apply_monument_proportions(result)
     # Keep every part in world-space and rescale about its ground datum. The
     # pedestal-off version drops the statue as one assembly to Z=0.
-    shift = 0. if include_pedestal else -9.30
+    shift = (0. if include_pedestal else -46.94) if monument_proportions \
+        else (0. if include_pedestal else -9.30)
     scaled = []
     for part in result:
         mesh = Mesh(tuple((x*scale, y*scale, (z+shift)*scale)
@@ -565,4 +574,5 @@ def make_liberty_study(*, scale: float = 1., include_pedestal: bool = True,
                                              ("detailed_crown", detailed_crown),
                                              ("detailed_face", detailed_face),
                                              ("detailed_feet", detailed_feet),
-                                             ("detailed_drapery", detailed_drapery)))
+                                             ("detailed_drapery", detailed_drapery),
+                                             ("monument_proportions", monument_proportions)))

@@ -249,6 +249,51 @@ class LibertyTests(unittest.TestCase):
         with self.assertRaises(LibertyError):
             make_liberty_study(detailed_drapery=1)
 
+    def test_nps_dimension_constrained_monument_blockout(self):
+        from kumiki_blender.liberty_monument_proportions import (
+            HEAD_HEIGHT_M, HEAD_WIDTH_M, PEDESTAL_HEIGHT_M, TABLET_HEIGHT_M,
+            TABLET_THICKNESS_M, TABLET_WIDTH_M, TOTAL_HEIGHT_M, WAIST_WIDTH_M,
+        )
+
+        study = make_liberty_study(monument_proportions=True,
+                                  detailed_drapery=True, detailed_feet=True)
+        parts = {part.name: part for part in study.instances}
+        self.assertAlmostEqual(study.bounds_max[2], TOTAL_HEIGHT_M, delta=.001)
+        self.assertAlmostEqual(study.bounds_min[2], 0, delta=.001)
+        self.assertTrue(dict(study.parameters)["monument_proportions"])
+
+        def width(part, axis):
+            vals = [point[axis] for point in part.mesh.vertices]
+            return max(vals)-min(vals)
+
+        pedestal = [p for p in study.instances if p.name.startswith("liberty-pedestal-")]
+        self.assertAlmostEqual(max(max(v[2] for v in p.mesh.vertices) for p in pedestal),
+                               PEDESTAL_HEIGHT_M, delta=.001)
+        torso = parts["liberty-gown-underrobe"]
+        self.assertAlmostEqual(width(torso, 0), WAIST_WIDTH_M, delta=.001)
+        head = [p for p in study.instances if p.name.startswith("liberty-head-")]
+        head_x = [v[0] for p in head for v in p.mesh.vertices]
+        self.assertAlmostEqual(max(head_x)-min(head_x), HEAD_WIDTH_M, delta=.001)
+        face = parts["liberty-head-face"]
+        self.assertAlmostEqual(width(face, 2), HEAD_HEIGHT_M, delta=.001)
+        self.assertAlmostEqual(max(v[2] for v in face.mesh.vertices),
+                               PEDESTAL_HEIGHT_M+33.86, delta=.001)
+        slab = parts["liberty-tablet-slab"]
+        for axis, value in ((0, TABLET_WIDTH_M), (1, TABLET_THICKNESS_M),
+                            (2, TABLET_HEIGHT_M)):
+            self.assertAlmostEqual(width(slab, axis), value, delta=.001)
+        for selected in (torso, face, slab):
+            report = audit_mesh(selected.mesh)
+            self.assertEqual((report.boundary_edges, report.nonmanifold_edges), (0, 0))
+            self.assertGreater(report.volume_m3, 0)
+
+        statue = make_liberty_study(monument_proportions=True, include_pedestal=False)
+        self.assertAlmostEqual(statue.bounds_max[2], TOTAL_HEIGHT_M-PEDESTAL_HEIGHT_M,
+                               delta=.001)
+        self.assertAlmostEqual(statue.bounds_min[2], 0, delta=.001)
+        with self.assertRaises(LibertyError):
+            make_liberty_study(monument_proportions=1)
+
     def test_export_parts_are_closed_meshes_and_have_unique_semantic_names(self):
         study = make_liberty_study()
         self.assertLess(len(study.instances), 700)

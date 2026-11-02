@@ -1,5 +1,81 @@
 # Statue of Liberty — scan-assisted detail rebuild
 
+## r64 — NPS-measured monument envelope + authentic NYC LiDAR intake (**opt-in; HOLD**)
+
+The existing default is **36.0 m from ground to flame**, while the installed
+monument is **92.99 m** including its 46.94 m pedestal and 46.05 m statue.
+This large discrepancy changes the entire full-body silhouette; the previous
+fold tuning could not fix it. This revision changes **the geometric foundation**
+with `--monument-proportions`, off by default for compatibility.
+
+**Measured source:** [National Park Service, Statue Statistics](https://www.nps.gov/stli/learn/historyculture/statue-statistics.htm)
+publishes the following actual-monument dimensions:
+
+| Structure / feature | NPS length | Optional model's mapped dimension |
+| --- | ---: | ---: |
+| Ground to flame | 92.99 m | 92.99 m |
+| Ground to top of pedestal | 46.94 m | 46.94 m |
+| Pedestal top to flame | 46.05 m | 46.05 m |
+| Heel to head's cranium top | 33.86 m | 33.86 m |
+| Head height, chin to cranium | 5.26 m | 5.26 m |
+| Head breadth | 3.05 m | 3.05 m (head assembly envelope) |
+| Waist breadth | 10.67 m | 10.67 m (*maximum underrobe span proxy*) |
+| Tablet | 7.19 × 4.14 × 0.61 m | Same slab bounding dimensions |
+
+The separate height mapping prevents the 9 m illustrative pedestal from
+remaining absurdly short. Major statue components share a common scale
+frame while the **head and tablet have separate dimensional control cages**;
+their widths no longer inflate with the broad robe. The native meshes remain
+named and editable, and `--no-pedestal` produces the independently grounded
+46.05 m statue. These are **reference dimensions**, not proof that surfaces,
+poses, garments, or fine landmarks match the monument. The current head's
+facial anatomy remains inaccurate, as the close-ups show.
+
+**Genuine target geometry evidence:** New York State ITS [LAS tile index](https://elevation.its.ny.gov/arcgis/rest/services/LAS_Indexes/FeatureServer/11)
+locates [2017 NYC topobathymetric LAS tile `970190`](https://gisdata.ny.gov/elevation/LIDAR/NYC_TopoBathymetric2017/970190.las)
+at the installed Statue of Liberty (not a miniature). The original uncompressed
+LAS 1.4 survey tile has **1,991,616 classified points**, point format 6,
+NAD83 New York Long Island State Plane horizontal coordinates in US feet,
+NAVD88 vertical datum; its top observed return is ~303.36 ft elevation.
+Locally inspected source SHA-256:
+`05678c0d69b360c51818fa8df0ab2022e61ecf428e50f853ee6e683a67aa6ce6`.
+The new `scripts/liberty_lidar_sections.py` can independently stream and
+summarize this authentic survey into reproducible 10-foot elevation bands.
+The **~16.8 m upper-pedestal breadth** is a coarse inference from one airborne
+section, explicitly not an NPS measurement. The survey tile was **not copied
+into the repository or exported in the GLB**.
+
+**Important source limit:** This is aerial LiDAR, with sparse side/underbody
+returns and incomplete vertical copper coverage. The inferred center and
+sampled percentile widths do **not** register Blender cameras or recover the
+face, true robe folds, underside, fingers or anatomy. We therefore used the
+published NPS dimensions for exact size anchors and the LAS data only as an
+independent wide-scale sanity check. The 2019 NPS [laser/photogrammetry survey](https://www.nps.gov/articles/laser-scan-lady-liberty.htm)
+would be a far better high-detail foundation **if its authentic exterior
+geometry becomes publicly accessible**; we did not obtain it. A Sketchfab
+desktop-scanner model and any miniature/replica remain secondary references,
+not proven scans of the installed statue.
+
+**Visual QA (HOLD):** Front and oblique full-monument previews now show the
+correct statue/pedestal height hierarchy. The model still has a narrow,
+generic drape, a simplistic long pedestal with missing Fort Wood geometry,
+falsely regular sleeve and a face that fails the front/profile anatomical
+comparisons. The old code remains the default; the new dimensional path is an
+**experimental coarse blockout**, not a photo-faithful release. `--detailed-torch`
+and `--detailed-tablet` are intentionally blocked with this flag until their
+additional *Blender-only* objects are transformed into the measured coordinate
+frame; silently attaching unscaled lettering/torch detail would be incorrect.
+
+```bash
+python3 scripts/liberty_lidar_sections.py \
+  --source .review/liberty-r64-survey/970190.las \
+  --output .review/liberty-r64-survey/lidar-sections.json
+KUMIKI_RENDER_PROFILE=smoke blender --background --factory-startup \
+  --threads 6 --python-exit-code 1 --python scripts/blender_entry.py -- \
+  build-liberty --monument-proportions --detailed-drapery --detailed-feet \
+  --output .review/liberty-r64-survey/monument-proportions
+```
+
 ## r63 — broad copper drapery study (**opt-in; visual gate HOLD**)
 
 The default gown assembled 26 raised pinstripe tubes onto a radially rippled
