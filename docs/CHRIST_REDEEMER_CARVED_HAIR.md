@@ -88,3 +88,12 @@ rooted vertices, the largest original root gap, and the groove projection
 method. These are still **overlapping meshes, not a single manifold solid**.
 A visually convincing seam, facial likeness and watertightness have **not**
 been demonstrated until the four-view Blender renders are inspected.
+
+## Rear hairline silhouette guard
+
+The donor scalp mask previously fell below **z = -0.09 donor metres**
+around the rear temples, potentially covering the whole neck like a
+helmet/cape. The extracted scalp now has a hard lower silhouette bound
+at **z = 0.028 donor metres**, aligning it with the temple curtains'
+shoulder-length termination. This only constrains geometry: its likeness
+still requires actual four-view renders and real-monument comparison.

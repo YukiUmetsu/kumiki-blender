@@ -59,5 +59,22 @@ class ContinuousGrooveProjectionTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             nearest_polyline_segment((0.,0.,0.),[(0.,0.,0.),(1.,0.,0.)],[0.,1.],5)
 
+class AnatomicalHairlineTests(unittest.TestCase):
+    def test_forehead_is_open_and_back_curtain_ends_at_neck(self):
+        from kumiki_blender.sculpt_hair_flow import anatomical_hairline_height
+        self.assertAlmostEqual(anatomical_hairline_height(0,-.2), .347)
+        self.assertAlmostEqual(anatomical_hairline_height(.2,-.2), .294)
+        self.assertAlmostEqual(anatomical_hairline_height(0,.2), .062)
+        self.assertAlmostEqual(anatomical_hairline_height(.2,.2), .028)
+
+    def test_hairline_stays_bounded_over_head_and_neck(self):
+        from kumiki_blender.sculpt_hair_flow import anatomical_hairline_height
+        for x in (-.20,-.12,-.06,0,.06,.12,.20):
+            for y in (-.20,-.10,-.02,.06,.20):
+                with self.subTest(x=x,y=y):
+                    self.assertGreaterEqual(anatomical_hairline_height(x,y), .028)
+                    self.assertLessEqual(anatomical_hairline_height(x,y), .347)
+
+
 if __name__ == '__main__':
     unittest.main()

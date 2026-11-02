@@ -98,3 +98,16 @@ def nearest_polyline_segment(point, points, lengths, near_index, span=2):
             progress = (lengths[i]+t*(lengths[i+1]-lengths[i]))/lengths[-1]
             best = (squared_distance,progress)
     return math.sqrt(best[0]),best[1]
+
+
+def anatomical_hairline_height(x, y):
+    """Capped hairline on the donor head (donor-metre Z coordinate).
+
+    The rear lateral region must not turn the entire neck into a stone cape.
+    This is an artist-directed mask, not a measured Christ scan.
+    """
+    if not (math.isfinite(x) and math.isfinite(y)):
+        raise ValueError("Hairline coordinates must be finite")
+    rear = smoothstep((y+.075)/.100)
+    side = smoothstep((abs(x)-.047)/.070)
+    return max(.028, .347-.285*rear-.100*rear*side-.053*side)

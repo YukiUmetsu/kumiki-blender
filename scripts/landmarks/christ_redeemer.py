@@ -27,6 +27,7 @@ from mathutils.bvhtree import BVHTree
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from carved_hair import sculpt_carved_hair_from_anatomy
+from kumiki_blender.sculpt_hair_flow import anatomical_hairline_height
 
 TAU = math.tau
 STONE = None
@@ -991,9 +992,7 @@ def sculpt_scalp_surface_from_anatomy(head):
 
     vertices=head.data.vertices
     def hairline(co):
-        rear=ease((co.y+.075)/.100)
-        side=ease((abs(co.x)-.047)/.070)
-        return .347-.285*rear-.100*rear*side-.053*side
+        return anatomical_hairline_height(co.x,co.y)
 
     selected=[]
     for polygon in head.data.polygons:
