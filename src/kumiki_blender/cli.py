@@ -29,6 +29,11 @@ from .portico import PorticoError, make_portico_study
 from .recipe import RecipeError, load_recipe
 from .render_profiles import RenderProfileError
 from .revision_audit import RevisionAuditError, audit_revision
+from .sphinx_scan_review import prepare_sphinx_review
+from .sphinx_landmarks import (
+    LandmarkError, compare_landmark_revisions, compare_landmark_views, load_landmark_view,
+)
+from .sphinx_reference_shape import prepare_sphinx_face_fit
 from .surfaces import SurfaceError
 from .vintage_biplane import make_biplane
 
@@ -81,6 +86,8 @@ def main(argv: list[str] | None = None) -> int:
         subcommand.add_argument("--casing-fraction", type=float, default=0.04)
         subcommand.add_argument("--sphinx-length", type=float, default=10.5)
         subcommand.add_argument("--restored-nose", action="store_true")
+        subcommand.add_argument("--sphinx-face-reference", type=Path)
+        subcommand.add_argument("--sphinx-face-candidate", type=Path)
         if command == "build-monument":
             subcommand.add_argument("--output", type=Path, required=True)
             subcommand.add_argument("--sphinx-source", type=Path)
@@ -142,6 +149,18 @@ def main(argv: list[str] | None = None) -> int:
     visual_parser.add_argument("--idiff", action="store_true", help="Also run optional OpenImageIO idiff")
     source_parser = subcommands.add_parser("inspect-asset")
     source_parser.add_argument("--input", type=Path, required=True)
+    scan_review_parser = subcommands.add_parser("review-sphinx-source")
+    scan_review_parser.add_argument("--input", type=Path, required=True)
+    scan_review_parser.add_argument("--output", type=Path, required=True)
+    scan_review_parser.add_argument("--front-axis", choices=("-X", "+X", "-Y", "+Y"),
+                                    default="-X")
+    landmark_parser = subcommands.add_parser("compare-sphinx-landmarks")
+    landmark_parser.add_argument("--reference", type=Path, required=True)
+    landmark_parser.add_argument("--candidate", type=Path, required=True)
+    revision_landmarks = subcommands.add_parser("compare-sphinx-revisions")
+    revision_landmarks.add_argument("--reference", type=Path, required=True)
+    revision_landmarks.add_argument("--baseline", type=Path, required=True)
+    revision_landmarks.add_argument("--revised", type=Path, required=True)
     texture_parser = subcommands.add_parser("inspect-texture-packs")
     texture_parser.add_argument("--input", type=Path, required=True)
     import_parser = subcommands.add_parser("import-asset")
@@ -340,6 +359,33 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "inspect-asset":
             print(json.dumps(inspect_source_glb(args.input), indent=2))
             return 0
+        if args.command == "review-sphinx-source":
+            review = prepare_sphinx_review(args.input, args.output,
+                                           front_axis=args.front_axis)
+            try:
+                import bpy  # type: ignore[import-not-found]
+            except ImportError as error:
+                raise RuntimeError(
+                    "Reviewing external scans requires Blender. Run via: "
+                    "blender --background --factory-startup --python-exit-code 1 "
+                    "--python scripts/blender_entry.py -- review-sphinx-source "
+                    "--input licensed-model.obj --output .review/sphinx-scan"
+                ) from error
+            from .sphinx_scan_review import render_sphinx_source_review
+
+            print(json.dumps(render_sphinx_source_review(review, bpy_module=bpy), indent=2))
+            return 0
+        if args.command == "compare-sphinx-landmarks":
+            reference = load_landmark_view(args.reference)
+            candidate = load_landmark_view(args.candidate)
+            print(json.dumps(compare_landmark_views(reference, candidate), indent=2))
+            return 0
+        if args.command == "compare-sphinx-revisions":
+            reference = load_landmark_view(args.reference)
+            baseline = load_landmark_view(args.baseline)
+            revised = load_landmark_view(args.revised)
+            print(json.dumps(compare_landmark_revisions(reference, baseline, revised), indent=2))
+            return 0
         if args.command == "inspect-texture-packs":
             print(json.dumps({"assignments": [entry.to_manifest() for entry in
                                                load_texture_packs(args.input)]}, indent=2))
@@ -505,11 +551,23 @@ def main(argv: list[str] | None = None) -> int:
                                                bpy_module=bpy), indent=2))
             return 0
         if args.command in ("plan-monument", "build-monument"):
+            if bool(args.sphinx_face_reference) != bool(args.sphinx_face_candidate):
+                raise MonumentError(
+                    "--sphinx-face-reference and --sphinx-face-candidate must be supplied together")
+            if args.sphinx_face_reference and args.kind == "pyramid":
+                raise MonumentError("Face fitting requires sphinx or giza-study")
+            fit = (prepare_sphinx_face_fit(
+                load_landmark_view(args.sphinx_face_reference),
+                load_landmark_view(args.sphinx_face_candidate),
+                scale_y=args.sphinx_length/10.5,
+                scale_z=(args.sphinx_length*3.6/10.5)/4.6)
+                   if args.sphinx_face_reference else None)
             study = make_monument_study(
                 kind=args.kind, pyramid_base=args.pyramid_base,
                 pyramid_height=args.pyramid_height, pyramid_courses=args.pyramid_courses,
                 casing_fraction=args.casing_fraction, sphinx_length=args.sphinx_length,
-                restored_nose=args.restored_nose, pyramid_preset=args.pyramid_preset)
+                restored_nose=args.restored_nose, pyramid_preset=args.pyramid_preset,
+                sphinx_face_fit=fit)
             if args.command == "plan-monument":
                 print(json.dumps({
                     "asset_id": study.asset_id,
@@ -567,7 +625,7 @@ def main(argv: list[str] | None = None) -> int:
         manifest = build_scene(recipe, plan, output, bpy_module=bpy)
         print(json.dumps(manifest, indent=2))
         return 0
-    except (CatalogError, RecipeError, PorticoError, FacadeError, MonumentError, GeometryError, AssetImportError, RenderProfileError, RevisionAuditError, AuditError, ExportAuditError,
+    except (CatalogError, RecipeError, PorticoError, FacadeError, MonumentError, GeometryError, AssetImportError, RenderProfileError, RevisionAuditError, AuditError, ExportAuditError, LandmarkError,
             SurfaceError, RuntimeError, OSError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 2

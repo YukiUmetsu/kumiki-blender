@@ -18,7 +18,7 @@ the Great Sphinx.
 | `pyramid_assembly(prefix, base_width, height, courses, block_width, joint, casing_fraction)` | Recessed core, individually named alternating-course blocks, worn vacancies, light lower casing and capstone |
 | `petrie_course_tops_m(last_course=201)` | Historical corrected NE corner course-top elevations for Khufu: 203 observed levels, 201-course present-day cutoff |
 | `khufu_petrie_assembly(prefix, last_course=201)` | Full-sized Khufu study with measured course heights and multiple watertight masonry blocks batched per face/course |
-| `sphinx_assembly(prefix, length, width, height, restored_nose)` | Sculpted body/haunches/paws/toes/tail and hood/face/ears; recessed eye sockets, broken nose and mouth are carved directly into the face |
+| `sphinx_assembly(prefix, length, width, height, restored_nose)` | Sculpted body/haunches/paws/toes/tail, squared jaw/face and carved crown; broad swept nemes panels, almond eyes, broken nose and mouth are modeled as physical geometry |
 | `sphinx_integral_parts(parts)` | Identify the eight overlapping anatomical volumes for one visible carved lion body |
 | `sphinx_head_parts(parts)` | Identify the six closed hood/face/ear/lappet solids for one head sculpture without overlay eye/brow pieces |
 | `combine_sculpture_sources(parts)` | Flatten transformed closed body meshes into a world-space surface input for Blender's voxel union |
@@ -59,21 +59,80 @@ voxel size, source count and vertex count. This remains an original
 illustrative sculpt, not photogrammetry.
 
 The default procedural sculpt now uses a lower head-to-total-length ratio,
-rounded rather than rectangular lion torso/foreleg sections, a broader
-shoulder-to-neck transition, and narrower headdress lappets. A second
-geometry-level weathering pass adds irregular undercut bedding planes and
+rounded rather than rectangular lion torso/foreleg sections, and a broader
+shoulder-to-neck transition. Side and frontal photographs of the monument
+informed the replacement of two dangling tubular headdress lappets with
+**closed, triangular nemes drapery wings** that flare outward, follow a swept
+profile behind the face, and end in a broad shoulder-level hem. Geometry-level
+incised linen folds cross the crown, while finer horizontal stone/cloth
+banding runs through the flared side panels. The face now has a wider squared
+jaw, separated brow and almond-shaped eye relief, less prominent ears and
+additional restrained mineral wear. Blender Cycles visual QA prompted a
+second facial pass: the surviving nose now ends in a shallow damaged stub
+instead of a triangular dark cavity; eye depressions are reduced, visible
+forehead folds extend into the face, and the headdress's horizontal ridges
+are more irregular and quieter under raking light. A second
+reference-based anatomy revision addresses the remaining compressed mask:
+the modeled forehead-to-chin face ratio is now at least **1.24:1 in finished
+world-space meters**, not just in the unscaled source coordinates. This
+addresses the previously overlooked **3.6/4.6 vertical compression** of the
+statue and uses a nonuniform facial landmark deformation: upper orbital
+planes move higher, the jaw/mouth region extends downward and cheeks narrow
+without raising the entire headdress or lion. The jaw also has a tapered,
+undercut chin rather than a constant-width face slab. Separate eyelid ridges
+surround tapered eye depressions, the surviving nasal bridge has flanking
+planes, and the mouth and lips sit above a protruding lower jaw. Both ears
+use editable closed meshes with physically recessed inner conchae and raised
+outer rims rather than undifferentiated blocks. These are inferred
+proportions and sculptural details from frontal/profile photographs, not
+archaeologically measured control points. The additional manifold, proportion
+and ear-relief tests are exercised in focused Python CI. The subsequent
+Cycles render exposed sub-voxel mouth and eyelid relief. Upper/lower
+eyelid ridges, a narrow bowed lip separation, the surviving nasal ridge and
+the ear's inner recess were strengthened so they remain readable after the
+0.019 m head remesh; irregular brow/cheek chips interrupt the overly even
+face. Follow-up Cycles QA required softening the lip cut and shaping the
+inner ear bowl asymmetrically with an upper helix instead of a circular
+donut-like groove. This is deliberately geometric carving rather than extra
+eye or lip
+objects glued over the head. The geometry-level weathering pass adds
+irregular undercut bedding planes and
 small concave mineral pockets to the lion's body and haunches, with much
 weaker wear on the harder head. The facial silhouette now includes a surviving
 nasal bridge and chipped lower tip, narrow recessed sockets, differentiated
 lids, cheek and jaw planes, and shallow carved lips. A rendered QA pass led
-to reduced nasal and eye recesses and a broader, less round nemes crown.
+to reduced nasal and eye recesses and a less round nemes crown. A dedicated
+straight-on `sphinx-frontal` quality shot joins the existing oblique face and
+side profile, allowing all three silhouettes to be checked in CI renders.
 
-The supplied side-profile concept image is used as an **art-direction and
-silhouette reference**, not a surveyed depth map. AERA documents why the
+The newest procedural revision **replaces the loft-derived facial mask** with
+a closed, front/back **anatomical surface mesh** with a height-varying jaw
+outline and direct 3D relief at the upper/lower eyelids, orbital rims, broken
+nasal bridge, cheek planes, philtrum, lips, lower jaw, chin and crown pleats.
+It is a single 25,026-vertex watertight mesh, still editable among the hidden
+head sources, rather than individual decorative facial objects pasted over a
+flat head. Source-level tests check nose/lid/lip/chin depth separation is
+large enough to survive the 0.019 m Blender head voxel union. The landmarks
+and damage remain *inferred from photographs*, so neither the facial features
+nor the stone microstructure should be mistaken for an archaeological scan.
+
+The user's three frontal and side photographs are **visual proportion and
+wear references only**, not surveyed 3D depth maps; the photographs are not
+included or redistributed in the repository. AERA documents why the
 [Sphinx's body beds erode more strongly than the head](https://aeraweb.org/geology-of-the-sphinx/).
 This procedural interpretation emphasizes those differences; it is still an
 artistic approximation: these changes improve the *silhouette*, but do not
 replace a surveyed statue mesh or guarantee authentic facial anatomy.
+
+For the next, **survey-constrained rather than purely parametric** facial
+revision, see [Sphinx Reference-Driven Geometry Fidelity](SPHINX_REFERENCE_FIDELITY.md).
+The reference-only landmark comparison can quantify eyes, chin, nose,
+ears and jaw differences without distributing source photos or third-party
+meshes. An optional frontal-landmark-constrained source mesh deformer now
+shifts the continuous face geometry toward the supplied photographic
+observations while retaining manifold topology and its original rear.
+Until the photogrammetric survey contours and head depths are digitized
+and fitted, the procedural and experimental photo-fitted heads remain proxies.
 
 ### Chipped pyramid stone (geometry, not just bump maps)
 
@@ -140,6 +199,42 @@ inset, and nominal continuous pyramid slope. The surviving present-day
 stone configuration is not fully surveyed by this data. To avoid fabricating
 the site's real relative positions, this preset requires `--kind pyramid`
 and cannot be added to the miniature `giza-study` composition.
+
+### Scan-first facial fidelity: local render-only checkpoint
+
+**The procedural face is a layout fallback, not a documentary-grade likeness.**
+Neither changing its facial control points nor increasing its subdivision
+count can recover missing, historically specific anatomy. Start with a scan of
+the real Giza monument, or a scanned/reconstructed model whose source is
+independently verifiable.
+
+Before a third-party asset is authorized for a production export, review its
+actual geometry in Blender. This separate command supports local **GLB, OBJ
+and FBX** inputs, including paid assets. It preserves imported materials and
+renders frontal facial, three-quarter facial, full side, and whole-frontal
+PNG previews. It writes only these previews and a small inspection JSON; it
+does **not** write a `.blend`, repack textures, export mesh geometry, upload
+any files, or add an asset to Git. This makes it useful for evaluating models
+that may be licensed for rendered video but **not for source redistribution**.
+
+```bash
+blender --background --factory-startup --python-exit-code 1 \
+  --python scripts/blender_entry.py -- \
+  review-sphinx-source \
+  --input /path/to/licensed-sphinx.fbx \
+  --front-axis=-X \
+  --output .review/sphinx-source-check-r01
+```
+
+Inspect `frontal.png` and `face-three-quarter.png` alongside real frontal
+and oblique photographs, and `side-profile.png` against survey elevations.
+Check eyelid/ear topology, the broken nose and chin silhouette, nemes profile,
+repair seams and mineral wear. A successful render checks technical intake,
+**not** source authenticity or licensing. Record the asset's actual creator,
+specific license, permitted output uses and capture provenance outside Git.
+The source's front axis is measured **after Blender imports** that format; if
+the face is not centered, correct the axis and remove surrounding terrain
+before repeating the review.
 
 ### Place your own licensed Sphinx scan
 
@@ -228,7 +323,8 @@ geometry in a documentary-grade shot. Candidates researched in November
 | [Harvard Digital Giza — Sphinx primary model](https://giza.fas.harvard.edu/3dmodels/71021/full/) | Curated institutional 3D visualization and reference views | Public display is not equivalent to permission to extract and redistribute model geometry |
 | [Chenzoss Great Sphinx / Sketchfab](https://sketchfab.com/3d-models/the-great-sphinx-of-giza-egypt-f169dbe7974648babe327179091e0ee3) | CC BY, roughly 40k-triangle model for visual assessment | Listing does not prove original monument capture or true facial geometry |
 | [Watt Institution / Sketchfab](https://sketchfab.com/3d-models/the-great-sphinx-of-giza-c126509af31142a9a0d116e264e7b629) | **Reject** as historical ground truth | Photogrammetry depicts a *1903 bronze miniature*, not the monument |
-| [Scan the World / Zenodo](https://zenodo.org/records/21647117) | Pending rights review | GLB listing exists; commercial redistribution and actual survey origin unverified |
+| [Scan the World / Zenodo](https://zenodo.org/records/21647117) | **Reject** for the Great Sphinx | Five public preview views depict an upright decorative sphinx sculpture, **not the recumbent Giza monument**; download availability and title do not establish correct source geometry |
+| [Fab scan-derived Sphinx](https://www.fab.com/listings/511d31db-91e0-4919-affc-3a0ac634ac26) | Paid/private scan-first candidate: GLB and FBX with scanned stone textures | Advertised scan provenance still needs external validation; review locally, do not place purchased geometry in public Git |
 | [TurboSquid Great Sphinx scan](https://www.turbosquid.com/3d-models/great-sphinx-giza-scan-3d-model-1302443) | Optional paid production reference | Payment does not grant the right to redistribute the mesh in an open-source GLB |
 
 Verify the exact asset's current rights, original capture evidence and visual

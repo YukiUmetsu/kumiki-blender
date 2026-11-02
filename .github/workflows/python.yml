@@ -33,9 +33,16 @@ jobs:
             tests.test_egyptian_monuments.EgyptianMonumentTests.test_rounded_lion_silhouette_and_head_are_not_cartoon_proportioned \
             tests.test_egyptian_monuments.EgyptianMonumentTests.test_sphinx_reference_has_four_distinct_toes_per_forepaw \
             tests.test_egyptian_monuments.EgyptianMonumentTests.test_face_relief_preserves_smooth_back_of_head \
+            tests.test_egyptian_monuments.EgyptianMonumentTests.test_reference_face_proportions_and_carved_human_ears \
+            tests.test_egyptian_monuments.EgyptianMonumentTests.test_sphinx_anatomical_face_has_sculpted_lids_nose_lips_and_chin \
+            tests.test_egyptian_monuments.EgyptianMonumentTests.test_reference_nemes_wings_have_broad_swept_hem_and_closed_stone \
+            tests.test_egyptian_monuments.EgyptianMonumentTests.test_nemes_forehead_has_physical_incised_folds \
             tests.test_rock_weathering.RockWeatheringTests.test_differential_bedding_and_mineral_pits_are_real_closed_relief \
             tests.test_rock_weathering.RockWeatheringTests.test_sphinx_has_rough_anatomical_surfaces_not_smooth_loft \
             tests.test_landmark_scan \
+            tests.test_sphinx_scan_review \
+            tests.test_sphinx_landmarks \
+            tests.test_sphinx_reference_shape \
             tests.test_sphinx_sculpt \
             tests.test_egypt_map \
             tests.test_cli.CLITests.test_sphinx_scan_build_preflights_rights_and_pairs_without_blender \
@@ -481,10 +488,30 @@ jobs:
             --python scripts/blender_entry.py -- \
             build-monument --kind sphinx \
             --output .review/ci/sphinx-procedural
+      - name: Render Sphinx face refitted to photographed feature landmarks
+        env:
+          KUMIKI_RENDER_PROFILE: smoke
+        run: |
+          blender --background --factory-startup --threads 1 --python-exit-code 1 \
+            --python scripts/blender_entry.py -- \
+            build-monument --kind sphinx \
+            --sphinx-face-reference examples/sphinx-frontal-photo-landmarks.json \
+            --sphinx-face-candidate examples/sphinx-frontal-procedural-landmarks.json \
+            --output .review/ci/sphinx-reference-fitted
       - name: Create first-party Sphinx scan integration fixture
         run: |
           blender --background --factory-startup --threads 1 --python-exit-code 1 \
             --python scripts/blender_sphinx_scan_fixture.py
+      - name: Render-only Sphinx source review without exporting source geometry
+        env:
+          KUMIKI_RENDER_PROFILE: smoke
+        run: |
+          blender --background --factory-startup --threads 1 --python-exit-code 1 \
+            --python scripts/blender_entry.py -- \
+            review-sphinx-source \
+            --input .review/ci/first-party-sphinx-proxy.glb \
+            --front-axis=-X \
+            --output .review/ci/sphinx-source-review
       - name: Render Sphinx external geometry intake and anatomical views
         env:
           KUMIKI_RENDER_PROFILE: smoke
@@ -501,23 +528,35 @@ jobs:
         run: |
           python -m kumiki_blender audit-revision --root .review/ci/khufu-petrie
           python -m kumiki_blender audit-revision --root .review/ci/sphinx-procedural
+          python -m kumiki_blender audit-revision --root .review/ci/sphinx-reference-fitted
           python -m kumiki_blender audit-revision --root .review/ci/sphinx-scan-integration
           python -m kumiki_blender audit --model .review/ci/khufu-petrie/model.glb --require-pbr-textures
           python -m kumiki_blender audit --model .review/ci/sphinx-procedural/model.glb --require-pbr-textures
+          python -m kumiki_blender audit --model .review/ci/sphinx-reference-fitted/model.glb --require-pbr-textures
           # The deliberately small first-party Sphinx proxy has no PBR maps;
           # preserve a static-mesh/attribution gate without treating it as a
           # production-quality scan.
           python -m kumiki_blender audit --model .review/ci/sphinx-scan-integration/model.glb
           python -c 'import json; m=json.load(open(".review/ci/khufu-petrie/manifest.json")); assert m["parameters"]["pyramid_courses"] == 201 and m["named_parts"]["pyramid_parts"] == 805'
           python -c 'import json; m=json.load(open(".review/ci/sphinx-procedural/manifest.json")); assert m["sphinx_sculpt_union"]["body"]["sources"] == 8 and m["sphinx_sculpt_union"]["head"]["sources"] == 6 and m["named_parts"]["sphinx_parts"] == 23'
+          python -c 'import json; m=json.load(open(".review/ci/sphinx-reference-fitted/manifest.json")); assert len(m["parameters"]["sphinx_face_fit_sha256"]) == 64 and m["sphinx_sculpt_union"]["head"]["sources"] == 6'
           python -c 'import json; m=json.load(open(".review/ci/sphinx-scan-integration/manifest.json")); s=m["sphinx_scan"]; assert s["provenance"]["commercial_use_allowed"] and s["mesh_objects"] >= 1 and "passes_bounding_envelope_screen" in s["source_geometry_review"] and not s["source_readiness_review"]["technical_screen_passed"] and not s["source_readiness_review"]["monument_source_authenticated"]'
           test -s .review/ci/khufu-petrie/previews/masonry.png
           test -s .review/ci/sphinx-procedural/previews/sphinx.png
           test -s .review/ci/sphinx-procedural/previews/sphinx-profile.png
           test -s .review/ci/sphinx-procedural/previews/sphinx-face.png
+          test -s .review/ci/sphinx-procedural/previews/sphinx-frontal.png
+          test -s .review/ci/sphinx-reference-fitted/previews/sphinx-face.png
+          test -s .review/ci/sphinx-reference-fitted/previews/sphinx-frontal.png
           test -s .review/ci/sphinx-scan-integration/previews/sphinx.png
           test -s .review/ci/sphinx-scan-integration/previews/sphinx-profile.png
           test -s .review/ci/sphinx-scan-integration/previews/sphinx-face.png
+          test -s .review/ci/sphinx-scan-integration/previews/sphinx-frontal.png
+          test -s .review/ci/sphinx-source-review/frontal.png
+          test -s .review/ci/sphinx-source-review/face-three-quarter.png
+          test -s .review/ci/sphinx-source-review/side-profile.png
+          test -s .review/ci/sphinx-source-review/review.json
+          python -c 'import json; m=json.load(open(".review/ci/sphinx-source-review/review.json")); assert m["no_source_geometry_exported"] and m["no_source_textures_exported"] and m["mesh_objects"] == 4 and len(m["previews"]) == 4'
       - name: Upload focused Blender previews and source artifacts
         if: always()
         uses: actions/upload-artifact@v4
@@ -553,6 +592,10 @@ jobs:
             .review/ci/sphinx-procedural/previews/sphinx.png \
             .review/ci/sphinx-procedural/previews/sphinx-profile.png \
             .review/ci/sphinx-procedural/previews/sphinx-face.png \
+            .review/ci/sphinx-procedural/previews/sphinx-frontal.png \
+            .review/ci/sphinx-reference-fitted/previews/sphinx-face.png \
+            .review/ci/sphinx-reference-fitted/previews/sphinx-frontal.png \
             .review/ci/sphinx-scan-integration/previews/sphinx.png \
             .review/ci/sphinx-scan-integration/previews/sphinx-profile.png \
-            .review/ci/sphinx-scan-integration/previews/sphinx-face.png
+            .review/ci/sphinx-scan-integration/previews/sphinx-face.png \
+            .review/ci/sphinx-scan-integration/previews/sphinx-frontal.png

@@ -35,7 +35,11 @@ def main(argv: list[str]) -> int:
             output = io.BytesIO()
             frame.save(output, format="JPEG", quality=79, optimize=True)
         payload = base64.b64encode(output.getvalue()).decode("ascii")
-        label = path.parent.name + "-" + path.stem
+        # Include the artifact directory: otherwise procedural and imported
+        # Sphinx previews both appear as "previews-sphinx-face" in CI logs.
+        label = (path.parent.parent.name + "-" + path.stem
+                 if path.parent.name == "previews"
+                 else path.parent.name + "-" + path.stem)
         print(f"KUMIKI_QA_BEGIN {label}")
         for offset in range(0, len(payload), 2048):
             print("KUMIKI_QA_DATA " + payload[offset:offset+2048])

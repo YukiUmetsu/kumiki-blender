@@ -1,0 +1,19 @@
+{
+  "view": "frontal",
+  "image_size": [612, 408],
+  "anchors": ["crown-top", "left-nemes-wing-tip", "right-nemes-wing-tip"],
+  "landmarks": {
+    "crown-top": [318, 68],
+    "left-nemes-wing-tip": [146, 232],
+    "right-nemes-wing-tip": [486, 232],
+    "left-eye": [269, 149],
+    "right-eye": [356, 149],
+    "nose-break": [315, 186],
+    "mouth-midline": [318, 220],
+    "chin-bottom": [315, 257],
+    "left-ear-center": [197, 154],
+    "right-ear-center": [416, 153],
+    "left-cheek-outline": [241, 185],
+    "right-cheek-outline": [395, 184]
+  }
+}
