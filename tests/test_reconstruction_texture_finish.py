@@ -305,6 +305,57 @@ class TextureFinishTests(unittest.TestCase):
         with self.assertRaisesRegex(ReferenceError, "changed"):
             _validated_package(target)
 
+    @unittest.skipUnless(os.environ.get("KUMIKI_BLENDER_EXECUTABLE"), "requires real Blender 4.2+")
+    def test_real_udim_relighting_gallery_has_fixed_camera_opposing_light_renders(self):
+        self._set_up_cross_page_seam()
+        finished = self.root / "relight-finish"
+        finish_dense_textures(self.dense, finished, TextureFinishSettings())
+        package = self.root / "relight-tiles"
+        package_finished_udim(finished, package)
+        result = self.root / "relighting-review"
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(main(["render-udim-material-review", "--udim-package", str(package),
+                                   "--output", str(result), "--resolution", "96", "--samples", "4",
+                                   "--blender", os.environ["KUMIKI_BLENDER_EXECUTABLE"]]), 0)
+        report = json.loads((result / "material-review-report.json").read_text())
+        self.assertFalse(report["distribution_allowed"])
+        self.assertFalse(report["photo_fidelity_verified"])
+        self.assertEqual(len(report["comparison"]), 6)
+        self.assertEqual(report["azimuths_deg"], [0, 55, 110])
+        self.assertIn("key-left", (result / report["gallery"]).read_text())
+        self.assertTrue((result / report["blend"]["path"]).is_file())
+        for item in report["comparison"]:
+            path = result / item["path"]
+            self.assertEqual(self._digest(path), item["sha256"])
+            with Image.open(path) as image:
+                self.assertEqual(image.size, (96, 96))
+        left = next(item for item in report["comparison"] if item["azimuth_deg"] == 55
+                    and item["lighting"] == "key-left")
+        right = next(item for item in report["comparison"] if item["azimuth_deg"] == 55
+                     and item["lighting"] == "key-right")
+        self.assertNotEqual(left["sha256"], right["sha256"])
+        scene_only = self.root / "relighting-scene-only"
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(main(["render-udim-material-review", "--udim-package", str(package),
+                                   "--output", str(scene_only), "--no-renders",
+                                   "--blender", os.environ["KUMIKI_BLENDER_EXECUTABLE"]]), 0)
+        solo = json.loads((scene_only / "material-review-report.json").read_text())
+        self.assertEqual(solo["comparison"], [])
+        self.assertIsNone(solo["gallery"])
+        self.assertTrue((scene_only / solo["blend"]["path"]).is_file())
+
+    def test_udim_relighting_validates_before_output_directory(self):
+        self._set_up_cross_page_seam()
+        finished = self.root / "bad-review-finish"
+        finish_dense_textures(self.dense, finished, TextureFinishSettings())
+        package = self.root / "bad-review-package"
+        package_finished_udim(finished, package)
+        output = self.root / "bad-review"
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(main(["render-udim-material-review", "--udim-package", str(package),
+                                   "--output", str(output), "--resolution", "16"]), 2)
+        self.assertFalse(output.exists())
+
     def test_unpinned_mtl_resource_directives_cannot_reach_blender(self):
         self.mtl.write_text(self.mtl.read_text() + "bump ../../untrusted-normal.png\n")
         with self.assertRaisesRegex(ReferenceError, "unsupported or unpinned"):

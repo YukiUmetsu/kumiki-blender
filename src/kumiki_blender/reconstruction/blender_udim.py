@@ -92,6 +92,8 @@ def _validated_package(directory: str | Path) -> tuple[Path, dict[str, Any]]:
                 raise ReferenceError("UDIM height tile has no valid displacement scale")
         elif page.get("displacement_scale_m") is not None:
             raise ReferenceError("UDIM displacement scale requires a height tile")
+    if 1001 not in tile_numbers:
+        raise ReferenceError("UDIM package requires a 1001 base tile")
     for channel in ("roughness", "height"):
         if (any(page.get(channel) is None for page in pages)
                 and any(page.get(channel) is not None for page in pages)):
