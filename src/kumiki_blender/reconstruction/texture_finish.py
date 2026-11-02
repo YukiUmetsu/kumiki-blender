@@ -39,6 +39,8 @@ class TextureFinishSettings:
     surface_max_delight_ev: float = 1.0
     surface_low_frequency_radius: int = 96
     surface_cleanup_radius: int = 0
+    surface_multiview_strength: float = 0.0
+    surface_multiview_max_ev: float = 1.5
 
     def validate(self) -> "TextureFinishSettings":
         for name, low, high in (("exposure_ev", -3.0, 3.0),
@@ -67,12 +69,14 @@ class TextureFinishSettings:
         from .surface_finish import SurfaceOptions
 
         SurfaceOptions(self.surface_delight_strength, self.surface_max_delight_ev,
-                       self.surface_low_frequency_radius, self.surface_cleanup_radius).validate()
+                       self.surface_low_frequency_radius, self.surface_cleanup_radius,
+                       self.surface_multiview_strength, self.surface_multiview_max_ev).validate()
         if self.surface_recipe is not None and (not isinstance(self.surface_recipe, str)
                                                  or not self.surface_recipe):
             raise ReferenceError("surface_recipe must be a nonempty path")
         if (self.surface_recipe is None and (self.surface_delight_strength != 0
-                                              or self.surface_cleanup_radius != 0)):
+                                              or self.surface_cleanup_radius != 0
+                                              or self.surface_multiview_strength != 0)):
             raise ReferenceError("Advanced surface operations require a surface_recipe")
         return self
 
@@ -210,7 +214,9 @@ def finish_dense_textures(dense_revision: str | Path, output: str | Path,
         surface_options = SurfaceOptions(settings.surface_delight_strength,
                                          settings.surface_max_delight_ev,
                                          settings.surface_low_frequency_radius,
-                                         settings.surface_cleanup_radius)
+                                         settings.surface_cleanup_radius,
+                                         settings.surface_multiview_strength,
+                                         settings.surface_multiview_max_ev)
     seam_balance: dict[str, float] = {}
     seam_diagnostics: dict[str, Any] | None = None
     if settings.balance_uv_seams:

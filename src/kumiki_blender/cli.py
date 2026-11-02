@@ -283,6 +283,10 @@ def main(argv: list[str] | None = None) -> int:
                                        help="Heuristic illumination blur radius when no guidance map exists")
     texture_finish_parser.add_argument("--surface-cleanup-radius", type=int, default=0,
                                        help="Radius 1–16 for explicitly masked small texture defects")
+    texture_finish_parser.add_argument("--surface-multiview-strength", type=float, default=0.0,
+                                       help="0–1 confidence-masked fusion of 3–8 UV-reprojected photos")
+    texture_finish_parser.add_argument("--surface-multiview-max-ev", type=float, default=1.5,
+                                       help="Maximum per-pixel and per-material relative correction (0–2 EV)")
     udim_parser = subcommands.add_parser(
         "package-finished-udim", help="Copy a verified finished multi-atlas OBJ to numbered UDIM tiles")
     udim_parser.add_argument("--texture-finish", type=Path, required=True)
@@ -475,7 +479,9 @@ def main(argv: list[str] | None = None) -> int:
                                                     surface_delight_strength=args.surface_delight_strength,
                                                     surface_max_delight_ev=args.surface_max_delight_ev,
                                                     surface_low_frequency_radius=args.surface_low_frequency_radius,
-                                                    surface_cleanup_radius=args.surface_cleanup_radius))
+                                                    surface_cleanup_radius=args.surface_cleanup_radius,
+                                                    surface_multiview_strength=args.surface_multiview_strength,
+                                                    surface_multiview_max_ev=args.surface_multiview_max_ev))
             except ReferenceError as error:
                 raise RecipeError(str(error)) from error
             print(json.dumps(report, indent=2))

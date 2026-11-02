@@ -54,12 +54,20 @@ class MaterialRegion:
 
 
 @dataclass(frozen=True)
+class UVPhotoObservation:
+    id: str
+    photo: PinnedSurfaceImage
+    confidence: PinnedSurfaceImage
+
+
+@dataclass(frozen=True)
 class AtlasSurfaceSpec:
     regions: tuple[MaterialRegion, ...]
     illumination_map: PinnedSurfaceImage | None = None
     damage_mask: PinnedSurfaceImage | None = None
     height_map: PinnedSurfaceImage | None = None
     displacement_scale_m: float | None = None
+    observations: tuple[UVPhotoObservation, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -68,10 +76,14 @@ class SurfaceOptions:
     max_delight_ev: float = 1.0
     low_frequency_radius: int = 96
     cleanup_radius: int = 0
+    multiview_strength: float = 0.0
+    multiview_max_ev: float = 1.5
 
     def validate(self) -> "SurfaceOptions":
         for name, low, high in (("delight_strength", 0, 1),
-                                ("max_delight_ev", 0, 2)):
+                                ("max_delight_ev", 0, 2),
+                                ("multiview_strength", 0, 1),
+                                ("multiview_max_ev", 0, 2)):
             number = getattr(self, name)
             if type(number) not in (float, int) or not math.isfinite(number) or not low <= number <= high:
                 raise ReferenceError(f"{name} must be finite in [{low}, {high}]")
@@ -117,6 +129,8 @@ def _pinned_image(directory: Path, relative: str, size: tuple[int, int],
                 raise ReferenceError("Height map must be a genuine 16-bit grayscale PNG")
             if grayscale and not height and image.mode != "L":
                 raise ReferenceError("Surface mask/illumination must be 8-bit grayscale PNG")
+            if not grayscale and image.mode not in ("RGB", "RGBA"):
+                raise ReferenceError("UV photo observations must be RGB or RGBA PNG")
             image.verify()
             mode = image.mode
         digest = hashlib.sha256(resolved.read_bytes()).hexdigest()
@@ -151,7 +165,8 @@ def load_surface_recipe(path: str | Path,
     result: dict[str, AtlasSurfaceSpec] = {}
     for name, entry in data["atlases"].items():
         if not isinstance(entry, dict) or not {"regions"} <= set(entry) or set(entry) - {
-                "regions", "illumination_map", "damage_mask", "height_map", "displacement_scale_m"}:
+                "regions", "illumination_map", "damage_mask", "height_map",
+                "displacement_scale_m", "observations"}:
             raise ReferenceError(f"Invalid material regions/maps for atlas {name}")
         atlas = atlases[name]
         with Image.open(atlas) as original:
@@ -194,8 +209,28 @@ def load_surface_recipe(path: str | Path,
                 (scale is not None and (type(scale) not in (float, int)
                                         or not math.isfinite(scale) or not .00001 <= scale <= .5))):
             raise ReferenceError("height_map requires a displacement_scale_m in [0.00001, 0.5]")
+        observations: list[UVPhotoObservation] = []
+        if "observations" in entry:
+            source_views = entry["observations"]
+            if not isinstance(source_views, list) or not 3 <= len(source_views) <= 8:
+                raise ReferenceError("UV-aligned photo observations require 3–8 distinct views")
+            view_ids: set[str] = set()
+            photo_paths: set[Path] = set()
+            for view in source_views:
+                if (not isinstance(view, dict) or set(view) != {"id", "photo", "confidence"}
+                        or not isinstance(view["id"], str)
+                        or not _IDENTIFIER.fullmatch(view["id"]) or view["id"] in view_ids):
+                    raise ReferenceError("UV photo observations require unique view ids, photo and confidence")
+                photo = _pinned_image(directory, view["photo"], size, grayscale=False)
+                if photo.path in photo_paths:
+                    raise ReferenceError("UV observations must use distinct photo files per view")
+                confidence = _pinned_image(directory, view["confidence"], size)
+                observations.append(UVPhotoObservation(view["id"], photo, confidence))
+                view_ids.add(view["id"])
+                photo_paths.add(photo.path)
         result[name] = AtlasSurfaceSpec(tuple(regions), illumination, damage, height,
-                                        float(scale) if scale is not None else None)
+                                        float(scale) if scale is not None else None,
+                                        tuple(observations))
     return result
 
 
@@ -292,6 +327,16 @@ def finish_surface_atlas(photo: Any, spec: AtlasSurfaceSpec,
     has_alpha = "A" in photo.getbands() or "transparency" in photo.info
     original = photo.convert("RGBA" if has_alpha else "RGB")
     working = original
+    multiview_quality = None
+    if options.multiview_strength > 0:
+        if len(spec.observations) < 3:
+            raise ReferenceError("Multi-view finishing requires 3–8 UV-reprojected photo observations")
+        from .multiview_fusion import fuse_uv_photo_observations
+
+        working, multiview_quality = fuse_uv_photo_observations(
+            working, spec.regions, spec.observations,
+            strength=options.multiview_strength, max_ev=options.multiview_max_ev,
+            protect_black=protect_black)
     cleanup_count = 0
     if spec.damage_mask is not None:
         working, cleanup_count = _cleanup_damage(
@@ -353,6 +398,7 @@ def finish_surface_atlas(photo: Any, spec: AtlasSurfaceSpec,
         "cleanup_pixels": cleanup_count,
         "roughness_source": ("material-priors-and-authored-maps-not-measured"
                              if any(rough_maps) else "material-priors-not-measured"),
+        "multiview": multiview_quality,
         "regions": [{"id": item.id, "roughness": item.roughness,
                      "mask_sha256": item.mask.sha256,
                      "roughness_map_sha256": (item.roughness_map.sha256

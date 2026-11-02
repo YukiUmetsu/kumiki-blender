@@ -448,6 +448,11 @@ subdirectories. Files and the recipe are hash-pinned before processing.
         {"id": "oxidized-metal", "mask": "masks/metal.png", "roughness": 0.72}
       ],
       "illumination_map": "guides/lighting.png",
+      "observations": [
+        {"id": "front", "photo": "reprojected/front-uv.png", "confidence": "masks/front-visible.png"},
+        {"id": "left", "photo": "reprojected/left-uv.png", "confidence": "masks/left-visible.png"},
+        {"id": "right", "photo": "reprojected/right-uv.png", "confidence": "masks/right-visible.png"}
+      ],
       "damage_mask": "guides/camera-artifacts.png",
       "height_map": "maps/scanned-height-16bit.png",
       "displacement_scale_m": 0.012
@@ -471,6 +476,23 @@ subdirectories. Files and the recipe are hash-pinned before processing.
   The fallback can remove real low-frequency pigment/weathering: inspect every
   original/finished atlas comparison. This is NOT a solved intrinsic-image
   decomposition problem.
+- **Multiple photographic views (opt-in):** supply 3–8 *distinct UV-reprojected*
+  RGB PNGs of the **same object in the same UV coordinates**, with one
+  grayscale visibility/confidence mask for each. These are **not raw camera
+  JPGs**; an image taken from a side angle cannot be used as a UV map until
+  calibrated reprojection and visibility/occlusion masking have been performed.
+  Use `--surface-multiview-strength 0.8 --surface-multiview-max-ev 1.5` to
+  normalize view illumination **separately for each material region** and
+  blend the confidence-weighted median in **linear RGB**. A pixel changes only
+  with at least three independent valid observations; unobserved islands,
+  source-black gutters and transparent padding stay untouched. The EV bound
+  prevents aggressive color invention. See the per-atlas `quality.multiview`
+  report for view gains, coverage, input hashes and change rate. A shadow
+  appearing in only one of three views can be reduced, but a shadow present
+  in all views cannot be separated reliably from real pigment. Confidence
+  masks must exclude back-facing/occluded surfaces and foreground objects.
+  This is a conservative multiview **color estimate**, **not calibrated
+  physical albedo** or automatic camera reprojection.
 - **Damage cleanup:** only areas explicitly painted into `damage_mask` are
   filled with nearby *same-material* colors. The mask may cover at most 5% of
   an atlas and `--surface-cleanup-radius` must be 1–16. Do not paint original

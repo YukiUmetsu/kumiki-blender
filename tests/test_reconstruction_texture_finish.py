@@ -159,6 +159,52 @@ class TextureFinishTests(unittest.TestCase):
                                   TextureFinishSettings(surface_recipe=str(recipe)))
         self.assertFalse(destination.exists())
 
+    def test_cli_multiview_uv_observation_fusion_is_opt_in_and_pinned(self):
+        mask = self.root / "fusion-mask.png"
+        Image.new("L", (48, 32), 255).save(mask)
+        observations = []
+        for index in range(3):
+            view = self.root / f"fusion-view-{index}.png"
+            confidence = self.root / f"fusion-confidence-{index}.png"
+            with Image.open(self.atlas) as source:
+                copy = source.convert("RGB")
+            if index == 0:
+                for y in range(10, 20):
+                    for x in range(20, 30):
+                        copy.putpixel((x, y), (25, 35, 45))
+            copy.save(view)
+            Image.new("L", (48, 32), 255).save(confidence)
+            observations.append({"id": f"angle-{index}",
+                                 "photo": view.name, "confidence": confidence.name})
+        recipe = self.root / "fusion-surface.json"
+        recipe.write_text(json.dumps({"schema_version": 1, "atlases": {
+            self.atlas.name: {"regions": [{"id": "stone", "mask": mask.name,
+                                             "roughness": .9}],
+                              "observations": observations}}}))
+        original = self.atlas.read_bytes()
+        destination = self.root / "fusion-finished"
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(main(["finish-dense-textures", "--dense-revision", str(self.dense),
+                                   "--output", str(destination), "--surface-recipe", str(recipe),
+                                   "--surface-multiview-strength", "1",
+                                   "--surface-multiview-max-ev", "1.5"]), 0)
+        record = json.loads((destination / "texture-finish-report.json").read_text())
+        fusion = record["surface_maps"][0]["quality"]["multiview"]
+        self.assertEqual(fusion["view_count"], 3)
+        self.assertGreater(fusion["independently_covered_fraction"], .5)
+        self.assertEqual(fusion["method"],
+                         "UV-registered-photo-weighted-median / not-calibrated-reflectance")
+        self.assertEqual(self.atlas.read_bytes(), original)
+        plan = plan_dense_blender_review(self.dense, self.root / "fused-blender",
+                                         textured=True, texture_finish=destination)
+        self.assertEqual(len(plan["surface_maps"]), 1)
+        bad = self.root / "invalid-no-recipe"
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(main(["finish-dense-textures", "--dense-revision", str(self.dense),
+                                   "--output", str(bad),
+                                   "--surface-multiview-strength", "1"]), 2)
+        self.assertFalse(bad.exists())
+
     @unittest.skipUnless(os.environ.get("KUMIKI_BLENDER_EXECUTABLE"), "requires real Blender 4.2+")
     def test_real_blender_packs_roughness_and_height_and_exports_glb(self):
         region = self.root / "render-region.png"
