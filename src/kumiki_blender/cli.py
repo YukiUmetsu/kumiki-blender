@@ -21,6 +21,8 @@ from .egyptian_monuments import MonumentError, make_monument_study
 from .egypt_map import CITY_MARKERS, LABELS, RIVER_CHANNELS, EgyptMapSpec
 from .geography.fuji import load_dem
 from .glb_audit import AuditError, audit_glb
+from .glb_motion import MotionExportError, write_glb_motion
+from .physics_plan import PhysicsPlanError, load_physics_plan
 from .lattice import make_lattice_tower
 from .landmark_scan import prepare_sphinx_scan
 from .material_overrides import load_material_overrides, verify_material_overrides
@@ -132,6 +134,21 @@ def main(argv: list[str] | None = None) -> int:
     audit_parser = subcommands.add_parser("audit")
     audit_parser.add_argument("--model", type=Path, required=True)
     audit_parser.add_argument("--require-pbr-textures", action="store_true")
+    motion_parser = subcommands.add_parser(
+        "export-motion", help="Convert Blender-baked glTF node clips into Kumiki PM2 motion JSON")
+    motion_parser.add_argument("--model", type=Path, required=True, help="Animated Blender-exported GLB")
+    motion_parser.add_argument("--clip", help="Clip name; optional when GLB has exactly one animation")
+    motion_parser.add_argument("--output", type=Path, required=True, help="New PM2 baked-actions.json")
+    motion_parser.add_argument("--action-id", help="Optional Kumiki action ID; defaults to <clip>-baked")
+    motion_parser.add_argument("--contacts", type=Path, help="Optional validated contact cue array JSON")
+    motion_parser.add_argument("--merge-clips", action="store_true", help="Combine disjoint per-object simulation clips into one PM2 action")
+    motion_parser.add_argument("--resample-mixed", action="store_true", help="Permit mixed glTF STEP/LINEAR channels via frame-exact 30-fps resampling")
+    for command in ("plan-physics", "build-physics"):
+        physics_parser = subcommands.add_parser(command, help="Validate or bake a declarative Blender rigid-body shot")
+        physics_parser.add_argument("--spec", type=Path, required=True)
+        if command == "build-physics":
+            physics_parser.add_argument("--output", type=Path, required=True,
+                                        help="New, immutable motion bundle (requires Blender background with a loaded .blend)")
     revision_parser = subcommands.add_parser("audit-revision")
     revision_parser.add_argument("--root", type=Path, required=True)
     visual_parser = subcommands.add_parser("visual-qa", help="Contact sheet and optional render regression")
@@ -311,6 +328,31 @@ def main(argv: list[str] | None = None) -> int:
     texture_finish_parser.add_argument("--auto-exposure-luma", type=float,
                                        help="Opt-in target median brightness (32–224) across all atlas pages")
     texture_finish_parser.add_argument("--max-auto-exposure-ev", type=float, default=1.0)
+    texture_finish_parser.add_argument("--surface-recipe", type=Path,
+                                       help="Optional local per-atlas material masks, lighting, cleanup and height JSON")
+    texture_finish_parser.add_argument("--surface-delight-strength", type=float, default=0.0,
+                                       help="0–1 bounded linear-light photo de-lighting (guided map preferred)")
+    texture_finish_parser.add_argument("--surface-max-delight-ev", type=float, default=1.0)
+    texture_finish_parser.add_argument("--surface-low-frequency-radius", type=int, default=96,
+                                       help="Heuristic illumination blur radius when no guidance map exists")
+    texture_finish_parser.add_argument("--surface-cleanup-radius", type=int, default=0,
+                                       help="Radius 1–16 for explicitly masked small texture defects")
+    udim_parser = subcommands.add_parser(
+        "package-finished-udim", help="Copy a verified finished multi-atlas OBJ to numbered UDIM tiles")
+    udim_parser.add_argument("--texture-finish", type=Path, required=True)
+    udim_parser.add_argument("--output", type=Path, required=True)
+    udim_review = subcommands.add_parser(
+        "render-udim-material-review",
+        help="Compare one verified UDIM model from three angles under opposing lights")
+    udim_review.add_argument("--udim-package", type=Path, required=True)
+    udim_review.add_argument("--output", type=Path, required=True)
+    udim_review.add_argument("--resolution", type=int, default=512)
+    udim_review.add_argument("--samples", type=int, default=24)
+    udim_review.add_argument("--matched-views", type=int, default=0,
+                             help="Include 1–6 exact registered COLMAP/photo views, if available")
+    udim_review.add_argument("--matched-resolution-percent", type=int, default=25)
+    udim_review.add_argument("--no-renders", action="store_true")
+    udim_review.add_argument("--blender", default="blender")
     for command in ("plan-dense-blender-review", "render-dense-blender-review"):
         review_dense = subcommands.add_parser(
             command, help="Inspect or create a private editable Blender scene from a dense PLY")
@@ -387,6 +429,29 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     try:
+        if args.command in ("plan-physics", "build-physics"):
+            shot = load_physics_plan(args.spec)
+            if args.command == "plan-physics":
+                print(json.dumps({"asset_id": shot.asset_id, "action_id": shot.action_id,
+                                  "duration_frames": shot.duration_frames,
+                                  "rules": len(shot.bodies), "active_rules": sum(body.kind == "active" for body in shot.bodies),
+                                  "constraints": len(shot.constraints), "ground": shot.ground is not None,
+                                  "gravity_mps2": shot.gravity_mps2}, indent=2))
+                return 0
+            try:
+                import bpy  # type: ignore[import-not-found]
+            except ImportError as error:
+                raise PhysicsPlanError("build-physics requires Blender: blender --background source.blend --python scripts/blender_entry.py -- build-physics --spec plan.json --output new-revision") from error
+            from .blender_physics import build_physics_shot
+            print(json.dumps(build_physics_shot(bpy, shot, args.output), indent=2))
+            return 0
+        if args.command == "export-motion":
+            print(json.dumps(write_glb_motion(args.model, args.output, clip_name=args.clip,
+                                              action_id=args.action_id,
+                                              contacts_path=args.contacts,
+                                              merge_clips=args.merge_clips,
+                                              resample_mixed=args.resample_mixed), indent=2))
+            return 0
         if args.command == "prepare-dense-masks":
             from .reconstruction.masking import generate_rectified_masks
             from .reconstruction.references import ReferenceError
@@ -458,7 +523,60 @@ def main(argv: list[str] | None = None) -> int:
                                                     max_seam_ev=args.max_seam_ev,
                                                     min_seam_anchors=args.min_seam_anchors,
                                                     auto_exposure_luma=args.auto_exposure_luma,
-                                                    max_auto_exposure_ev=args.max_auto_exposure_ev))
+                                                    max_auto_exposure_ev=args.max_auto_exposure_ev,
+                                                    surface_recipe=(str(args.surface_recipe)
+                                                                    if args.surface_recipe else None),
+                                                    surface_delight_strength=args.surface_delight_strength,
+                                                    surface_max_delight_ev=args.surface_max_delight_ev,
+                                                    surface_low_frequency_radius=args.surface_low_frequency_radius,
+                                                    surface_cleanup_radius=args.surface_cleanup_radius))
+            except ReferenceError as error:
+                raise RecipeError(str(error)) from error
+            print(json.dumps(report, indent=2))
+            return 0
+        if args.command == "package-finished-udim":
+            from .reconstruction.references import ReferenceError
+            from .reconstruction.udim import package_finished_udim
+            try:
+                report = package_finished_udim(args.texture_finish, args.output)
+            except ReferenceError as error:
+                raise RecipeError(str(error)) from error
+            print(json.dumps(report, indent=2))
+            return 0
+        if args.command == "render-udim-material-review":
+            from .reconstruction.references import ReferenceError
+            from .reconstruction.udim_relighting import (build_udim_relighting_review,
+                                                          validate_udim_relighting_request)
+            try:
+                validate_udim_relighting_request(args.udim_package, args.output,
+                                                 args.resolution, args.samples,
+                                                 args.matched_views,
+                                                 args.matched_resolution_percent)
+            except ReferenceError as error:
+                raise RecipeError(str(error)) from error
+            try:
+                import bpy  # type: ignore[import-not-found]
+            except ImportError:
+                executable = shutil.which(args.blender)
+                if not executable:
+                    raise RuntimeError(f"Blender executable not found: {args.blender}")
+                entry = Path(__file__).resolve().parents[2] / "scripts/blender_entry.py"
+                command = [executable, "--background", "--factory-startup",
+                           "--python-exit-code", "1", "--python", str(entry), "--",
+                           "render-udim-material-review", "--udim-package",
+                           str(args.udim_package.resolve()), "--output", str(args.output.resolve()),
+                           "--resolution", str(args.resolution), "--samples", str(args.samples),
+                           "--matched-views", str(args.matched_views),
+                           "--matched-resolution-percent", str(args.matched_resolution_percent)]
+                if args.no_renders:
+                    command.append("--no-renders")
+                return subprocess.run(command, check=False).returncode
+            try:
+                report = build_udim_relighting_review(
+                    bpy, args.udim_package, args.output, resolution=args.resolution,
+                    samples=args.samples, render_previews=not args.no_renders,
+                    matched_views=args.matched_views,
+                    matched_resolution_percent=args.matched_resolution_percent)
             except ReferenceError as error:
                 raise RecipeError(str(error)) from error
             print(json.dumps(report, indent=2))
@@ -1176,7 +1294,7 @@ def main(argv: list[str] | None = None) -> int:
         manifest = build_scene(recipe, plan, output, bpy_module=bpy)
         print(json.dumps(manifest, indent=2))
         return 0
-    except (CatalogError, RecipeError, PorticoError, FacadeError, MonumentError, GeometryError, AssetImportError, HeadFitError, MakeHumanSourceError, RenderProfileError, RevisionAuditError, AuditError, ExportAuditError,
+    except (CatalogError, RecipeError, PorticoError, FacadeError, MonumentError, GeometryError, AssetImportError, HeadFitError, MakeHumanSourceError, RenderProfileError, RevisionAuditError, AuditError, ExportAuditError, MotionExportError, PhysicsPlanError,
             SurfaceError, RuntimeError, OSError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 2

@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "asset_id": "mechanical-constraint-smoke",
+  "action_id": "mechanical-joints",
+  "duration_frames": 60,
+  "substeps": 24,
+  "solver_iterations": 24,
+  "bodies": [
+    {"target": "name:hinge-base", "kind": "passive", "friction": 0.4, "restitution": 0.02},
+    {"target": "name:hinge-arm", "kind": "active", "mass_kg": 0.6, "friction": 0.4, "restitution": 0.02},
+    {"target": "name:slider-guide", "kind": "passive", "friction": 0.4, "restitution": 0.02},
+    {"target": "name:slider-weight", "kind": "active", "mass_kg": 0.6, "friction": 0.4, "restitution": 0.02},
+    {"target": "name:fixed-base", "kind": "passive", "friction": 0.4, "restitution": 0.02},
+    {"target": "name:fixed-piece", "kind": "active", "mass_kg": 0.6, "friction": 0.4, "restitution": 0.02}
+  ],
+  "constraints": [
+    {"id": "door-pin", "kind": "hinge", "body_a": "name:hinge-base", "body_b": "name:hinge-arm",
+     "pivot_m": [0.05, 0, 1], "axis": [0, 1, 0], "limits_deg": [-120, 120]},
+    {"id": "linear-rail", "kind": "slider", "body_a": "name:slider-guide", "body_b": "name:slider-weight",
+     "pivot_m": [2.2, 0, 1.4], "axis": [0, 0, 1], "limits_m": [-0.4, 0.1]},
+    {"id": "weld", "kind": "fixed", "body_a": "name:fixed-base", "body_b": "name:fixed-piece",
+     "pivot_m": [4.2, 0, 1.2]}
+  ]
+}

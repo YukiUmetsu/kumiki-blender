@@ -75,6 +75,18 @@ def _textured_obj_plan(root: Path, report: dict[str, Any],
     if material.is_symlink() or not material.is_file() or material.stat().st_size > 65_536:
         raise ReferenceError("OBJ MTL file missing, linked or oversized")
     mtl_lines = material.read_text(encoding="utf-8").splitlines()
+    # OBJ material loaders accept additional path-bearing directives such as
+    # bump, disp, norm and refl. Reject unknown MTL operations completely;
+    # checking only map_* would still let Blender load unpinned local files.
+    safe_mtl_directives = {
+        "newmtl", "Ka", "Kd", "Ks", "Ke", "Ns", "Ni", "d", "Tr",
+        "illum", "Tf", "Pr", "Pm", "Ps", "Pc", "Pcr", "aniso", "anisor",
+        "map_Kd",
+    }
+    if any(line.strip() and not line.lstrip().startswith("#")
+           and line.split(maxsplit=1)[0] not in safe_mtl_directives
+           for line in mtl_lines):
+        raise ReferenceError("OBJ MTL contains unsupported or unpinned resource directives")
     texture_names = [line.split(maxsplit=1)[1].strip() for line in mtl_lines
                      if line.startswith("map_Kd ")]
     if (not texture_names or any(name not in {Path(item["path"]).name
@@ -86,6 +98,20 @@ def _textured_obj_plan(root: Path, report: dict[str, Any],
     return {"source_obj": str(obj), "source_obj_sha256": digest,
             "source_mtl": str(material), "texture_atlases": verified_atlases,
             "textured_faces": face_count}
+
+
+def _png_metadata(path: Path) -> tuple[tuple[int, int], int, int]:
+    """Read PNG IHDR without Pillow (Blender's Python has no QA extras)."""
+    with path.open("rb") as stream:
+        header = stream.read(26)
+    if (len(header) != 26 or header[:8] != b"\x89PNG\r\n\x1a\n"
+            or header[8:16] != b"\x00\x00\x00\rIHDR"):
+        raise ReferenceError("Finished surface image is not a valid PNG header")
+    dimensions = (int.from_bytes(header[16:20], "big"),
+                  int.from_bytes(header[20:24], "big"))
+    if not all(0 < size <= 16384 for size in dimensions):
+        raise ReferenceError("Finished surface PNG dimensions are invalid")
+    return dimensions, header[24], header[25]
 
 
 def _finished_texture_plan(root: Path, dense_report: dict[str, Any],
@@ -120,9 +146,111 @@ def _finished_texture_plan(root: Path, dense_report: dict[str, Any],
             or mtl_record["sha256"] != record["source_mtl_sha256"]
             or finished["textured_faces"] != original["textured_faces"]):
         raise ReferenceError("Finished texture geometry or MTL changed since original")
+    surface_entries = record.get("surface_maps", [])
+    if not isinstance(surface_entries, list):
+        raise ReferenceError("Finished surface maps must be a list")
+    if record.get("surface_recipe_sha256") is not None and not surface_entries:
+        raise ReferenceError("Finished surface maps missing despite a recorded recipe")
+    if surface_entries:
+        names = [item.get("atlas") for item in surface_entries if isinstance(item, dict)]
+        if (len(names) != len(surface_entries) or len(names) != len(original_atlases)
+                or set(names) != set(original_atlases)):
+            raise ReferenceError("Finished surface maps need exactly one entry per atlas; duplicate/missing records")
+    verified_surface = []
+    for entry in surface_entries:
+        if not isinstance(entry, dict) or not isinstance(entry.get("atlas"), str):
+            raise ReferenceError("Invalid finished surface map record")
+        name = entry["atlas"]
+        maps: dict[str, Any] = {}
+        for channel in ("roughness", "height"):
+            asset = entry.get(channel)
+            if asset is None:
+                if channel == "roughness":
+                    raise ReferenceError("Finished material surface requires roughness map")
+                maps[channel] = None
+                continue
+            expected_name = name + (".roughness.png" if channel == "roughness" else ".height.png")
+            if (not isinstance(asset, dict) or asset.get("path") != expected_name
+                    or not isinstance(asset.get("sha256"), str)):
+                raise ReferenceError("Invalid finished surface map path/hash")
+            path = finish / expected_name
+            if (path.is_symlink() or not path.is_file()
+                    or path.stat().st_size > 512 * 1024 * 1024
+                    or _sha256(path) != asset["sha256"]):
+                raise ReferenceError(f"Surface map changed after finishing: {expected_name}")
+            dimensions, depth, color_type = _png_metadata(path)
+            if (depth != (8 if channel == "roughness" else 16) or color_type != 0):
+                raise ReferenceError("Finished surface map requires grayscale PNG at expected bit depth")
+            maps[channel] = {"path": str(path), "sha256": asset["sha256"],
+                             "dimensions": dimensions}
+        scale = entry.get("displacement_scale_m")
+        if ((maps["height"] is None) != (scale is None)
+                or (scale is not None and (type(scale) not in (float, int)
+                                             or not math.isfinite(scale) or not .00001 <= scale <= .5))):
+            raise ReferenceError("Finished height displacement scale is invalid")
+        # Match auxiliary PNG headers to pinned albedo metadata without
+        # requiring optional Pillow inside Blender's bundled Python.
+        atlas_records = [item for item in record.get("texture_atlases", [])
+                         if isinstance(item, dict) and item.get("path") == name]
+        if len(atlas_records) != 1:
+            raise ReferenceError("Finished surface albedo metadata is missing or duplicate")
+        reported_dims = atlas_records[0].get("dimensions")
+        if (not isinstance(reported_dims, list) or len(reported_dims) != 2
+                or any(type(value) is not int or not 0 < value <= 16384
+                       for value in reported_dims)):
+            raise ReferenceError("Finished surface albedo dimensions are invalid")
+        source_size = tuple(reported_dims)
+        if name.lower().endswith(".png") and _png_metadata(finish / name)[0] != source_size:
+            raise ReferenceError("Finished albedo dimensions differ from its recorded metadata")
+        for map_record in maps.values():
+            if map_record is not None and map_record["dimensions"] != source_size:
+                raise ReferenceError("Finished surface map dimensions differ from albedo")
+        verified_surface.append({"atlas": name,
+                                 **{key: ({"path": value["path"], "sha256": value["sha256"]}
+                                     if value is not None else None) for key, value in maps.items()},
+                                 "displacement_scale_m": scale})
     return {**finished, "texture_finish_revision": str(finish),
             "texture_finish_settings": record.get("settings"),
+            "surface_maps": verified_surface,
             "texture_quality_verified": False}
+
+
+def _attach_finished_surface_nodes(bpy: Any, material: Any,
+                                   entry: dict[str, Any]) -> None:
+    """Use hash-checked PBR maps. True height affects Blender, not the GLB."""
+    nodes, links = material.node_tree.nodes, material.node_tree.links
+    shader = next((node for node in nodes if node.type == "BSDF_PRINCIPLED"), None)
+    if shader is None:
+        raise ReferenceError("Finished material has no Principled BSDF")
+
+    def texture(channel: str) -> Any:
+        source = entry[channel]
+        image = bpy.data.images.load(source["path"], check_existing=False)
+        image.colorspace_settings.name = "Non-Color"
+        image.pack()
+        if image.packed_file is None:
+            raise ReferenceError(f"Cannot pack finished {channel} map")
+        node = nodes.new("ShaderNodeTexImage")
+        node.label = f"Kumiki / finished {channel} / {entry['atlas']}"
+        node.image = image
+        return node
+
+    rough = texture("roughness")
+    links.new(rough.outputs["Color"], shader.inputs["Roughness"])
+    if entry["height"] is not None:
+        height = texture("height")
+        displacement = nodes.new("ShaderNodeDisplacement")
+        displacement.inputs["Scale"].default_value = entry["displacement_scale_m"]
+        displacement.inputs["Midlevel"].default_value = 0.5
+        links.new(height.outputs["Color"], displacement.inputs["Height"])
+        output = next((node for node in nodes if node.type == "OUTPUT_MATERIAL"), None)
+        if output is None:
+            raise ReferenceError("Finished material has no Material Output node")
+        links.new(displacement.outputs["Displacement"], output.inputs["Displacement"])
+        # Blender 4.x/5.x material property names differ. Do not invent a
+        # universal setting: leave a clear Displacement node for Cycles artists.
+        if hasattr(material, "displacement_method"):
+            material.displacement_method = "BOTH"
 
 
 def _matched_scan_cameras(report: dict[str, Any], count: int) -> list[dict[str, Any]]:
@@ -363,6 +491,7 @@ def build_dense_blender_review(dense_revision: str | Path, output: str | Path,
     obj.name = "Private dense scan / unverified scale and axes"
     if textured:
         linked = {Path(item["path"]).resolve() for item in plan["texture_atlases"]}
+        surface_by_name = {item["atlas"]: item for item in plan.get("surface_maps", [])}
         for material in obj.data.materials:
             if material is None or not material.use_nodes:
                 raise ReferenceError("Textured OBJ lost its image-linked material")
@@ -375,6 +504,14 @@ def build_dense_blender_review(dense_revision: str | Path, output: str | Path,
                 if shader.type == "BSDF_PRINCIPLED":
                     shader.inputs["Roughness"].default_value = 0.85
                     shader.inputs["Alpha"].default_value = 1.0
+            if surface_by_name:
+                # OBJ material groups may use shared atlases; the map is per
+                # atlas so each group receives consistent surface treatment.
+                image_names = {Path(bpy.path.abspath(img.filepath)).name for img in images}
+                if len(image_names) != 1 or next(iter(image_names)) not in surface_by_name:
+                    raise ReferenceError("Cannot uniquely associate finished material and atlas")
+                _attach_finished_surface_nodes(bpy, material,
+                                               surface_by_name[next(iter(image_names))])
         bpy.ops.file.pack_all()  # Private portable .blend; GLB embeds the atlas separately.
     else:
         material = bpy.data.materials.new("Dense statue / neutral review material")

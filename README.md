@@ -1,5 +1,11 @@
 # Kumiki Blender
 
+**New: Blender physics → Kumiki motion:** [export baked GLB rigid-body clips to portable PM2 actions](docs/KUMIKI_MOTION_BRIDGE.md) with `kumiki-blender export-motion --model model.glb --output baked-actions.json`. No extra Python dependencies, manual coordinate conversion or per-model browser animation code.
+
+For fully automated rigid-body shots, use `kumiki-blender plan-physics --spec examples/desk-lamp-physics-shot.json`, then `build-physics` under Blender with a saved `.blend` loaded. A declarative plan generates a new editable physics scene, GLB, and PM2 animation sidecar; it never overwrites source geometry.
+
+The same plan now supports native `hinge`, `slider` and `fixed` joints (see `examples/mechanical-constraints-physics-shot.json`) and conservative, measured ground-impact cues for SFX. Every constraint/impact is backed by a real Blender simulation; no per-model animation code is required.
+
 **New to Blender, 3D modeling, and this repository?** Start with the
 [beginner's step-by-step Wiki](https://github.com/YukiUmetsu/kumiki-blender/wiki): install the tools, generate your
 first tower, open it in Blender, change its color and dimensions, and learn how
@@ -98,6 +104,13 @@ texture darkness, broad color cast or exposure mismatch between atlas pages,
 exposure/gamma/white-balance atlas revision; import it
 with `render-dense-blender-review --textured --texture-finish`. Both remain
 manual-review candidates, not autonomous texture restoration.
+
+For relightable scans, `finish-dense-textures --surface-recipe` adds opt-in
+mask-guided linear-light de-lighting, material-specific roughness priors,
+camera-artifact cleanup and measured 16-bit height/Blender displacement maps.
+`package-finished-udim` exports a separate UV-remapped 1001+ tile package.
+These private artist-review candidates cannot guarantee measured reflectance
+or recover lost surface geometry; see [dense statue reconstruction](docs/DENSE_STATUE_RECONSTRUCTION.md#advanced-photographic-material-finishing).
 Very dark atlases can optionally use bounded `--auto-exposure-luma 115`.
 Add `--uv-aware-stats` to measure brightness and missing dark texels only on
 real textured OBJ faces, with a private red-marked UV coverage preview.
