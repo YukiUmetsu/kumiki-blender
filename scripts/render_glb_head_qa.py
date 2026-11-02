@@ -32,13 +32,15 @@ def main():
     prefixes=tuple(args.prefix or ('Head |','Hair |','Face |'))
     meshes=[]
     for node in scene.graph.nodes_geometry:
-        transform,name=scene.graph[node]
-        if not name.startswith(prefixes):
+        transform,geometry_name=scene.graph[node]
+        # Blender object names differ from mesh datablock names; semantic
+        # filtering must use the scene node, not the geometry key.
+        if not node.startswith(prefixes):
             continue
-        mesh=scene.geometry[name].copy()
+        mesh=scene.geometry[geometry_name].copy()
         mesh.apply_transform(transform)
         if len(mesh.faces):
-            meshes.append((name,mesh))
+            meshes.append((node,mesh))
     if not meshes:
         raise ValueError('No head geometry matches prefixes '+repr(prefixes))
     bounds=np.vstack([m.bounds for _,m in meshes])

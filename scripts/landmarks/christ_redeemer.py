@@ -979,7 +979,7 @@ def sculpted_anatomical_hair_mantle():
     return objects
 
 
-def sculpt_scalp_surface_from_anatomy(head):
+def sculpt_scalp_surface_from_anatomy(head, trim_nape=False):
     """Extract the donor's *real scalp topology* as a sculptable stone layer.
 
     Unlike the failed free-form hood lofts, every source surface point comes
@@ -993,7 +993,14 @@ def sculpt_scalp_surface_from_anatomy(head):
 
     vertices=head.data.vertices
     def hairline(co):
-        return anatomical_hairline_height(co.x,co.y)
+        base=anatomical_hairline_height(co.x,co.y)
+        if not trim_nape:
+            return base
+        # The old extracted scalp included the whole posterior neck and
+        # rendered as a huge rolled stone cape. The crown must end at the
+        # nape; long hair is a separate sculpted curtain, not neck skin.
+        rear=ease((co.y+.015)/.085)
+        return max(base,.215*rear)
 
     selected=[]
     for polygon in head.data.polygons:
@@ -1077,6 +1084,7 @@ def sculpt_scalp_surface_from_anatomy(head):
     ob=bpy.data.objects.new("Hair | anatomy-derived sculptable scalp drape",mesh)
     bpy.context.collection.objects.link(ob)
     ob.data.materials.append(STONE)
+    ob["nape_trimmed"] = bool(trim_nape)
     for poly in mesh.polygons:
         poly.use_smooth=True
     solid=ob.modifiers.new("Physical stone hairline and drape thickness","SOLIDIFY")
@@ -1643,6 +1651,9 @@ def main():
                     metrics["max_root_snap_distance_m"]=round(
                         float(scalp["max_root_snap_distance_m"]),5)
                     metrics["groove_projection"]=str(scalp["groove_projection"])
+                    metrics["scalp_nape_trimmed"]=bool(scalp["nape_trimmed"])
+                    metrics["scalp_min_z_m"]=round(min(
+                        (scalp.matrix_world @ v.co).z for v in scalp.data.vertices),3)
                 metrics["hair_bounds_min_z_m"]=round(min(p.z for p in hair_points),3)
                 metrics["hair_bounds_max_z_m"]=round(max(p.z for p in hair_points),3)
                 metrics["hair_bounds_width_m"]=round(

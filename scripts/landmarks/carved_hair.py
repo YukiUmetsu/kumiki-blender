@@ -22,7 +22,7 @@ def sculpt_carved_hair_from_anatomy(head, *, curtain_builder, scalp_builder):
     # Construct the curtains first so their ear-covering adjustments are
     # reflected in the extracted scalp topology. Do not create ribbon locks.
     curtains = curtain_builder(head, crown_locks=False)
-    scalp = scalp_builder(head)
+    scalp = scalp_builder(head, trim_nape=True)
     bpy.context.view_layer.update()
     bvh = BVHTree.FromPolygons(
         [v.co.copy() for v in scalp.data.vertices],

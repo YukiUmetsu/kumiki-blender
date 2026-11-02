@@ -33,6 +33,8 @@ class ChristCarvedHairTests(unittest.TestCase):
             self.assertLess(report['max_root_snap_distance_m'], .08)
             self.assertEqual(report['groove_projection'], 'continuous-polyline')
             self.assertGreater(report['carved_hair_vertices'], 150)
+            self.assertTrue(report['scalp_nape_trimmed'])
+            self.assertGreater(report['scalp_min_z_m'], 35.0)
             self.assertGreater(report['hair_surface_vertices'], 7000)
             self.assertGreater(report['hair_bounds_width_m'], 2.4)
             self.assertLess(report['hair_bounds_width_m'], 4.2)

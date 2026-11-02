@@ -97,3 +97,33 @@ helmet/cape. The extracted scalp now has a hard lower silhouette bound
 at **z = 0.028 donor metres**, aligning it with the temple curtains'
 shoulder-length termination. This only constrains geometry: its likeness
 still requires actual four-view renders and real-monument comparison.
+
+## Real Blender 4.5 visual QA and nape reconstruction (2026-11-02)
+
+GitHub Actions generated actual `.blend`, GLB, front, profile, oblique
+and low-angle clay renders (run 41389926503; artifact
+`christ-redeemer-carved-hair-clay-HOLD`). The automated geometry checks
+passed, but **visual QA rejected the result**:
+
+- The donor-derived scalp wraps the **entire posterior neck**, creating
+  an oversized cape and a rolled lower edge.
+- The long temple curtains are broad, almost straight ribbons; their
+  connection to the scalp and ears looks broken and exposes dark gaps.
+- Crown flow reads like a smooth helmet, not the real monument's distinct
+  parted, deeply carved stone locks.
+- The face still lacks the real sculpture's heavy brows, angular jaw and
+  square chin. Good topology counts are not evidence of likeness.
+
+We isolated the scalp and curtain meshes in the actual GLB. The giant
+rolled edge is primarily the **extracted scalp's neck region**, not
+the curtains themselves. An offline test trimmed only the rear neck
+region and visibly removed the rolled cape, though it exposed a
+missing posterior hair mass. Therefore the next carved-hair candidate
+uses `trim_nape=True` only for this experimental mode. The other
+head studies and the production GLB are unchanged.
+
+**Acceptance gate:** the revised scalp must terminate at the nape
+rather than becoming neck skin, but the missing back-of-hair volume
+must be reconstructed as an actual connected stone sculpt before any
+production promotion. The candidate remains **HOLD** until new
+four-view Blender renders pass photo comparison.
