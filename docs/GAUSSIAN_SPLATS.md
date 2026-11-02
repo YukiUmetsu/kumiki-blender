@@ -112,6 +112,7 @@ splats-r01/
   sparse-reconstruction/  # Only when input is --photos/--references
   dataset/images/         # Pinned undistorted images
   dataset/sparse/0/       # COLMAP registered cameras and 3D points
+  dataset/cameras/        # Pinned cameras.txt + images.txt for multi-angle visual QA
   dataset/masks/          # Only when reviewed masks are supplied
   dataset/dataset-report.json
   splat.ply               # Or splat.spz when --format spz
@@ -141,6 +142,78 @@ splats-r01/
 - These are **private artifacts** with `distribution_allowed: false` until
   image, source, training-tool, and model licenses have been reviewed. Do not
   commit photos, splats or training data to the repository.
+
+## Calibrated comparisons against the original multi-angle photographs
+
+Use the registered cameras **from the actual training revision** to render
+the same viewpoints as the undistorted source photos. The tool does not guess
+the camera angle from filenames or generate plausible-looking substitute
+images. It uses the actual SplatTransform GPU rasterizer and Pillow for
+per-pixel diagnostics. No FFmpeg is needed for this step.
+
+```bash
+pip install Pillow
+npm install -g @playcanvas/splat-transform
+splat-transform --list-gpus
+
+kumiki-blender plan-splat-view-qa \
+  --splat .review/my-statue/splats-r01 \
+  --output .review/my-statue/visual-qa-r01 --max-views 12
+
+kumiki-blender compare-splat-views \
+  --splat .review/my-statue/splats-r01 \
+  --output .review/my-statue/visual-qa-r01 \
+  --max-views 12 --max-dimension 1280
+```
+
+The pipeline samples poses that span the camera collection instead of always
+taking the first twelve filenames. For each chosen photo, it:
+
+1. Checks SHA-256 against the training snapshot and retrieves that photo's
+   COLMAP position, rotation and lens intrinsics.
+2. Converts the camera to PlayCanvas's 180°-Z-transformed PLY coordinate
+   convention. Requests a real GPU WebP render, preserving the registered
+   vertical field of view and camera orientation.
+3. Accounts for off-center principal points and unequal `fx/fy` via a
+   documented pinhole pixel warp, excluding pixels outside the renderer's
+   field of view. Applies a matching pinned foreground mask when provided.
+4. Saves the reference, matched render, 50/50 overlay, visible difference
+   heatmap and labeled comparison JPEG per angle, plus one contact sheet.
+
+```
+visual-qa-r01/
+  visual-qa-report.json     # Camera, hash, per-view error, worst angles, status
+  multi-angle-contact-sheet.jpg
+  views/001/gpu-render.webp
+  views/001/comparison/reference.png
+  views/001/comparison/registered-render.png
+  views/001/comparison/overlay.png
+  views/001/comparison/difference.png
+  views/001/comparison/valid-pixels.png
+  views/001/comparison/comparison.jpg
+  logs/001.log
+```
+
+The report includes pixel MAE, RMSE, PSNR and the fraction of valid compared
+pixels for **each** selected view, plus the three worst-error angles. These
+are *diagnostics*, not a photographic-likeness score: lighting, background,
+and training-view overfit can dominate them, and a good score does not
+demonstrate correct facial anatomy or geometry in unseen angles. Inspect the
+side/profile, three-quarter and front images directly; use new held-out
+photographs for an independent generalization test when available.
+
+This tool requires a full splat revision with recorded cameras and photos,
+not only an exported `.ply`. New training revisions pin `cameras.txt` and
+`images.txt` inside `dataset/cameras/`; older revisions can use their
+original undistorted text model only if both source files still match their
+training-time hashes. Outputs remain private; a successful comparison stays
+`candidate / human-multi-angle-visual-review-required`. On a GPU or
+renderer failure, a persistent failed report records the view and log.
+
+GPU validation must run on your Mac M4/Metal host or another supported
+GPU machine. CPU-only CI tests exercise the command, camera math, hashes,
+pixel warps and failure reports using a mock rasterizer; they **do not**
+demonstrate real GPU output or photo-faithfulness.
 
 ## GPU Gaussian-splat video and viewer (Mac or CUDA GPU)
 

@@ -124,6 +124,10 @@ class SplatDatasetTests(unittest.TestCase):
         for name in ("cameras", "images", "points3D"):
             self.assertEqual((output / "sparse/0" / f"{name}.bin").read_bytes(),
                              (self.source / "undistorted/sparse" / f"{name}.bin").read_bytes())
+        for name in ("cameras.txt", "images.txt"):
+            self.assertEqual((output / "cameras" / name).read_bytes(),
+                             (self.source / "undistorted/text-model" / name).read_bytes())
+        self.assertEqual(set(report["camera_text_hashes"]), {"cameras.txt", "images.txt"})
 
     def test_rejects_tampered_rectified_photo_before_staging(self):
         photo = self.source / "undistorted/images/photo-0000.jpg"

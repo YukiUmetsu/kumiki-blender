@@ -216,6 +216,11 @@ def stage_splat_dataset(reconstruction: str | Path, output: str | Path, *,
     images_target.mkdir()
     sparse_target = target / "sparse" / "0"
     sparse_target.mkdir(parents=True)
+    # Keep the exact undistorted text cameras used at training time. The
+    # registered photos can then be compared against the resulting splat
+    # without depending on a mutable external reconstruction directory.
+    camera_target = target / "cameras"
+    camera_target.mkdir()
     copied = []
     for name in plan["undistorted_images"]:
         origin = source_images / name
@@ -234,6 +239,12 @@ def stage_splat_dataset(reconstruction: str | Path, output: str | Path, *,
         shutil.copyfile(origin, destination)
         if _sha256(destination) != expected:
             raise ReferenceError(f"COLMAP camera model changed during staging: {origin.name}")
+    for name, expected in plan["viewpoint_qa"]["text_model_hashes"].items():
+        source_camera = text_model / name
+        destination = camera_target / name
+        shutil.copyfile(source_camera, destination)
+        if _sha256(destination) != expected:
+            raise ReferenceError(f"COLMAP text camera model changed during staging: {name}")
     mask_count = 0
     if plan["rectified_masks"]:
         mask_target = target / "masks"
@@ -254,6 +265,7 @@ def stage_splat_dataset(reconstruction: str | Path, output: str | Path, *,
               "asset_id": plan["asset_id"], "registered_images": plan["registered_images"],
               "images": len(copied), "masks": mask_count,
               "viewpoint_qa": plan["viewpoint_qa"],
+              "camera_text_hashes": plan["viewpoint_qa"]["text_model_hashes"],
               "photo_hashes": copied, "distribution_allowed": False,
               "status": "staged / OpenSplat-training-required"}
     (target / "dataset-report.json").write_text(json.dumps(report, indent=2) + "\n")

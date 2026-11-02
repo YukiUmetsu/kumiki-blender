@@ -264,6 +264,19 @@ def main(argv: list[str] | None = None) -> int:
         video_parser.add_argument("--ffmpeg", default="ffmpeg")
         video_parser.add_argument("--ffprobe", default="ffprobe")
         video_parser.add_argument("--timeout-seconds", type=int, default=7200)
+    for command in ("plan-splat-view-qa", "compare-splat-views"):
+        qa_parser = subcommands.add_parser(
+            command, help="GPU-render COLMAP-matched splat views and compare them with pinned photos")
+        qa_parser.add_argument("--splat", type=Path, required=True,
+                               help="Complete splat revision with registered source cameras/photos")
+        qa_parser.add_argument("--output", type=Path, required=True,
+                               help="New private, immutable multi-angle QA revision")
+        qa_parser.add_argument("--max-views", type=int, default=12,
+                               help="Pose-spread selection of 3–48 registered photographs")
+        qa_parser.add_argument("--max-dimension", type=int, default=1280,
+                               help="Limit longest rendered photo edge to 256–4096 pixels")
+        qa_parser.add_argument("--splat-transform", default="splat-transform")
+        qa_parser.add_argument("--timeout-seconds", type=int, default=900)
     photo_mask_parser = subcommands.add_parser(
         "prepare-dense-masks", help="Create inspectable rectified foreground mask candidates with CPU GrabCut")
     photo_mask_parser.add_argument("--reconstruction", type=Path, required=True)
@@ -729,6 +742,23 @@ def main(argv: list[str] | None = None) -> int:
                 raise RecipeError(str(error)) from error
             print(json.dumps(report, indent=2))
             return (0 if args.command == "plan-splat-video" or
+                    report["status"].startswith("candidate") else 3)
+        if args.command in ("plan-splat-view-qa", "compare-splat-views"):
+            from .reconstruction.references import ReferenceError
+            from .reconstruction.splat_visual_qa import (
+                SplatViewQASettings, plan_splat_view_qa, render_splat_view_qa)
+            try:
+                settings = SplatViewQASettings(
+                    max_views=args.max_views, max_dimension=args.max_dimension,
+                    splat_transform=args.splat_transform,
+                    timeout_seconds=args.timeout_seconds)
+                report = (plan_splat_view_qa(args.splat, args.output, settings)
+                          if args.command == "plan-splat-view-qa" else
+                          render_splat_view_qa(args.splat, args.output, settings))
+            except ReferenceError as error:
+                raise RecipeError(str(error)) from error
+            print(json.dumps(report, indent=2))
+            return (0 if args.command == "plan-splat-view-qa" or
                     report["status"].startswith("candidate") else 3)
         if args.command == "prepare-makehuman-head":
             from .head_sources.makehuman import (fetch_makehuman_obj,
