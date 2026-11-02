@@ -40,6 +40,13 @@ standalone Blender script exports GLB/`.blend` and
 eight front/profile/detail QA views with dimensional and mesh winding checks.
 It remains a sculptural study, not a photo-accurate model.
 
+The [anatomical head graft and real-photo fitting workflow](docs/CHRIST_REDEEMER_ANATOMICAL_GRAFT.md)
+now produces **provisional full-figure GLB previews** with a dense CC0 donor
+head, metric soapstone materials, two-view facial residuals, and four-view
+geometry QA. [Carved-hair QA](docs/CHRIST_REDEEMER_CARVED_HAIR.md) remains
+on visual HOLD; [licensed scan references](docs/CHRIST_REDEEMER_SCAN_INTAKE.md)
+are tracked separately. The original production export is unchanged.
+
 ## Find models in the categorized asset catalog
 
 Every model family has one manifest in `src/kumiki_blender/assets/<category>/<subcategory>/<asset-id>/asset.json`. Existing geometry modules and CLI entry points remain compatible; discover assets by name, category, tags, or alternate names without knowing which Python module implements them:

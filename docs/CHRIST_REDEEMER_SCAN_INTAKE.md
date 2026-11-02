@@ -256,3 +256,32 @@ Before accepting any facial sculpt, capture a second independent authentic
 profile/oblique view with enough overlapping facial points, refine the
 landmark correspondences, and fit per-photo perspective cameras. Then
 sculpt the **shared 3D facial and hair silhouette** against all views.
+
+## Additional openly licensed comparison models (2026-11-02)
+
+These are **not verified authentic scans of the Rio monument**. Their
+public Sketchfab pages state Creative Commons Attribution (CC BY),
+which is suitable for *licensed comparison* subject to preserving
+attribution and checking the exact downloadable asset and terms.
+
+| Candidate | Published geometry | License shown | Source |
+|---|---:|---|---|
+| Parlin Sitorus, *Christ the Redeemer (Cristo Redentor)* | 55.6k triangles | CC BY | https://sketchfab.com/3d-models/christ-the-redeemer-cristo-redentor-157dbdb9d8654651a5e5c9af7b412398 |
+| JuanG3D, *Christ the Redeemer* (3D print) | 58.8k triangles | CC BY | https://sketchfab.com/3d-models/christ-the-redeemer-d143e5357efd42529777438d0f72c79c |
+| Walter Araujo, *Cristo redentor* | 14.8k triangles | CC BY | https://sketchfab.com/3d-models/cristo-redentor-christ-the-redeemer-27c2c6a36001409b9f6879051e6217e1 |
+
+**Download status:** no model geometry was fetched or imported; the
+public Sketchfab download action may require the asset owner's
+account/OAuth. Do not scrape the 3D viewer or assume a screenshot
+licenses the underlying mesh. The Pix4D and Baukunst authentic
+photogrammetric surveys remain better fidelity references, but
+redistribution/download rights are not established. The paid
+photogrammetry models on TurboSquid/Free3D have editorial-use
+restrictions and are not automatically suitable for commercial
+video production.
+
+**Next best-quality path:** obtain a properly licensed real-monument
+scan or a CC BY reference model and compare its **frontal, profile
+and low-angle** silhouette against the editable clay. Rebuild the
+topology where necessary; do not treat generic donor anatomy as
+the actual monument.
