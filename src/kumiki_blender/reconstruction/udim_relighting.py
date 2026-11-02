@@ -189,6 +189,8 @@ def build_udim_relighting_review(bpy: Any, package: str | Path, output: str | Pa
             filename = f"registered-photo-{index:02d}{source_photo.suffix.lower()}"
             if render_previews:
                 shutil.copyfile(source_photo, target / filename)
+                if _sha256(target / filename) != entry["source_photo_sha256"]:
+                    raise ReferenceError("Registered photo changed while copying into private review")
             record: dict[str, Any] = {
                 "reference_photo": filename if render_previews else None,
                 "reference_sha256": entry["source_photo_sha256"],
