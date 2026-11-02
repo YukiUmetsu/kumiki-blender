@@ -16,6 +16,7 @@ from .material_packs import TextureAssignment, verify_texture_targets
 from .render_profiles import select_render_profile
 from .shots import QualityShot
 from .surfaces import get_surface
+from .reconstruction.head_base import HeadFitPlan
 
 
 def imported_bounds(objects: list[Any]) -> tuple[tuple[float, float, float], tuple[float, float, float]]:
@@ -36,6 +37,7 @@ def build_imported_scene(
     *,
     material_overrides: tuple[MaterialOverride, ...] = (),
     texture_packs: tuple[TextureAssignment, ...] = (),
+    head_fit: HeadFitPlan | None = None,
     bpy_module: Any = None,
 ) -> dict[str, Any]:
     """Import one reviewed GLB, preserve its materials and publish a QA revision."""
@@ -53,7 +55,7 @@ def build_imported_scene(
     if {item.material_name for item in material_overrides} & {item.target for item in texture_packs}:
         raise AssetImportError("One source material cannot have both a preset override and a texture pack")
     profile = select_render_profile(1440, 900, 48)
-    scene = create_model_scene(bpy, provenance.asset_id)
+    scene = create_model_scene(bpy, head_fit.asset_id if head_fit else provenance.asset_id)
     scene.render.engine = "CYCLES"
     scene.cycles.samples = profile.samples
     scene.render.resolution_x = profile.width
@@ -73,9 +75,14 @@ def build_imported_scene(
     )
     if "FINISHED" not in status:
         raise AssetImportError("Blender failed to import the supplied GLB")
-    objects = [obj for obj in scene.objects if obj.as_pointer() not in known_object_ids and obj.type == "MESH"]
+    imported = [obj for obj in scene.objects if obj.as_pointer() not in known_object_ids]
+    objects = [obj for obj in imported if obj.type == "MESH"]
     if not objects:
         raise AssetImportError("GLB imported without any usable mesh objects")
+    head_fit_report = None
+    if head_fit is not None:
+        from .blender_head_base import apply_head_base_fit
+        head_fit_report = apply_head_base_fit(bpy, scene, imported, objects, head_fit)
     preserved_parts = sum(1 for obj in objects if isinstance(obj.get("kumiki_part"), str)
                           and obj["kumiki_part"].strip())
     expected_parts = report["glb_audit"]["semantic_nodes"]
@@ -128,9 +135,10 @@ def build_imported_scene(
     bounds_min, bounds_max = imported_bounds(objects)
     dx, dy, dz = (bounds_max[index] - bounds_min[index] for index in range(3))
     cx, cy, cz = ((bounds_min[index] + bounds_max[index]) / 2 for index in range(3))
-    extent = max(dx, dy, dz, 3.0)
+    extent = max(dx, dy, dz, 0.2 if head_fit else 3.0)
     # Wide-safe orthographic composition, honoring glTF's meter-based units.
-    frame = max(dx * 1.55, dy * 1.7, dz * 1.85 * (16 / 9), 5.0)
+    frame = max(dx * 1.55, dy * 1.7, dz * 1.85 * (16 / 9),
+                0.3 if head_fit else 5.0)
 
     studio = bpy.data.collections.new("Studio / excluded from portable GLB")
     scene.collection.children.link(studio)
@@ -164,22 +172,49 @@ def build_imported_scene(
     camera_data.type = "ORTHO"
     camera = bpy.data.objects.new(camera_data.name, camera_data)
     studio.objects.link(camera)
-    shots = (
-        QualityShot("hero", (cx + extent * 0.7, cy - extent * 1.4, cz + extent * 0.48),
-                    (cx, cy, cz), frame),
-        QualityShot("front", (cx, cy - extent * 1.6, cz + extent * 0.12),
-                    (cx, cy, cz), frame * 0.95),
-        QualityShot("detail", (cx + extent * 0.32, cy - extent * 0.7, cz + extent * 0.35),
-                    (cx, cy, cz + dz * 0.2), max(2.0, frame * 0.34)),
-    )
+    if head_fit_report is not None:
+        # The default imported-architecture views assume global -Y is front.
+        # Rotate head inspection cameras with its fitted anatomy instead.
+        rotation = head_fit_report["rotation_3x3"]
+        front_local = {"-X": (-1, 0, 0), "+X": (1, 0, 0),
+                       "-Y": (0, -1, 0), "+Y": (0, 1, 0)}[head_fit.source_front_axis]
+        forward = tuple(sum(rotation[i][j]*front_local[j] for j in range(3)) for i in range(3))
+        up = tuple(rotation[i][2] for i in range(3))
+        right = (up[1]*forward[2]-up[2]*forward[1],
+                 up[2]*forward[0]-up[0]*forward[2],
+                 up[0]*forward[1]-up[1]*forward[0])
+
+        def around(f: float, r: float, u: float) -> tuple[float, float, float]:
+            return tuple((cx, cy, cz)[i] + extent*(f*forward[i] + r*right[i] + u*up[i])
+                         for i in range(3))
+
+        shots = (
+            QualityShot("hero", around(1.45, 0.65, 0.30), (cx, cy, cz), frame),
+            QualityShot("front", around(1.7, 0.0, 0.0), (cx, cy, cz), frame * 0.95),
+            QualityShot("profile", around(0.0, 1.7, 0.0), (cx, cy, cz), frame * 0.95),
+            QualityShot("three-quarter", around(1.25, 1.25, 0.15), (cx, cy, cz), frame * 0.95),
+            QualityShot("detail", around(0.9, 0.2, 0.10), (cx, cy, cz + dz * 0.12),
+                        max(0.3, frame * 0.4)),
+        )
+    else:
+        shots = (
+            QualityShot("hero", (cx + extent * 0.7, cy - extent * 1.4, cz + extent * 0.48),
+                        (cx, cy, cz), frame),
+            QualityShot("front", (cx, cy - extent * 1.6, cz + extent * 0.12),
+                        (cx, cy, cz), frame * 0.95),
+            QualityShot("detail", (cx + extent * 0.32, cy - extent * 0.7, cz + extent * 0.35),
+                        (cx, cy, cz + dz * 0.2), max(2.0, frame * 0.34)),
+        )
     category_counts: dict[str, int] = {}
     for obj in objects:
         part = obj["kumiki_part"]
         category_counts[part] = category_counts.get(part, 0) + 1
     metadata = {
-        "asset_id": provenance.asset_id,
-        "generator": "kumiki-blender/static-glb-import",
-        "status": "reviewed-source-import / visual-review-pending",
+        "asset_id": head_fit.asset_id if head_fit else provenance.asset_id,
+        "generator": ("kumiki-blender/anatomical-head-base" if head_fit
+                      else "kumiki-blender/static-glb-import"),
+        "status": ("head-base-study / artistic-review-required" if head_fit
+                   else "reviewed-source-import / visual-review-pending"),
         "provenance": provenance.to_manifest(report["input_sha256"]),
         "source_glb_bytes": report["input_bytes"],
         "imported_materials": len(imported_materials),
@@ -192,5 +227,7 @@ def build_imported_scene(
         "named_parts": category_counts,
         "bounds_m": [bounds_min, bounds_max],
     }
+    if head_fit_report is not None:
+        metadata["head_fit"] = head_fit_report
     return export_revision(bpy, scene, camera, objects, shots, destination,
                            samples=profile.samples, metadata=metadata)

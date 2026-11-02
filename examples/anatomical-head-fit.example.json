@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "asset_id": "redeemer-head-reference-study",
+  "source_glb": "head.glb",
+  "source_provenance": "head-provenance.json",
+  "mesh_name": "Head",
+  "source_front_axis": "-Y",
+  "fit_mode": "local-sculpt",
+  "landmarks": [
+    {"id": "nose", "region": "face", "source_xyz_m": [0, -0.12, 0.05], "target_xyz_m": [3.24, -1, 5.1], "radius_m": 0.12},
+    {"id": "left-eye", "region": "eyes", "source_xyz_m": [-0.06, -0.1, 0.04], "target_xyz_m": [3.2, -1.12, 5.08], "radius_m": 0.12},
+    {"id": "right-eye", "region": "eyes", "source_xyz_m": [0.06, -0.1, 0.04], "target_xyz_m": [3.2, -0.88, 5.08], "radius_m": 0.12},
+    {"id": "chin", "region": "chin", "source_xyz_m": [0, -0.11, -0.12], "target_xyz_m": [3.22, -1, 4.76], "radius_m": 0.16},
+    {"id": "right-ear", "region": "ears", "source_xyz_m": [0.1, 0.015, 0], "target_xyz_m": [2.97, -0.8, 5], "radius_m": 0.14},
+    {"id": "forehead", "region": "face", "source_xyz_m": [0, -0.085, 0.13], "target_xyz_m": [3.17, -1, 5.26], "radius_m": 0.16}
+  ]
+}
