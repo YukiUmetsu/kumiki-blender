@@ -149,6 +149,8 @@ def main(argv: list[str] | None = None) -> int:
             photo_parser.add_argument("--output", type=Path, required=True,
                                       help="New immutable reconstruction revision directory")
             photo_parser.add_argument("--colmap", default="colmap", help="Installed COLMAP executable")
+            photo_parser.add_argument("--engine", choices=("colmap", "pycolmap"), default="colmap",
+                                      help="COLMAP CLI (default) or pip-installed CPU PyCOLMAP")
             photo_parser.add_argument("--timeout-seconds", type=int, default=3600)
             photo_parser.add_argument("--undistort", action="store_true",
                                       help="Rectify camera intrinsics and image pixels for accurate Blender projection")
@@ -165,6 +167,12 @@ def main(argv: list[str] | None = None) -> int:
         dense_parser.add_argument("--min-registered-images", type=int, default=8)
         dense_parser.add_argument("--min-registered-fraction", type=float, default=0.60)
         dense_parser.add_argument("--min-mesh-faces", type=int, default=1000)
+        dense_parser.add_argument("--resolution-level", type=int, default=0,
+                                  help="OpenMVS depth map downscale (0 preserves input pixels)")
+        dense_parser.add_argument("--max-resolution", type=int, default=3200,
+                                  help="OpenMVS maximum depth map image dimension")
+        dense_parser.add_argument("--number-views", type=int, default=5,
+                                  help="OpenMVS neighboring views per depth estimate")
         dense_parser.add_argument("--timeout-seconds", type=int, default=7200)
         dense_parser.add_argument("--no-refine", action="store_true",
                                   help="OpenMVS: skip refined topology")
@@ -262,6 +270,8 @@ def main(argv: list[str] | None = None) -> int:
                     backend=args.backend, min_registered_images=args.min_registered_images,
                     min_registered_fraction=args.min_registered_fraction,
                     timeout_seconds=args.timeout_seconds, min_mesh_faces=args.min_mesh_faces,
+                    resolution_level=args.resolution_level,
+                    max_resolution=args.max_resolution, number_views=args.number_views,
                     refine=not args.no_refine, texture=not args.no_texture)
                 report = (plan_dense_reconstruction(args.reconstruction, args.output, settings)
                           if args.command == "plan-dense-photos" else
@@ -347,6 +357,7 @@ def main(argv: list[str] | None = None) -> int:
                 references = load_reference_set(args.manifest)
                 report = (audit_reference_set(references) if args.command == "reference-audit" else
                           build_sparse_reconstruction(references, args.output, colmap=args.colmap,
+                                                      engine=args.engine,
                                                       timeout_seconds=args.timeout_seconds,
                                                       undistort=args.undistort,
                                                       max_image_size=args.max_image_size))

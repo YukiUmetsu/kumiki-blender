@@ -9,10 +9,11 @@ reports missing camera viewpoints/anatomical regions, and can hand a curated
 set to a locally installed **COLMAP** sparse reconstruction worker. Run:
 
 ```bash
-pip install -e '.[qa]'
+pip install -e '.[photogrammetry]'
 kumiki-blender reference-audit --manifest /path/to/references.json
 kumiki-blender reconstruct-photos --manifest /path/to/references.json \
-  --output .review/your-monument/reconstruction-r01 --undistort
+  --output .review/your-monument/reconstruction-r01 \
+  --engine pycolmap --undistort
 
 # With overlapping registered views, make a private dense mesh via OpenMVS:
 kumiki-blender build-dense-photos \
@@ -29,7 +30,10 @@ photo cameras, `silhouette-qa` to compare neutral-clay renders against
 manually checked statue masks, and `landmark-qa` for face/hair/drapery
 pixel-reprojection measurements. See the [full camera and mask workflow](docs/REFERENCE_RECONSTRUCTION.md).
 The optional [dense photo-to-mesh workflow](docs/DENSE_STATUE_RECONSTRUCTION.md)
-now runs OpenMVS CPU or COLMAP GPU reconstruction after successful sparse
+includes independently sourced and hash-pinned **real statue photo benchmarks**
+(Pix4D eagle, EPFL standing figure and sculpted face), with photo rights kept
+separate and no restricted images or derived models in Git. It runs OpenMVS CPU
+or COLMAP GPU reconstruction after successful sparse
 registration. It generates private candidate meshes, not guaranteed facial
 likeness or redistributable assets. It cannot reconstruct a statue from
 arbitrary unrelated web photos.

@@ -44,13 +44,15 @@ elif app == "ReconstructMesh":
         b"property float x\\nelement face 1600\\nend_header\\n" + b"body"
     )
 elif app == "RefineMesh":
-    assert flag("--input-file").name == "scene_dense_mesh.mvs"
+    assert flag("--input-file").name == "scene_dense.mvs"
+    assert flag("--mesh-file").name == "scene_dense_mesh.ply"
     (flag("--output-file").parent / "scene_dense_mesh_refined.ply").write_bytes(
         b"ply\\nformat ascii 1.0\\nelement vertex 2400\\n"
         b"element face 1900\\nend_header\\n" + b"body"
     )
 elif app == "TextureMesh":
-    assert flag("--input-file").name == "scene_dense_mesh_refined.mvs"
+    assert flag("--input-file").name == "scene_dense.mvs"
+    assert flag("--mesh-file").name == "scene_dense_mesh_refined.ply"
     if "SKIP_MVS_ATLAS" not in os.environ:
         (flag("--output-file").parent / "atlas-00.png").write_bytes(b"fake atlas data")
 else:
@@ -138,11 +140,30 @@ class DenseMvsTests(unittest.TestCase):
         self.assertEqual(len(report["mesh"]["sha256"]), 64)
         self.assertEqual([step["stage"] for step in report["commands"]],
                          ["interface", "densify", "mesh", "refine", "texture"])
+        densify = report["commands"][1]["argv"]
+        self.assertEqual(densify[densify.index("--resolution-level") + 1], "0")
+        self.assertEqual(densify[densify.index("--max-resolution") + 1], "3200")
+        self.assertEqual(densify[densify.index("--tower-mode") + 1], "0")
         self.assertEqual(len(list((output / "logs").glob("*.log"))), 5)
         self.assertEqual(json.loads((output / "dense-report.json").read_text()), report)
-        self.assertTrue((output / "workspace/scene_textured.mvs").is_file())
+        self.assertTrue((output / "workspace/scene_dense_mesh_refined_texture.mvs").is_file())
         self.assertEqual(report["texture_images"], ["workspace/atlas-00.png"])
         self.assertTrue((self.sparse / "undistorted/images/view-00.jpg").is_file())
+
+    def test_detail_settings_are_bounded_and_audited(self):
+        for changed in ({"resolution_level": -1}, {"resolution_level": True},
+                        {"max_resolution": 100}, {"number_views": 1},
+                        {"number_views": 100}):
+            with self.subTest(changed=changed), self.assertRaises(ReferenceError):
+                DenseSettings(**changed).validate()
+        output = self.root / "dense-quality"
+        settings = DenseSettings(resolution_level=1, max_resolution=1600,
+                                 number_views=8, texture=False, refine=False)
+        report = build_dense_reconstruction(self.sparse, output, settings,
+                                            executables=self.executables)
+        self.assertEqual(report["resolution_level"], 1)
+        self.assertEqual(report["max_resolution"], 1600)
+        self.assertEqual(report["number_views"], 8)
 
     def test_gpu_colmap_always_copies_undistorted_workspace(self):
         output = self.root / "dense-r02"

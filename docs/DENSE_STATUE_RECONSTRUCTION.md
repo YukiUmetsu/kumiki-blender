@@ -15,6 +15,16 @@ private texture projection to produce a mesh for artistic inspection.
   registration by default; these are minimum gates, not enough evidence to
   guarantee realistic faces or unseen surfaces.
 - Install [COLMAP](https://colmap.github.io/) for the original sparse cameras.
+  Alternatively, install the [official PyCOLMAP wheel](https://pypi.org/project/pycolmap/)
+  with `pip install 'kumiki-blender[photogrammetry]'` and add
+  `--engine pycolmap` to `reconstruct-photos`.
+  The Python engine isolates stages in subprocesses, uses CPU SIFT/matching,
+  and preserves the same per-stage logs, timeouts and rectified camera outputs.
+  Both engines normalize invalid JPEG EXIF orientation values (such as `0`)
+  on **staged copies** by patching the EXIF tag bytes, without re-encoding any
+  photograph or touching the immutable originals. The per-image index records
+  both original and staged SHA-256 values and the repair flag. This prevents
+  fatal COLMAP metadata-parser aborts observed in real monument photo sets.
   For dense CPU reconstruction (including Apple Silicon), install
   [OpenMVS](https://github.com/cdcseacave/openMVS) and put InterfaceCOLMAP,
   DensifyPointCloud, ReconstructMesh, RefineMesh and TextureMesh on PATH.
@@ -28,6 +38,12 @@ private texture projection to produce a mesh for artistic inspection.
     kumiki-blender reconstruct-photos \
       --manifest /private/statue/reference-set.json \
       --output .review/statue/sparse-r01 --undistort --max-image-size 3200
+
+    # No standalone COLMAP CLI needed; still runs real SfM on CPU.
+    kumiki-blender reconstruct-photos \
+      --manifest /private/statue/reference-set.json \
+      --output .review/statue/sparse-pycolmap-r01 \
+      --engine pycolmap --undistort --max-image-size 2000
 
     # Checks coverage, image hashes, executable paths and output destination.
     # Writes nothing.
@@ -56,6 +72,11 @@ private texture projection to produce a mesh for artistic inspection.
 
 Options include --min-registered-images, --min-registered-fraction,
 --min-mesh-faces, --timeout-seconds, --no-refine (OpenMVS) and --no-texture.
+For large statues, `--resolution-level 0` (default) preserves rectified
+image detail in OpenMVS depth maps, while `--max-resolution 3200` (default)
+and `--number-views 5` (default) bound resource use. Lower fidelity for a
+quick diagnostic by setting `--resolution-level 1` or `2`. Artificial
+OpenMVS tower-mode fill is disabled to avoid inventing monument geometry.
 Loosening thresholds does not improve a weak reconstruction. Each stage logs
 its command and stdout/stderr. Failures preserve a diagnostic report instead
 of silently promoting an unusable mesh.
@@ -63,7 +84,8 @@ of silently promoting an unusable mesh.
 ## Results and review
 
 - OpenMVS: workspace/scene_dense_mesh.ply, optionally
-  workspace/scene_dense_mesh_refined.ply, workspace/scene_textured.mvs
+  workspace/scene_dense_mesh_refined.ply,
+  workspace/scene_dense_mesh_refined_texture.mvs
   and texture atlas images.
 - COLMAP: meshed-poisson.ply and optionally a textured/ folder.
 - workspace/: an immutable private snapshot of the registered, undistorted
@@ -104,6 +126,85 @@ The Python regression tests use controlled mock executables to verify secure
 preflight, subprocess commands, immutable workspace copies, failure
 checkpoints and mesh-output validation. A separate CI Blender 4.5 smoke
 imports a first-party synthetic PLY, renders 3 views and validates its
-private GLB and editable scene. Real multi-view photo quality remains
-unverified until the pipeline runs on a rights-cleared overlapping statue
-dataset with genuine COLMAP/OpenMVS installations.
+private GLB and editable scene.
+
+## Reproducible real-photo statue benchmark (Pix4D eagle)
+
+Pix4D publishes [44 original 5184x3456 JPG views of an outdoor eagle statue](
+https://support.pix4d.com/hc/en-us/articles/360000235126) photographed during
+two walks at different heights. The original example ZIP is available at
+`https://data.pix4d.com/misc/example_datasets/example_eagle.zip` (388 MiB).
+This scene challenges wing, feather, talon and surface-relief fidelity; foliage
+and ground may create unwanted reconstructed background geometry.
+
+**Rights:** These are **not** CC0 photos. Pix4D allows personal or professional
+training use; commercial/promotional use requires a linked
+[Courtesy of Pix4D / pix4d.com](https://www.pix4d.com/) notice, with other usage referred to Pix4D.
+Keep the photo ZIP, reconstructed surfaces, textures and rendered previews
+**out of Git and public CI artifacts**. The example uses private training data
+only; a successful dense run does not clear public redistribution rights.
+
+    # Download the example_eagle.zip from the official source above,
+    # then unzip it into a private folder OUTSIDE the repository.
+    python scripts/prepare_pix4d_eagle.py \
+      --unpacked /private/pix4d-eagle --archive /private/example_eagle.zip
+
+    kumiki-blender reference-audit \
+      --manifest /private/pix4d-eagle/reference-set.json
+    kumiki-blender reconstruct-photos \
+      --manifest /private/pix4d-eagle/reference-set.json \
+      --output /private/pix4d-eagle-sparse-r01 \
+      --engine pycolmap --undistort --max-image-size 1600
+    kumiki-blender build-dense-photos \
+      --reconstruction /private/pix4d-eagle-sparse-r01 \
+      --output /private/pix4d-eagle-dense-r01 --backend openmvs
+
+The helper verifies the exact photo count, optional pinned source ZIP hash,
+and every image hash, and records source and rights separately. It assigns
+`unknown` rather than guessing view labels from file order. The photo audit
+cannot confirm camera overlap; only the SfM registration and photo-matched
+visual inspection can do that. On large statues, use a low-resolution
+diagnostic run first; repeat at higher image resolution only after checking
+foreground geometry against actual statue photographs.
+
+**Measured private CPU SfM benchmark (2026-11-02):** PyCOLMAP 4.0.2
+registered **44/44** eagle photographs after downscaling SIFT to 1600px,
+triangulating 14,556 sparse points; median *feature reprojection* error was
+1.153 pixels. This demonstrates genuine multi-view camera registration, not
+mesh quality, full surface coverage, scale accuracy or historic likeness.
+
+## Independent full-body and facial reference sets (EPFL)
+
+The [EPFL Geometric Computing Laboratory statue archive](https://lgg.epfl.ch/statues.php)
+provides original photographs and student-made reconstructed meshes. Two useful
+additional stress tests are:
+
+- **Freddie Mercury standing monument:** 37 overlapping full-body photographs,
+  exposed arms, fine facial relief, folded clothing and a busy city background.
+  [Original photo archive](https://lgg.epfl.ch/old/statues_data/dataset2013/mercury_pics.zip).
+- **Outdoor sculpted face (“Mask”):** 32 photographs that expose nose, eyelids,
+  lips, chin and the monument base.
+  [Original photo archive](https://lgg.epfl.ch/old/statues_data/dataset2013/head_pics.zip).
+
+EPFL permits use **for research**, not commercial distribution without written
+permission. Models derived from EPFL data must remain private. The meshes are
+useful qualitative comparisons, not calibrated ground-truth scans.
+
+    # Unpack each original photo ZIP outside the repo and keep its original
+    # Photos/ or africanhead_photos/ directory intact.
+    python scripts/prepare_epfl_statue.py \
+      --scene freddie-mercury --unpacked /private/epfl-freddie \
+      --archive /private/mercury_pics.zip
+    python scripts/prepare_epfl_statue.py \
+      --scene sculpted-mask --unpacked /private/epfl-mask \
+      --archive /private/head_pics.zip
+
+    kumiki-blender reconstruct-photos \
+      --manifest /private/epfl-freddie/reference-set.json \
+      --output /private/epfl-freddie-sparse-r01 \
+      --engine pycolmap --undistort --max-image-size 1600
+
+As with the eagle scene, these helpers pin each original archive hash, record
+the individual photo hashes and mark all camera directions as unverified until
+SfM. Compare the private reconstruction to EPFL's views and mesh without
+turning the research dataset into a public example asset.

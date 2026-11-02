@@ -32,6 +32,9 @@ class DenseSettings:
     refine: bool = True
     texture: bool = True
     min_mesh_faces: int = 1000
+    resolution_level: int = 0
+    max_resolution: int = 3200
+    number_views: int = 5
 
     def validate(self) -> "DenseSettings":
         if self.backend not in ("openmvs", "colmap"):
@@ -48,6 +51,12 @@ class DenseSettings:
             raise ReferenceError("refine and texture must be booleans")
         if type(self.min_mesh_faces) is not int or not 100 <= self.min_mesh_faces <= 10_000_000:
             raise ReferenceError("min_mesh_faces must be 100–10,000,000")
+        if type(self.resolution_level) is not int or not 0 <= self.resolution_level <= 4:
+            raise ReferenceError("resolution_level must be 0–4")
+        if type(self.max_resolution) is not int or not 640 <= self.max_resolution <= 16384:
+            raise ReferenceError("max_resolution must be 640–16384")
+        if type(self.number_views) is not int or not 2 <= self.number_views <= 32:
+            raise ReferenceError("number_views must be 2–32")
         return self
 
 
@@ -152,6 +161,9 @@ def plan_dense_reconstruction(reconstruction: str | Path, output: str | Path,
         "min_mesh_faces": settings.min_mesh_faces,
         "refine": settings.refine if settings.backend == "openmvs" else False,
         "texture": settings.texture,
+        "resolution_level": settings.resolution_level if settings.backend == "openmvs" else None,
+        "max_resolution": settings.max_resolution if settings.backend == "openmvs" else None,
+        "number_views": settings.number_views if settings.backend == "openmvs" else None,
         "status": "preflight-only / dense-and-artistic-review-required",
         "distribution_allowed": False,
         "limitations": "Output is private. Photo rights, monument identity, surface accuracy, scale and topology require independent review.",
@@ -255,20 +267,27 @@ def build_dense_reconstruction(reconstruction: str | Path, output: str | Path,
             ("interface", "InterfaceCOLMAP", ["--input-file", str(workspace),
                                               "--output-file", str(scene)]),
             ("densify", "DensifyPointCloud", ["--input-file", str(scene),
-                                             "--output-file", str(dense)]),
+                                             "--output-file", str(dense),
+                                             "--resolution-level", str(settings.resolution_level),
+                                             "--max-resolution", str(settings.max_resolution),
+                                             "--number-views", str(settings.number_views),
+                                             "--tower-mode", "0"]),
             ("mesh", "ReconstructMesh", ["--input-file", str(dense),
                                         "--output-file", str(mesh)]),
         ]
         if settings.refine:
-            stages.append(("refine", "RefineMesh", ["--input-file", str(mesh),
+            stages.append(("refine", "RefineMesh", ["--input-file", str(dense),
+                                                   "--mesh-file", str(workspace / "scene_dense_mesh.ply"),
                                                    "--output-file", str(refined)]))
         if settings.texture:
             stages.append(("texture", "TextureMesh", [
-                "--input-file", str(refined if settings.refine else mesh),
-                "--output-file", str(workspace / "scene_textured.mvs")]))
+                "--input-file", str(dense),
+                "--mesh-file", str(workspace / ("scene_dense_mesh_refined.ply" if settings.refine
+                                                  else "scene_dense_mesh.ply")),
+                "--output-file", str(workspace / "scene_dense_mesh_refined_texture.mvs")]))
         ply = workspace / "scene_dense_mesh.ply"
         stage_outputs = {"interface": scene, "densify": dense, "mesh": mesh,
-                         "refine": refined, "texture": workspace / "scene_textured.mvs"}
+                         "refine": refined, "texture": workspace / "scene_dense_mesh_refined_texture.mvs"}
         for stage, app, args in stages:
             if not run(stage, [exe[app], *args, "--working-folder", str(workspace)]):
                 return checkpoint()

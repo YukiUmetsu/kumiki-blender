@@ -1,6 +1,7 @@
 """Execute the real host-process boundary with a controlled local CLI fixture."""
 
 import json
+import io
 import os
 import shutil
 import tempfile
@@ -11,7 +12,8 @@ from unittest.mock import patch
 from PIL import Image, ImageDraw
 
 from kumiki_blender.reconstruction.colmap import (
-    _registered_image_count, build_sparse_reconstruction,
+    _prepare_images, _registered_image_count, _repair_jpeg_orientation, _sparse_point_metrics,
+    build_sparse_reconstruction,
 )
 from kumiki_blender.reconstruction.references import ReferenceError, load_reference_set
 
@@ -243,6 +245,62 @@ class ColmapWorkflowTests(unittest.TestCase):
             "1 1 0 0 0 0 0 0 1 front.png\n" + observations + "\n"
             "2 1 0 0 0 0 0 0 1 left.png\n" + observations + "\n")
         self.assertEqual(_registered_image_count(model), 2)
+
+    def test_sparse_reprojection_evidence_is_not_mislabeled_as_mesh_accuracy(self):
+        model = self.root / "quality"
+        model.mkdir()
+        (model / "points3D.txt").write_text(
+            "# POINT3D_ID X Y Z R G B ERROR TRACK\n"
+            "1 0 0 0 255 0 0 0.50 1 10 2 11\n"
+            "2 0 0 0 255 0 0 1.50 1 10 2 11 3 12 4 13\n"
+            "3 0 0 0 255 0 0 NaN 1 10 2 11\n")
+        result = _sparse_point_metrics(model)
+        self.assertEqual(result["triangulated_points"], 2)
+        self.assertEqual(result["mean_track_length"], 3)
+        self.assertEqual(result["median_reprojection_error_px"], 1)
+        self.assertIn("not surface", result["interpretation"])
+
+    def test_repairs_invalid_exif_orientation_losslessly_before_colmap(self):
+        for old in (0, 9):
+            with self.subTest(old=old):
+                image = Image.new("RGB", (80, 70), "#cb9365")
+                exif = Image.Exif()
+                exif[274] = old
+                stream = io.BytesIO()
+                image.save(stream, format="JPEG", exif=exif)
+                original = stream.getvalue()
+                repaired, changed = _repair_jpeg_orientation(original)
+                self.assertTrue(changed)
+                self.assertEqual(len(repaired), len(original))
+                self.assertEqual(sum(a != b for a, b in zip(repaired, original)), 1)
+                self.assertEqual(Image.open(io.BytesIO(repaired)).getexif()[274], 1)
+                self.assertEqual(_repair_jpeg_orientation(repaired), (repaired, False))
+        self.assertEqual(_repair_jpeg_orientation(b"not a JPEG"), (b"not a JPEG", False))
+
+    def test_staged_photos_record_original_and_repaired_hashes(self):
+        photo = self.images / "bad-orientation.jpg"
+        exif = Image.Exif()
+        exif[274] = 0
+        Image.new("RGB", (120, 90), "#a1b2c3").save(photo, exif=exif)
+        manifest = self.root / "jpeg-reference.json"
+        manifest.write_text(json.dumps({
+            "schema_version": 1, "asset_id": "exif-statue", "subject": "EXIF test",
+            "required_views": ["front"], "required_regions": ["face"],
+            "images": [{"id": "exif-test", "file": "photos/bad-orientation.jpg",
+                        "source_url": "https://example.org/exif.jpg", "view": "front",
+                        "regions": ["face"]}],
+        }))
+        references = load_reference_set(manifest)
+        output = self.root / "staged"
+        output.mkdir()
+        self.assertFalse(_prepare_images(list(references.images), output))
+        index = json.loads((output / "staged-reference-index.json").read_text())["images"][0]
+        self.assertTrue(index["invalid_exif_orientation_normalized"])
+        self.assertNotEqual(index["original_sha256"], index["sha256"])
+        with Image.open(photo) as original:
+            self.assertEqual(original.getexif()[274], 0)
+        with Image.open(output / "images/exif-test.jpg") as staged:
+            self.assertEqual(staged.getexif()[274], 1)
 
 
 if __name__ == "__main__":
