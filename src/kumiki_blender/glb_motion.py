@@ -176,6 +176,23 @@ def _semantic_ids(doc: dict[str, Any]) -> dict[int, str]:
     return tagged
 
 
+def canonical_ids_by_node_name(path: str | Path) -> dict[str, str]:
+    """Resolve the exported glTF node names to canonical UI part IDs.
+
+    Refuse ambiguous names; Blender's object names are unique but another
+    exporter may collapse or rename them during its hierarchy conversion.
+    """
+    glb = _Glb(path)
+    ids = _semantic_ids(glb.document)
+    result: dict[str, str] = {}
+    for index, canonical in ids.items():
+        name = glb.document["nodes"][index].get("name")
+        if not isinstance(name, str) or not name or name in result:
+            raise MotionExportError("Semantic glTF node names must be unique for contact cue alignment")
+        result[name] = canonical
+    return result
+
+
 def _sample(times: list[float], values: list[list[float]], path: str,
             seconds: float, interpolation: str) -> list[float]:
     index = max(0, min(len(times)-1, bisect_right(times, seconds)-1))
@@ -191,7 +208,7 @@ def _sample(times: list[float], values: list[list[float]], path: str,
 
 def export_glb_motion(path: str | Path, *, clip_name: str | None = None, action_id: str | None = None,
                       contacts: list[dict[str, Any]] | None = None,
-                      merge_clips: bool = False) -> list[dict[str, Any]]:
+                      merge_clips: bool = False, resample_mixed: bool = False) -> list[dict[str, Any]]:
     """Export a glTF clip, or merge disjoint physics-node clips, to PM2.
 
     Rigid body physics should be baked to keyframes in Blender before GLB
@@ -261,7 +278,7 @@ def export_glb_motion(path: str | Path, *, clip_name: str | None = None, action_
     for node, channels in sorted(samples_by_node.items(), key=lambda item: semantic[item[0]]):
         source = nodes[node]
         modes = {c[2] for c in channels.values()}
-        if len(modes) > 1:
+        if len(modes) > 1 and not resample_mixed:
             raise MotionExportError(f"node[{node}] mixes STEP and LINEAR channels; PM2 interpolates per track")
         defaults = {
             "translation": _vector(source.get("translation", [0, 0, 0]), 3, "node translation", -1000, 1000),
@@ -278,7 +295,11 @@ def export_glb_motion(path: str | Path, *, clip_name: str | None = None, action_
                 return _sample(ts, values, component, seconds, mode)
             keys.append({"frame": frame, "position": value("translation"),
                          "rotation": value("rotation"), "scale": value("scale")})
-        output_tracks.append({"target": semantic[node], "interpolation": modes.pop().lower(), "keys": keys})
+        # When explicitly opted in, sample mixed glTF channels at every 30-fps
+        # output boundary. LINEAR between adjacent baked PM2 frames preserves
+        # the exact values at rendered frames; no sub-frame parity is promised.
+        interpolation = "linear" if len(modes) > 1 else modes.pop().lower()
+        output_tracks.append({"target": semantic[node], "interpolation": interpolation, "keys": keys})
 
     cues = []
     if contacts is not None:
@@ -306,12 +327,16 @@ def export_glb_motion(path: str | Path, *, clip_name: str | None = None, action_
 
 def write_glb_motion(path: str | Path, output: str | Path, *, clip_name: str | None = None,
                      action_id: str | None = None, contacts_path: str | Path | None = None,
-                     merge_clips: bool = False) -> dict[str, Any]:
+                     merge_clips: bool = False,
+                     contacts: list[dict[str, Any]] | None = None,
+                     resample_mixed: bool = False) -> dict[str, Any]:
     """Produce a new standalone PM2 JSON sidecar; never overwrite user output."""
     destination = Path(output)
     if destination.exists() or destination.is_symlink():
         raise MotionExportError(f"Output already exists: {destination}")
-    cues = None
+    if contacts is not None and contacts_path is not None:
+        raise MotionExportError("Provide either in-memory measured contacts or --contacts, not both")
+    cues = contacts
     if contacts_path is not None:
         source = Path(contacts_path)
         if source.stat().st_size > 256 * 1024:
@@ -322,7 +347,7 @@ def write_glb_motion(path: str | Path, output: str | Path, *, clip_name: str | N
         except (ValueError, UnicodeError) as error:
             raise MotionExportError(f"Malformed contact cues: {error}") from error
     actions = export_glb_motion(path, clip_name=clip_name, action_id=action_id, contacts=cues,
-                                merge_clips=merge_clips)
+                                merge_clips=merge_clips, resample_mixed=resample_mixed)
     destination.parent.mkdir(parents=True, exist_ok=True)
     with destination.open("x", encoding="utf-8") as stream:
         json.dump(actions, stream, indent=2, allow_nan=False)

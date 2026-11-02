@@ -33,6 +33,7 @@ class PhysicsBody:
     restitution: float
     margin_m: float
     offset_m: tuple[float, float, float]
+    impact_material: str | None = None
 
 
 @dataclass(frozen=True)
@@ -45,6 +46,18 @@ class GroundCollider:
 
 
 @dataclass(frozen=True)
+class PhysicsConstraint:
+    id: str
+    kind: str
+    body_a: str
+    body_b: str
+    pivot_m: tuple[float, float, float]
+    axis: tuple[float, float, float]
+    limits: tuple[float, float] | None
+    disable_collisions: bool
+
+
+@dataclass(frozen=True)
 class PhysicsShot:
     asset_id: str
     action_id: str
@@ -54,6 +67,7 @@ class PhysicsShot:
     solver_iterations: int
     bodies: tuple[PhysicsBody, ...]
     ground: GroundCollider | None = None
+    constraints: tuple[PhysicsConstraint, ...] = ()
 
 
 def _object(value: Any, label: str, required: set[str], optional: set[str] = frozenset()) -> dict[str, Any]:
@@ -82,7 +96,7 @@ def _vector(value: Any, label: str, minimum: float, maximum: float) -> tuple[flo
 
 def parse_physics_plan(value: Any) -> PhysicsShot:
     raw = _object(value, "plan", {"schema_version", "asset_id", "action_id", "duration_frames", "bodies"},
-                  {"gravity_mps2", "substeps", "solver_iterations", "ground"})
+                  {"gravity_mps2", "substeps", "solver_iterations", "ground", "constraints"})
     if raw["schema_version"] != 1 or type(raw["schema_version"]) is not int:
         raise PhysicsPlanError("Only physics schema_version 1 is supported")
     asset = raw["asset_id"]
@@ -114,7 +128,7 @@ def parse_physics_plan(value: Any) -> PhysicsShot:
     for index, raw_body in enumerate(originals):
         label = f"bodies[{index}]"
         body = _object(raw_body, label, {"target", "kind"},
-                       {"shape", "mass_kg", "friction", "restitution", "margin_m", "offset_m"})
+                       {"shape", "mass_kg", "friction", "restitution", "margin_m", "offset_m", "impact_material"})
         target = body["target"]
         if (not isinstance(target, str) or not (target.startswith("name:") or target.startswith("role:"))
                 or not _NAME.fullmatch(target.split(":", 1)[1])):
@@ -131,6 +145,9 @@ def parse_physics_plan(value: Any) -> PhysicsShot:
         offset = _vector(body.get("offset_m", [0, 0, 0]), f"{label}.offset_m", -20, 20)
         if kind == "passive" and any(abs(x) > 1e-9 for x in offset):
             raise PhysicsPlanError(f"{label}.offset_m on a passive collider would move the static reference")
+        material = body.get("impact_material")
+        if material is not None and (not isinstance(material, str) or not _NAME.fullmatch(material)):
+            raise PhysicsPlanError(f"{label}.impact_material must be a safe semantic label")
         bodies.append(PhysicsBody(
             target=target, kind=kind, shape=shape,
             mass_kg=_float(body.get("mass_kg", 1), f"{label}.mass_kg", .001, 50_000),
@@ -138,10 +155,58 @@ def parse_physics_plan(value: Any) -> PhysicsShot:
             restitution=_float(body.get("restitution", .2), f"{label}.restitution", 0, 1),
             margin_m=_float(body.get("margin_m", .001), f"{label}.margin_m", 0, .2),
             offset_m=offset,
+            impact_material=material,
         ))
     if not any(body.kind == "active" for body in bodies):
         raise PhysicsPlanError("A shot needs at least one active rigid body")
-    return PhysicsShot(asset, action, duration, gravity, substeps, iterations, tuple(bodies), ground)
+    raw_constraints = raw.get("constraints", [])
+    if not isinstance(raw_constraints, list) or len(raw_constraints) > 64:
+        raise PhysicsPlanError("constraints must be an array of at most 64 entries")
+    constraints = []
+    seen_ids = set()
+    for index, raw_constraint in enumerate(raw_constraints):
+        label = f"constraints[{index}]"
+        item = _object(raw_constraint, label,
+                       {"id", "kind", "body_a", "body_b", "pivot_m"},
+                       {"axis", "limits_deg", "limits_m", "disable_collisions"})
+        ident = item["id"]
+        if not isinstance(ident, str) or not _NAME.fullmatch(ident) or ident in seen_ids:
+            raise PhysicsPlanError(f"{label}.id must be a unique safe identifier")
+        seen_ids.add(ident)
+        kind = item["kind"]
+        if kind not in ("fixed", "hinge", "slider"):
+            raise PhysicsPlanError(f"{label}.kind must be fixed, hinge or slider")
+        refs = (item["body_a"], item["body_b"])
+        for ref in refs:
+            if (not isinstance(ref, str) or not (ref.startswith("name:") or ref.startswith("role:"))
+                    or not _NAME.fullmatch(ref.split(":", 1)[1])):
+                raise PhysicsPlanError(f"{label} must reference name:<object> or role:<part>")
+        if refs[0] == refs[1]:
+            raise PhysicsPlanError(f"{label} cannot constrain a body to itself")
+        pivot = _vector(item["pivot_m"], f"{label}.pivot_m", -100, 100)
+        axis = _vector(item.get("axis", [0, 0, 1]), f"{label}.axis", -1, 1)
+        axis_length = math.sqrt(sum(x*x for x in axis))
+        if not .99 <= axis_length <= 1.01:
+            raise PhysicsPlanError(f"{label}.axis must be a unit vector")
+        if "limits_deg" in item and kind != "hinge" or "limits_m" in item and kind != "slider":
+            raise PhysicsPlanError(f"{label} limits must match the hinge or slider kind")
+        limit_name = "limits_deg" if kind == "hinge" else "limits_m"
+        limits = None
+        if limit_name in item:
+            raw_limits = item[limit_name]
+            if not isinstance(raw_limits, list) or len(raw_limits) != 2:
+                raise PhysicsPlanError(f"{label}.{limit_name} must contain [lower, upper]")
+            bound = 180 if kind == "hinge" else 20
+            limits = tuple(_float(v, f"{label}.{limit_name}", -bound, bound) for v in raw_limits)
+            if limits[0] > limits[1]:
+                raise PhysicsPlanError(f"{label}.{limit_name} must be ordered")
+        disable = item.get("disable_collisions", True)
+        if type(disable) is not bool:
+            raise PhysicsPlanError(f"{label}.disable_collisions must be boolean")
+        constraints.append(PhysicsConstraint(ident, kind, refs[0], refs[1], pivot,
+                                             tuple(v/axis_length for v in axis), limits, disable))
+    return PhysicsShot(asset, action, duration, gravity, substeps, iterations,
+                       tuple(bodies), ground, tuple(constraints))
 
 
 def load_physics_plan(source: str | Path) -> PhysicsShot:

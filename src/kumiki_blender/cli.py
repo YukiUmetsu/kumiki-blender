@@ -142,6 +142,7 @@ def main(argv: list[str] | None = None) -> int:
     motion_parser.add_argument("--action-id", help="Optional Kumiki action ID; defaults to <clip>-baked")
     motion_parser.add_argument("--contacts", type=Path, help="Optional validated contact cue array JSON")
     motion_parser.add_argument("--merge-clips", action="store_true", help="Combine disjoint per-object simulation clips into one PM2 action")
+    motion_parser.add_argument("--resample-mixed", action="store_true", help="Permit mixed glTF STEP/LINEAR channels via frame-exact 30-fps resampling")
     for command in ("plan-physics", "build-physics"):
         physics_parser = subcommands.add_parser(command, help="Validate or bake a declarative Blender rigid-body shot")
         physics_parser.add_argument("--spec", type=Path, required=True)
@@ -355,6 +356,7 @@ def main(argv: list[str] | None = None) -> int:
                 print(json.dumps({"asset_id": shot.asset_id, "action_id": shot.action_id,
                                   "duration_frames": shot.duration_frames,
                                   "rules": len(shot.bodies), "active_rules": sum(body.kind == "active" for body in shot.bodies),
+                                  "constraints": len(shot.constraints), "ground": shot.ground is not None,
                                   "gravity_mps2": shot.gravity_mps2}, indent=2))
                 return 0
             try:
@@ -368,7 +370,8 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(write_glb_motion(args.model, args.output, clip_name=args.clip,
                                               action_id=args.action_id,
                                               contacts_path=args.contacts,
-                                              merge_clips=args.merge_clips), indent=2))
+                                              merge_clips=args.merge_clips,
+                                              resample_mixed=args.resample_mixed), indent=2))
             return 0
         if args.command == "prepare-dense-masks":
             from .reconstruction.masking import generate_rectified_masks

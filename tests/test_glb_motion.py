@@ -10,7 +10,7 @@ import struct
 import tempfile
 import unittest
 
-from kumiki_blender.glb_motion import MotionExportError, export_glb_motion, write_glb_motion
+from kumiki_blender.glb_motion import MotionExportError, canonical_ids_by_node_name, export_glb_motion, write_glb_motion
 
 
 def sample_glb(path: Path, *, animation_changes: dict | None = None,
@@ -189,6 +189,27 @@ class GlbMotionTests(unittest.TestCase):
             bad = sample_glb(base/"overlap.glb", extra_clips=[duplicate])
             with self.assertRaisesRegex(MotionExportError, "repeats"):
                 export_glb_motion(bad, merge_clips=True)
+
+    def test_explicit_frame_resampling_handles_blender_constant_rotations_and_contact_inputs(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            model = sample_glb(root/"mixed.glb", animation_changes={"samplers": [
+                {"input": 0, "output": 1, "interpolation": "LINEAR"},
+                {"input": 0, "output": 2, "interpolation": "STEP"},
+            ]})
+            with self.assertRaisesRegex(MotionExportError, "mixes"):
+                export_glb_motion(model)
+            [action] = export_glb_motion(model, resample_mixed=True)
+            self.assertEqual(action["tracks"][0]["interpolation"], "linear")
+            self.assertEqual(action["tracks"][0]["keys"][14]["rotation"], [0, 0, 0, 1])
+            self.assertEqual(canonical_ids_by_node_name(model)["fastener"], "kumiki:hardware:1")
+            output = root/"action.json"
+            report = write_glb_motion(model, output, resample_mixed=True,
+                                      contacts=[{"frame": 15.25, "speedMps": 2.0,
+                                                 "target": "kumiki:hardware:1", "material": "metal-on-floor"}])
+            self.assertEqual(report["contacts"], 1)
+            with self.assertRaisesRegex(MotionExportError, "either"):
+                write_glb_motion(model, root/"other.json", contacts_path=output, contacts=[])
 
 
 if __name__ == "__main__":

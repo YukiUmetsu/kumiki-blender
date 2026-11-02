@@ -10,12 +10,14 @@ from __future__ import annotations
 from collections import Counter
 from dataclasses import asdict
 import json
+import math
 from pathlib import Path
 import re
 from typing import Any
 
 from .glb_audit import audit_glb
-from .glb_motion import write_glb_motion
+from .glb_motion import canonical_ids_by_node_name, write_glb_motion
+from .impact_measurement import GroundSample, ground_impact_frames
 from .physics_plan import PhysicsPlanError, PhysicsShot
 
 
@@ -90,7 +92,53 @@ def _add_ground_collider(bpy: Any, shot: PhysicsShot) -> None:
     rigid.collision_margin = min(.001, ground.thickness_m/10)
 
 
-def _bake_evaluated_transforms(bpy: Any, scene: Any, objects: list[Any]) -> None:
+def _add_constraints(bpy: Any, shot: PhysicsShot, assignments: list[tuple[Any, Any]]) -> None:
+    """Build Blender-native helpers anchored in world space, never exported."""
+    if not shot.constraints:
+        return
+    from mathutils import Vector
+
+    def find(selector: str) -> Any:
+        kind, label = selector.split(":", 1)
+        matches = [obj for obj, _ in assignments if (obj.name == label if kind == "name" else _tag(obj) == label)]
+        if len(matches) != 1:
+            raise PhysicsPlanError(f"Constraint target {selector!r} must select exactly one configured rigid body")
+        return matches[0]
+
+    for rule in shot.constraints:
+        a, b = find(rule.body_a), find(rule.body_b)
+        if a == b or (a.rigid_body.type != "ACTIVE" and b.rigid_body.type != "ACTIVE"):
+            raise PhysicsPlanError(f"Constraint {rule.id!r} needs two distinct bodies, at least one active")
+        name = f"Kumiki_Constraint_{rule.id}"
+        if bpy.data.objects.get(name) is not None:
+            raise PhysicsPlanError(f"Source scene already defines {name!r}")
+        bpy.ops.object.select_all(action="DESELECT")
+        bpy.ops.object.empty_add(type="ARROWS", location=rule.pivot_m)
+        helper = bpy.context.object
+        helper.name = name
+        helper["kumiki_physics_helper"] = "collision-only-constraint"
+        helper.hide_render = True
+        axis = Vector(rule.axis)
+        # Hinge uses the helper's Z axis; slider moves on its X axis.
+        track_axis, up_axis = ("Z", "Y") if rule.kind == "hinge" else ("X", "Z")
+        helper.rotation_euler = axis.to_track_quat(track_axis, up_axis).to_euler()
+        bpy.ops.rigidbody.constraint_add(type=rule.kind.upper())
+        native = helper.rigid_body_constraint
+        if native is None:
+            raise PhysicsPlanError(f"Blender failed to create constraint {rule.id!r}")
+        native.object1, native.object2 = a, b
+        native.disable_collisions = rule.disable_collisions
+        if rule.limits is not None and rule.kind == "hinge":
+            native.use_limit_ang_z = True
+            native.limit_ang_z_lower = math.radians(rule.limits[0])
+            native.limit_ang_z_upper = math.radians(rule.limits[1])
+        if rule.limits is not None and rule.kind == "slider":
+            native.use_limit_lin_x = True
+            native.limit_lin_x_lower, native.limit_lin_x_upper = rule.limits
+
+
+def _bake_evaluated_transforms(bpy: Any, scene: Any, objects: list[Any],
+                               shot: PhysicsShot, assignments: list[tuple[Any, Any]]) -> dict[Any, list[dict[str, Any]]]:
     """Bake Bullet's evaluated world transforms without UI-only Blender ops.
 
     bpy.ops.rigidbody.bake_to_keyframes internally invokes a keying-set UI
@@ -108,6 +156,23 @@ def _bake_evaluated_transforms(bpy: Any, scene: Any, objects: list[Any]) -> None
             evaluated = obj.evaluated_get(graph)
             parent = obj.parent.evaluated_get(graph).matrix_world.copy() if obj.parent else None
             samples[obj].append((frame, evaluated.matrix_world.copy(), parent))
+
+    measured: dict[Any, list[dict[str, Any]]] = {}
+    if shot.ground is not None:
+        from mathutils import Vector
+        body_by_object = {obj: body for obj, body in assignments}
+        for obj in objects:
+            curve = []
+            for frame, matrix, _ in samples[obj]:
+                lowest = min((matrix @ Vector(corner)).z for corner in obj.bound_box)
+                center = matrix.translation
+                curve.append(GroundSample(frame, lowest, center.z, center.x, center.y))
+            hits = ground_impact_frames(curve, height_m=shot.ground.height_m,
+                                       half_extent_m=shot.ground.half_extent_m)
+            measured[obj] = [dict(frame=frame, speedMps=speed,
+                                  **({"material": body_by_object[obj].impact_material}
+                                     if body_by_object[obj].impact_material else {}))
+                             for frame, speed in hits]
 
     # Remove simulation ownership *after* sampling. Keyframe insertion uses the
     # raw RNA API rather than a VIEW_3D/context-dependent keying-set operator.
@@ -130,6 +195,7 @@ def _bake_evaluated_transforms(bpy: Any, scene: Any, objects: list[Any]) -> None
             # Baking the constant scale emits glTF STEP channels alongside
             # LINEAR motion, which the PM2 track contract cannot mix.
     scene.frame_set(scene.frame_start)
+    return measured
 
 
 def build_physics_shot(bpy: Any, shot: PhysicsShot, output: str | Path) -> dict[str, Any]:
@@ -177,6 +243,7 @@ def build_physics_shot(bpy: Any, shot: PhysicsShot, output: str | Path) -> dict[
         rigid.use_margin = body.margin_m > 0
         rigid.collision_margin = body.margin_m
     _add_ground_collider(bpy, shot)
+    _add_constraints(bpy, shot, assignments)
     if scene.rigidbody_world is None:
         bpy.ops.rigidbody.world_add()
     world = scene.rigidbody_world
@@ -198,7 +265,7 @@ def build_physics_shot(bpy: Any, shot: PhysicsShot, output: str | Path) -> dict[
     active = [obj for obj, body in assignments if body.kind == "active"]
     if (shot.duration_frames + 1) * len(active) > 120_000:
         raise PhysicsPlanError("Physics bake exceeds the portable PM2 120,000-key budget")
-    _bake_evaluated_transforms(bpy, scene, active)
+    observations = _bake_evaluated_transforms(bpy, scene, active, shot, assignments)
 
     portable = _model_objects(scene)
     if not portable or not any(obj.type == "MESH" for obj in portable):
@@ -214,10 +281,19 @@ def build_physics_shot(bpy: Any, shot: PhysicsShot, output: str | Path) -> dict[
         export_cameras=False, export_lights=False, export_apply=False,
     )
     audit = audit_glb(model_path)
+    cues = []
+    if any(observations.values()):
+        ids = canonical_ids_by_node_name(model_path)
+        for obj, events in observations.items():
+            if events and obj.name not in ids:
+                raise PhysicsPlanError(f"Exported GLB lacks semantic node for measured contact {obj.name!r}")
+            cues.extend({"target": ids[obj.name], **event} for event in events)
+        cues.sort(key=lambda event: (event["frame"], event["target"]))
     # Blender can export a distinct action for every selected rigid body. PM2
     # can combine them only when their animated channels do not overlap.
     motion = write_glb_motion(model_path, destination / "baked-actions.json",
-                              action_id=shot.action_id, merge_clips=True)
+                              action_id=shot.action_id, merge_clips=True, contacts=cues,
+                              resample_mixed=True)
     role_counts = Counter(_tag(obj) for obj in portable if _tag(obj) is not None)
     if sum(role_counts.values()) != audit["semantic_nodes"]:
         raise PhysicsPlanError("Portable glTF semantic role count differs from the source .blend")
@@ -235,6 +311,8 @@ def build_physics_shot(bpy: Any, shot: PhysicsShot, output: str | Path) -> dict[
         "physics": {"action_id": shot.action_id, "duration_frames": shot.duration_frames,
                     "substeps": shot.substeps, "solver_iterations": shot.solver_iterations,
                     "has_collision_ground": shot.ground is not None,
+                    "constraints": len(shot.constraints),
+                    "contact_evidence": "evaluated-geometry-ground-proximity" if cues else "none",
                     "animated_tracks": motion["tracks"], "contact_cues": motion["contacts"]},
     }
     (destination / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")

@@ -13,6 +13,7 @@
       "kind": "active",
       "shape": "CONVEX_HULL",
       "mass_kg": 0.015,
+      "impact_material": "metal-on-floor",
       "friction": 0.45,
       "restitution": 0.3,
       "margin_m": 0.001,

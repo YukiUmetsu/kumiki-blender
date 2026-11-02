@@ -32,7 +32,7 @@ jobs:
       - name: Test Blender physics shot plans, export and headless worker boundary
         env:
           PYTHONPATH: src:tests
-        run: python -m unittest tests.test_physics_plan tests.test_blender_physics tests.test_glb_motion -v
+        run: python -m unittest tests.test_physics_plan tests.test_blender_physics tests.test_glb_motion tests.test_impact_measurement -v
       - name: Test measured Khufu masonry and Sphinx source intake
         env:
           PYTHONPATH: src
@@ -112,6 +112,14 @@ jobs:
             --python scripts/blender_physics_smoke.py -- .review/ci/physics-smoke
           python -m kumiki_blender audit --model .review/ci/physics-smoke/physics-r01/model.glb
           test -s .review/ci/physics-smoke/physics-r01/baked-actions.json
+      - name: Verify native hinge, slider and fixed constraints in headless Blender
+        env:
+          PYTHONPATH: src
+        run: |
+          blender --background --factory-startup --threads 2 --python-exit-code 1 \
+            --python scripts/blender_physics_constraints_smoke.py -- .review/ci/physics-constraints
+          python -m kumiki_blender audit --model .review/ci/physics-constraints/physics-r01/model.glb
+          test -s .review/ci/physics-constraints/physics-r01/baked-actions.json
       - name: Install optional AssetSpec and image QA dependencies (host Python only)
         run: python -m pip install -e '.[composer,qa]'
       - name: Render AssetSpec v2 component assembly through dependency-free Blender worker
@@ -134,7 +142,7 @@ jobs:
             build-physics --spec examples/desk-lamp-physics-shot.json \
             --output .review/ci/desk-lamp-physics
           python -m kumiki_blender audit --model .review/ci/desk-lamp-physics/model.glb
-          python -c "import json; m=json.load(open('.review/ci/desk-lamp-physics/manifest.json')); a=json.load(open('.review/ci/desk-lamp-physics/baked-actions.json'))[0]; assert m['physics']['has_collision_ground'] and len(a['tracks'])==12; assert all(-.02 < key['position'][1] < 2 for t in a['tracks'] for key in t['keys'])"
+          python -c "import json; m=json.load(open('.review/ci/desk-lamp-physics/manifest.json')); a=json.load(open('.review/ci/desk-lamp-physics/baked-actions.json'))[0]; assert m['physics']['has_collision_ground'] and len(a['tracks'])==12; assert all(-.02 < key['position'][1] < 2 for t in a['tracks'] for key in t['keys']); assert m['physics']['contact_cues'] > 0 and all(c['material']=='metal-on-floor' for c in a['contacts'])"
       - name: Render precision product-detail component kit using the same generic worker
         env:
           KUMIKI_RENDER_PROFILE: smoke
@@ -230,6 +238,13 @@ jobs:
         with:
           name: blender-physics-baked-motion-qa
           path: .review/ci/physics-smoke/physics-r01/
+          if-no-files-found: warn
+      - name: Upload Blender hinge/slider/fixed constraints QA
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: blender-physics-constraints-qa
+          path: .review/ci/physics-constraints/physics-r01/
           if-no-files-found: warn
       - name: Upload real desk-lamp Blender physics and PM2 action bundle
         if: always()
