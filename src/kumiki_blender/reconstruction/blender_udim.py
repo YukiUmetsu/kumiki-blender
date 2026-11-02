@@ -50,8 +50,16 @@ def _validated_package(directory: str | Path) -> tuple[Path, dict[str, Any]]:
     if [line for line in lines if line.startswith("mtllib ")] != ["mtllib udim.mtl"]:
         raise ReferenceError("UDIM OBJ references an unpinned material library")
     material_lines = material.read_text(encoding="utf-8").splitlines()
+    safe_mtl_directives = {
+        "newmtl", "Ka", "Kd", "Ks", "Ke", "Ns", "Ni", "d", "Tr",
+        "illum", "Tf", "Pr", "Pm", "Ps", "Pc", "Pcr", "aniso", "anisor",
+        "map_Kd",
+    }
     if (not any(line == "map_Kd albedo.<UDIM>.png" for line in material_lines)
-            or any(line.startswith("map_") and line != "map_Kd albedo.<UDIM>.png"
+            or any(line.strip() and not line.lstrip().startswith("#") and
+                   (line.split(maxsplit=1)[0] not in safe_mtl_directives or
+                    (line.startswith("map_Kd") and
+                     line != "map_Kd albedo.<UDIM>.png"))
                    for line in material_lines)):
         raise ReferenceError("UDIM MTL references unpinned texture files")
 

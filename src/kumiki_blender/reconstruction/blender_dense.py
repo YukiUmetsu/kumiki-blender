@@ -75,6 +75,18 @@ def _textured_obj_plan(root: Path, report: dict[str, Any],
     if material.is_symlink() or not material.is_file() or material.stat().st_size > 65_536:
         raise ReferenceError("OBJ MTL file missing, linked or oversized")
     mtl_lines = material.read_text(encoding="utf-8").splitlines()
+    # OBJ material loaders accept additional path-bearing directives such as
+    # bump, disp, norm and refl. Reject unknown MTL operations completely;
+    # checking only map_* would still let Blender load unpinned local files.
+    safe_mtl_directives = {
+        "newmtl", "Ka", "Kd", "Ks", "Ke", "Ns", "Ni", "d", "Tr",
+        "illum", "Tf", "Pr", "Pm", "Ps", "Pc", "Pcr", "aniso", "anisor",
+        "map_Kd",
+    }
+    if any(line.strip() and not line.lstrip().startswith("#")
+           and line.split(maxsplit=1)[0] not in safe_mtl_directives
+           for line in mtl_lines):
+        raise ReferenceError("OBJ MTL contains unsupported or unpinned resource directives")
     texture_names = [line.split(maxsplit=1)[1].strip() for line in mtl_lines
                      if line.startswith("map_Kd ")]
     if (not texture_names or any(name not in {Path(item["path"]).name

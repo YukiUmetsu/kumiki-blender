@@ -305,6 +305,12 @@ class TextureFinishTests(unittest.TestCase):
         with self.assertRaisesRegex(ReferenceError, "changed"):
             _validated_package(target)
 
+    def test_unpinned_mtl_resource_directives_cannot_reach_blender(self):
+        self.mtl.write_text(self.mtl.read_text() + "bump ../../untrusted-normal.png\n")
+        with self.assertRaisesRegex(ReferenceError, "unsupported or unpinned"):
+            plan_dense_blender_review(self.dense, self.root / "unsafe-review", textured=True)
+        self.assertFalse((self.root / "unsafe-review").exists())
+
     def test_cli_surface_and_udim_commands(self):
         mask = self.root / "cli-mask.png"
         Image.new("L", (48, 32), 255).save(mask)
