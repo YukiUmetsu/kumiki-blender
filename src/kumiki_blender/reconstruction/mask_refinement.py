@@ -101,7 +101,8 @@ def _inset_mask(binary: Any, pixels: int) -> Any:
 
 
 def _color_refine_boundary(binary: Any, photo: Any, *, band_pixels: int,
-                           max_side: int, iterations: int) -> Any:
+                           max_side: int, iterations: int,
+                           trim_only: bool = False) -> Any:
     """Reclassify only a narrow original-mask boundary band via color GrabCut.
 
     Hard foreground/background interiors never change. This is an optional
@@ -151,6 +152,11 @@ def _color_refine_boundary(binary: Any, photo: Any, *, band_pixels: int,
     hard_bg = cv2.dilate(binary, full_kernel) == 0
     proposal[hard_fg] = 255
     proposal[hard_bg] = 0
+    if trim_only:
+        # In cluttered outdoor scenes color similarity can make GrabCut grow
+        # a semantic silhouette into architecture, pavement or foliage.
+        # Opt-in conservative mode only removes candidate background pixels.
+        proposal = np.minimum(proposal, binary)
     return proposal
 
 
@@ -161,7 +167,8 @@ def refine_rectified_masks(reconstruction: str | Path, mask_revision: str | Path
                            edge_inset_pixels: int = 0,
                            color_band_pixels: int = 0,
                            color_max_side: int = 1280,
-                           color_iterations: int = 3) -> dict[str, Any]:
+                           color_iterations: int = 3,
+                           color_trim_only: bool = False) -> dict[str, Any]:
     """Create a new hash-pinned mask revision and before/after QA contact sheet."""
     for key, value in (("min_island_pixels", min_island_pixels),
                        ("max_hole_pixels", max_hole_pixels)):
@@ -175,6 +182,10 @@ def refine_rectified_masks(reconstruction: str | Path, mask_revision: str | Path
         raise ReferenceError("color_max_side must be an integer from 256 to 4096")
     if type(color_iterations) is not int or not 1 <= color_iterations <= 8:
         raise ReferenceError("color_iterations must be an integer from 1 to 8")
+    if type(color_trim_only) is not bool:
+        raise ReferenceError("color_trim_only must be a boolean")
+    if color_trim_only and not color_band_pixels:
+        raise ReferenceError("color_trim_only needs positive color_band_pixels")
     if edits is None and not (min_island_pixels or max_hole_pixels or edge_inset_pixels
                               or color_band_pixels):
         raise ReferenceError("Mask refinement needs edits or a positive cleanup threshold")
@@ -245,6 +256,7 @@ def refine_rectified_masks(reconstruction: str | Path, mask_revision: str | Path
         "color_band_pixels": color_band_pixels,
         "color_max_side": color_max_side,
         "color_iterations": color_iterations,
+        "color_trim_only": color_trim_only,
         "approved_for_reconstruction": False,
         "status": "incomplete / manual-mask-review-required",
         "images": [],
@@ -267,7 +279,8 @@ def refine_rectified_masks(reconstruction: str | Path, mask_revision: str | Path
                     photo.load()
                     color_refined = _color_refine_boundary(
                         refined, photo, band_pixels=color_band_pixels,
-                        max_side=color_max_side, iterations=color_iterations)
+                        max_side=color_max_side, iterations=color_iterations,
+                        trim_only=color_trim_only)
                 color_changed = int(np.count_nonzero(refined != color_refined))
                 refined = color_refined
             refined = _inset_mask(refined, edge_inset_pixels)

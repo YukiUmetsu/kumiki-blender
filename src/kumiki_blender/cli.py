@@ -218,6 +218,8 @@ def main(argv: list[str] | None = None) -> int:
                                     help="Optional 1–8 pixel contour inset to reduce background edge halos")
     refine_mask_parser.add_argument("--color-band-pixels", type=int, default=0,
                                     help="Optional 1–32 pixel local GrabCut boundary reclassification (candidate only)")
+    refine_mask_parser.add_argument("--color-trim-only", action="store_true",
+                                    help="Conservative color cleanup: remove suspected background, never add foreground")
     refine_mask_parser.add_argument("--color-max-side", type=int, default=1280)
     refine_mask_parser.add_argument("--color-iterations", type=int, default=3)
     mask_consistency_parser = subcommands.add_parser(
@@ -343,7 +345,8 @@ def main(argv: list[str] | None = None) -> int:
                     edge_inset_pixels=args.edge_inset_pixels,
                     color_band_pixels=args.color_band_pixels,
                     color_max_side=args.color_max_side,
-                    color_iterations=args.color_iterations)
+                    color_iterations=args.color_iterations,
+                    color_trim_only=args.color_trim_only)
             except ReferenceError as error:
                 raise RecipeError(str(error)) from error
             print(json.dumps(report, indent=2))

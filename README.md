@@ -60,7 +60,9 @@ and inspect the red overlays before dense MVS. Use `refine-dense-masks` to
 remove tiny mask artifacts and hand-correct individual rectified views with
 normalized include/exclude polygons or a cautious contour inset in a new
 private revision. An optional `--color-band-pixels` GrabCut pass reclassifies
-only a narrow mask boundary while holding interior labels fixed.
+only a narrow mask boundary while holding interior labels fixed; use
+`--color-trim-only` to forbid new foreground. Verify against the original:
+real multi-view statue tests show color cleanup can worsen mask agreement.
 `audit-dense-masks` checks whether the same COLMAP 3D
 feature is inconsistently included across rectified views and writes private
 direction-coded correction overlays, full-resolution detail crops and review

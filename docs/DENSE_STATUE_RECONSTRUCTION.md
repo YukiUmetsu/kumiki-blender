@@ -91,14 +91,13 @@ private texture projection to produce a mesh for artistic inspection.
       --min-island-pixels 24 --max-hole-pixels 24 \
       --edge-inset-pixels 2
 
-    # Optional color-aware boundary pass: moves foreground/background labels
-    # only within six ORIGINAL pixels of the existing mask edge. Keeps
-    # definite interior subjects intact, but inspect thin hair/fingers.
+    # Optional separate color-aware draft to compare visually against r02.
+    # Trim-only never adds foreground; it can still remove thin anatomy.
     kumiki-blender refine-dense-masks \
       --reconstruction .review/statue/sparse-r01 \
       --mask-revision .review/statue/masks-r02 \
       --output .review/statue/masks-r03 \
-      --color-band-pixels 6 --color-max-side 2048 \
+      --color-band-pixels 4 --color-trim-only --color-max-side 2048 \
       --color-iterations 4
 
     # Find camera-specific mask mistakes using actual shared COLMAP 3D tracks.
@@ -107,13 +106,13 @@ private texture projection to produce a mesh for artistic inspection.
     # This is a private QA report, NOT an automatic mask approval.
     kumiki-blender audit-dense-masks \
       --reconstruction .review/statue/sparse-r01 \
-      --rectified-masks .review/statue/masks-r03/masks \
+      --rectified-masks .review/statue/masks-r02/masks \
       --output .review/statue/mask-consistency-r01
 
     # Use only reviewed masks; OpenMVS consumes <rectified-filename>.mask.png.
     kumiki-blender build-dense-photos \
       --reconstruction .review/statue/sparse-r01 \
-      --rectified-masks .review/statue/masks-r03/masks \
+      --rectified-masks .review/statue/masks-r02/masks \
       --output .review/statue/dense-masked-r01 --backend openmvs
 
     # CPU-capable OpenMVS meshing + refinement + texturing.
@@ -268,6 +267,10 @@ hair/fingers can still be misclassified. It writes per-view changed-pixel
 counts and a **new, unapproved revision**; inspect it and restore detail with
 include polygons if necessary. A broad band or low processing resolution may
 make boundaries blockier, so start with 2–6 pixels and review at 100% zoom.
+`--color-trim-only` is the safer background-removal variant: only pixels
+previously labeled foreground can be removed; it cannot extend the mask into
+new background regions. This is **not** guaranteed to improve semantic masks;
+compare new and old audits before selecting a revision for dense MVS.
 The masks are SHA-pinned, copied only into the private MVS workspace, checked
 on resume, and remain absent from Git. Do **not** reuse original distorted-image
 masks by simply resizing them: regenerate/warp them in the exact rectified
@@ -310,6 +313,20 @@ edges and ground/base patches still need review or manual correction. Neither
 set was promoted to an approved silhouette or used as evidence of a completed
 background-free 3D mesh. No EPFL photos, masks or renders are included in Git
 or CI (research use only without written commercial permission).
+
+The 32-photo EPFL Mask dataset was re-run with the official source ZIP SHA-256
+verified, CPU PyCOLMAP 4.2.1 registering **32/32** cameras and **7,906** shared
+3D tracks. The semantic IS-Net masks produced **468** mixed-label tracks
+(41 tied). A 4-pixel unrestricted color-boundary pass increased disagreement to
+**504** (47 tied), and the conservative `--color-trim-only` pass yielded
+**482** (40 tied). The baseline is therefore preferable on this metric;
+no revised candidate was promoted. This is a *triage metric*, not proof that
+the unchanged mask is more accurate: inspection still finds pedestal/ground
+patches with inconsistent inclusion, and isolated profile edges are hard to
+interpret from sparse tracks. Real-data runs also revealed that COLMAP can
+contain multiple observations of the same 3D track within one registered
+image; the auditor now deduplicates these votes and excludes contradictory
+within-camera labels rather than failing or double-counting them.
 
 - OpenMVS: workspace/scene_dense_mesh.ply, optionally
   workspace/scene_dense_mesh_refined.ply and textured OBJ/atlas outputs.

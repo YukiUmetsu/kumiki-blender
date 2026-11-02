@@ -198,6 +198,22 @@ class MaskConsistencyTests(unittest.TestCase):
         boundary = next(mark for mark in candidates if mark["point3d_id"] == 106)
         self.assertEqual(boundary["normalized_xy"], [1.0, 1.0])
 
+    def test_repeated_3d_track_in_one_camera_does_not_cast_extra_votes(self):
+        # Real COLMAP image models can contain multiple 2D observations of
+        # one 3D ID per camera. One identical label counts only once; mixed
+        # labels from the same camera must not be chosen arbitrarily.
+        self.points[2].append((31, 30, 100))  # same foreground label
+        self.points[2].append((30, 40, 102))  # conflicts with image-02 BG
+        self._write_model()
+        result = audit_multiview_masks(self.sparse, self.masks,
+                                       self.root / "duplicate-tracks-audit")
+        image = result["images"][2]
+        self.assertEqual(image["duplicate_track_observations"], 2)
+        self.assertEqual(image["conflicting_duplicate_tracks"], 1)
+        self.assertEqual(image["consensus_outliers"], 0)
+        self.assertEqual(image["tracked_observations"], 2)
+        self.assertTrue(any("deduplicated" in warning for warning in image["warnings"]))
+
     def test_tampering_corrupt_tracks_or_no_overlap_rejects_without_output(self):
         target = self.root / "invalid"
         binary = self.sparse / "undistorted/sparse/images.bin"

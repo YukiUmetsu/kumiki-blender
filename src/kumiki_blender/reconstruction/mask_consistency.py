@@ -171,6 +171,8 @@ def audit_multiview_masks(reconstruction: str | Path, masks: str | Path,
     image_meta = {name: {"filename": name, "source_photo_sha256": None,
                          "mask_sha256": mask_hashes[name],
                          "tracked_observations": 0, "out_of_frame_observations": 0,
+                         "duplicate_track_observations": 0,
+                         "conflicting_duplicate_tracks": 0,
                          "compared_observations": 0, "consensus_outliers": 0,
                          "possible_background_leaks": 0,
                          "possible_missing_subject": 0,
@@ -187,16 +189,30 @@ def audit_multiview_masks(reconstruction: str | Path, masks: str | Path,
             decoded = mask.convert("L")
             pixels = decoded.load()
             width, height = mask.size
-            seen_ids = set()
+            observations: dict[int, tuple[float, float, bool] | None] = {}
+            conflicting: set[int] = set()
             for point_id, x, y in tracks_by_image[name]:
-                if point_id in seen_ids:
-                    raise ReferenceError("COLMAP repeats one 3D track within an image")
-                seen_ids.add(point_id)
                 if not 0 <= x < width or not 0 <= y < height:
                     image_meta[name]["out_of_frame_observations"] += 1
                     continue
                 foreground = bool(pixels[min(width-1, round(x)),
                                          min(height-1, round(y))])
+                if point_id in observations:
+                    image_meta[name]["duplicate_track_observations"] += 1
+                    prior = observations[point_id]
+                    if prior is not None and prior[2] != foreground:
+                        # COLMAP can merge multiple feature observations into
+                        # one point within one image. Never count a camera
+                        # twice or pick a side if its own mask is inconsistent.
+                        observations[point_id] = None
+                        conflicting.add(point_id)
+                    continue
+                observations[point_id] = (x, y, foreground)
+            image_meta[name]["conflicting_duplicate_tracks"] = len(conflicting)
+            for point_id, record in observations.items():
+                if record is None:
+                    continue
+                x, y, foreground = record
                 observed_points[point_id].append((name, x, y, foreground))
                 image_meta[name]["tracked_observations"] += 1
                 image_meta[name]["foreground_observations" if foreground
@@ -261,6 +277,10 @@ def audit_multiview_masks(reconstruction: str | Path, masks: str | Path,
             item["warnings"].append("Some tracks have no majority label; inspect yellow points")
         if item["out_of_frame_observations"]:
             item["warnings"].append("Some sparse features fall outside rectified image boundaries")
+        if item["duplicate_track_observations"]:
+            item["warnings"].append("Repeated COLMAP 3D point observations deduplicated within this camera")
+        if item["conflicting_duplicate_tracks"]:
+            item["warnings"].append("Within-camera conflicting labels on repeated tracks were excluded")
         if item["consensus_outliers"] + item["ambiguous_observations"] > max_overlay_points:
             item["warnings"].append("Review markers were capped; counts include every observed disagreement")
     target.mkdir(parents=True, exist_ok=False)

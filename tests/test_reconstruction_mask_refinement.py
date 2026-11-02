@@ -139,6 +139,9 @@ class MaskRefinementTests(unittest.TestCase):
         self.assertEqual(refined[35, 50], 255)  # high-confidence statue core retained
         self.assertEqual(refined[1, 1], 0)  # sure background remains background
         self.assertGreater(int(np.count_nonzero(initial != refined)), 0)
+        trimmed = _color_refine_boundary(initial, photo, band_pixels=8,
+                                         max_side=256, iterations=4, trim_only=True)
+        self.assertTrue(np.all(trimmed <= initial))
         with self.assertRaisesRegex(ReferenceError, "exactly rectified"):
             _color_refine_boundary(initial, Image.new("RGB", (99, 80)),
                                    band_pixels=8, max_side=256, iterations=4)
@@ -189,11 +192,13 @@ class MaskRefinementTests(unittest.TestCase):
                 "refine-dense-masks", "--reconstruction", str(self.sparse),
                 "--mask-revision", str(self.source_masks), "--output", str(target),
                 "--color-band-pixels", "8", "--color-max-side", "256",
-                "--color-iterations", "4",
+                "--color-iterations", "4", "--color-trim-only",
             ]), 0)
         result = json.loads((target / "mask-report.json").read_text())
         self.assertEqual(result["color_band_pixels"], 8)
+        self.assertTrue(result["color_trim_only"])
         self.assertGreater(result["images"][0]["color_boundary_pixels_changed"], 0)
+        self.assertEqual(result["images"][0]["pixels_added"], 0)
         self.assertFalse(result["approved_for_reconstruction"])
         with Image.open(target / "masks/view-00.jpg.mask.png") as refined:
             self.assertEqual(refined.getpixel((27, 35)), 0)
@@ -201,6 +206,9 @@ class MaskRefinementTests(unittest.TestCase):
         with self.assertRaisesRegex(ReferenceError, "color_band_pixels"):
             refine_rectified_masks(self.sparse, self.source_masks,
                                    self.root / "invalid-color", color_band_pixels=33)
+        with self.assertRaisesRegex(ReferenceError, "needs positive"):
+            refine_rectified_masks(self.sparse, self.source_masks,
+                                   self.root / "invalid-trim", color_trim_only=True)
 
     def test_cli_refine_masks_and_reject_invalid_settings(self):
         target = self.root / "cli-r02"
