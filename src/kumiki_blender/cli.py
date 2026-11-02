@@ -22,6 +22,7 @@ from .egypt_map import CITY_MARKERS, LABELS, RIVER_CHANNELS, EgyptMapSpec
 from .geography.fuji import load_dem
 from .glb_audit import AuditError, audit_glb
 from .glb_motion import MotionExportError, write_glb_motion
+from .physics_plan import PhysicsPlanError, load_physics_plan
 from .lattice import make_lattice_tower
 from .landmark_scan import prepare_sphinx_scan
 from .material_overrides import load_material_overrides, verify_material_overrides
@@ -140,6 +141,13 @@ def main(argv: list[str] | None = None) -> int:
     motion_parser.add_argument("--output", type=Path, required=True, help="New PM2 baked-actions.json")
     motion_parser.add_argument("--action-id", help="Optional Kumiki action ID; defaults to <clip>-baked")
     motion_parser.add_argument("--contacts", type=Path, help="Optional validated contact cue array JSON")
+    motion_parser.add_argument("--merge-clips", action="store_true", help="Combine disjoint per-object simulation clips into one PM2 action")
+    for command in ("plan-physics", "build-physics"):
+        physics_parser = subcommands.add_parser(command, help="Validate or bake a declarative Blender rigid-body shot")
+        physics_parser.add_argument("--spec", type=Path, required=True)
+        if command == "build-physics":
+            physics_parser.add_argument("--output", type=Path, required=True,
+                                        help="New, immutable motion bundle (requires Blender background with a loaded .blend)")
     revision_parser = subcommands.add_parser("audit-revision")
     revision_parser.add_argument("--root", type=Path, required=True)
     visual_parser = subcommands.add_parser("visual-qa", help="Contact sheet and optional render regression")
@@ -341,10 +349,26 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     try:
+        if args.command in ("plan-physics", "build-physics"):
+            shot = load_physics_plan(args.spec)
+            if args.command == "plan-physics":
+                print(json.dumps({"asset_id": shot.asset_id, "action_id": shot.action_id,
+                                  "duration_frames": shot.duration_frames,
+                                  "rules": len(shot.bodies), "active_rules": sum(body.kind == "active" for body in shot.bodies),
+                                  "gravity_mps2": shot.gravity_mps2}, indent=2))
+                return 0
+            try:
+                import bpy  # type: ignore[import-not-found]
+            except ImportError as error:
+                raise PhysicsPlanError("build-physics requires Blender: blender --background source.blend --python scripts/blender_entry.py -- build-physics --spec plan.json --output new-revision") from error
+            from .blender_physics import build_physics_shot
+            print(json.dumps(build_physics_shot(bpy, shot, args.output), indent=2))
+            return 0
         if args.command == "export-motion":
             print(json.dumps(write_glb_motion(args.model, args.output, clip_name=args.clip,
                                               action_id=args.action_id,
-                                              contacts_path=args.contacts), indent=2))
+                                              contacts_path=args.contacts,
+                                              merge_clips=args.merge_clips), indent=2))
             return 0
         if args.command == "prepare-dense-masks":
             from .reconstruction.masking import generate_rectified_masks
@@ -1059,7 +1083,7 @@ def main(argv: list[str] | None = None) -> int:
         manifest = build_scene(recipe, plan, output, bpy_module=bpy)
         print(json.dumps(manifest, indent=2))
         return 0
-    except (CatalogError, RecipeError, PorticoError, FacadeError, MonumentError, GeometryError, AssetImportError, HeadFitError, MakeHumanSourceError, RenderProfileError, RevisionAuditError, AuditError, ExportAuditError, MotionExportError,
+    except (CatalogError, RecipeError, PorticoError, FacadeError, MonumentError, GeometryError, AssetImportError, HeadFitError, MakeHumanSourceError, RenderProfileError, RevisionAuditError, AuditError, ExportAuditError, MotionExportError, PhysicsPlanError,
             SurfaceError, RuntimeError, OSError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 2

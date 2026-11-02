@@ -190,8 +190,9 @@ def _sample(times: list[float], values: list[list[float]], path: str,
 
 
 def export_glb_motion(path: str | Path, *, clip_name: str | None = None, action_id: str | None = None,
-                      contacts: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
-    """Export exactly one glTF clip into a validated PM2 action list.
+                      contacts: list[dict[str, Any]] | None = None,
+                      merge_clips: bool = False) -> list[dict[str, Any]]:
+    """Export a glTF clip, or merge disjoint physics-node clips, to PM2.
 
     Rigid body physics should be baked to keyframes in Blender before GLB
     export. Unsupported morph, bones without part tags, and cubic interpolation
@@ -203,54 +204,56 @@ def export_glb_motion(path: str | Path, *, clip_name: str | None = None, action_
     if not isinstance(clips, list):
         raise MotionExportError("glTF animations must be an array")
     matches = [a for a in clips if isinstance(a, dict) and (clip_name is None or a.get("name") == clip_name)]
-    if len(matches) != 1:
+    if not matches or (len(matches) != 1 and not merge_clips):
         raise MotionExportError(f"Expected exactly one glTF animation for {clip_name or 'automatic clip selection'!r}; specify --clip when several exist")
-    clip_name = matches[0].get("name") or "physics"
+    clip_name = (matches[0].get("name") if len(matches) == 1 else "combined-physics") or "physics"
     if not isinstance(clip_name, str):
         raise MotionExportError("glTF animation name must be text")
     slug = re.sub(r"[^A-Za-z0-9._:-]+", "-", clip_name).strip("-:")[:80] or "physics"
     name = action_id or f"{slug}-baked"
     if not _ID.fullmatch(name):
         raise MotionExportError("PM2 action id must be a safe identifier")
-    animation = matches[0]
     semantic = _semantic_ids(doc)
     nodes = doc["nodes"]
     samples_by_node: dict[int, dict[str, tuple[list[float], list[list[float]], str]]] = {}
     duration = 0.0
-    tracks = animation.get("channels", [])
-    if not 1 <= len(tracks) <= 384:
-        raise MotionExportError("Animation requires 1–384 channels")
-    samplers = animation.get("samplers", [])
-    for channel in tracks:
-        channel = _object(channel, "channel")
-        target = _object(channel.get("target"), "channel.target")
-        node = _index(target.get("node"), len(nodes), "channel.target.node")
-        if node not in semantic:
-            raise MotionExportError(f"Animated node[{node}] needs a kumiki_part tag on the node itself")
-        component = target.get("path")
-        if component not in ("translation", "rotation", "scale"):
-            raise MotionExportError(f"Unsupported animated path {component!r}; PM2 requires node TRS")
-        if "matrix" in nodes[node]:
-            raise MotionExportError(f"Animated node[{node}] uses matrix instead of glTF TRS")
-        sampler = _object(samplers[_index(channel.get("sampler"), len(samplers), "sampler")], "sampler")
-        interp = sampler.get("interpolation", "LINEAR")
-        if interp not in ("LINEAR", "STEP"):
-            raise MotionExportError("Only LINEAR and STEP glTF clips can be faithfully converted to PM2")
-        times = [row[0] for row in glb.accessor(sampler.get("input"), "SCALAR")]
-        values = glb.accessor(sampler.get("output"), "VEC4" if component == "rotation" else "VEC3")
-        if not times or len(times) != len(values) or times[0] < 0 or any(
-                not math.isfinite(t) or t < 0 or t > 120 or (i and t <= times[i-1])
-                for i, t in enumerate(times)):
-            raise MotionExportError("Animation timestamps must increase strictly within 120 seconds")
-        for value in values:
-            _vector(value, len(value), "animation transform", -1000, 1000)
-        if component == "rotation":
-            values = [_quat(_vector(v, 4, "rotation", -1, 1)) for v in values]
-        assigned = samples_by_node.setdefault(node, {})
-        if component in assigned:
-            raise MotionExportError(f"node[{node}] repeats an animated {component} channel")
-        assigned[component] = (times, values, interp)
-        duration = max(duration, times[-1])
+    for animation in matches:
+        tracks = animation.get("channels", [])
+        if not isinstance(tracks, list) or not 1 <= len(tracks) <= 384:
+            raise MotionExportError("Animation requires 1–384 channels")
+        samplers = animation.get("samplers", [])
+        if not isinstance(samplers, list):
+            raise MotionExportError("Animation samplers must be an array")
+        for channel in tracks:
+            channel = _object(channel, "channel")
+            target = _object(channel.get("target"), "channel.target")
+            node = _index(target.get("node"), len(nodes), "channel.target.node")
+            if node not in semantic:
+                raise MotionExportError(f"Animated node[{node}] needs a kumiki_part tag on the node itself")
+            component = target.get("path")
+            if component not in ("translation", "rotation", "scale"):
+                raise MotionExportError(f"Unsupported animated path {component!r}; PM2 requires node TRS")
+            if "matrix" in nodes[node]:
+                raise MotionExportError(f"Animated node[{node}] uses matrix instead of glTF TRS")
+            sampler = _object(samplers[_index(channel.get("sampler"), len(samplers), "sampler")], "sampler")
+            interp = sampler.get("interpolation", "LINEAR")
+            if interp not in ("LINEAR", "STEP"):
+                raise MotionExportError("Only LINEAR and STEP glTF clips can be faithfully converted to PM2")
+            times = [row[0] for row in glb.accessor(sampler.get("input"), "SCALAR")]
+            values = glb.accessor(sampler.get("output"), "VEC4" if component == "rotation" else "VEC3")
+            if not times or len(times) != len(values) or times[0] < 0 or any(
+                    not math.isfinite(t) or t < 0 or t > 120 or (i and t <= times[i-1])
+                    for i, t in enumerate(times)):
+                raise MotionExportError("Animation timestamps must increase strictly within 120 seconds")
+            for value in values:
+                _vector(value, len(value), "animation transform", -1000, 1000)
+            if component == "rotation":
+                values = [_quat(_vector(v, 4, "rotation", -1, 1)) for v in values]
+            assigned = samples_by_node.setdefault(node, {})
+            if component in assigned:
+                raise MotionExportError(f"node[{node}] repeats an animated {component} channel")
+            assigned[component] = (times, values, interp)
+            duration = max(duration, times[-1])
     duration_frames = max(1, math.ceil(duration*_RATE))
     if duration_frames > 3600 or len(samples_by_node) > 128 or (duration_frames+1)*len(samples_by_node) > _MAX_KEYS:
         raise MotionExportError("Animation exceeds the PM2 duration, track or key budget")
@@ -302,7 +305,8 @@ def export_glb_motion(path: str | Path, *, clip_name: str | None = None, action_
 
 
 def write_glb_motion(path: str | Path, output: str | Path, *, clip_name: str | None = None,
-                     action_id: str | None = None, contacts_path: str | Path | None = None) -> dict[str, Any]:
+                     action_id: str | None = None, contacts_path: str | Path | None = None,
+                     merge_clips: bool = False) -> dict[str, Any]:
     """Produce a new standalone PM2 JSON sidecar; never overwrite user output."""
     destination = Path(output)
     if destination.exists() or destination.is_symlink():
@@ -317,7 +321,8 @@ def write_glb_motion(path: str | Path, output: str | Path, *, clip_name: str | N
                               parse_constant=lambda x: (_ for _ in ()).throw(ValueError(x)))
         except (ValueError, UnicodeError) as error:
             raise MotionExportError(f"Malformed contact cues: {error}") from error
-    actions = export_glb_motion(path, clip_name=clip_name, action_id=action_id, contacts=cues)
+    actions = export_glb_motion(path, clip_name=clip_name, action_id=action_id, contacts=cues,
+                                merge_clips=merge_clips)
     destination.parent.mkdir(parents=True, exist_ok=True)
     with destination.open("x", encoding="utf-8") as stream:
         json.dump(actions, stream, indent=2, allow_nan=False)

@@ -2,6 +2,35 @@
 
 Use Blender's native rigid-body solver and constraints for genuine collisions, then convert its exported glTF keyframes into a portable, frame-addressed motion action. No per-object JavaScript or live solver is needed in Kumiki-UI.
 
+## Automatic Blender rigid-body shot (no per-object Python)
+
+A validated JSON plan configures mass, gravity, friction, restitution, collision shapes, start offsets, solver quality and timeline for any **already modeled** `.blend` scene. It reuses the existing mesh and materials rather than generating replacement geometry. Start with [the desk-lamp fastener-drop example](../examples/desk-lamp-physics-shot.json), which targets the `base-fasteners` and `weighted-base` roles exported by the AssetSpec v2 desk lamp. Its optional `ground` is a simulation-only, unexported collider that catches falling parts; adjust `height_m`, `half_extent_m`, `thickness_m`, `friction` and `restitution` to suit any scene.
+
+```bash
+# Validate on normal Python first, no Blender needed:
+kumiki-blender plan-physics --spec examples/desk-lamp-physics-shot.json
+
+# After building the AssetSpec desk-lamp scene:
+blender --background .review/desk-lamp/r01/source.blend \
+  --python-exit-code 1 --python scripts/blender_entry.py -- \
+  build-physics --spec examples/desk-lamp-physics-shot.json \
+  --output .review/desk-lamp/physics-r01
+```
+
+The output directory must **not exist**. The original `.blend` is never overwritten. A physics bundle contains:
+
+| File | Purpose |
+| --- | --- |
+| `source.blend` | Editable copy with configured rigid bodies, before keyframe baking |
+| `model.glb` | Existing geometry/materials and actual baked glTF animation |
+| `baked-actions.json` | PM2 transforms converted from the GLB; all disjoint per-object clips merged safely |
+| `physics-plan.json` | Canonical reusable input plan, including explicit material/solver settings |
+| `manifest.json` | Schema-1 metadata and GLB counts for the Kumiki-UI asset bridge |
+
+Use `baked-actions.json` in `loadBlenderRevision(..., { bakedActions })` and select the generated action in Storybook with the portable camera/lighting inspector. This motion-only bundle has **no rendered preview images** and is not a full visual-QA revision; review Blender viewport frames and rendered video before production approval. If the glTF exporter cannot represent a shot faithfully (non-TRS clips, overlapping actions, untagged nodes), the build fails explicitly.
+
+Physics is assigned only to explicitly targeted editable meshes. `name:<exact Blender object name>` selects one mesh (and automatically gives an untagged selected object a safe `kumiki_part` role); `role:<kumiki_part>` applies a rule to all matching meshes. All selected bodies are checked for overlaps and the animation is sampled from frame zero at a 30-fps reference rate, producing exactly `duration_frames` of playback. In headless Blender 4.5, the worker samples evaluated Bullet transforms and inserts native object keyframes because the standard `bpy.ops.rigidbody.bake_to_keyframes` operator requires an unavailable UI keying context. The generic shot intentionally does not infer collision forces or SFX events from curves.
+
 ## One command after baking
 
 ```bash
@@ -11,6 +40,9 @@ kumiki-blender export-motion --model model.glb --output baked-actions.json
 # Choose an animation when there are several; optional measured impact cues:
 kumiki-blender export-motion --model model.glb --clip "RigidBodyAction" \
   --contacts contacts.json --output baked-actions.json
+
+# If Blender emitted one disjoint clip per rigid body:
+kumiki-blender export-motion --model model.glb --merge-clips --output baked-actions.json
 ```
 
 The output is a **PM2 action array**, ready to supply to the pending Kumiki-UI `loadBlenderRevision(..., { bakedActions })` bridge. It includes 30-fps reference frames, per-node absolute local translation/quaternion/scale, and any explicitly supplied contact timestamps. A full source GLB glTF clip is still playable in the existing asset bridge; the sidecar adds a renderer-neutral, bounded motion contract and SFX cues.
@@ -19,7 +51,7 @@ The output is a **PM2 action array**, ready to supply to the pending Kumiki-UI `
 
 1. Make the object a real rigid body, choose collision shapes/margins, mass, restitution and friction; configure constraints and scene scale. Test at normal playback speed in Blender.
 2. Assign stable tags to **the actual animated nodes** before GLB export, e.g. `obj["kumiki_part"] = "hardware"`. If multiple nodes share a role, Kumiki assigns stable canonical IDs like `kumiki:hardware:1` from the GLB scene hierarchy.
-3. Bake rigid-body motion to keyframes using Blender's **Object → Rigid Body → Bake to Keyframes** or its Python equivalent `bpy.ops.rigidbody.bake_to_keyframes(frame_start=1, frame_end=121, step=1)` with the intended rigid bodies selected. Store the editable `.blend` source.
+3. Bake rigid-body motion to keyframes using Blender's **Object → Rigid Body → Bake to Keyframes** in the interactive application, or use `build-physics` in headless Blender. The `bake_to_keyframes` operator is not supported in Blender 4.5 background mode because it invokes a UI keying set. Store the editable `.blend` source.
 4. Export **binary glTF (.glb)** with animations and custom properties/extras enabled. Preserve the same node hierarchy and names for both the GLB and subsequent Kumiki import. Do not author a second coordinate conversion: this command samples the GLB's already converted Y-up local transforms.
 5. Run `export-motion`, then visually compare important Blender frames and the Kumiki Storybook/MP4 output: first contact, rebound, joint alignment, final rest and material lighting.
 
@@ -53,5 +85,7 @@ hero.dispose(); factory.release();
 - Names and role ordinals follow the exported GLB's default scene DFS order, not raw Blender collection order. Avoid editing GLB hierarchy after creating the sidecar. A node with a matrix instead of animatable TRS is rejected.
 - Duration: up to 120 seconds at 30-fps reference, 128 animated nodes, 120,000 sampled transform keys, 4,096 contact cues. Large sequences should be split into clips for rendering and editing. The source GLB is capped at 512 MiB; animation accessors are read via bounded file offsets without loading all mesh geometry into memory.
 - `export-motion` is an interchange converter, **not a rigid-body physics solver or an artistic fidelity certificate**. Genuine Blender reference-frame comparison remains mandatory. Cloth/soft-body geometry needs morph targets or a separate vertex-cache pipeline.
+
+Real Blender QA: `scripts/blender_physics_smoke.py` creates two falling metal cubes and an unexported floor, simulates them in Blender 4.5, and checks that the GLB has exactly two semantic animated nodes and that neither penetrates the floor. The PR CI additionally bakes the **actual 12 fasteners** in the existing desk-lamp AssetSpec, checks their vertical trajectories and uploads `.blend`, GLB, PM2 and manifest artifacts for independent inspection.
 
 Blender references: [Rigid Body Python API](https://docs.blender.org/api/4.5/bpy.ops.rigidbody.html), [Rigid Body Introduction](https://docs.blender.org/manual/en/latest/physics/rigid_body/introduction.html).

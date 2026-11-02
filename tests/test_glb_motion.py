@@ -15,7 +15,8 @@ from kumiki_blender.glb_motion import MotionExportError, export_glb_motion, writ
 
 def sample_glb(path: Path, *, animation_changes: dict | None = None,
                untagged: bool = False, corrupted: bool = False,
-               second_role: str = "ground", reversed_roots: bool = False) -> Path:
+               second_role: str = "ground", reversed_roots: bool = False,
+               extra_clips: list[dict] | None = None) -> Path:
     times = struct.pack("<3f", 0, .5, 1)
     positions = struct.pack("<9f", 0, 1, 0, 0, 0, 0, 0, .3, 0)
     rotations = struct.pack("<12f", 0, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 1)
@@ -39,7 +40,7 @@ def sample_glb(path: Path, *, animation_changes: dict | None = None,
         "nodes": [node, {"name": "floor", "extras": {"kumiki_part": second_role}}],
         "scenes": [{"nodes": [1, 0] if reversed_roots else [0, 1]}], "scene": 0,
         "meshes": [{"primitives": [{}]}],
-        "animations": [animation],
+        "animations": [animation, *(extra_clips or [])],
         "buffers": [{"byteLength": len(binary)}],
         "bufferViews": [
             {"buffer": 0, "byteOffset": 0, "byteLength": len(times)},
@@ -170,6 +171,24 @@ class GlbMotionTests(unittest.TestCase):
             with self.assertRaisesRegex(MotionExportError, "canonical semantic part"):
                 export_glb_motion(model, contacts=[{"frame": 10,
                     "target": "kumiki:hardware:3", "speedMps": 1}])
+
+    def test_merges_disjoint_per_object_blender_clips_but_rejects_channel_collisions(self):
+        with tempfile.TemporaryDirectory() as folder:
+            base = Path(folder)
+            second = {"name": "second-object", "samplers": [{"input": 0, "output": 1}],
+                      "channels": [{"sampler": 0, "target": {"node": 1, "path": "translation"}}]}
+            model = sample_glb(base/"disjoint.glb", extra_clips=[second])
+            with self.assertRaisesRegex(MotionExportError, "exactly one"):
+                export_glb_motion(model)
+            [action] = export_glb_motion(model, merge_clips=True, action_id="two-body-hit")
+            self.assertEqual(action["id"], "two-body-hit")
+            self.assertEqual({t["target"] for t in action["tracks"]},
+                             {"kumiki:hardware:1", "kumiki:ground:1"})
+            duplicate = {**second, "channels": [{"sampler": 0,
+                         "target": {"node": 0, "path": "translation"}}]}
+            bad = sample_glb(base/"overlap.glb", extra_clips=[duplicate])
+            with self.assertRaisesRegex(MotionExportError, "repeats"):
+                export_glb_motion(bad, merge_clips=True)
 
 
 if __name__ == "__main__":

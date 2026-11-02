@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "asset_id": "midcentury-desk-lamp-physics",
+  "action_id": "fastener-drop",
+  "duration_frames": 120,
+  "gravity_mps2": [0, 0, -9.81],
+  "substeps": 20,
+  "solver_iterations": 20,
+  "ground": {"height_m": -0.002, "half_extent_m": 8, "friction": 0.8, "restitution": 0.08},
+  "bodies": [
+    {
+      "target": "role:base-fasteners",
+      "kind": "active",
+      "shape": "CONVEX_HULL",
+      "mass_kg": 0.015,
+      "friction": 0.45,
+      "restitution": 0.3,
+      "margin_m": 0.001,
+      "offset_m": [0, 0, 0.45]
+    },
+    {
+      "target": "role:weighted-base",
+      "kind": "passive",
+      "shape": "MESH",
+      "friction": 0.6,
+      "restitution": 0.12,
+      "margin_m": 0.001
+    }
+  ]
+}
