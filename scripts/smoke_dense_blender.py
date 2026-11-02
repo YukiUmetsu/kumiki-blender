@@ -12,6 +12,8 @@ def main() -> None:
     import bpy  # type: ignore[import-not-found]
 
     output = Path(sys.argv[sys.argv.index("--") + 1]).resolve()
+    root = Path(__file__).resolve().parents[1]
+    sys.path.insert(0, str(root / "src"))
     fixture = output.parent / "dense-blender-first-party-input"
     fixture.mkdir(parents=True, exist_ok=False)
     bpy.ops.wm.read_factory_settings(use_empty=True)
@@ -23,20 +25,19 @@ def main() -> None:
         x, y, z = vertex.co
         vertex.co.z += 0.04*x*y
     sphere.data.update()
-    original_vertices = len(sphere.data.vertices)
-    original_faces = len(sphere.data.polygons)
     path = fixture / "first-party-source.ply"
     bpy.ops.wm.ply_export(filepath=str(path), export_selected_objects=True)
+    # Blender's PLY exporter may triangulate polygons and merge identical
+    # pole vertices; the real boundary contract is the exported PLY header.
+    from kumiki_blender.reconstruction.dense import _ply_counts
+    counts = _ply_counts(path)
     with path.open("rb") as stream:
         sha = hashlib.file_digest(stream, "sha256").hexdigest()
     (fixture / "dense-report.json").write_text(json.dumps({
         "status": "dense-mesh-candidate / artistic-and-rights-review-required",
         "distribution_allowed": False,
-        "mesh": {"ply": path.name, "sha256": sha, "vertices": original_vertices,
-                 "faces": original_faces},
+        "mesh": {"ply": path.name, "sha256": sha, **counts},
     }))
-    root = Path(__file__).resolve().parents[1]
-    sys.path.insert(0, str(root / "src"))
     from kumiki_blender.reconstruction.blender_dense import build_dense_blender_review
 
     result = build_dense_blender_review(fixture, output, bpy_module=bpy, render_previews=True)
