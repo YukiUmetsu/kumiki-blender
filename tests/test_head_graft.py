@@ -78,6 +78,38 @@ class HeadGraftTests(unittest.TestCase):
         self.assertNotIn("Hair | mantle",result.graph.nodes_geometry)
         self.assertIn("Study | Hair | sculpted temple",result.graph.nodes_geometry)
         self.assertEqual(audit["donor_hair_meshes"],1)
+        hair=result.geometry["Study | Hair | sculpted temple"]
+        head=result.geometry["Head | anatomical quad-topology HOLD"]
+        self.assertEqual(hair.visual.material.name,head.visual.material.name)
+        self.assertTrue(audit["donor_hair_soapstone_retextured"])
+
+    def test_removes_old_neck_and_preserves_body_and_donor_eyeballs(self):
+        base,donor=self.make_scenes()
+        base.add_geometry(sphere(.6,(0,35.5,-.5),subdivisions=2),
+                          geom_name="Head | broad tendinous neck",
+                          node_name="Head | broad tendinous neck")
+        donor.add_geometry(sphere(.11,(.2,36.3,1.6),subdivisions=2),
+                           geom_name="Head | stone eyeball reference right",
+                           node_name="Head | stone eyeball reference right")
+        result,audit=graft_anatomical_head(base,donor)
+        self.assertNotIn("Head | broad tendinous neck",result.graph.nodes_geometry)
+        self.assertIn("Statue | robe",result.graph.nodes_geometry)
+        self.assertIn("Study | Head | stone eyeball reference right",result.graph.nodes_geometry)
+        self.assertEqual(audit["donor_eye_meshes"],1)
+        self.assertEqual(audit["preserved_nodes"],2)
+
+    def test_auto_neck_bridge_reaches_collar_without_moving_head_top(self):
+        base,donor=self.make_scenes()
+        collar=sphere(.5,(0,32.95,0),subdivisions=2)
+        base.add_geometry(collar,geom_name="Collar | shoulder transition",
+                          node_name="Collar | shoulder transition")
+        original_top=donor.geometry["Head | anatomical quad-topology clay sculpt"].bounds[1,1]
+        result,audit=graft_anatomical_head(base,donor)
+        self.assertGreater(audit["neck_bridge_drop_m"],.0)
+        head=result.geometry["Head | anatomical quad-topology HOLD"]
+        self.assertLess(head.bounds[0,1],33.45)
+        self.assertAlmostEqual(head.bounds[1,1],original_top,places=5)
+        self.assertIn("Collar | shoulder transition",result.graph.nodes_geometry)
 
     def test_transfers_soapstone_material_with_metric_uv(self):
         base,donor=self.make_scenes()

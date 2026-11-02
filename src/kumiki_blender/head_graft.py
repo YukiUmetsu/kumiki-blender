@@ -101,6 +101,28 @@ def graft_anatomical_head(base_scene, donor_scene, *, alignment="world",
         raise ValueError("Donor face depth is too far from original sculpt")
 
     # The CC0 donor may carry unrelated neutral-clay/copper material.
+    # The r50 figure uses a separate broad-neck mesh down to the collar.
+    # Removing that obsolete neck leaves a gap beneath the anatomical donor.
+    # Extend only the donor's lower cervical cross-sections into the collar;
+    # preserve chin, eyes and crown and do not alter the robe.
+    neck_drop=0.
+    neck_gap_before=None
+    collars=[node for node in base.graph.nodes_geometry
+             if node.startswith("Collar | shoulder transition")]
+    if len(collars)==1:
+        collar=_world_mesh(base,collars[0])
+        collar_top=float(collar.bounds[1,1])
+        neck_gap_before=float(head.bounds[0,1]-collar_top)
+        if neck_gap_before>.08:
+            if neck_gap_before>.85:
+                raise ValueError("HOLD_donor_neck_too_far_from_collar")
+            neck_drop=neck_gap_before+.12
+            original_y=head.vertices[:,1].copy()
+            start=float(original_y.min())+.18
+            t=np.clip((original_y-start)/.72,0,1)
+            weight=1-t*t*(3-2*t)
+            head.vertices[:,1]-=neck_drop*weight
+
     # Transfer the original r50 soapstone PBR textures and reproject UVs
     # in metres. Copying the donor's 0..1 UVs would make 3-cm tiles huge.
     z_center=float((bounds[0,2]+bounds[1,2])/2)
@@ -115,7 +137,7 @@ def graft_anatomical_head(base_scene, donor_scene, *, alignment="world",
     head.visual=trimesh.visual.TextureVisuals(uv=uv,material=material)
 
     remove = [node for node in base.graph.nodes_geometry if
-              node.startswith(("Head | integrated cheekbone","Face |"))
+              node.startswith(("Head | integrated cheekbone","Head | broad tendinous neck","Face |"))
               or (replace_hair and node.startswith("Hair |"))]
     keep = [node for node in base.graph.nodes_geometry if node not in remove]
     original_digest = _geometry_digest(base, keep)
@@ -128,6 +150,20 @@ def graft_anatomical_head(base_scene, donor_scene, *, alignment="world",
         base.delete_geometry(geom)
     base.add_geometry(head, geom_name="Head | anatomical quad-topology HOLD",
                       node_name="Head | anatomical quad-topology HOLD")
+    # Donor's separate stone eyeball meshes must follow the anatomical
+    # eyelids. Leaving them out creates hollow eye sockets in the full figure.
+    donor_eye_count=0
+    for node in donor.graph.nodes_geometry:
+        if not node.startswith("Head | stone eyeball reference"):
+            continue
+        eye=_world_mesh(donor,node)
+        if alignment=="bounds":
+            eye.vertices=(eye.vertices-source)*scale+target
+        eye.visual=trimesh.visual.TextureVisuals(
+            uv=np.column_stack((eye.vertices[:,0]/.72,eye.vertices[:,1]/.72)),
+            material=copy.deepcopy(head.visual.material))
+        base.add_geometry(eye,geom_name="Study | "+node,node_name="Study | "+node)
+        donor_eye_count+=1
     donor_hair_count = 0
     if replace_hair:
         for node in donor.graph.nodes_geometry:
@@ -136,6 +172,13 @@ def graft_anatomical_head(base_scene, donor_scene, *, alignment="world",
             mesh = _world_mesh(donor, node)
             if alignment == "bounds":
                 mesh.vertices = (mesh.vertices-source)*scale+target
+            # The donor hair is neutral clay; match the statue's metric
+            # soapstone instead of mixing unrelated materials.
+            p=mesh.vertices
+            uv=np.column_stack((np.arctan2(p[:,0],p[:,2]-1.3)*.95/.72,
+                                p[:,1]/.72))
+            mesh.visual=trimesh.visual.TextureVisuals(
+                uv=uv,material=copy.deepcopy(head.visual.material))
             base.add_geometry(mesh,geom_name="Study | "+node,
                               node_name="Study | "+node)
             donor_hair_count += 1
@@ -152,7 +195,12 @@ def graft_anatomical_head(base_scene, donor_scene, *, alignment="world",
         "preserved_nodes":len(keep),
         "preserved_body_sha256":original_digest,
         "donor_hair_meshes":donor_hair_count,
+        "donor_eye_meshes":donor_eye_count,
+        "donor_hair_soapstone_retextured":bool(replace_hair),
         "head_material":head.visual.material.name,
+        "neck_gap_before_m":None if neck_gap_before is None else round(neck_gap_before,5),
+        "neck_bridge_drop_m":round(neck_drop,5),
+        "neck_bridge_status":"HOLD_neck_robe_intersection_requires_visual_review",
         "head_uv_projection":"metric cylindrical / 0.72 m repeat",
         "alignment":fit,
         "head_bounds_world_m":np.round(head.bounds,4).tolist(),

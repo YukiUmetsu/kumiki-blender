@@ -148,3 +148,49 @@ The actual r62 GLB was exported, reopened, and inspected:
 - Embedded albedo texture: 768 × 768 pixels
 - Head metric UVs: approximately U -5.58..5.58, V 47.25..52.70
 - Anatomical mesh: 189,456 vertices; photo likeness and hair still **HOLD**
+
+
+## r75 full-figure graft audit (2026-11-02, HOLD)
+
+A real full-figure GLB integration of the Blender r67 trimmed anatomical
+head exposed an overlooked **original neck mesh**: the r50
+"Head | broad tendinous neck" remained in the graft and appeared as a
+large overlapping oval beside the donor head. The graft now removes that
+obsolete neck along with the old parametric head/face, while preserving
+all unrelated robe, arms, hands and pedestal geometry. The donor's two
+separate stone eyeball meshes now follow the new head, and experimental
+hair is retextured with the same 3 cm soapstone PBR material as the figure.
+
+Actual r75 GLB audit:
+- **49** unrelated body/arm/pedestal meshes preserved with unchanged
+  world-space geometry SHA-256.
+- **1** donor anatomical head, **2** donor stone eyeball meshes, and
+  **3** provisional carved-hair meshes.
+- Original broad-neck overlap removed; metric soapstone materials retained.
+- Front/profile/oblique/low-angle GLB renders reviewed.
+- **Still HOLD:** donor facial likeness, exposed ears, disconnected
+  planar hair curtains and neck/robe transitions are not photo-faithful.
+  No production GLB promotion; the accepted r50 remains unchanged.
+
+To reproduce, pass the Blender r67 head study GLB as --donor with
+--replace-hair to scripts/preview_anatomical_head_swap.py. This preview
+is intended for further sculpting and must not be mistaken for an
+authentic monument scan.
+
+
+### r77 connected cervical graft (HOLD)
+
+The first r75 full-figure preview removed the obsolete neck but exposed
+a **visible floating-head gap** above the robe. We rejected that export.
+The graft now measures the donor neck's lower Y against the actual
+"Collar | shoulder transition" mesh and smoothly extends only the
+lower cervical cross-sections by the required overlap distance, while
+leaving chin, face, eyes and crown fixed. If the gap exceeds 0.85 m,
+the operation fails closed rather than creating a stretched neck.
+
+In the actual r50+r67 full-figure test, donor-neck-to-collar gap was
+**0.47954 m** and the automatic cervical extension was **0.59954 m**,
+overlapping the collar by 0.12 m. Front/profile/three-quarter whole-
+figure VTK QA confirms the head is no longer floating. The neck-to-robe
+surface transition and facial likeness remain **HOLD**, not approved
+for a cinematic close-up or final production.
