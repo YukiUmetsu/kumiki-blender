@@ -345,7 +345,27 @@ class TextureFinishTests(unittest.TestCase):
 
     def test_cross_page_uv_seam_balancing_uses_shared_vertices_not_page_medians(self):
         second = self._set_up_cross_page_seam()
+        # The page-wide medians intentionally point the WRONG way: most texels
+        # outside the actual seam strip are brighter on page 0 and darker on
+        # page 1. Only corresponding seam texels reveal the real page mismatch.
+        for path, outside in ((self.atlas, 220), (second, 35)):
+            with Image.open(path) as source:
+                edited = source.copy()
+            for y in list(range(35)) + list(range(61, 96)):
+                for x in range(96):
+                    edited.putpixel((x, y), (outside, outside, outside))
+            edited.save(path)
+        report_path = self.dense / "dense-report.json"
+        report = json.loads(report_path.read_text())
+        report["texture_atlases"][0]["sha256"] = self._digest(self.atlas)
+        report["texture_atlases"][1]["sha256"] = self._digest(second)
+        report_path.write_text(json.dumps(report))
         originals = {path: path.read_bytes() for path in (self.obj, self.mtl, self.atlas, second)}
+        median_result = finish_dense_textures(
+            self.dense, self.root / "wrong-page-medians",
+            TextureFinishSettings(balance_atlases=True, max_balance_ev=0.6))
+        self.assertLess(median_result["texture_atlases"][0]["atlas_balance_ev"], 0)
+        self.assertGreater(median_result["texture_atlases"][1]["atlas_balance_ev"], 0)
         target = self.root / "seam-finished"
         result = finish_dense_textures(
             self.dense, target, TextureFinishSettings(balance_uv_seams=True,

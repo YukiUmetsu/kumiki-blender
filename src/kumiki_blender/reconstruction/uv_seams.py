@@ -294,6 +294,7 @@ def balance_uv_seams(obj: Path, mtl: Path, atlases: dict[str, Path], *,
     if any(not pair["used"] for pair in pairs):
         warnings.append("Some atlas pairs lack consistent/adequate seam evidence; inspect pair diagnostics")
     return offsets, {"enabled": True, "candidate_vertices": candidates,
-                     "sampled_vertices": len(sampled), "valid_vertex_samples": len(luminance),
+                     "sampled_vertices": len(sampled),
+                     "valid_vertex_samples": sum(len(pages) >= 2 for pages in luminance.values()),
                      "min_anchors_per_pair": min_anchors, "max_page_ev": max_ev,
                      "pairs": pairs, "warnings": warnings}
