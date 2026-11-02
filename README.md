@@ -72,6 +72,8 @@ exposure/gamma/white-balance atlas revision; import it
 with `render-dense-blender-review --textured --texture-finish`. Both remain
 manual-review candidates, not autonomous texture restoration.
 Very dark atlases can optionally use bounded `--auto-exposure-luma 115`.
+Add `--uv-aware-stats` to measure brightness and missing dark texels only on
+real textured OBJ faces, with a private red-marked UV coverage preview.
 No technical score certifies facial likeness. Historical survey geometry,
 source-specific artistic sculpting and production GLB baking remain separate work.
 

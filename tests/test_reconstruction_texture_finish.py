@@ -95,7 +95,8 @@ class TextureFinishTests(unittest.TestCase):
                          TextureFinishSettings(max_balance_ev=-1),
                          TextureFinishSettings(auto_exposure_luma=0),
                          TextureFinishSettings(auto_exposure_luma=float("nan")),
-                         TextureFinishSettings(max_auto_exposure_ev=3)):
+                         TextureFinishSettings(max_auto_exposure_ev=3),
+                         TextureFinishSettings(uv_aware_stats="yes")):
             with self.assertRaises(ReferenceError):
                 finish_dense_textures(self.dense, self.root / "unfinished", settings)
             self.assertFalse((self.root / "unfinished").exists())
@@ -112,12 +113,14 @@ class TextureFinishTests(unittest.TestCase):
             self.assertEqual(main(["finish-dense-textures", "--dense-revision", str(self.dense),
                                    "--output", str(target), "--exposure-ev", "0.75",
                                    "--shadow-lift", "0.12", "--neutralize-cast",
+                                   "--uv-aware-stats",
                                    "--auto-exposure-luma", "115",
                                    "--max-auto-exposure-ev", "0.5"]), 0)
         settings = json.loads((target / "texture-finish-report.json").read_text())["settings"]
         self.assertEqual(settings["exposure_ev"], 0.75)
         self.assertEqual(settings["shadow_lift"], 0.12)
         self.assertTrue(settings["neutralize_cast"])
+        self.assertTrue(settings["uv_aware_stats"])
         self.assertEqual(settings["auto_exposure_luma"], 115.0)
         self.assertEqual(settings["max_auto_exposure_ev"], 0.5)
         with patch("kumiki_blender.cli.shutil.which", return_value="/bin/blender"), \
@@ -199,6 +202,110 @@ class TextureFinishTests(unittest.TestCase):
         self.assertEqual(diagnostics["approx_highlight_clip_fraction_after"], 0)
         blank = Image.new("RGBA", (64, 64), (255, 255, 255, 0))
         self.assertIsNone(_sample_luminance(blank, 12))
+
+    def test_uv_aware_exposure_ignores_bright_unused_atlas_padding(self):
+        # Our OBJ triangle occupies the bottom-left half (v=0 is the bottom).
+        # White outside its UV polygon must not bias an exposure estimate.
+        atlas = Image.new("RGB", (48, 32), (240, 240, 240))
+        for y in range(32):
+            for x in range(48):
+                if x/47 < y/31 - 0.06:
+                    atlas.putpixel((x, y), (60, 60, 60))
+        atlas.save(self.atlas)
+        report_path = self.dense / "dense-report.json"
+        record = json.loads(report_path.read_text())
+        record["texture_atlases"][0]["sha256"] = self._digest(self.atlas)
+        report_path.write_text(json.dumps(record))
+        baseline = finish_dense_textures(
+            self.dense, self.root / "global-luma",
+            TextureFinishSettings(auto_exposure_luma=120, max_auto_exposure_ev=1.0))
+        aware_path = self.root / "uv-aware-luma"
+        aware = finish_dense_textures(
+            self.dense, aware_path,
+            TextureFinishSettings(auto_exposure_luma=120, max_auto_exposure_ev=1.0,
+                                  uv_aware_stats=True))
+        global_item = baseline["texture_atlases"][0]
+        uv_item = aware["texture_atlases"][0]
+        self.assertLess(global_item["auto_exposure_ev"], 0)
+        self.assertGreater(uv_item["auto_exposure_ev"], 0)
+        self.assertEqual(uv_item["uv_mapped_faces"], 1)
+        self.assertGreater(uv_item["uv_mapped_atlas_fraction"], 0.4)
+        self.assertLess(uv_item["uv_mapped_atlas_fraction"], 0.6)
+        self.assertEqual(uv_item["source_median_luma"], 60)
+        with Image.open(self.atlas) as original, Image.open(aware_path / self.atlas.name) as fixed:
+            self.assertGreater(fixed.getpixel((6, 25))[0], original.getpixel((6, 25))[0])
+        plan = plan_dense_blender_review(self.dense, self.root / "uv-aware-review",
+                                         textured=True, texture_finish=aware_path)
+        self.assertEqual(plan["source_obj"], str(aware_path / self.obj.name))
+
+    def test_uv_aware_stats_reject_invalid_uv_indices_and_unused_atlas(self):
+        source_report = self.dense / "dense-report.json"
+        original = self.obj.read_text()
+        self.obj.write_text(original.replace("f 1/1 2/2 3/3", "f 1//1 2//2 3//3"))
+        report = json.loads(source_report.read_text())
+        report["textured_obj"]["sha256"] = self._digest(self.obj)
+        source_report.write_text(json.dumps(report))
+        target = self.root / "invalid-uv"
+        with self.assertRaisesRegex(ReferenceError, "missing a UV index"):
+            finish_dense_textures(self.dense, target,
+                                  TextureFinishSettings(uv_aware_stats=True))
+        self.assertFalse(target.exists())
+        # Negative relative OBJ indices are valid and should select the same UVs.
+        self.obj.write_text(original.replace("f 1/1 2/2 3/3", "f 1/-3 2/-2 3/-1"))
+        report["textured_obj"]["sha256"] = self._digest(self.obj)
+        source_report.write_text(json.dumps(report))
+        valid = finish_dense_textures(self.dense, self.root / "negative-uv",
+                                      TextureFinishSettings(uv_aware_stats=True))
+        self.assertEqual(valid["texture_atlases"][0]["uv_mapped_faces"], 1)
+        # An atlas listed in the source report but never bound to a polygon
+        # cannot provide meaningful surface coverage statistics.
+        second = self.atlas.parent / "unused-map.png"
+        Image.new("RGB", (48, 32), (120, 120, 120)).save(second)
+        self.mtl.write_text(self.mtl.read_text() + f"newmtl spare\nmap_Kd {second.name}\n")
+        report["texture_atlases"].append({"path": str(second.relative_to(self.dense)),
+                                          "sha256": self._digest(second)})
+        source_report.write_text(json.dumps(report))
+        with self.assertRaisesRegex(ReferenceError, "mapped UV face"):
+            finish_dense_textures(self.dense, self.root / "unused-uv",
+                                  TextureFinishSettings(uv_aware_stats=True))
+
+    def test_uv_aware_balancing_handles_two_materials_and_detects_missing_texels(self):
+        second = self.atlas.parent / "second-map.png"
+        Image.new("RGB", (48, 32), (155, 155, 155)).save(second)
+        self.mtl.write_text(self.mtl.read_text() + f"newmtl m1\nmap_Kd {second.name}\n")
+        self.obj.write_text(self.obj.read_text() + "usemtl m1\nf 1/1 2/2 3/3\n")
+        report_path = self.dense / "dense-report.json"
+        report = json.loads(report_path.read_text())
+        report["textured_obj"]["sha256"] = self._digest(self.obj)
+        report["texture_atlases"].append({"path": str(second.relative_to(self.dense)),
+                                          "sha256": self._digest(second)})
+        report_path.write_text(json.dumps(report))
+        result = finish_dense_textures(self.dense, self.root / "multi-uv",
+                                       TextureFinishSettings(uv_aware_stats=True,
+                                                             balance_atlases=True))
+        self.assertEqual(len(result["texture_atlases"]), 2)
+        by_name = {item["path"]: item for item in result["texture_atlases"]}
+        self.assertEqual(by_name[self.atlas.name]["uv_mapped_faces"], 1)
+        self.assertEqual(by_name[second.name]["uv_mapped_faces"], 1)
+        self.assertGreater(by_name[self.atlas.name]["atlas_balance_ev"], 0)
+        self.assertLess(by_name[second.name]["atlas_balance_ev"], 0)
+        # The first source page has a black patch that overlaps *actual* UVs.
+        self.assertGreater(by_name[self.atlas.name]["approx_uncovered_dark_fraction"], 0)
+        self.assertLess(by_name[second.name]["approx_uncovered_dark_fraction"], 0.01)
+        for page in by_name.values():
+            self.assertTrue((self.root / "multi-uv" / page["uv_dark_review"]).is_file())
+
+    def test_uv_aware_rejects_tiled_coordinates_without_touching_sources(self):
+        self.obj.write_text(self.obj.read_text().replace("vt 1 0", "vt 2 0"))
+        record_path = self.dense / "dense-report.json"
+        record = json.loads(record_path.read_text())
+        record["textured_obj"]["sha256"] = self._digest(self.obj)
+        record_path.write_text(json.dumps(record))
+        output = self.root / "tiled-uv"
+        with self.assertRaisesRegex(ReferenceError, "tiled/out-of-range"):
+            finish_dense_textures(self.dense, output,
+                                  TextureFinishSettings(uv_aware_stats=True))
+        self.assertFalse(output.exists())
 
 
 if __name__ == "__main__":

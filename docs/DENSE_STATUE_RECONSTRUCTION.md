@@ -184,7 +184,7 @@ private texture projection to produce a mesh for artistic inspection.
       --dense-revision .review/statue/dense-masked-r01 \
       --output .review/statue/texture-auto-r01 \
       --auto-exposure-luma 115 --max-auto-exposure-ev 1.0 \
-      --balance-atlases
+      --balance-atlases --uv-aware-stats
 
     # Blender imports the same verified OBJ/MTL/UVs with the corrected atlases
     # and packs them into the private .blend and GLB.
@@ -355,6 +355,18 @@ that option. It also writes original/corrected side-by-side
 `review/` previews. All original source files, UVs and face
 indices remain untouched. `--texture-finish` requires `--textured` and
 verifies both original and corrected content hashes before Blender import.
+With `--uv-aware-stats`, exposure, optional white-balance neutralization and
+atlas-to-atlas balancing use **only texels belonging to actual OBJ UV faces**,
+not unrelated colored padding or unused atlas space. The command parses the
+pinned OBJ/MTL face materials, produces a bounded UV occupancy mask for each
+page and reports `uv_mapped_atlas_fraction`, `uv_mapped_faces`, and the fraction
+of *mapped* texels that are dark/transparent. Its separate
+`review/*.uv-dark.jpg` preview marks those on-mesh dark/empty patches in red.
+This helps identify missing texture data that overall atlas statistics can
+hide. It is disabled by default for compatibility; it rejects unsupported
+UV tiling, absent face UVs and unused atlas pages instead of guessing.
+Diagnostic masks are approximate at 768px resolution and cannot recover
+photographic details or correct UV seam geometry.
 This can improve dark overall exposure, broad color cast and atlas-page
 exposure mismatch, but **cannot invent missing photographs, paint empty atlas
 patches or fix intra-page UV chart seams and baked lighting**. Use the
