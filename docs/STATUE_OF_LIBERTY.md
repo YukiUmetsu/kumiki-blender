@@ -1,5 +1,49 @@
 # Statue of Liberty — scan-assisted detail rebuild
 
+## r66 — anatomical sculpt scaffold eye-transform repair (**HOLD**)
+
+**Concrete defect fixed in the separate, editable CC0 sculpt trial:** the
+previous `scripts/blender_liberty_whole_head_sculpt.py` build collapsed all four
+eye-object transforms onto the head origin when detaching a nested parent
+hierarchy. Both sclerae were around `(x=0, z=24.77)` with the cranium above,
+leaving conspicuous black eye holes. The revised builder freezes the distinct
+destination world matrices before detaching the original parents, detaches
+children first, and verifies both eye centers are separated and actually lie
+within the face. The regenerated neutral-clay front and three-quarter renders
+show solid ocular surfaces, while the profile is still anatomically generic.
+
+No procedural facial feature or drapery generator has been altered or adopted
+as a reconstruction route. The source is a [Blender Studio CC0 anatomical
+base](https://www.blender.org/download/demo-files/), not the actual Liberty
+monument or a licensed copy of a replica scan. It has a continuous, editable
+multires head; the eyes remain separate meshes so an artist can sculpt the
+lids and orbital transitions. The previous full-statue generated head is
+unchanged. **This repaired donor is strictly a sculpt scaffold, not a final
+statue head or a likeness milestone.**
+
+The new Blender review checkpoint at
+`.review/liberty-r66-sculpt-studio/liberty-face-sculpt-studio.blend` packs all
+11 actual-monument [HAER NY-138](https://www.loc.gov/item/ny1251/) head and
+restoration detail photographs. Its front, bilateral profile and oblique
+clay cameras are explicitly **unregistered**. The most urgent residuals
+against HAER 236/237/241 are the statue's weightier brow and upper lids,
+fuller sculpted mouth, larger planar cheek/jaw mass and continuous hair/crown
+transition. Eyeball positioning alone does not solve any of those.
+
+Local repeatable QA (Blender 4.5.3):
+
+```bash
+blender --background --factory-startup --python-exit-code 1 \
+  --python scripts/blender_liberty_whole_head_sculpt.py -- \
+  --source .review/liberty-donor/source.blend \
+  --output .review/liberty-r66-eye-transform --resolution 640
+blender --background --factory-startup --python-exit-code 1 \
+  --python scripts/blender_liberty_reference_studio.py -- \
+  --clay-blend .review/liberty-r66-eye-transform/whole-head-sculpt.blend \
+  --reference-dir .review/liberty-haer \
+  --output .review/liberty-r66-sculpt-studio
+```
+
 ## r65 — non-procedural pivot: reference-based sculpting and photogrammetry feasibility (**HOLD**)
 
 The earlier Gaussian face, radial robe ripples and generated fold rods are
