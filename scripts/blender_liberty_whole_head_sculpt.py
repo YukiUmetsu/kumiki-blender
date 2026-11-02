@@ -109,15 +109,21 @@ def main() -> None:
     transform = (Matrix.Translation(Vector((0., 0., 26.69)))
                  @ Matrix.Diagonal((sx, sy, sz, 1.))
                  @ Matrix.Translation(-midpoint))
-    # Blender Studio's eyeballs inherit a parent transform from the source.
-    # Capture world matrices *before* unlinking parent relations, and remap
-    # them through the source head frame so no eyeball floats below the bust.
+    # Blender Studio's sclerae and irises are nested children of the head.
+    # Capture world matrices before removing parents. The entire parent chain
+    # must be detached *before* assigning any destination matrix: otherwise
+    # changing the head first invalidates the children's evaluated transforms
+    # and collapses all four eyes to the head's object origin.
     for obj in (head, *eyes):
         scene.collection.objects.link(obj)
     bpy.context.view_layer.update()
     donor_head_world = head.matrix_world.copy()
     source_matrices = {obj: obj.matrix_world.copy() for obj in (head, *eyes)}
     target_from_source = transform @ donor_head_world.inverted()
+    destination_matrices = {
+        obj: target_from_source @ source_matrices[obj]
+        for obj in (head, *eyes)
+    }
 
     clay = bpy.data.materials.new("Matte neutral sculpture / geometry only")
     clay.diffuse_color = (.64, .66, .62, 1.)
@@ -125,13 +131,33 @@ def main() -> None:
     clay.node_tree.nodes["Principled BSDF"].inputs["Base Color"].default_value = (
         .64, .66, .62, 1.)
     clay.node_tree.nodes["Principled BSDF"].inputs["Roughness"].default_value = .86
-    for obj in (head, *eyes):
+    # The irises are children of the sclerae; detach child-first to avoid
+    # intermediate evaluations pulling their parents through the hierarchy.
+    for obj in reversed(eyes):
         obj.parent = None
-        obj.matrix_world = target_from_source @ source_matrices[obj]
+    head.parent = None
+    bpy.context.view_layer.update()
+    for obj in (head, *eyes):
+        obj.matrix_world = destination_matrices[obj]
         obj.data.materials.clear()
         obj.data.materials.append(clay)
         for polygon in obj.data.polygons:
             polygon.use_smooth = True
+    bpy.context.view_layer.update()
+    # A valid sculpt base must have both actual eyeballs *inside* the cranial
+    # section, not coincident with the object's origin or down in the neck.
+    sockets = [obj for obj in eyes if ".sclera." in obj.name]
+    if len(sockets) != 2:
+        raise RuntimeError("Expected exactly two imported eye sockets")
+    eye_centers = [obj.matrix_world @ Vector((0., 0., 0.)) for obj in sockets]
+    eye_separation = abs(eye_centers[0].x - eye_centers[1].x)
+    crown_top = max((head.matrix_world @ v.co).z for v in head.data.vertices)
+    head_bottom = min((head.matrix_world @ v.co).z for v in head.data.vertices)
+    if not (0.12 < eye_separation < target.width * .62
+            and all(head_bottom + .40 * (crown_top - head_bottom) < eye.z
+                    < head_bottom + .90 * (crown_top - head_bottom)
+                    for eye in eye_centers)):
+        raise RuntimeError("Eyeballs misplaced relative to head; abort sculpt candidate")
     head.name = "Liberty sculpt candidate / continuous whole-head anatomy"
     head["source_authenticity"] = "CC0 generic human anatomy; NOT a real Liberty scan"
     head["modeling_strategy"] = "Replace entire head; no r41 graft or seam"
@@ -143,6 +169,10 @@ def main() -> None:
     head["donor_cranium_width_band_local_z"] = str(SOURCE_CRANIAL_WIDTH_Z)
     head["sculpt_workflow"] = "Sculpt Mode: adjust entire head, then recheck all four cameras"
     head["sculpt_pass"] = "Original CC0 donor silhouette only; NO Statue-specific sculpt"
+    head["eye_transform_audit"] = (
+        "PASS / sclerae independently positioned in upper facial sockets; "
+        "not a subject-specific eye sculpt"
+    )
 
     # Multires is actual editable sculpt topology; it does not claim that
     # subdivision or an untouched donor supplies *specific* Liberty likeness.
@@ -196,7 +226,8 @@ def main() -> None:
 
     scene["candidate_status"] = "HOLD / not photo-faithful"
     scene["candidate_note"] = (
-        "Anatomical whole-head sculpt base without the rejected graft seams. "
+        "Anatomical whole-head sculpt base, eye hierarchy corrected without "
+        "the rejected graft seams. "
         "Must reshape brow, eyes, nose, lips, chin, jaw, ears against real HAER photos.")
     for name, _ in SHOTS:
         scene.camera = cameras[name]
