@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import math
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -23,8 +24,40 @@ _AZIMUTHS_DEG = (0, 55, 110)
 _LIGHTS = ("key-left", "key-right")
 
 
+def _matched_photo_entries(package: Path, count: int) -> list[dict[str, Any]]:
+    """Reuse validated sparse COLMAP camera evidence without fabricating poses."""
+    if not count:
+        return []
+    from .blender_dense import _matched_scan_cameras
+    from .dense import _json
+
+    record = _json(package / "udim-report.json")
+    finish = Path(record["source_texture_finish_revision"])
+    finish_report_path = finish / "texture-finish-report.json"
+    if (finish.is_symlink() or not finish.is_dir()
+            or finish_report_path.is_symlink() or not finish_report_path.is_file()
+            or _sha256(finish_report_path)
+            != record.get("source_texture_finish_report_sha256")):
+        raise ReferenceError("UDIM source texture finishing evidence changed")
+    finish_report = _json(finish_report_path)
+    dense = Path(finish_report["source_dense_revision"])
+    if (dense.is_symlink() or not dense.is_dir()
+            or (dense / "dense-report.json").is_symlink()):
+        raise ReferenceError("UDIM source dense reconstruction is missing")
+    cameras = _matched_scan_cameras(_json(dense / "dense-report.json"), count)
+    if any((Path(item["source_photo_path"]).stat().st_size > 512 * 1024 * 1024
+            or Path(item["source_photo_path"]).suffix.lower()
+            not in {".jpg", ".jpeg", ".png", ".webp"})
+           for item in cameras):
+        raise ReferenceError("Photo-matched review image is oversized or unsupported")
+    return cameras
+
+
 def validate_udim_relighting_request(package: str | Path, output: str | Path,
-                                     resolution: int, samples: int) -> tuple[Path, Path]:
+                                     resolution: int, samples: int,
+                                     matched_views: int = 0,
+                                     matched_resolution_percent: int = 25
+                                     ) -> tuple[Path, Path, list[dict[str, Any]]]:
     """Preflight on host or in Blender, before changing the filesystem."""
     source, _ = _validated_package(package)
     target = Path(output).resolve()
@@ -35,14 +68,23 @@ def validate_udim_relighting_request(package: str | Path, output: str | Path,
         raise ReferenceError("Relighting resolution must be 96–2048")
     if type(samples) is not int or not 1 <= samples <= 256:
         raise ReferenceError("Relighting samples must be 1–256")
-    return source, target
+    if type(matched_views) is not int or not 0 <= matched_views <= 6:
+        raise ReferenceError("Relighting matched_views must be 0–6")
+    if (type(matched_resolution_percent) is not int
+            or not 10 <= matched_resolution_percent <= 100):
+        raise ReferenceError("Matched photo render resolution percent must be 10–100")
+    cameras = _matched_photo_entries(source, matched_views)
+    return source, target, cameras
 
 
 def build_udim_relighting_review(bpy: Any, package: str | Path, output: str | Path,
                                  *, resolution: int = 512, samples: int = 24,
-                                 render_previews: bool = True) -> dict[str, Any]:
+                                 render_previews: bool = True,
+                                 matched_views: int = 0,
+                                 matched_resolution_percent: int = 25) -> dict[str, Any]:
     """Write an editable scene and a 3-angle x 2-light comparison gallery."""
-    source, target = validate_udim_relighting_request(package, output, resolution, samples)
+    source, target, photo_entries = validate_udim_relighting_request(
+        package, output, resolution, samples, matched_views, matched_resolution_percent)
     if type(render_previews) is not bool:
         raise ReferenceError("render_previews must be a boolean")
     if bpy.app.background and bpy.data.filepath:
@@ -96,12 +138,17 @@ def build_udim_relighting_review(bpy: Any, package: str | Path, output: str | Pa
 
     target.mkdir(parents=True, exist_ok=False)
     comparison: list[dict[str, Any]] = []
+    photo_comparison: list[dict[str, Any]] = []
     distance = extent * 3.2
-    for label in _LIGHTS:
+
+    def aim_light(label: str) -> None:
         direction = (-1 if label == "key-left" else 1)
         lamp.location = (center[0] + direction * extent * 2.0,
                          center[1] - extent * 1.8, center[2] + extent * 1.2)
         aim_at(lamp, center)
+
+    for label in _LIGHTS:
+        aim_light(label)
         for azimuth in _AZIMUTHS_DEG:
             theta = math.radians(azimuth)
             camera.location = (center[0] + distance * math.sin(theta),
@@ -114,6 +161,52 @@ def build_udim_relighting_review(bpy: Any, package: str | Path, output: str | Pa
                 bpy.ops.render.render(write_still=True)
                 comparison.append({"azimuth_deg": azimuth, "lighting": label,
                                    "path": filename, "sha256": _sha256(target / filename)})
+
+    # Optional exact photo camera poses are stronger evidence than a generic
+    # side/front guess; the lighting still deliberately differs from the shot.
+    if photo_entries:
+        from mathutils import Matrix
+
+        for index, entry in enumerate(photo_entries, start=1):
+            intr = entry["intrinsics"]
+            calibrated = bpy.data.cameras.new(f"Kumiki / photo-matched {index:02d}")
+            calibrated.type = "PERSP"
+            calibrated.sensor_fit = "HORIZONTAL"
+            calibrated.sensor_width = 36.0
+            calibrated.lens = intr["fx_px"] * 36.0 / intr["width"]
+            calibrated.shift_x = (intr["width"] / 2 - intr["cx_px"]) / intr["width"]
+            calibrated.shift_y = (intr["cy_px"] - intr["height"] / 2) / intr["width"]
+            camera_obj = bpy.data.objects.new(calibrated.name, calibrated)
+            scene.collection.objects.link(camera_obj)
+            orientation, location = entry["rotation_3x3"], entry["location_colmap"]
+            camera_obj.matrix_world = Matrix((
+                (*orientation[0], location[0]), (*orientation[1], location[1]),
+                (*orientation[2], location[2]), (0, 0, 0, 1),
+            ))
+            source_photo = Path(entry["source_photo_path"])
+            filename = f"registered-photo-{index:02d}{source_photo.suffix.lower()}"
+            if render_previews:
+                shutil.copyfile(source_photo, target / filename)
+            record: dict[str, Any] = {
+                "reference_photo": filename if render_previews else None,
+                "reference_sha256": entry["source_photo_sha256"],
+                "source_photo_path": entry["source_photo_path"],
+                "source_image_id": entry["image_id"],
+                "rendered_lights": [],
+            }
+            for light in _LIGHTS:
+                aim_light(light)
+                scene.camera = camera_obj
+                scene.render.resolution_x = intr["width"]
+                scene.render.resolution_y = intr["height"]
+                scene.render.resolution_percentage = matched_resolution_percent
+                name = f"matched-{index:02d}-{light}.png"
+                if render_previews:
+                    scene.render.filepath = str(target / name)
+                    bpy.ops.render.render(write_still=True)
+                    record["rendered_lights"].append({
+                        "lighting": light, "path": name, "sha256": _sha256(target / name)})
+            photo_comparison.append(record)
 
     scene.render.filepath = str(target / "preview.png")
     blend = target / "udim-material-review.blend"
@@ -144,6 +237,27 @@ def build_udim_relighting_review(bpy: Any, package: str | Path, output: str | Pa
                 '<main>' + ''.join(cells) + '</main></html>')
         (target / gallery).write_text(html, encoding="utf-8")
 
+    matched_gallery = None
+    if render_previews and photo_comparison:
+        matched_gallery = "photo-matched-comparison.html"
+        rows = []
+        for record in photo_comparison:
+            files = [record["reference_photo"]] + [item["path"] for item in record["rendered_lights"]]
+            labels = ["Registered photograph", "Key left", "Key right"]
+            rows.extend(f'<figure><img src="{path}" alt="{label}">'
+                        f'<figcaption>{label}</figcaption></figure>'
+                        for path, label in zip(files, labels))
+        html = ('<!doctype html><html lang="en"><meta charset="utf-8">'
+                '<title>Kumiki photo-matched material comparison</title>'
+                '<style>body{margin:36px;background:#12151a;color:#e9edf2;'
+                'font:15px system-ui}main{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}'
+                'figure{margin:0;background:#21262d;padding:8px}img{width:100%;height:auto}'
+                'figcaption{padding:8px}</style><h1>Calibrated camera comparison</h1>'
+                '<p>Camera positions match registered photos. The studio lighting '
+                'does not reproduce original sunlight, so color differences are expected.</p>'
+                '<main>' + ''.join(rows) + '</main></html>')
+        (target / matched_gallery).write_text(html, encoding="utf-8")
+
     report = {
         "schema_version": 1,
         "status": "private-UDIM-relighting-review / artistic-review-required",
@@ -153,10 +267,14 @@ def build_udim_relighting_review(bpy: Any, package: str | Path, output: str | Pa
         "source_udim_report_sha256": _sha256(source / "udim-report.json"),
         "blend": {"path": blend.name, "sha256": _sha256(blend)},
         "gallery": gallery,
+        "matched_gallery": matched_gallery,
         "comparison": comparison,
+        "photo_matched_comparison": photo_comparison,
         "azimuths_deg": list(_AZIMUTHS_DEG), "lighting": list(_LIGHTS),
         "resolution": resolution, "cycles_samples": samples,
+        "matched_resolution_percent": matched_resolution_percent,
         "notes": "Diagnostic views are not photo-matched; the original front axis may differ. "
+                 "Optional COLMAP camera views are photo-calibrated but studio lighting is not. "
                  "Measured roughness and intrinsic albedo require calibrated multi-light data. "
                  "Image paths inside the .blend depend on the source UDIM package staying available.",
     }

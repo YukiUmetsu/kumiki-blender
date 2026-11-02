@@ -139,7 +139,10 @@ def import_finished_udim_package(bpy: Any, directory: str | Path) -> list[Any]:
         channel_images[channel] = image
 
     previous_objects = set(bpy.data.objects)
-    bpy.ops.wm.obj_import(filepath=str(root / "udim.obj"))
+    # Preserve the original COLMAP/OpenMVS world axes. Blender's default OBJ
+    # axes otherwise rotate the model and invalidate registered photo views.
+    bpy.ops.wm.obj_import(filepath=str(root / "udim.obj"),
+                          forward_axis="Y", up_axis="Z")
     imported = [obj for obj in bpy.data.objects if obj not in previous_objects
                 and obj.type == "MESH"]
     if not imported:

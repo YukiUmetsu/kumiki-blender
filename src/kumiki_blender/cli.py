@@ -294,6 +294,9 @@ def main(argv: list[str] | None = None) -> int:
     udim_review.add_argument("--output", type=Path, required=True)
     udim_review.add_argument("--resolution", type=int, default=512)
     udim_review.add_argument("--samples", type=int, default=24)
+    udim_review.add_argument("--matched-views", type=int, default=0,
+                             help="Include 1–6 exact registered COLMAP/photo views, if available")
+    udim_review.add_argument("--matched-resolution-percent", type=int, default=25)
     udim_review.add_argument("--no-renders", action="store_true")
     udim_review.add_argument("--blender", default="blender")
     for command in ("plan-dense-blender-review", "render-dense-blender-review"):
@@ -492,7 +495,9 @@ def main(argv: list[str] | None = None) -> int:
                                                           validate_udim_relighting_request)
             try:
                 validate_udim_relighting_request(args.udim_package, args.output,
-                                                 args.resolution, args.samples)
+                                                 args.resolution, args.samples,
+                                                 args.matched_views,
+                                                 args.matched_resolution_percent)
             except ReferenceError as error:
                 raise RecipeError(str(error)) from error
             try:
@@ -506,14 +511,18 @@ def main(argv: list[str] | None = None) -> int:
                            "--python-exit-code", "1", "--python", str(entry), "--",
                            "render-udim-material-review", "--udim-package",
                            str(args.udim_package.resolve()), "--output", str(args.output.resolve()),
-                           "--resolution", str(args.resolution), "--samples", str(args.samples)]
+                           "--resolution", str(args.resolution), "--samples", str(args.samples),
+                           "--matched-views", str(args.matched_views),
+                           "--matched-resolution-percent", str(args.matched_resolution_percent)]
                 if args.no_renders:
                     command.append("--no-renders")
                 return subprocess.run(command, check=False).returncode
             try:
                 report = build_udim_relighting_review(
                     bpy, args.udim_package, args.output, resolution=args.resolution,
-                    samples=args.samples, render_previews=not args.no_renders)
+                    samples=args.samples, render_previews=not args.no_renders,
+                    matched_views=args.matched_views,
+                    matched_resolution_percent=args.matched_resolution_percent)
             except ReferenceError as error:
                 raise RecipeError(str(error)) from error
             print(json.dumps(report, indent=2))

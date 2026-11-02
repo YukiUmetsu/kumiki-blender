@@ -533,6 +533,16 @@ not COLMAP-calibrated camera poses, so the labels are not guaranteed to match
 the actual statue's front/side orientation. This is a material diagnostic,
 not proof of photo fidelity.
 
+If the finished atlas came from a reconstruction with pinned registered
+COLMAP photos, add `--matched-views 3 --matched-resolution-percent 25`.
+The tool also writes `photo-matched-comparison.html` with each original
+registered photograph beside two relit renders at the **same calibrated
+camera pose**. Those photos remain in a private output revision. Lighting
+is deliberately different, so judge visible geometry, UV seam placement and
+baked shadows rather than interpreting raw color differences as reconstruction
+error. When source photos or camera evidence are missing/tampered, preflight
+fails without creating an output directory.
+
 All of these outputs remain `artistic-review-required` and private; none
 establishes photo-perfect likeness. Photograph-to-material decomposition is
 ambiguous without illumination and reflectance measurements. Compare

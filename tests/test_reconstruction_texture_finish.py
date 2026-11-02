@@ -308,6 +308,28 @@ class TextureFinishTests(unittest.TestCase):
     @unittest.skipUnless(os.environ.get("KUMIKI_BLENDER_EXECUTABLE"), "requires real Blender 4.2+")
     def test_real_udim_relighting_gallery_has_fixed_camera_opposing_light_renders(self):
         self._set_up_cross_page_seam()
+        source = self.root / "matched-sparse"
+        model = source / "undistorted/text-model"
+        model.mkdir(parents=True)
+        photos = source / "undistorted/images"
+        photos.mkdir()
+        (model / "cameras.txt").write_text("1 PINHOLE 128 96 115 115 64 48\n")
+        (model / "images.txt").write_text("".join(
+            f"{index + 1} 1 0 0 0 {-5 + index * 2} 0 -10 1 frame-{index}.jpg\n\n"
+            for index in range(2)))
+        images = []
+        for index in range(2):
+            name = f"frame-{index}.jpg"
+            Image.new("RGB", (128, 96), (120 + index * 20, 130, 140)).save(photos / name)
+            images.append({"filename": name, "sha256": self._digest(photos / name),
+                           "dimensions": [128, 96]})
+        (source / "undistorted-reference-index.json").write_text(json.dumps({"images": images}))
+        (source / "reconstruction-report.json").write_text(json.dumps({
+            "status": "candidate / visual-review-required", "registered_images": 2}))
+        dense_file = self.dense / "dense-report.json"
+        dense_record = json.loads(dense_file.read_text())
+        dense_record["source_revision"] = str(source)
+        dense_file.write_text(json.dumps(dense_record))
         finished = self.root / "relight-finish"
         finish_dense_textures(self.dense, finished, TextureFinishSettings())
         package = self.root / "relight-tiles"
@@ -316,6 +338,7 @@ class TextureFinishTests(unittest.TestCase):
         with contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(main(["render-udim-material-review", "--udim-package", str(package),
                                    "--output", str(result), "--resolution", "96", "--samples", "4",
+                                   "--matched-views", "2", "--matched-resolution-percent", "25",
                                    "--blender", os.environ["KUMIKI_BLENDER_EXECUTABLE"]]), 0)
         report = json.loads((result / "material-review-report.json").read_text())
         self.assertFalse(report["distribution_allowed"])
@@ -324,6 +347,16 @@ class TextureFinishTests(unittest.TestCase):
         self.assertEqual(report["azimuths_deg"], [0, 55, 110])
         self.assertIn("key-left", (result / report["gallery"]).read_text())
         self.assertTrue((result / report["blend"]["path"]).is_file())
+        self.assertEqual(len(report["photo_matched_comparison"]), 2)
+        self.assertTrue((result / report["matched_gallery"]).is_file())
+        for item in report["photo_matched_comparison"]:
+            self.assertEqual(len(item["rendered_lights"]), 2)
+            self.assertEqual(self._digest(result / item["reference_photo"]),
+                             item["reference_sha256"])
+            for shot in item["rendered_lights"]:
+                self.assertEqual(self._digest(result / shot["path"]), shot["sha256"])
+                with Image.open(result / shot["path"]) as image:
+                    self.assertEqual(image.size, (32, 24))
         for item in report["comparison"]:
             path = result / item["path"]
             self.assertEqual(self._digest(path), item["sha256"])
@@ -343,6 +376,12 @@ class TextureFinishTests(unittest.TestCase):
         self.assertEqual(solo["comparison"], [])
         self.assertIsNone(solo["gallery"])
         self.assertTrue((scene_only / solo["blend"]["path"]).is_file())
+        (photos / "frame-0.jpg").write_bytes(b"changed registered photograph")
+        broken_output = self.root / "relighting-broken-source"
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(main(["render-udim-material-review", "--udim-package", str(package),
+                                   "--output", str(broken_output), "--matched-views", "2"]), 2)
+        self.assertFalse(broken_output.exists())
 
     def test_udim_relighting_validates_before_output_directory(self):
         self._set_up_cross_page_seam()
