@@ -1,5 +1,52 @@
 # Statue of Liberty — scan-assisted detail rebuild
 
+## r70 — reversible sculpt placement and embedded actual-monument reference boards (**HOLD**)
+
+This checkpoint **does not improve the Statue's facial likeness**. It connects
+the previously isolated, editable CC0 human-anatomy sculpt to the full-scale
+monument scene without generating facial geometry or borrowing any scan mesh.
+`scripts/blender_liberty_sculpt_integration.py` imports the existing multires
+head and four eye meshes, places them with a **uniform** 1.0129 scale (no
+depth/face distortion), and hides the 20 code-generated head components in
+an explicitly named, reversible HOLD collection. The original robe, pedestal,
+torch, tablet, crown and generated hair are retained. A removable Mask
+modifier conceals the donor's shoulders for an **assembly trial only**;
+the untouched CC0 bust is used for isolated anatomical comparison.
+
+The integrated `.blend` now also includes both distinct `02 HAER POSES` and
+`03 HAER ANATOMY` photo-board scenes, with 11 packed archival views of the
+**actual installed monument**, carried from the r66 reference studio.
+These are sculpt references, not calibrated cameras or texture projections.
+No geometry was imported from the view-only third-party replica scans.
+
+**Visual gate remains failed:** the unmodified donor has too small/simple
+upper lids and brow, a narrower cheek/jaw mass, an unlike nose/lip profile,
+and a bald cranium. Its post-scale height envelope is roughly 0.49 m
+different from the failed generated-head envelope, so it also has no
+accurate neck-to-robe registration. The fifth `assembly-front-clay.png`
+shows a visibly ragged neck cutoff and extremely ill-fitting tube-like
+legacy hair and crown; nothing was hidden to imply these interfaces work.
+The four isolated clay views instead show the whole donor bust with the
+surrounding statue removed, to make honest facial review possible. The
+smoke-test GLB is **not** the public release model; PR #6 remains a draft.
+
+Run the reversible integration with Blender 4.5+ using the existing review
+sources (no proprietary scan assets are needed):
+
+```bash
+blender --background --factory-startup --threads 4 --python-exit-code 1 \
+  --python scripts/blender_liberty_sculpt_integration.py -- \
+  --statue-blend .review/liberty-r64-survey/second-pass/source.blend \
+  --sculpt-blend .review/liberty-r66-sculpt-studio/liberty-face-sculpt-studio.blend \
+  --output .review/liberty-r70-sculpt-assembly --resolution 640
+PYTHONPATH=src python3 -m unittest tests.test_liberty_sculpt_integration -q
+```
+
+The next **actual likeness** step is manually sculpting the forehead/brow,
+heavy lids, cheeks, nasal bridge, squared jaw and lips against multiple
+genuine HAER target views, followed by hand-shaped hair/crown and neck-
+to-drapery contact. Do not tune the old procedural face, fold or hair code.
+
 ## r66 — anatomical sculpt scaffold eye-transform repair (**HOLD**)
 
 **Concrete defect fixed in the separate, editable CC0 sculpt trial:** the
