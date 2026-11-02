@@ -1,0 +1,439 @@
+{
+  "status": "HOLD_hand_estimated_photo_landmarks_not_registered",
+  "model_revision": "r59-cc0-generic-head-unregistered",
+  "notes": "The two actual monument photos were supplied by the user; only manual pixel coordinates and donor model vertices are stored. Never infer reproduction rights for source photos or claim metric survey accuracy.",
+  "views": [
+    {
+      "view_id": "photo-0",
+      "subject_photo_url": "user-upload:Christ the Redeemer-face2.jpg",
+      "model_revision": "r59-cc0-generic-head-unregistered",
+      "image_size": [
+        1024,
+        767
+      ],
+      "annotation_status": "Hand estimated pixels; generic donor mesh anchors, not survey measurements",
+      "landmarks": [
+        {
+          "name": "nose_tip",
+          "world_xyz": [
+            -0.0006,
+            -2.0957,
+            35.9655
+          ],
+          "photo_uv": [
+            486,
+            428
+          ]
+        },
+        {
+          "name": "nose_bridge",
+          "world_xyz": [
+            -0.0006,
+            -2.1253,
+            36.2476
+          ],
+          "photo_uv": [
+            484,
+            350
+          ]
+        },
+        {
+          "name": "left_eye_inner",
+          "world_xyz": [
+            -0.2297,
+            -1.6868,
+            36.5428
+          ],
+          "photo_uv": [
+            443,
+            300
+          ]
+        },
+        {
+          "name": "left_eye_outer",
+          "world_xyz": [
+            -0.8348,
+            -1.4913,
+            36.5314
+          ],
+          "photo_uv": [
+            361,
+            289
+          ]
+        },
+        {
+          "name": "right_eye_inner",
+          "world_xyz": [
+            0.2286,
+            -1.6868,
+            36.5428
+          ],
+          "photo_uv": [
+            534,
+            301
+          ]
+        },
+        {
+          "name": "right_eye_outer",
+          "world_xyz": [
+            0.8355,
+            -1.4907,
+            36.5269
+          ],
+          "photo_uv": [
+            613,
+            293
+          ]
+        },
+        {
+          "name": "left_brow",
+          "world_xyz": [
+            -0.6789,
+            -1.7477,
+            36.8051
+          ],
+          "photo_uv": [
+            396,
+            269
+          ]
+        },
+        {
+          "name": "right_brow",
+          "world_xyz": [
+            0.6778,
+            -1.7477,
+            36.8051
+          ],
+          "photo_uv": [
+            579,
+            268
+          ]
+        },
+        {
+          "name": "left_mouth",
+          "world_xyz": [
+            -0.4876,
+            -1.7334,
+            35.5685
+          ],
+          "photo_uv": [
+            411,
+            462
+          ]
+        },
+        {
+          "name": "right_mouth",
+          "world_xyz": [
+            0.4872,
+            -1.7327,
+            35.5607
+          ],
+          "photo_uv": [
+            548,
+            463
+          ]
+        },
+        {
+          "name": "upper_lip",
+          "world_xyz": [
+            -0.0006,
+            -1.9811,
+            35.549
+          ],
+          "photo_uv": [
+            482,
+            457
+          ]
+        },
+        {
+          "name": "lower_lip",
+          "world_xyz": [
+            -0.0006,
+            -1.94,
+            35.4645
+          ],
+          "photo_uv": [
+            483,
+            475
+          ]
+        },
+        {
+          "name": "chin_tip",
+          "world_xyz": [
+            -0.0006,
+            -1.5944,
+            34.9343
+          ],
+          "photo_uv": [
+            486,
+            600
+          ]
+        },
+        {
+          "name": "left_jaw",
+          "world_xyz": [
+            -0.6849,
+            -0.6599,
+            35.0488
+          ],
+          "photo_uv": [
+            416,
+            576
+          ]
+        },
+        {
+          "name": "right_jaw",
+          "world_xyz": [
+            0.6637,
+            -0.6479,
+            35.0229
+          ],
+          "photo_uv": [
+            552,
+            573
+          ]
+        },
+        {
+          "name": "left_cheek",
+          "world_xyz": [
+            -0.834,
+            -1.5707,
+            35.9546
+          ],
+          "photo_uv": [
+            382,
+            398
+          ]
+        },
+        {
+          "name": "right_cheek",
+          "world_xyz": [
+            0.8243,
+            -1.5735,
+            35.938
+          ],
+          "photo_uv": [
+            584,
+            399
+          ]
+        }
+      ]
+    },
+    {
+      "view_id": "photo-1",
+      "subject_photo_url": "user-upload:Christ the Redeemer-face.webp",
+      "model_revision": "r59-cc0-generic-head-unregistered",
+      "image_size": [
+        600,
+        900
+      ],
+      "annotation_status": "Hand estimated pixels; generic donor mesh anchors, not survey measurements",
+      "landmarks": [
+        {
+          "name": "nose_tip",
+          "world_xyz": [
+            -0.0006,
+            -2.0957,
+            35.9655
+          ],
+          "photo_uv": [
+            306,
+            391
+          ]
+        },
+        {
+          "name": "nose_bridge",
+          "world_xyz": [
+            -0.0006,
+            -2.1253,
+            36.2476
+          ],
+          "photo_uv": [
+            306,
+            349
+          ]
+        },
+        {
+          "name": "left_eye_inner",
+          "world_xyz": [
+            -0.2297,
+            -1.6868,
+            36.5428
+          ],
+          "photo_uv": [
+            280,
+            297
+          ]
+        },
+        {
+          "name": "left_eye_outer",
+          "world_xyz": [
+            -0.8348,
+            -1.4913,
+            36.5314
+          ],
+          "photo_uv": [
+            207,
+            302
+          ]
+        },
+        {
+          "name": "right_eye_inner",
+          "world_xyz": [
+            0.2286,
+            -1.6868,
+            36.5428
+          ],
+          "photo_uv": [
+            339,
+            298
+          ]
+        },
+        {
+          "name": "right_eye_outer",
+          "world_xyz": [
+            0.8355,
+            -1.4907,
+            36.5269
+          ],
+          "photo_uv": [
+            424,
+            307
+          ]
+        },
+        {
+          "name": "left_brow",
+          "world_xyz": [
+            -0.6789,
+            -1.7477,
+            36.8051
+          ],
+          "photo_uv": [
+            242,
+            265
+          ]
+        },
+        {
+          "name": "right_brow",
+          "world_xyz": [
+            0.6778,
+            -1.7477,
+            36.8051
+          ],
+          "photo_uv": [
+            381,
+            267
+          ]
+        },
+        {
+          "name": "left_mouth",
+          "world_xyz": [
+            -0.4876,
+            -1.7334,
+            35.5685
+          ],
+          "photo_uv": [
+            251,
+            435
+          ]
+        },
+        {
+          "name": "right_mouth",
+          "world_xyz": [
+            0.4872,
+            -1.7327,
+            35.5607
+          ],
+          "photo_uv": [
+            360,
+            434
+          ]
+        },
+        {
+          "name": "upper_lip",
+          "world_xyz": [
+            -0.0006,
+            -1.9811,
+            35.549
+          ],
+          "photo_uv": [
+            306,
+            421
+          ]
+        },
+        {
+          "name": "lower_lip",
+          "world_xyz": [
+            -0.0006,
+            -1.94,
+            35.4645
+          ],
+          "photo_uv": [
+            307,
+            444
+          ]
+        },
+        {
+          "name": "chin_tip",
+          "world_xyz": [
+            -0.0006,
+            -1.5944,
+            34.9343
+          ],
+          "photo_uv": [
+            307,
+            576
+          ]
+        },
+        {
+          "name": "left_jaw",
+          "world_xyz": [
+            -0.6849,
+            -0.6599,
+            35.0488
+          ],
+          "photo_uv": [
+            243,
+            535
+          ]
+        },
+        {
+          "name": "right_jaw",
+          "world_xyz": [
+            0.6637,
+            -0.6479,
+            35.0229
+          ],
+          "photo_uv": [
+            384,
+            537
+          ]
+        },
+        {
+          "name": "left_cheek",
+          "world_xyz": [
+            -0.834,
+            -1.5707,
+            35.9546
+          ],
+          "photo_uv": [
+            227,
+            395
+          ]
+        },
+        {
+          "name": "right_cheek",
+          "world_xyz": [
+            0.8243,
+            -1.5735,
+            35.938
+          ],
+          "photo_uv": [
+            406,
+            396
+          ]
+        }
+      ]
+    }
+  ]
+}

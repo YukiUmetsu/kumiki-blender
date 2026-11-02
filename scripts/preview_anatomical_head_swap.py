@@ -21,6 +21,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 from kumiki_blender.head_graft import graft_anatomical_head
+from kumiki_blender.jaw_cage import experimental_jaw_cage
 
 
 def blender_study_command(blender, destination, *, carved_hair=False):
@@ -45,6 +46,8 @@ def main():
                    help="Only if donor includes a separately reviewed hair study")
     p.add_argument("--carved-hair",action="store_true",
                    help="Experimental carved hair; requires --blender --replace-hair")
+    p.add_argument("--experimental-jaw-cage",action="store_true",
+                   help="Apply provisional full-ring jaw cage warp to the donor head")
     p.add_argument("--output",type=Path,required=True)
     p.add_argument("--metrics",type=Path)
     p.add_argument("--views",type=Path,help="Optionally render four head views using VTK")
@@ -66,6 +69,15 @@ def main():
         donor=trimesh.load(donor_file,force="scene")
         candidate,audit=graft_anatomical_head(base,donor,alignment=args.alignment,
                                               replace_hair=args.replace_hair)
+        if args.experimental_jaw_cage:
+            import numpy as np
+            node="Head | anatomical quad-topology HOLD"
+            matrix,geom=candidate.graph[node]
+            mesh=candidate.geometry[geom]
+            world=trimesh.transform_points(mesh.vertices,matrix)
+            revised,metrics=experimental_jaw_cage(world)
+            mesh.vertices=trimesh.transform_points(revised,np.linalg.inv(matrix))
+            audit.update(metrics)
         args.output.parent.mkdir(parents=True,exist_ok=True)
         candidate.export(args.output,file_type="glb")
         metrics=args.metrics or args.output.with_suffix(".json")

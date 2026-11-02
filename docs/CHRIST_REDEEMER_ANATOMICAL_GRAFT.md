@@ -14,15 +14,15 @@ a photogrammetry scan of Christ the Redeemer. It does not establish likeness.
 
 ## Implemented
 
-- \`src/kumiki_blender/head_graft.py\`: scene-node-aware GLB mesh graft,
+- `src/kumiki_blender/head_graft.py`: scene-node-aware GLB mesh graft,
   preserving source transforms and 65 untouched body/hair nodes; hashes the
   world-space vertices/faces before and after grafting to prevent accidental
   changes to the statue, arms, robe or pedestal.
-- \`scripts/preview_anatomical_head_swap.py\`: can generate a donor study via
+- `scripts/preview_anatomical_head_swap.py`: can generate a donor study via
   Blender CLI automatically, graft it into an existing full-figure GLB,
   write a JSON audit and optionally render four head QA views.
-- Two alignment modes: \`world\` for the native Blender study already placed
-  on the statue, and \`bounds\` only for diagnostic generic donor GLBs.
+- Two alignment modes: `world` for the native Blender study already placed
+  on the statue, and `bounds` only for diagnostic generic donor GLBs.
   Bounding-box fitting is **not** a measured scan/photo fit.
 - Optional hair substitution is off by default. The existing r50 mantle is
   still not photo-faithful, but rejected hair experiments must not silently
@@ -30,24 +30,24 @@ a photogrammetry scan of Christ the Redeemer. It does not establish likeness.
 
 ## One-command candidate (Blender installed)
 
-\`\`\`bash
+```bash
 python -m pip install -e '.[preview,head-qa]'
 python scripts/preview_anatomical_head_swap.py \
   --base .review/christ_redeemer/r50.glb \
   --blender blender \
   --output .review/christ_redeemer/anatomical-HOLD.glb \
   --views .review/christ_redeemer/anatomical-views
-\`\`\`
+```
 
-The \`--blender\` option calls the existing CC0 anatomical head-study
+The `--blender` option calls the existing CC0 anatomical head-study
 generator. The accepted r50 GLB is **never overwritten**. The tool also
-accepts \`--donor <head-study.glb>\` if it was generated previously.
+accepts `--donor <head-study.glb>` if it was generated previously.
 
 ## Real GLB review (r59, 2026-11-02)
 
 We assembled and rendered an actual 343k-vertex full-figure GLB from the
 retained r50 GLB and a previous 189,456-vertex Blender Studio anatomy
-checkpoint. The donor was uniformly aligned with \`--alignment bounds\`,
+checkpoint. The donor was uniformly aligned with `--alignment bounds`,
 which is a diagnostic transform, **not** camera registration.
 
 Audit:
@@ -55,7 +55,7 @@ Audit:
 - 65 preserved nodes, verified unchanged by SHA-256 of world-space geometry.
 - 66 meshes total after removing the old head and 3 detached face guides.
 - 29.4 m arm span and full statue geometry retained; 38 m overall height.
-- Four real 3D QA views rendered with \`scripts/render_glb_head_qa.py\`.
+- Four real 3D QA views rendered with `scripts/render_glb_head_qa.py`.
 
 **Visible outcome:** the face has much better anatomical topology than r50,
 but the eyes, brow, mouth and chin still resemble a generic human donor.
@@ -83,3 +83,48 @@ so no pixel-aligned geometric accuracy claim is made.
 
 Status: **HOLD — facial likeness, hair silhouette, collision and Blender
 PBR render verification still incomplete.**
+
+## r61 controlled jaw-cage trial (2026-11-02, HOLD)
+
+A new optional `--experimental-jaw-cage` deforms *complete anatomical
+cross-sections*, smoothly tapering the lower-face drop toward the neck
+and rear skull. This replaces the r57/r58 front-only chin bulge that
+created an unacceptable horizontal shelf. The cage is artist-inferred,
+not a surveyed reconstruction.
+
+The r61 preview was actually exported and rendered from the same
+189,456-vertex donor topology as r59; its other 65 preserved meshes are
+unchanged. We manually marked 17 shared features on **two different
+real-monument photos** (user-supplied high-angle and low-angle front views).
+Only the pixel coordinates and corresponding generic donor mesh vertices
+are stored in `CHRIST_REDEEMER_PHOTO_ANCHORS_R59_HOLD.json`, not the photos.
+
+Weak-perspective independent camera fits, with **no free focal/distance
+degeneracy**, gave these *provisional* residuals:
+
+| Photo | r59 RMS | r61 RMS | r59 chin | r61 chin |
+|---|---:|---:|---:|---:|
+| High-angle front | 24.22 px | 21.12 px | 40.12 px | 16.41 px |
+| Low-angle front | 20.34 px | 16.78 px | 56.19 px | 36.69 px |
+
+The chin silhouette moves in the correct direction without adding a
+detached chin object, but the overall fit is still **HOLD** (both RMS
+values exceed 15 px). The donor remains too generic in the eyelids,
+nose, mouth, brow and hair. Annotation uncertainty, unknown lens
+distortion and unregistered camera positions mean these numbers are
+*not* millimetre-accurate survey results.
+
+Reproduce the provisional jaw variant:
+
+```bash
+python scripts/preview_anatomical_head_swap.py \
+  --base .review/christ_redeemer/r50.glb --blender blender \
+  --experimental-jaw-cage \
+  --output .review/christ_redeemer/anatomical-jaw-HOLD.glb \
+  --views .review/christ_redeemer/anatomical-jaw-views
+```
+
+The photo-residual comparison tool is
+`scripts/evaluate_christ_face_photos.py`; it requires two GLBs
+with **identical donor vertex topology** and the r59 annotations.
+Do not transfer the r59 vertex IDs to a different Blender study revision.
