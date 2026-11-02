@@ -254,6 +254,9 @@ def _cleanup_damage(photo: Any, masks: list[Any], damage: Any, radius: int) -> t
             continue
         donors = ImageChops.multiply(region, ImageChops.invert(damage))
         denom = donors.filter(ImageFilter.GaussianBlur(radius))
+        insufficient = denom.point(lambda value: 255 if value < 8 else 0)
+        if ImageChops.multiply(area, insufficient).getbbox():
+            raise ReferenceError("Damage contains unsupported holes beyond cleanup radius; review manually")
         layers = []
         for channel in original.split():
             weighted = ImageChops.multiply(channel, donors).filter(ImageFilter.GaussianBlur(radius))

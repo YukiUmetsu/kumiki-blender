@@ -88,6 +88,25 @@ class GuidedSurfaceTests(unittest.TestCase):
         self.assertEqual(result.getpixel((34, 10)), (245, 0, 0))
         self.assertGreater(diagnostics["cleanup_pixels"], 0)
 
+    def test_cleanup_rejects_large_contiguous_hole_even_below_five_percent(self):
+        photo = Image.new("RGB", (128, 128), (115, 100, 80))
+        atlas = self.root / "wide-atlas.png"
+        photo.save(atlas)
+        region = Image.new("L", (128, 128), 255)
+        region.save(self.root / "wide-region.png")
+        damage = Image.new("L", (128, 128), 0)
+        for y in range(50, 62):
+            for x in range(50, 62):
+                damage.putpixel((x, y), 255)
+        damage.save(self.root / "wide-damage.png")
+        self.manifest.write_text(json.dumps({"schema_version": 1, "atlases": {
+            atlas.name: {"regions": [{"id": "stone", "mask": "wide-region.png",
+                                        "roughness": .85}],
+                         "damage_mask": "wide-damage.png"}}}))
+        spec = load_surface_recipe(self.manifest, {atlas.name: atlas})[atlas.name]
+        with self.assertRaisesRegex(ReferenceError, "beyond cleanup radius"):
+            finish_surface_atlas(photo, spec, SurfaceOptions(cleanup_radius=1))
+
     def test_strict_path_overlap_and_dimension_validation(self):
         self._image("atlas.png", 120, "RGB")
         self._image("region.png", 255)

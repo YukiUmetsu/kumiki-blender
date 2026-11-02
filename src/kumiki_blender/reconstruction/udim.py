@@ -151,6 +151,8 @@ def package_finished_udim(texture_finish: str | Path, output: str | Path) -> dic
     }
     for atlas_name, tile in tile_by_atlas.items():
         page: dict[str, Any] = {"source_atlas": atlas_name, "tile": tile}
+        if by_atlas.get(atlas_name, {}).get("height") is not None:
+            page["displacement_scale_m"] = by_atlas[atlas_name]["displacement_scale_m"]
         for channel in ("albedo", "roughness", "height"):
             path = (atlas_paths[atlas_name] if channel == "albedo" else
                     by_atlas.get(atlas_name, {}).get(channel, {}).get("path")

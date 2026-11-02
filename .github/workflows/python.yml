@@ -24,7 +24,7 @@ jobs:
       - name: Test photo-reference evidence and COLMAP worker boundary
         env:
           PYTHONPATH: src
-        run: python -m unittest tests.test_reconstruction_references tests.test_reconstruction_colmap tests.test_reconstruction_pycolmap tests.test_reconstruction_dense tests.test_reconstruction_blender_dense tests.test_reconstruction_masking tests.test_reconstruction_mask_refinement tests.test_reconstruction_mask_consistency tests.test_reconstruction_texture_finish tests.test_reconstruction_cli tests.test_reconstruction_cameras tests.test_reconstruction_silhouettes tests.test_reconstruction_landmarks tests.test_prepare_pix4d_eagle tests.test_prepare_epfl_statue tests.test_prepare_cycladic_figurine -v
+        run: python -m unittest tests.test_reconstruction_references tests.test_reconstruction_colmap tests.test_reconstruction_pycolmap tests.test_reconstruction_dense tests.test_reconstruction_blender_dense tests.test_reconstruction_masking tests.test_reconstruction_mask_refinement tests.test_reconstruction_mask_consistency tests.test_reconstruction_texture_finish tests.test_surface_finishing tests.test_reconstruction_cli tests.test_reconstruction_cameras tests.test_reconstruction_silhouettes tests.test_reconstruction_landmarks tests.test_prepare_pix4d_eagle tests.test_prepare_epfl_statue tests.test_prepare_cycladic_figurine -v
       - name: Test anatomical head-base alignment and CLI preflight
         env:
           PYTHONPATH: src
@@ -102,6 +102,11 @@ jobs:
             build-egypt-map --output .review/ci/egypt-map
       - name: Install optional AssetSpec and image QA dependencies (host Python only)
         run: python -m pip install -e '.[composer,qa]'
+      - name: Verify guided surfaces, portable GLB and tiled UDIM in Blender
+        env:
+          PYTHONPATH: src
+          KUMIKI_BLENDER_EXECUTABLE: blender
+        run: python -m unittest tests.test_reconstruction_texture_finish.TextureFinishTests.test_real_blender_packs_roughness_and_height_and_exports_glb tests.test_reconstruction_texture_finish.TextureFinishTests.test_udim_package_opens_as_tiled_material_in_blender -v
       - name: Render AssetSpec v2 component assembly through dependency-free Blender worker
         env:
           KUMIKI_RENDER_PROFILE: smoke

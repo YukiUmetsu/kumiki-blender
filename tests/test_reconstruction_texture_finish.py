@@ -4,6 +4,9 @@ import contextlib
 import hashlib
 import io
 import json
+import os
+import struct
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -124,6 +127,20 @@ class TextureFinishTests(unittest.TestCase):
                                          textured=True, texture_finish=output)
         self.assertEqual(plan["surface_maps"][0]["roughness"]["path"],
                          str(output / entry["roughness"]["path"]))
+        report_path = output / "texture-finish-report.json"
+        original_report = report_path.read_text()
+        altered = json.loads(original_report)
+        altered["surface_maps"].append(dict(altered["surface_maps"][0]))
+        report_path.write_text(json.dumps(altered))
+        with self.assertRaisesRegex(ReferenceError, "duplicate|exactly one"):
+            plan_dense_blender_review(self.dense, self.root / "duplicate-render",
+                                      textured=True, texture_finish=output)
+        altered["surface_maps"] = []
+        report_path.write_text(json.dumps(altered))
+        with self.assertRaisesRegex(ReferenceError, "missing|exactly one"):
+            plan_dense_blender_review(self.dense, self.root / "missing-render",
+                                      textured=True, texture_finish=output)
+        report_path.write_text(original_report)
         (output / entry["roughness"]["path"]).write_bytes(b"tampered")
         with self.assertRaisesRegex(ReferenceError, "Surface map changed"):
             plan_dense_blender_review(self.dense, self.root / "tampered-render",
@@ -141,6 +158,62 @@ class TextureFinishTests(unittest.TestCase):
             finish_dense_textures(self.dense, destination,
                                   TextureFinishSettings(surface_recipe=str(recipe)))
         self.assertFalse(destination.exists())
+
+    @unittest.skipUnless(os.environ.get("KUMIKI_BLENDER_EXECUTABLE"), "requires real Blender 4.2+")
+    def test_real_blender_packs_roughness_and_height_and_exports_glb(self):
+        region = self.root / "render-region.png"
+        height = self.root / "render-height.png"
+        Image.new("L", (48, 32), 255).save(region)
+        Image.new("I;16", (48, 32), 32768).save(height)
+        recipe = self.root / "render-surface.json"
+        recipe.write_text(json.dumps({"schema_version": 1, "atlases": {
+            self.atlas.name: {
+                "regions": [{"id": "limestone", "mask": region.name, "roughness": .84}],
+                "height_map": height.name, "displacement_scale_m": .008,
+            }}}))
+        finished = self.root / "render-finish"
+        finish_dense_textures(self.dense, finished,
+                              TextureFinishSettings(surface_recipe=str(recipe)))
+        render = self.root / "render-output"
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(main(["render-dense-blender-review",
+                                   "--dense-revision", str(self.dense),
+                                   "--texture-finish", str(finished),
+                                   "--output", str(render), "--textured", "--no-renders",
+                                   "--blender", os.environ["KUMIKI_BLENDER_EXECUTABLE"]]), 0)
+        report = json.loads((render / "blender-review-report.json").read_text())
+        self.assertTrue(report["status"].startswith("private-Blender-mesh-candidate"))
+        glb = render / report["review_glb"]
+        self.assertTrue(glb.is_file())
+        with glb.open("rb") as stream:
+            self.assertEqual(stream.read(4), b"glTF")
+            stream.read(8)
+            length, kind = struct.unpack("<I4s", stream.read(8))
+            self.assertEqual(kind, b"JSON")
+            gltf = json.loads(stream.read(length))
+        materials = gltf["materials"]
+        self.assertTrue(any("metallicRoughnessTexture" in m.get("pbrMetallicRoughness", {})
+                            for m in materials))
+        self.assertGreaterEqual(len(gltf.get("images", [])), 2)
+        # Inspect the actual editable .blend as well: GLB cannot carry height
+        # displacement, but Cycles must retain the packed 16-bit source.
+        expression = (
+            "import bpy; "
+            "m = next(m for m in bpy.data.materials if m.use_nodes); "
+            "nodes = list(m.node_tree.nodes); "
+            "shader = next(n for n in nodes if n.type == 'BSDF_PRINCIPLED'); "
+            "output = next(n for n in nodes if n.type == 'OUTPUT_MATERIAL'); "
+            "assert shader.inputs['Roughness'].is_linked; "
+            "assert output.inputs['Displacement'].is_linked; "
+            "assert m.displacement_method == 'BOTH'; "
+            "assert len([n for n in nodes if n.type == 'TEX_IMAGE' and "
+            "n.image and n.image.packed_file]) >= 3"
+        )
+        verified = subprocess.run([os.environ["KUMIKI_BLENDER_EXECUTABLE"],
+                                   "--background", str(render / report["review_blend"]),
+                                   "--python-exit-code", "1", "--python-expr", expression],
+                                  capture_output=True, text=True, check=False)
+        self.assertEqual(verified.returncode, 0, verified.stdout + verified.stderr)
 
     def test_udim_package_remaps_shared_uvs_and_keeps_sources_unchanged(self):
         second = self.atlas.with_name("another-page.png")
@@ -166,6 +239,71 @@ class TextureFinishTests(unittest.TestCase):
         self.assertTrue((destination / "albedo.1002.png").is_file())
         self.assertEqual((self.obj.read_bytes(), self.mtl.read_bytes(), second.read_bytes()),
                          src_before)
+
+    @unittest.skipUnless(os.environ.get("KUMIKI_BLENDER_EXECUTABLE"), "requires real Blender 4.2+")
+    def test_udim_package_opens_as_tiled_material_in_blender(self):
+        second = self._set_up_cross_page_seam()
+        recipe = self.root / "udim-surface.json"
+        atlases = {}
+        for index, path in enumerate((self.atlas, second)):
+            mask = self.root / f"udim-mask-{index}.png"
+            height = self.root / f"udim-height-{index}.png"
+            Image.new("L", (96, 96), 255).save(mask)
+            Image.new("I;16", (96, 96), 32768).save(height)
+            atlases[path.name] = {
+                "regions": [{"id": "stone", "mask": mask.name, "roughness": .84}],
+                "height_map": height.name,
+                "displacement_scale_m": .004 if index == 0 else .012,
+            }
+        recipe.write_text(json.dumps({"schema_version": 1, "atlases": atlases}))
+        finished = self.root / "udim-blender-finish"
+        finish_dense_textures(self.dense, finished,
+                              TextureFinishSettings(surface_recipe=str(recipe)))
+        target = self.root / "udim-blender-package"
+        package_finished_udim(finished, target)
+        expression = (
+            "import bpy, sys; "
+            f"sys.path.insert(0, {str(Path(__file__).resolve().parents[1] / 'src')!r}); "
+            "from kumiki_blender.reconstruction.blender_udim import import_finished_udim_package; "
+            f"import_finished_udim_package(bpy, {str(target)!r}); "
+            "images = [n.image for m in bpy.data.materials if m.use_nodes "
+            "for n in m.node_tree.nodes if n.type == 'TEX_IMAGE' and n.image]; "
+            "assert images, 'UDIM OBJ lost diffuse images'; "
+            "assert len(set(i.name for i in images)) == 3, 'UDIM PBR/height maps missing'; "
+            "assert all(i.source == 'TILED' and len(i.tiles) >= 2 for i in images), "
+            "'UDIM map not configured as a tiled image'; "
+            "assert all(i.has_data and tuple(i.size) == (96, 96) for i in images), "
+            "'UDIM image tile pixel data was not loaded'; "
+            "scales = sorted(n.inputs['Scale'].default_value for m in bpy.data.materials "
+            "if m.use_nodes for n in m.node_tree.nodes if n.type == 'DISPLACEMENT'); "
+            "assert len(scales) == 2 and abs(scales[0] - .004) < 1e-6 "
+            "and abs(scales[1] - .012) < 1e-6, 'UDIM displacement scale lost'"
+        )
+        process = subprocess.run([os.environ["KUMIKI_BLENDER_EXECUTABLE"],
+                                  "--background", "--factory-startup",
+                                  "--python-exit-code", "1", "--python-expr", expression],
+                                 capture_output=True, text=True, check=False)
+        self.assertEqual(process.returncode, 0, process.stdout + process.stderr)
+
+    def test_blender_udim_rejects_tampered_tiles_and_duplicate_assignments(self):
+        from kumiki_blender.reconstruction.blender_udim import _validated_package
+
+        self._set_up_cross_page_seam()
+        finished = self.root / "tamper-finish"
+        finish_dense_textures(self.dense, finished, TextureFinishSettings())
+        target = self.root / "tamper-udim"
+        package_finished_udim(finished, target)
+        report_file = target / "udim-report.json"
+        original_report = report_file.read_text()
+        report = json.loads(original_report)
+        report["tiles"][1]["tile"] = 1001
+        report_file.write_text(json.dumps(report))
+        with self.assertRaisesRegex(ReferenceError, "unique"):
+            _validated_package(target)
+        report_file.write_text(original_report)
+        (target / "albedo.1001.png").write_bytes(b"tampered")
+        with self.assertRaisesRegex(ReferenceError, "changed"):
+            _validated_package(target)
 
     def test_cli_surface_and_udim_commands(self):
         mask = self.root / "cli-mask.png"

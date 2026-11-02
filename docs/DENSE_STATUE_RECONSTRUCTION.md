@@ -497,12 +497,21 @@ subdirectories. Files and the recipe are hash-pinned before processing.
 - **UDIM:** `package-finished-udim` assigns numbered tiles (1001, 1002, ...)
   to original atlas pages, duplicates shared per-material OBJ `vt` indices,
   and emits `udim.obj`, `udim.mtl`, `albedo.<tile>.png`, plus any roughness and
-  height tiles, with a hash/provenance report. In Blender, load the generated
-  `<UDIM>` image sequence as a **Tiled** image and wire it to Principled BSDF;
-  check material slots and UVs before rendering. glTF has no native UDIM;
-  Blender's exporter splits UDIM into tiles/materials, so validate the final
-  portable GLB separately. This package does not overwrite the original UVs,
-  mesh, material revisions or Blender review.
+  height tiles and per-tile displacement scales, with a hash/provenance report.
+  Import the package in Blender's Python console or a Blender background script
+  using `from kumiki_blender.reconstruction.blender_udim import
+  import_finished_udim_package` and
+  `import_finished_udim_package(bpy, "/absolute/path/to/udim-package")`.
+  This checks hashes and material assignments, creates real **Tiled** image
+  datablocks for albedo/roughness/height, and connects the Principled and
+  Displacement shaders. Make `kumiki_blender` importable in Blender's Python
+  (for example `PYTHONPATH=/path/to/kumiki-blender/src blender --background
+  --python your-script.py`); the importer has no Pillow requirement. Keep the
+  image package directory with the `.blend` file and check UVs and material
+  slots before rendering. glTF has **no native UDIM or height displacement**;
+  bake/split UV tiles per material for portable GLB and verify it separately.
+  This package does not overwrite the original UVs, mesh, material revisions
+  or Blender review.
 
 All of these outputs remain `artistic-review-required` and private; none
 establishes photo-perfect likeness. Photograph-to-material decomposition is

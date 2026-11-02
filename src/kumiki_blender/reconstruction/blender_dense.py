@@ -88,6 +88,20 @@ def _textured_obj_plan(root: Path, report: dict[str, Any],
             "textured_faces": face_count}
 
 
+def _png_metadata(path: Path) -> tuple[tuple[int, int], int, int]:
+    """Read PNG IHDR without Pillow (Blender's Python has no QA extras)."""
+    with path.open("rb") as stream:
+        header = stream.read(26)
+    if (len(header) != 26 or header[:8] != b"\x89PNG\r\n\x1a\n"
+            or header[8:16] != b"\x00\x00\x00\rIHDR"):
+        raise ReferenceError("Finished surface image is not a valid PNG header")
+    dimensions = (int.from_bytes(header[16:20], "big"),
+                  int.from_bytes(header[20:24], "big"))
+    if not all(0 < size <= 16384 for size in dimensions):
+        raise ReferenceError("Finished surface PNG dimensions are invalid")
+    return dimensions, header[24], header[25]
+
+
 def _finished_texture_plan(root: Path, dense_report: dict[str, Any],
                            texture_finish: str | Path, max_faces: int) -> dict[str, Any]:
     """Pin a non-destructive corrected atlas without trusting its filesystem links."""
@@ -121,10 +135,15 @@ def _finished_texture_plan(root: Path, dense_report: dict[str, Any],
             or finished["textured_faces"] != original["textured_faces"]):
         raise ReferenceError("Finished texture geometry or MTL changed since original")
     surface_entries = record.get("surface_maps", [])
-    if not isinstance(surface_entries, list) or (surface_entries and
-            {item.get("atlas") for item in surface_entries if isinstance(item, dict)}
-            != set(original_atlases)):
-        raise ReferenceError("Finished surface maps do not match original atlases")
+    if not isinstance(surface_entries, list):
+        raise ReferenceError("Finished surface maps must be a list")
+    if record.get("surface_recipe_sha256") is not None and not surface_entries:
+        raise ReferenceError("Finished surface maps missing despite a recorded recipe")
+    if surface_entries:
+        names = [item.get("atlas") for item in surface_entries if isinstance(item, dict)]
+        if (len(names) != len(surface_entries) or len(names) != len(original_atlases)
+                or set(names) != set(original_atlases)):
+            raise ReferenceError("Finished surface maps need exactly one entry per atlas; duplicate/missing records")
     verified_surface = []
     for entry in surface_entries:
         if not isinstance(entry, dict) or not isinstance(entry.get("atlas"), str):
@@ -147,30 +166,37 @@ def _finished_texture_plan(root: Path, dense_report: dict[str, Any],
                     or path.stat().st_size > 512 * 1024 * 1024
                     or _sha256(path) != asset["sha256"]):
                 raise ReferenceError(f"Surface map changed after finishing: {expected_name}")
-            from PIL import Image
-
-            with Image.open(path) as img:
-                if (img.format != "PNG" or img.mode != ("L" if channel == "roughness" else "I;16")
-                        or not 0 < img.width <= 16384 or not 0 < img.height <= 16384):
-                    raise ReferenceError("Finished surface map has invalid mode or dimensions")
-            maps[channel] = {"path": str(path), "sha256": asset["sha256"]}
+            dimensions, depth, color_type = _png_metadata(path)
+            if (depth != (8 if channel == "roughness" else 16) or color_type != 0):
+                raise ReferenceError("Finished surface map requires grayscale PNG at expected bit depth")
+            maps[channel] = {"path": str(path), "sha256": asset["sha256"],
+                             "dimensions": dimensions}
         scale = entry.get("displacement_scale_m")
         if ((maps["height"] is None) != (scale is None)
                 or (scale is not None and (type(scale) not in (float, int)
                                              or not math.isfinite(scale) or not .00001 <= scale <= .5))):
             raise ReferenceError("Finished height displacement scale is invalid")
-        # Match each auxiliary map to its parent albedo dimensions.
-        from PIL import Image
-
-        albedo = finish / name
-        with Image.open(albedo) as source:
-            source_size = source.size
+        # Match auxiliary PNG headers to pinned albedo metadata without
+        # requiring optional Pillow inside Blender's bundled Python.
+        atlas_records = [item for item in record.get("texture_atlases", [])
+                         if isinstance(item, dict) and item.get("path") == name]
+        if len(atlas_records) != 1:
+            raise ReferenceError("Finished surface albedo metadata is missing or duplicate")
+        reported_dims = atlas_records[0].get("dimensions")
+        if (not isinstance(reported_dims, list) or len(reported_dims) != 2
+                or any(type(value) is not int or not 0 < value <= 16384
+                       for value in reported_dims)):
+            raise ReferenceError("Finished surface albedo dimensions are invalid")
+        source_size = tuple(reported_dims)
+        if name.lower().endswith(".png") and _png_metadata(finish / name)[0] != source_size:
+            raise ReferenceError("Finished albedo dimensions differ from its recorded metadata")
         for map_record in maps.values():
-            if map_record is not None:
-                with Image.open(map_record["path"]) as image:
-                    if image.size != source_size:
-                        raise ReferenceError("Finished surface map dimensions differ from albedo")
-        verified_surface.append({"atlas": name, **maps, "displacement_scale_m": scale})
+            if map_record is not None and map_record["dimensions"] != source_size:
+                raise ReferenceError("Finished surface map dimensions differ from albedo")
+        verified_surface.append({"atlas": name,
+                                 **{key: ({"path": value["path"], "sha256": value["sha256"]}
+                                     if value is not None else None) for key, value in maps.items()},
+                                 "displacement_scale_m": scale})
     return {**finished, "texture_finish_revision": str(finish),
             "texture_finish_settings": record.get("settings"),
             "surface_maps": verified_surface,
