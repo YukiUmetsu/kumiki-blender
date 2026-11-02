@@ -151,10 +151,59 @@ def main(argv: list[str] | None = None) -> int:
             photo_parser.add_argument("--output", type=Path, required=True,
                                       help="New immutable reconstruction revision directory")
             photo_parser.add_argument("--colmap", default="colmap", help="Installed COLMAP executable")
+            photo_parser.add_argument("--engine", choices=("colmap", "pycolmap"), default="colmap",
+                                      help="COLMAP CLI (default) or pip-installed CPU PyCOLMAP")
             photo_parser.add_argument("--timeout-seconds", type=int, default=3600)
             photo_parser.add_argument("--undistort", action="store_true",
                                       help="Rectify camera intrinsics and image pixels for accurate Blender projection")
             photo_parser.add_argument("--max-image-size", type=int, default=4000)
+    for command in ("plan-dense-photos", "build-dense-photos"):
+        dense_parser = subcommands.add_parser(
+            command, help="Review or reconstruct a private dense statue mesh from registered cameras")
+        dense_parser.add_argument("--reconstruction", type=Path, required=True,
+                                  help="Successful reconstruct-photos --undistort revision")
+        dense_parser.add_argument("--rectified-masks", type=Path,
+                                  help="Private binary grayscale <photo>.mask.png files matching every rectified image")
+        dense_parser.add_argument("--output", type=Path, required=True,
+                                  help="New private, immutable dense-mesh revision")
+        dense_parser.add_argument("--backend", choices=("openmvs", "colmap"), default="openmvs",
+                                  help="OpenMVS CPU (default) or COLMAP CUDA GPU")
+        dense_parser.add_argument("--min-registered-images", type=int, default=8)
+        dense_parser.add_argument("--min-registered-fraction", type=float, default=0.60)
+        dense_parser.add_argument("--min-mesh-faces", type=int, default=1000)
+        dense_parser.add_argument("--resolution-level", type=int, default=0,
+                                  help="OpenMVS depth map downscale (0 preserves input pixels)")
+        dense_parser.add_argument("--max-resolution", type=int, default=3200,
+                                  help="OpenMVS maximum depth map image dimension")
+        dense_parser.add_argument("--number-views", type=int, default=5,
+                                  help="OpenMVS neighboring views per depth estimate")
+        dense_parser.add_argument("--refine-decimate", type=float, default=1.0,
+                                  help="OpenMVS pre-refinement face retention; 1 preserves high-poly detail")
+        dense_parser.add_argument("--texture-decimate", type=float, default=1.0,
+                                  help="OpenMVS texture OBJ face retention; lower for faster atlas LOD while PLY stays high-poly")
+        dense_parser.add_argument("--timeout-seconds", type=int, default=7200)
+        dense_parser.add_argument("--no-refine", action="store_true",
+                                  help="OpenMVS: skip refined topology")
+        dense_parser.add_argument("--no-texture", action="store_true",
+                                  help="Skip the private image-to-mesh texture transfer")
+        if command == "build-dense-photos":
+            dense_parser.add_argument("--resume", action="store_true",
+                                      help="Resume an incomplete OpenMVS revision without repeating completed stages")
+    for command in ("plan-dense-blender-review", "render-dense-blender-review"):
+        review_dense = subcommands.add_parser(
+            command, help="Inspect or create a private editable Blender scene from a dense PLY")
+        review_dense.add_argument("--dense-revision", type=Path, required=True)
+        review_dense.add_argument("--output", type=Path, required=True)
+        review_dense.add_argument("--max-mesh-faces", type=int, default=5_000_000)
+        review_dense.add_argument("--matched-views", type=int, default=0,
+                                  help="Render calibrated dense-mesh views against pinned rectified photos (0–12)")
+        review_dense.add_argument("--matched-resolution-percent", type=int, default=100,
+                                  help="Photo-matched preview resolution percentage; 100 retains full camera pixels")
+        review_dense.add_argument("--textured", action="store_true",
+                                  help="Import pinned OpenMVS OBJ/MTL/atlas as private UV-textured Blender/GLB review")
+        if command == "render-dense-blender-review":
+            review_dense.add_argument("--no-renders", action="store_true")
+            review_dense.add_argument("--blender", default="blender")
     camera_parser = subcommands.add_parser(
         "prepare-camera-plan", help="Align sparse COLMAP cameras to sculpt-space 3D landmarks")
     camera_parser.add_argument("--reconstruction", type=Path, required=True)
@@ -214,6 +263,75 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     try:
+        if args.command in ("plan-dense-blender-review", "render-dense-blender-review"):
+            from .reconstruction.blender_dense import (build_dense_blender_review,
+                                                       plan_dense_blender_review)
+            from .reconstruction.references import ReferenceError
+            try:
+                planned = plan_dense_blender_review(
+                    args.dense_revision, args.output, max_mesh_faces=args.max_mesh_faces,
+                    matched_views=args.matched_views,
+                    matched_resolution_percent=args.matched_resolution_percent,
+                    textured=args.textured)
+                if args.command == "plan-dense-blender-review":
+                    print(json.dumps(planned, indent=2))
+                    return 0
+            except ReferenceError as error:
+                raise RecipeError(str(error)) from error
+            try:
+                import bpy  # type: ignore[import-not-found]
+            except ImportError:
+                executable = shutil.which(args.blender)
+                if not executable:
+                    raise RuntimeError(f"Blender executable not found: {args.blender}")
+                entry = Path(__file__).resolve().parents[2] / "scripts/blender_entry.py"
+                if not entry.is_file():
+                    raise RuntimeError("Dense Blender review requires scripts/blender_entry.py")
+                command = [executable, "--background", "--factory-startup", "--python-exit-code", "1",
+                           "--python", str(entry), "--", "render-dense-blender-review",
+                           "--dense-revision", str(args.dense_revision.resolve()),
+                           "--output", str(args.output.resolve()),
+                           "--max-mesh-faces", str(args.max_mesh_faces),
+                           "--matched-views", str(args.matched_views),
+                           "--matched-resolution-percent", str(args.matched_resolution_percent)]
+                if args.textured:
+                    command.append("--textured")
+                if args.no_renders:
+                    command.append("--no-renders")
+                return subprocess.run(command, check=False).returncode
+            report = build_dense_blender_review(
+                args.dense_revision, args.output, bpy_module=bpy,
+                render_previews=not args.no_renders, max_mesh_faces=args.max_mesh_faces,
+                matched_views=args.matched_views,
+                matched_resolution_percent=args.matched_resolution_percent,
+                textured=args.textured)
+            print(json.dumps(report, indent=2))
+            return 0 if report["status"].startswith("private-Blender-mesh-candidate") else 3
+        if args.command in ("plan-dense-photos", "build-dense-photos"):
+            from .reconstruction.dense import (DenseSettings, build_dense_reconstruction,
+                                               plan_dense_reconstruction)
+            from .reconstruction.references import ReferenceError
+            try:
+                settings = DenseSettings(
+                    backend=args.backend, min_registered_images=args.min_registered_images,
+                    min_registered_fraction=args.min_registered_fraction,
+                    timeout_seconds=args.timeout_seconds, min_mesh_faces=args.min_mesh_faces,
+                    resolution_level=args.resolution_level,
+                    max_resolution=args.max_resolution, number_views=args.number_views,
+                    refine_decimate=args.refine_decimate,
+                    texture_decimate=args.texture_decimate,
+                    refine=not args.no_refine, texture=not args.no_texture)
+                report = (plan_dense_reconstruction(args.reconstruction, args.output, settings,
+                                                    rectified_masks=args.rectified_masks)
+                          if args.command == "plan-dense-photos" else
+                          build_dense_reconstruction(args.reconstruction, args.output, settings,
+                                                     rectified_masks=args.rectified_masks,
+                                                     resume=args.resume))
+            except ReferenceError as error:
+                raise RecipeError(str(error)) from error
+            print(json.dumps(report, indent=2))
+            return (0 if args.command == "plan-dense-photos" or
+                    report["status"].startswith("dense-mesh-candidate") else 3)
         if args.command == "prepare-makehuman-head":
             from .head_sources.makehuman import (fetch_makehuman_obj,
                                                  load_body_mesh, verify_makehuman_obj)
@@ -355,6 +473,7 @@ def main(argv: list[str] | None = None) -> int:
                 references = load_reference_set(args.manifest)
                 report = (audit_reference_set(references) if args.command == "reference-audit" else
                           build_sparse_reconstruction(references, args.output, colmap=args.colmap,
+                                                      engine=args.engine,
                                                       timeout_seconds=args.timeout_seconds,
                                                       undistort=args.undistort,
                                                       max_image_size=args.max_image_size))

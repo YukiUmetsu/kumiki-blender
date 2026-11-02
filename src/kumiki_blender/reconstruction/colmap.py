@@ -8,9 +8,13 @@ statue, resolve missing anatomy, or clear source-media redistribution rights.
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
+import math
 import shutil
+import statistics
 import subprocess
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -22,15 +26,16 @@ def _sha256(path: Path) -> str:
         return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
-def _probe_colmap(executable: str) -> tuple[dict[str, str], tuple[str, str]]:
+def _probe_colmap(executable: str | list[str]) -> tuple[dict[str, str], tuple[str, str]]:
     """Negotiate CPU flags across legacy SIFT and newer Feature* CLIs."""
     help_texts = []
     try:
+        prefix = [executable] if isinstance(executable, str) else executable
         for command in ("feature_extractor", "exhaustive_matcher"):
-            result = subprocess.run([executable, command, "--help"],
+            result = subprocess.run([*prefix, command, "--help"],
                                     capture_output=True, text=True, timeout=20, check=False)
             help_texts.append(result.stdout + result.stderr)
-        version = subprocess.run([executable, "--version"], capture_output=True,
+        version = subprocess.run([*prefix, "--version"], capture_output=True,
                                  text=True, timeout=20, check=False)
     except (OSError, subprocess.TimeoutExpired) as error:
         raise ReferenceError(f"COLMAP CLI preflight failed: {error}") from error
@@ -44,7 +49,8 @@ def _probe_colmap(executable: str) -> tuple[dict[str, str], tuple[str, str]]:
     flags = (("--FeatureExtraction.use_gpu", "--FeatureMatching.use_gpu") if modern else
              ("--SiftExtraction.use_gpu", "--SiftMatching.use_gpu"))
     version_line = (version.stdout + version.stderr).strip().splitlines()
-    return {"executable": str(Path(executable).resolve()),
+    return {"executable": (str(Path(executable).resolve()) if isinstance(executable, str)
+                           else " ".join(prefix)),
             "version": version_line[0][:200] if version_line else "unreported",
             "cpu_flag_family": family}, flags
 
@@ -57,6 +63,68 @@ def _staged_images(reference_set: ReferenceSet, report: dict[str, Any]) -> list[
     # Representative-only matching: duplicate images cannot become fake camera baselines.
     excluded = {name for group in report["duplicate_groups"] for name in group[1:]}
     return [image for image in reference_set.images if image.image_id not in excluded]
+
+
+def _repair_jpeg_orientation(data: bytes) -> tuple[bytes, bool]:
+    """Repair invalid EXIF orientation without recompressing a single pixel.
+
+    Some real camera exports store EXIF Orientation=0. COLMAP/PyCOLMAP 4.0
+    aborts the entire process at C++ level on such images. Correct the inline
+    TIFF SHORT tag on a *staged copy* only; all other JPEG bytes stay identical.
+    Rotated but valid orientations 1–8 are left untouched.
+    """
+    if not data.startswith(b"\xff\xd8"):
+        return data, False
+    offset = 2
+    while offset + 4 < len(data):
+        if data[offset] != 0xff:
+            break
+        while offset < len(data) and data[offset] == 0xff:
+            offset += 1
+        if offset >= len(data):
+            break
+        marker = data[offset]
+        offset += 1
+        if marker == 0xda:  # Start of compressed image scan
+            break
+        if marker in (0xd8, 0xd9, 0x01) or 0xd0 <= marker <= 0xd7:
+            continue
+        if offset + 2 > len(data):
+            break
+        size = int.from_bytes(data[offset:offset + 2], "big")
+        if size < 2 or offset + size > len(data):
+            break
+        begin, end = offset + 2, offset + size
+        offset = end
+        if marker != 0xe1 or data[begin:begin + 6] != b"Exif\x00\x00":
+            continue
+        base = begin + 6
+        if base + 8 > end or data[base:base + 2] not in (b"II", b"MM"):
+            continue
+        endian = "little" if data[base:base + 2] == b"II" else "big"
+        if int.from_bytes(data[base + 2:base + 4], endian) != 42:
+            continue
+        table = base + int.from_bytes(data[base + 4:base + 8], endian)
+        if table < base + 8 or table + 2 > end:
+            continue
+        count = int.from_bytes(data[table:table + 2], endian)
+        for index in range(count):
+            tag = table + 2 + index * 12
+            if tag + 12 > end:
+                break
+            if int.from_bytes(data[tag:tag + 2], endian) != 274:
+                continue
+            # EXIF orientation must be SHORT (type 3), count 1, inline.
+            if (int.from_bytes(data[tag + 2:tag + 4], endian) != 3 or
+                    int.from_bytes(data[tag + 4:tag + 8], endian) != 1):
+                return data, False
+            old = int.from_bytes(data[tag + 8:tag + 10], endian)
+            if 1 <= old <= 8:
+                return data, False
+            corrected = bytearray(data)
+            corrected[tag + 8:tag + 10] = (1).to_bytes(2, endian)
+            return bytes(corrected), True
+    return data, False
 
 
 def _prepare_images(references: list[ReferenceImage], output: Path) -> bool:
@@ -75,6 +143,11 @@ def _prepare_images(references: list[ReferenceImage], output: Path) -> bool:
         shutil.copyfile(image.path, staged)
         if _sha256(staged) != image.sha256:
             raise ReferenceError(f"Reference {image.image_id} changed during image staging")
+        corrected_exif = False
+        if staged.suffix.lower() in (".jpg", ".jpeg"):
+            clean, corrected_exif = _repair_jpeg_orientation(staged.read_bytes())
+            if corrected_exif:
+                staged.write_bytes(clean)
         if has_masks:
             if image.mask is not None:
                 with Image.open(image.mask) as original:
@@ -84,7 +157,9 @@ def _prepare_images(references: list[ReferenceImage], output: Path) -> bool:
             mask.save(mask_root / (filename + ".png"))
         index.append({"image_id": image.image_id, "filename": filename,
                       "source_url": image.source_url, "view": image.view,
-                      "regions": image.regions, "sha256": image.sha256,
+                      "regions": image.regions, "sha256": _sha256(staged),
+                      "original_sha256": image.sha256,
+                      "invalid_exif_orientation_normalized": corrected_exif,
                       "staged_mask_sha256": (_sha256(mask_root / (filename + ".png"))
                                              if has_masks else None),
                       "dimensions": image.dimensions, "usage": "reference-only"})
@@ -93,9 +168,10 @@ def _prepare_images(references: list[ReferenceImage], output: Path) -> bool:
     return has_masks
 
 
-def _run(executable: str, stage: str, arguments: list[str], output: Path,
+def _run(executable: str | list[str], stage: str, arguments: list[str], output: Path,
          number: int, timeout_seconds: int) -> tuple[int, list[str]]:
-    command = [executable, stage, *arguments]
+    prefix = [executable] if isinstance(executable, str) else executable
+    command = [*prefix, stage, *arguments]
     log = output / "logs" / f"{number:02d}-{stage}.log"
     try:
         with log.open("w", encoding="utf-8") as stream:
@@ -140,8 +216,45 @@ def _finite_float(value: str) -> bool:
         return False
 
 
+def _sparse_point_metrics(text_model: Path) -> dict[str, Any] | None:
+    """Describe triangulation evidence, never statue surface or likeness accuracy.
+
+    COLMAP stores each point's *mean pixel reprojection error* and 2D feature
+    observation pairs in points3D.txt. A tight reprojection fit is necessary
+    for credible cameras but does not establish a clean foreground mesh.
+    """
+    path = text_model / "points3D.txt"
+    if path.is_symlink() or not path.is_file():
+        return None
+    errors: list[float] = []
+    track_sum = 0
+    with path.open(encoding="utf-8") as stream:
+        for line in stream:
+            if not line.strip() or line.startswith("#"):
+                continue
+            fields = line.split()
+            if (len(fields) < 10 or (len(fields) - 8) % 2 or
+                    not fields[0].isdigit() or not _finite_float(fields[7])):
+                continue
+            error = float(fields[7])
+            if error < 0:
+                continue
+            errors.append(error)
+            track_sum += (len(fields) - 8) // 2
+    if not errors:
+        return None
+    return {
+        "triangulated_points": len(errors),
+        "mean_track_length": round(track_sum / len(errors), 3),
+        "median_reprojection_error_px": round(statistics.median(errors), 3),
+        "mean_reprojection_error_px": round(math.fsum(errors) / len(errors), 3),
+        "interpretation": "Sparse matched-feature fit only; not surface, anatomical or monument fidelity",
+    }
+
+
 def build_sparse_reconstruction(reference_set: ReferenceSet, output: str | Path,
                                 *, colmap: str = "colmap",
+                                engine: str = "colmap",
                                 timeout_seconds: int = 3600,
                                 undistort: bool = False,
                                 max_image_size: int = 4000) -> dict[str, Any]:
@@ -158,14 +271,24 @@ def build_sparse_reconstruction(reference_set: ReferenceSet, output: str | Path,
         raise ReferenceError("COLMAP timeout_seconds must be 30–86400")
     if type(undistort) is not bool or type(max_image_size) is not int or not 512 <= max_image_size <= 16384:
         raise ReferenceError("undistort must be bool and max_image_size must be 512–16384")
+    if engine not in ("colmap", "pycolmap"):
+        raise ReferenceError("Sparse engine must be colmap or pycolmap")
     audit = audit_reference_set(reference_set)
     references = _staged_images(reference_set, audit)
     if len(references) < 3:
         raise ReferenceError("COLMAP requires at least three independent reference images")
-    executable = shutil.which(colmap)
-    if not executable:
-        raise ReferenceError(f"COLMAP executable not found: {colmap}")
+    if engine == "pycolmap":
+        if importlib.util.find_spec("pycolmap") is None:
+            raise ReferenceError("PyCOLMAP is not installed: pip install pycolmap")
+        executable: str | list[str] = [sys.executable, "-m",
+            "kumiki_blender.reconstruction.pycolmap_worker"]
+    else:
+        found = shutil.which(colmap)
+        if not found:
+            raise ReferenceError(f"COLMAP executable not found: {colmap}")
+        executable = found
     colmap_info, cpu_flags = _probe_colmap(executable)
+    colmap_info["engine"] = engine
     # Re-check before creating anything: photo files can be edited after intake.
     for image in references:
         if not image.path.is_file() or _sha256(image.path) != image.sha256:
@@ -207,7 +330,8 @@ def build_sparse_reconstruction(reference_set: ReferenceSet, output: str | Path,
     stages = [
         ("feature_extractor", ["--database_path", str(database), "--image_path", str(images)] +
          (["--ImageReader.mask_path", str(target / "masks")] if has_masks else []) +
-         [cpu_flags[0], "0"]),
+         [cpu_flags[0], "0"] +
+         (["--max_image_size", str(max_image_size)] if engine == "pycolmap" else [])),
         ("exhaustive_matcher", ["--database_path", str(database), cpu_flags[1], "0"]),
         ("mapper", ["--database_path", str(database), "--image_path", str(images),
                     "--output_path", str(sparse)]),
@@ -245,10 +369,12 @@ def build_sparse_reconstruction(reference_set: ReferenceSet, output: str | Path,
     else:
         report["failed_stage"] = "insufficient_registered_views"
         return checkpoint()
+    best = max(counts, key=lambda item: item["registered_images"])["model"]
+    report["sparse_feature_evidence"] = _sparse_point_metrics(target / "text-models" / best)
+    checkpoint()
     if undistort:
         # A production COLMAP default is SIMPLE_RADIAL; a Blender pinhole camera
         # cannot reproduce its curved optics. Rectify *both* pixels and cameras.
-        best = max(counts, key=lambda item: item["registered_images"])["model"]
         rectified = target / "undistorted"
         rectified.mkdir()
         args = ["--image_path", str(images), "--input_path", str(sparse / best),
