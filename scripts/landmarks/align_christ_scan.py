@@ -34,8 +34,13 @@ def main():
                         help='Experimental standalone GLB, never production full figure')
     parser.add_argument('--audit',type=Path,required=True)
     args=parser.parse_args()
-    if len({args.source.resolve(),args.output.resolve(),args.audit.resolve()})!=3:
-        parser.error('Output, audit and input must be different files')
+    # Fail closed: never overwrite the original scan, its rights record or
+    # manually reviewed correspondences. Resolve symlinks before checking.
+    paths=[args.source,args.provenance,args.anchors,args.output,args.audit]
+    if len({path.resolve() for path in paths})!=len(paths):
+        parser.error('Scan, provenance, anchors, output and audit must be distinct files')
+    if args.output.suffix.lower()!='.glb' or args.audit.suffix.lower()!='.json':
+        parser.error('Aligned preview must be .glb and audit must be .json')
     provenance=load_asset_provenance(args.provenance)
     if provenance.commercial_use_allowed is not True:
         parser.error('Commercial use must be explicitly verified before exporting a scan')

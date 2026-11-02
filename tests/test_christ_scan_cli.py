@@ -60,6 +60,15 @@ class ChristScanCLIIntegration(unittest.TestCase):
             result=subprocess.run(cmd,cwd=ROOT,env=env,text=True,capture_output=True)
             self.assertNotEqual(result.returncode,0)
             self.assertFalse(out.exists())
+            # Safety: a caller cannot accidentally overwrite the scan or
+            # its provenance/annotation files via output path aliases.
+            annotations['source_kind']='actual-monument-scan'
+            anchor_file.write_text(json.dumps(annotations))
+            dangerous=cmd.copy()
+            dangerous[dangerous.index('--output')+1]=str(source)
+            result=subprocess.run(dangerous,cwd=ROOT,env=env,text=True,capture_output=True)
+            self.assertNotEqual(result.returncode,0)
+            self.assertEqual(hashlib.sha256(source.read_bytes()).hexdigest(),digest)
 
 
 if __name__=='__main__':unittest.main()
