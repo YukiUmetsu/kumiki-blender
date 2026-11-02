@@ -16,6 +16,9 @@ from PIL import Image
 
 from kumiki_blender.cli import main
 from kumiki_blender.reconstruction.blender_dense import plan_dense_blender_review
+from kumiki_blender.reconstruction.photo_uv_projection import (
+    _Triangle, _project_view, project_registered_photos_to_uv,
+)
 from kumiki_blender.reconstruction.references import ReferenceError
 from kumiki_blender.reconstruction.texture_finish import (
     TextureFinishSettings, _atlas_correction, _sample_luminance, finish_dense_textures,
@@ -204,6 +207,139 @@ class TextureFinishTests(unittest.TestCase):
                                    "--output", str(bad),
                                    "--surface-multiview-strength", "1"]), 2)
         self.assertFalse(bad.exists())
+
+    def _prepare_registered_photo_projection(self):
+        source = self.root / "registered-sparse"
+        model = source / "undistorted/text-model"
+        model.mkdir(parents=True)
+        photos = source / "undistorted/images"
+        photos.mkdir()
+        (model / "cameras.txt").write_text("1 PINHOLE 128 128 90 90 64 64\n")
+        entries = []
+        poses = []
+        for index, center_x in enumerate((-0.15, 0.50, 1.15), start=1):
+            filename = f"registered-{index:02d}.jpg"
+            Image.new("RGB", (128, 128), (100 + index*5, 120, 140)).save(photos / filename)
+            entries.append({"filename": filename, "sha256": self._digest(photos / filename),
+                            "dimensions": [128, 128]})
+            # COLMAP world-to-camera R is diag(1,-1,-1). Blender matched-view
+            # orientation is identity: the camera looks along world -Z.
+            poses.append(f"{index} 0 1 0 0 {-center_x} 0.5 2 1 {filename}\n\n")
+        (model / "images.txt").write_text("".join(poses))
+        (source / "undistorted-reference-index.json").write_text(json.dumps({"images": entries}))
+        (source / "reconstruction-report.json").write_text(json.dumps({
+            "status": "candidate / visual-review-required", "registered_images": 3}))
+        self.obj.write_text(
+            f"mtllib {self.mtl.name}\n"
+            "v 0 0 0\nv 1 0 0\nv 1 1 0\nv 0 1 0\n"
+            "vt 0 0\nvt 1 0\nvt 1 1\nvt 0 1\n"
+            "usemtl m0\nf 1/1 2/2 3/3\nf 1/1 3/3 4/4\n")
+        record_path = self.dense / "dense-report.json"
+        record = json.loads(record_path.read_text())
+        record["source_revision"] = str(source)
+        record["textured_obj"]["sha256"] = self._digest(self.obj)
+        record_path.write_text(json.dumps(record))
+        return photos
+
+    def test_registered_photo_projection_cli_generates_fusable_and_pinned_uv_observations(self):
+        photos = self._prepare_registered_photo_projection()
+        target = self.root / "projected-views"
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(main(["project-registered-uv-views", "--dense-revision", str(self.dense),
+                                   "--output", str(target), "--views", "3",
+                                   "--atlas-side", "128", "--camera-side", "128",
+                                   "--max-triangles", "100"]), 0)
+        report = json.loads((target / "uv-projection-report.json").read_text())
+        self.assertFalse(report["distribution_allowed"])
+        self.assertEqual(report["triangle_count"], 2)
+        views = report["atlases"][self.atlas.name]["views"]
+        self.assertEqual(len(views), 3)
+        self.assertTrue(all(view["visible_fraction"] > .45 for view in views))
+        self.assertTrue(all(self._digest(target / view["photo"]["path"])
+                            == view["photo"]["sha256"] for view in views))
+        with Image.open(target / views[0]["photo"]["path"]) as observed:
+            self.assertAlmostEqual(observed.getpixel((24, 16))[0], 105, delta=3)
+        recipe = target / "surface-recipe.example.json"
+        finished = self.root / "finished-projected-views"
+        result = finish_dense_textures(self.dense, finished,
+                                       TextureFinishSettings(surface_recipe=str(recipe),
+                                                             surface_multiview_strength=1))
+        self.assertEqual(result["surface_maps"][0]["quality"]["multiview"]["view_count"], 3)
+        self.assertGreater(result["surface_maps"][0]["quality"]["multiview"]
+                           ["independently_covered_fraction"], .4)
+        self.assertEqual(self._digest(photos / "registered-01.jpg"),
+                         views[0]["source_photo_sha256"])
+
+    def test_registered_photo_projection_refuses_changed_camera_evidence_before_output(self):
+        photos = self._prepare_registered_photo_projection()
+        (photos / "registered-02.jpg").write_bytes(b"tampered")
+        output = self.root / "tampered-projection"
+        with self.assertRaisesRegex(ReferenceError, "Rectified photo changed"):
+            project_registered_photos_to_uv(self.dense, output, atlas_side=128,
+                                           camera_side=128, max_triangles=100)
+        self.assertFalse(output.exists())
+
+    def test_registered_photo_projection_rejects_hash_pinned_undecodable_photo(self):
+        photos = self._prepare_registered_photo_projection()
+        photo = photos / "registered-03.jpg"
+        photo.write_bytes(b"not actually a JPEG")
+        index = photos.parent.parent / "undistorted-reference-index.json"
+        entries = json.loads(index.read_text())
+        entries["images"][2]["sha256"] = self._digest(photo)
+        index.write_text(json.dumps(entries))
+        output = self.root / "invalid-photo-projection"
+        with self.assertRaisesRegex(ReferenceError, "not a decodable image"):
+            project_registered_photos_to_uv(self.dense, output,
+                                           atlas_side=128, camera_side=128,
+                                           max_triangles=100)
+        self.assertFalse(output.exists())
+
+    def test_registered_photo_projection_rejects_malformed_obj_numbers(self):
+        self._prepare_registered_photo_projection()
+        self.obj.write_text(self.obj.read_text().replace("v 0 0 0", "v bad 0 0"))
+        report_path = self.dense / "dense-report.json"
+        report = json.loads(report_path.read_text())
+        report["textured_obj"]["sha256"] = self._digest(self.obj)
+        report_path.write_text(json.dumps(report))
+        output = self.root / "invalid-obj-projection"
+        with self.assertRaisesRegex(ReferenceError, "invalid vertices"):
+            project_registered_photos_to_uv(self.dense, output,
+                                           atlas_side=128, camera_side=128,
+                                           max_triangles=100)
+        self.assertFalse(output.exists())
+
+    def test_registered_photo_projection_will_not_write_inside_source_photo_revision(self):
+        photos = self._prepare_registered_photo_projection()
+        output = photos.parent.parent / "generated-observations"
+        with self.assertRaisesRegex(ReferenceError, "outside both source revisions"):
+            project_registered_photos_to_uv(self.dense, output, atlas_side=128,
+                                           camera_side=128, max_triangles=100)
+        self.assertFalse(output.exists())
+
+    def test_camera_depth_rejects_occluded_uv_face(self):
+        import numpy as np
+
+        camera = {"location_colmap": (0.5, 0.5, 2),
+                  "rotation_3x3": [[1, 0, 0], [0, 1, 0], [0, 0, 1]],
+                  "intrinsics": {"width": 128, "height": 128,
+                                 "fx_px": 90, "fy_px": 90, "cx_px": 64, "cy_px": 64},
+                  "source_photo_path": str(self.root / "depth-photo.png")}
+        Image.new("RGB", (128, 128), (210, 120, 80)).save(camera["source_photo_path"])
+        # Identical projected surfaces at two depths but disjoint UV islands.
+        # The front triangle owns the left half; the back triangle cannot
+        # contribute visible evidence to the right half.
+        triangles = [
+            _Triangle("atlas.png", ((0, 0, .3), (1, 0, .3), (0, 1, .3)),
+                      ((0, 0), (.5, 0), (0, 1))),
+            _Triangle("atlas.png", ((0, 0, 0), (1, 0, 0), (0, 1, 0)),
+                      ((.5, 0), (1, 0), (.5, 1))),
+        ]
+        result, counts = _project_view(triangles, camera, {"atlas.png": (128, 128)},
+                                       camera_side=128, np=np, Image=Image)
+        mask = result["atlas.png"][1]
+        self.assertGreater(int(np.count_nonzero(mask[:, :64])), 100)
+        self.assertEqual(int(np.count_nonzero(mask[:, 64:])), 0)
+        self.assertGreater(counts["occluded_samples"], 100)
 
     @unittest.skipUnless(os.environ.get("KUMIKI_BLENDER_EXECUTABLE"), "requires real Blender 4.2+")
     def test_real_blender_packs_roughness_and_height_and_exports_glb(self):

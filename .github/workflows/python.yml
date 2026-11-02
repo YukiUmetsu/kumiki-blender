@@ -328,11 +328,15 @@ jobs:
         with:
           python-version: "3.11"
       - name: Install optional composer and image QA dependencies for full-suite tests
-        run: python -m pip install -e '.[composer,qa]'
+        run: python -m pip install -e '.[composer,qa]' 'pytest>=8,<10'
       - name: Run standard-library test suite
         env:
           PYTHONPATH: src
         run: python -m unittest discover -s tests -v
+      - name: Run retained face-analysis pytest coverage
+        env:
+          PYTHONPATH: src
+        run: python -m pytest -q tests/test_face_analysis_*.py
       - name: Compile Python sources
         run: python -m compileall -q src scripts
 
