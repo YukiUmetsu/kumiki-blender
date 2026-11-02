@@ -69,8 +69,10 @@ def _bake_one(bpy: Any, high: Any, low: Any, target: Path,
     _deselect(bpy)
     low.select_set(True)
     bpy.context.view_layer.objects.active = low
-    if low.data.uv_layers:
-        low.data.uv_layers.clear()
+    # Blender's bpy_prop_collection has no .clear() in supported 4.x releases.
+    # Remove from the end because removing a UV layer reindexes the collection.
+    while low.data.uv_layers:
+        low.data.uv_layers.remove(low.data.uv_layers[-1])
     bpy.ops.object.mode_set(mode="EDIT")
     bpy.ops.mesh.select_all(action="SELECT")
     result = bpy.ops.uv.smart_project(island_margin=0.02)
