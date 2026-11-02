@@ -9,6 +9,29 @@ reconstruction or proof of historical likeness.
 
 ## 1. Prepare the anatomical base
 
+- **Quick start: build our reproducible CC0 anatomical starter head.** The
+  `makehuman-neutral-head` catalog entry uses MakeHuman's *official core
+  graphical basemesh*, not a generated primitive face. The CLI verifies a
+  pinned upstream commit and exact OBJ SHA-256 before Blender can run:
+
+  ```bash
+  # Downloads the one approved upstream file to .review/source-cache/.
+  PYTHONPATH=src python3 -m kumiki_blender catalog build makehuman-neutral-head \
+    --revision r01
+
+  # Offline alternative if you already have the exact official base.obj:
+  PYTHONPATH=src python3 -m kumiki_blender prepare-makehuman-head \
+    --source-obj /path/to/base.obj \
+    --output .review/characters/people/makehuman-neutral-head/r02
+  ```
+
+  Both produce an editable `source.blend`, portable `model.glb`, front/profile
+  and three-quarter previews, `manifest.json`, plus a ready-to-use
+  `head-provenance.json`. **This is an anatomically recognizable neutral head,
+  not a likeness to an individual or a finished statue.** It has a planar
+  closed neck cut suitable for further sculpting. Use Blender 4.2+ and expect
+  an explicit download only with the catalog build or `--download`.
+
 - Create/export a *neutral, static* human-head mesh from an established tool
   such as [MakeHuman / MPFB](https://www.makehumancommunity.org/) (its **core
   exported graphical assets** are CC0). A licensed artist-authored mesh or an
@@ -25,6 +48,15 @@ reconstruction or proof of historical likeness.
   for the actual source, with verified `redistribution_allowed: true`. A pinned
   `expected_sha256` is recommended. Restricted meshes may be inspected privately
   elsewhere but **cannot** go through this publication-ready importer.
+
+The official head source is
+[`makehuman/data/3dobjs/base.obj`](https://github.com/makehumancommunity/makehuman/blob/a8bc2d54ff0ac92e78ff71431b1023eda42bf482/makehuman/data/3dobjs/base.obj)
+at commit `a8bc2d54ff0ac92e78ff71431b1023eda42bf482`, SHA-256
+`8e761e6624b8f54536409135d1636da63b32486a90d4897f84e121d144f6fb4c`.
+Its header explicitly declares CC0, consistent with MakeHuman's
+[published graphical asset licensing](https://www.makehumancommunity.org/about/license.html).
+That license applies to this core graphical base, **not automatically to
+community add-on meshes or executable MakeHuman code**.
 
 ## 2. Measure the monument before fitting
 
@@ -47,6 +79,12 @@ Include depth from genuine front/profile/three-quarter measurements; a single
 The [reference reconstruction pipeline](REFERENCE_RECONSTRUCTION.md) supplies
 registered cameras and existing silhouette/landmark QA. Independent survey
 data, scans and artist-confirmed multi-view correspondences remain important.
+
+For the catalog-built starter, use `model.glb` from its revision as
+`source_glb`, `head-provenance.json` as `source_provenance`, and the mesh name
+`Head and neck / editable original surface`. Set `source_front_axis` to `-Y`.
+Provide your own measured landmark coordinates; the starter contains no
+monument-specific landmark placements.
 
 - `fit_mode: rigid` applies only a **proper rotation, positive uniform scale and
   translation**; it preserves the base anatomy exactly.
@@ -92,6 +130,6 @@ calling any result photo-faithful.
   and high-resolution evidence; a fitted human head alone is not a statue.
 - The Great Sphinx's eroded historical geometry is a poor match for a generic
   modern head. Prefer a verified archaeological scan or multi-view survey first.
-- Future work: integrate a reviewed CC0 base-head asset catalog and a tightly
-  constrained 2D/3D landmark authoring UI, plus in-repo multi-angle acceptance
+- Future work: integrate a tightly constrained 2D/3D landmark authoring UI,
+  higher-detail independently licensed sculpt bases and multi-angle acceptance
   fixtures for each monument. No external binary is bundled in this PR.

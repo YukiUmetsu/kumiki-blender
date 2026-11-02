@@ -1,3 +1,6 @@
+Warning: truncated output (original token count: 12286)
+Total output lines: 787
+
 """Command-line entry point for headless asset validation and building."""
 
 from __future__ import annotations
@@ -31,6 +34,7 @@ from .render_profiles import RenderProfileError
 from .revision_audit import RevisionAuditError, audit_revision
 from .surfaces import SurfaceError
 from .reconstruction.head_base import HeadFitError
+from .head_sources.makehuman import MakeHumanSourceError
 from .vintage_biplane import make_biplane
 
 
@@ -189,6 +193,17 @@ def main(argv: list[str] | None = None) -> int:
         if command == "build-head-base":
             head_parser.add_argument("--output", type=Path, required=True)
             head_parser.add_argument("--blender", default="blender")
+    makehuman_parser = subcommands.add_parser(
+        "prepare-makehuman-head", help="Prepare an official, pinned CC0 MakeHuman head base")
+    makehuman_input = makehuman_parser.add_mutually_exclusive_group(required=True)
+    makehuman_input.add_argument("--source-obj", type=Path,
+                                 help="Previously downloaded official MakeHuman base.obj (exact hash required)")
+    makehuman_input.add_argument("--download", action="store_true",
+                                 help="Explicitly download the pinned CC0 source to a local cache")
+    makehuman_parser.add_argument("--cache", type=Path,
+                                  default=Path(".review/source-cache/makehuman/base.obj"))
+    makehuman_parser.add_argument("--output", type=Path, required=True)
+    makehuman_parser.add_argument("--blender", default="blender")
     source_parser = subcommands.add_parser("inspect-asset")
     source_parser.add_argument("--input", type=Path, required=True)
     texture_parser = subcommands.add_parser("inspect-texture-packs")
@@ -202,6 +217,35 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     try:
+        if args.command == "prepare-makehuman-head":
+            from .head_sources.makehuman import (fetch_makehuman_obj,
+                                                 load_body_mesh, verify_makehuman_obj)
+            output = args.output.resolve()
+            if output.exists() or args.output.is_symlink():
+                raise MakeHumanSourceError(f"Output revision already exists: {output}")
+            source = (fetch_makehuman_obj(args.cache) if args.download
+                      else verify_makehuman_obj(args.source_obj))
+            vertices, faces = load_body_mesh(source)
+            if len(vertices) < 10000 or len(faces) < 10000:
+                raise MakeHumanSourceError("Unexpectedly sparse official body topology")
+            try:
+                import bpy  # type: ignore[import-not-found]
+            except ImportError:
+                executable = shutil.which(args.blender)
+                if executable is None:
+                    raise RuntimeError(f"Blender executable not found: {args.blender}")
+                entry = Path(__file__).resolve().parents[2] / "scripts/blender_entry.py"
+                if not entry.is_file():
+                    raise RuntimeError("Blender build requires scripts/blender_entry.py from a source checkout")
+                completed = subprocess.run([
+                    executable, "--background", "--factory-startup", "--python-exit-code", "1",
+                    "--python", str(entry), "--", "prepare-makehuman-head",
+                    "--source-obj", str(source.path), "--output", str(output),
+                ], check=False)
+                return completed.returncode
+            from .blender_head_sources import build_makehuman_head
+            print(json.dumps(build_makehuman_head(source, output, bpy_module=bpy), indent=2))
+            return 0
         if args.command in ("plan-head-base", "build-head-base"):
             from .reconstruction.head_base import (
                 fit_head_landmarks, head_deformation_field, load_head_fit_plan,
@@ -332,24 +376,7 @@ def main(argv: list[str] | None = None) -> int:
                 )
             except VisualQAError as error:
                 raise RecipeError(str(error)) from error
-            print(json.dumps(report, indent=2))
-            return 3 if report["status"] == "review-required" else 0
-        if args.command in ("plan-asset", "compile-asset", "build-asset", "asset-schema"):
-            if args.command == "build-asset" and args.plan is not None:
-                # This branch is intentionally safe inside Blender 4.5's
-                # stock Python, where Pydantic and pydantic-core aren't present.
-                from .compiled_plan import CompiledPlanError, load_compiled_plan
-                try:
-                    spec, plan = load_compiled_plan(args.plan)
-                except CompiledPlanError as error:
-                    raise RecipeError(str(error)) from error
-                texture_packs = (load_texture_packs(args.texture_packs)
-                                 if args.texture_packs else ())
-                verify_texture_targets(list(spec.materials), texture_packs)
-                for assignment in texture_packs:
-                    if spec.materials[assignment.target].preset == "optical-glass":
-                        raise RecipeError("Texture packs cannot replace optical-glass transmission materials")
-                output = args.output.resolve()
+            print(json.dumps…286 tokens truncated…            output = args.output.resolve()
                 if output.exists() or output.is_symlink():
                     raise RecipeError(f"Output already exists: {output}. Choose a new revision directory.")
                 try:
@@ -736,7 +763,7 @@ def main(argv: list[str] | None = None) -> int:
         manifest = build_scene(recipe, plan, output, bpy_module=bpy)
         print(json.dumps(manifest, indent=2))
         return 0
-    except (CatalogError, RecipeError, PorticoError, FacadeError, MonumentError, GeometryError, AssetImportError, HeadFitError, RenderProfileError, RevisionAuditError, AuditError, ExportAuditError,
+    except (CatalogError, RecipeError, PorticoError, FacadeError, MonumentError, GeometryError, AssetImportError, HeadFitError, MakeHumanSourceError, RenderProfileError, RevisionAuditError, AuditError, ExportAuditError,
             SurfaceError, RuntimeError, OSError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 2

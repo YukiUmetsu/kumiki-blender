@@ -146,6 +146,20 @@ jobs:
           blender --background --factory-startup --threads 2 --python-exit-code 1 \
             --python scripts/smoke_head_base.py -- .review/ci/anatomical-head
           python -m kumiki_blender audit-revision --root .review/ci/anatomical-head
+      - name: Prepare and independently inspect a real official CC0 human head
+        env:
+          KUMIKI_RENDER_PROFILE: smoke
+        run: |
+          mkdir -p .review/ci/makehuman-source
+          curl --fail --location --retry 3 \
+            "https://raw.githubusercontent.com/makehumancommunity/makehuman/a8bc2d54ff0ac92e78ff71431b1023eda42bf482/makehuman/data/3dobjs/base.obj" \
+            --output .review/ci/makehuman-source/base.obj
+          python -m kumiki_blender prepare-makehuman-head \
+            --source-obj .review/ci/makehuman-source/base.obj \
+            --output .review/ci/makehuman-head
+          blender --background --factory-startup --threads 2 --python-exit-code 1 \
+            --python scripts/smoke_makehuman_head.py -- .review/ci/makehuman-head
+          python -m kumiki_blender audit-revision --root .review/ci/makehuman-head
       - name: Audit portable GLB and immutable revision
         env:
           PYTHONPATH: src
@@ -205,6 +219,13 @@ jobs:
           path: |
             .review/ci/anatomical-head/
             .review/ci/synthetic-anatomical-base-input/
+          if-no-files-found: warn
+      - name: Upload verified CC0 head mesh and anatomical QA views
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: makehuman-head-base-qa
+          path: .review/ci/makehuman-head/
           if-no-files-found: warn
 
   tests:
