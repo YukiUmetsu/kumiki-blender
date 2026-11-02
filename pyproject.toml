@@ -14,6 +14,8 @@ dependencies = []
 
 [project.optional-dependencies]
 reconstruction = ["numpy>=1.26", "scipy>=1.11"]
+preview = ["numpy>=1.26", "trimesh>=4.5"]
+qa = ["numpy>=1.26", "trimesh>=4.5", "vtk>=9.2"]
 
 [project.scripts]
 kumiki-blender = "kumiki_blender.cli:main"
