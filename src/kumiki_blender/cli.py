@@ -181,6 +181,10 @@ def main(argv: list[str] | None = None) -> int:
                                   help="OpenMVS pre-refinement face retention; 1 preserves high-poly detail")
         dense_parser.add_argument("--texture-decimate", type=float, default=1.0,
                                   help="OpenMVS texture OBJ face retention; lower for faster atlas LOD while PLY stays high-poly")
+        dense_parser.add_argument("--no-global-seam-leveling", action="store_true",
+                                  help="OpenMVS: disable global texture seam equalization if it creates dark artifacts")
+        dense_parser.add_argument("--no-local-seam-leveling", action="store_true",
+                                  help="OpenMVS: disable local texture seam blending if it creates dark artifacts")
         dense_parser.add_argument("--timeout-seconds", type=int, default=7200)
         dense_parser.add_argument("--no-refine", action="store_true",
                                   help="OpenMVS: skip refined topology")
@@ -210,6 +214,8 @@ def main(argv: list[str] | None = None) -> int:
                                     help="Normalized per-photo include/exclude polygons JSON")
     refine_mask_parser.add_argument("--min-island-pixels", type=int, default=0)
     refine_mask_parser.add_argument("--max-hole-pixels", type=int, default=0)
+    refine_mask_parser.add_argument("--edge-inset-pixels", type=int, default=0,
+                                    help="Optional 1–8 pixel contour inset to reduce background edge halos")
     texture_finish_parser = subcommands.add_parser(
         "finish-dense-textures", help="Non-destructive UV-atlas exposure, shadow and cast correction")
     texture_finish_parser.add_argument("--dense-revision", type=Path, required=True)
@@ -318,7 +324,8 @@ def main(argv: list[str] | None = None) -> int:
                 report = refine_rectified_masks(
                     args.reconstruction, args.mask_revision, args.output,
                     edits=args.edits, min_island_pixels=args.min_island_pixels,
-                    max_hole_pixels=args.max_hole_pixels)
+                    max_hole_pixels=args.max_hole_pixels,
+                    edge_inset_pixels=args.edge_inset_pixels)
             except ReferenceError as error:
                 raise RecipeError(str(error)) from error
             print(json.dumps(report, indent=2))
@@ -401,6 +408,8 @@ def main(argv: list[str] | None = None) -> int:
                     max_resolution=args.max_resolution, number_views=args.number_views,
                     refine_decimate=args.refine_decimate,
                     texture_decimate=args.texture_decimate,
+                    texture_global_seam_leveling=not args.no_global_seam_leveling,
+                    texture_local_seam_leveling=not args.no_local_seam_leveling,
                     refine=not args.no_refine, texture=not args.no_texture)
                 report = (plan_dense_reconstruction(args.reconstruction, args.output, settings,
                                                     rectified_masks=args.rectified_masks)

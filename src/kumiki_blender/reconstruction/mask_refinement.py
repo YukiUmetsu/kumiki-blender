@@ -88,16 +88,31 @@ def _paint_polygons(binary: Any, edits: dict[str, Any]) -> Any:
     return result
 
 
+def _inset_mask(binary: Any, pixels: int) -> Any:
+    """Optional conservative contour inset to avoid reconstructing edge halos."""
+    if not pixels:
+        return binary
+    import cv2  # type: ignore[import-not-found]
+
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE,
+                                      (2*pixels+1, 2*pixels+1))
+    return cv2.erode(binary, kernel, iterations=1, borderType=cv2.BORDER_CONSTANT,
+                     borderValue=0)
+
+
 def refine_rectified_masks(reconstruction: str | Path, mask_revision: str | Path,
                            output: str | Path, *, edits: str | Path | None = None,
                            min_island_pixels: int = 0,
-                           max_hole_pixels: int = 0) -> dict[str, Any]:
+                           max_hole_pixels: int = 0,
+                           edge_inset_pixels: int = 0) -> dict[str, Any]:
     """Create a new hash-pinned mask revision and before/after QA contact sheet."""
     for key, value in (("min_island_pixels", min_island_pixels),
                        ("max_hole_pixels", max_hole_pixels)):
         if type(value) is not int or not 0 <= value <= 100_000:
             raise ReferenceError(f"{key} must be an integer from 0 to 100000")
-    if edits is None and not (min_island_pixels or max_hole_pixels):
+    if type(edge_inset_pixels) is not int or not 0 <= edge_inset_pixels <= 8:
+        raise ReferenceError("edge_inset_pixels must be an integer from 0 to 8")
+    if edits is None and not (min_island_pixels or max_hole_pixels or edge_inset_pixels):
         raise ReferenceError("Mask refinement needs edits or a positive cleanup threshold")
     try:
         import cv2  # noqa: F401  # type: ignore[import-not-found]
@@ -162,6 +177,7 @@ def refine_rectified_masks(reconstruction: str | Path, mask_revision: str | Path
         "edits_sha256": edits_sha,
         "min_island_pixels": min_island_pixels,
         "max_hole_pixels": max_hole_pixels,
+        "edge_inset_pixels": edge_inset_pixels,
         "approved_for_reconstruction": False,
         "status": "incomplete / manual-mask-review-required",
         "images": [],
@@ -178,6 +194,9 @@ def refine_rectified_masks(reconstruction: str | Path, mask_revision: str | Path
             before = np.asarray(original.convert("L"))
             refined = _clean_mask(before, min_island_pixels=min_island_pixels,
                                   max_hole_pixels=max_hole_pixels)
+            refined = _inset_mask(refined, edge_inset_pixels)
+            # Inclusions happen after the inset, so a thin hair/arm can be
+            # selectively restored rather than permanently eroded.
             refined = _paint_polygons(refined, edits_map.get(name, {}))
             if not refined.any() or np.all(refined == 255):
                 report.update(failed_image=name, error="Refinement erased subject/background")

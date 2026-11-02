@@ -153,6 +153,8 @@ class DenseMvsTests(unittest.TestCase):
         self.assertEqual(refinement[refinement.index("--decimate") + 1], "1.0")
         texturing = report["commands"][4]["argv"]
         self.assertEqual(texturing[texturing.index("--decimate") + 1], "1.0")
+        self.assertEqual(texturing[texturing.index("--global-seam-leveling") + 1], "1")
+        self.assertEqual(texturing[texturing.index("--local-seam-leveling") + 1], "1")
         self.assertEqual(len(list((output / "logs").glob("*.log"))), 5)
         self.assertEqual(json.loads((output / "dense-report.json").read_text()), report)
         self.assertTrue((output / "workspace/scene_dense_mesh_refined_texture.obj").is_file())
@@ -182,7 +184,9 @@ class DenseMvsTests(unittest.TestCase):
                         {"max_resolution": 100}, {"number_views": 1},
                         {"number_views": 100}, {"refine_decimate": 1.2},
                         {"refine_decimate": 0.0}, {"refine_decimate": True},
-                        {"texture_decimate": 1.5}, {"texture_decimate": 0.0}):
+                        {"texture_decimate": 1.5}, {"texture_decimate": 0.0},
+                        {"texture_global_seam_leveling": 1},
+                        {"texture_local_seam_leveling": "false"}):
             with self.subTest(changed=changed), self.assertRaises(ReferenceError):
                 DenseSettings(**changed).validate()
         output = self.root / "dense-quality"
@@ -376,7 +380,9 @@ class DenseMvsTests(unittest.TestCase):
                                                 executables=self.executables)
         self.assertEqual(failed["failed_stage"], "texture")
         retried = build_dense_reconstruction(
-            self.sparse, output, DenseSettings(texture_decimate=0.25),
+            self.sparse, output, DenseSettings(texture_decimate=0.25,
+                                               texture_global_seam_leveling=False,
+                                               texture_local_seam_leveling=False),
             executables=self.executables, resume=True)
         self.assertTrue(retried["status"].startswith("dense-mesh-candidate"), retried)
         self.assertEqual(retried["texture_decimate"], 0.25)
@@ -385,6 +391,10 @@ class DenseMvsTests(unittest.TestCase):
         self.assertEqual(retried["mesh"]["faces"], 1900)
         texture_step = retried["commands"][-1]["argv"]
         self.assertEqual(texture_step[texture_step.index("--decimate")+1], "0.25")
+        self.assertEqual(texture_step[texture_step.index("--global-seam-leveling")+1], "0")
+        self.assertEqual(texture_step[texture_step.index("--local-seam-leveling")+1], "0")
+        self.assertFalse(retried["texture_global_seam_leveling"])
+        self.assertFalse(retried["texture_local_seam_leveling"])
 
     def test_failed_texture_can_finish_raw_mesh_without_claiming_atlas(self):
         output = self.root / "raw-after-texture-failure"
@@ -413,9 +423,16 @@ class DenseMvsTests(unittest.TestCase):
         output = self.root / "cli"
         with patch("kumiki_blender.reconstruction.dense.shutil.which",
                    side_effect=lambda name: self.executables.get(name)):
-            with contextlib.redirect_stdout(io.StringIO()):
+            plan_stdout = io.StringIO()
+            with contextlib.redirect_stdout(plan_stdout):
                 self.assertEqual(main(["plan-dense-photos", "--reconstruction", str(self.sparse),
-                                       "--output", str(output)]), 0)
+                                       "--output", str(output),
+                                       "--no-global-seam-leveling",
+                                       "--no-local-seam-leveling"]), 0)
+            planned = json.loads(plan_stdout.getvalue())
+            self.assertFalse(planned["texture_global_seam_leveling"])
+            self.assertFalse(planned["texture_local_seam_leveling"])
+            with contextlib.redirect_stdout(io.StringIO()):
                 self.assertFalse(output.exists())
                 self.assertEqual(main(["build-dense-photos", "--reconstruction", str(self.sparse),
                                        "--output", str(output)]), 0)

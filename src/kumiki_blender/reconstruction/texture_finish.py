@@ -45,13 +45,26 @@ class TextureFinishSettings:
         return self
 
 
-def _sample_luminance(photo: Any, protect_black: int) -> float | None:
-    from PIL import Image, ImageStat
+def _valid_texel_sample(photo: Any, protect_black: int) -> tuple[Any, Any, Any]:
+    from PIL import Image, ImageChops
 
-    sample = photo.convert("RGB")
+    sample = photo.copy()
     sample.thumbnail((768, 768), Image.Resampling.BILINEAR)
-    gray = sample.convert("L")
+    rgb = sample.convert("RGB")
+    gray = rgb.convert("L")
     valid = gray.point(lambda value: 255 if value >= max(16, protect_black) else 0)
+    if "A" in sample.getbands() or "transparency" in sample.info:
+        # Transparent white padding is just as uncovered as black padding.
+        alpha = sample.convert("RGBA").getchannel("A")
+        opaque = alpha.point(lambda value: 255 if value >= 128 else 0)
+        valid = ImageChops.multiply(valid, opaque)
+    return rgb, gray, valid
+
+
+def _sample_luminance(photo: Any, protect_black: int) -> float | None:
+    from PIL import ImageStat
+
+    _rgb, gray, valid = _valid_texel_sample(photo, protect_black)
     if not valid.getbbox():
         return None
     return ImageStat.Stat(gray, valid).mean[0]
@@ -62,11 +75,8 @@ def _atlas_correction(photo: Any, settings: TextureFinishSettings, *,
     from PIL import Image, ImageEnhance, ImageStat
 
     original = photo.convert("RGB")
-    sample = original.copy()
-    sample.thumbnail((768, 768), Image.Resampling.BILINEAR)
-    sample_gray = sample.convert("L")
-    # OpenMVS may leave black/uncovered texels. Do not estimate color from them.
-    valid = sample_gray.point(lambda value: 255 if value >= max(settings.protect_black, 16) else 0)
+    # Ignore both black padding and transparent padding when estimating color.
+    sample, sample_gray, valid = _valid_texel_sample(photo, settings.protect_black)
     stats = ImageStat.Stat(sample, valid)
     gains = [1.0, 1.0, 1.0]
     if settings.neutralize_cast and valid.getbbox():
@@ -93,20 +103,21 @@ def _atlas_correction(photo: Any, settings: TextureFinishSettings, *,
     matte = original.convert("L").point(
         lambda value: max(0, min(255, round((value - threshold) * 255 / 20))))
     corrected = Image.composite(corrected, original, matte)
-    dark_pixels = sum(sample_gray.histogram()[:max(threshold, 16)])
     count = sample_gray.width * sample_gray.height
+    valid_pixels = valid.histogram()[255]
+    invalid_pixels = count - valid_pixels
     after_sample = corrected.copy()
     after_sample.thumbnail((768, 768), Image.Resampling.BILINEAR)
-    highlight_pixels = sum(after_sample.convert("L").histogram()[250:])
+    highlight_pixels = sum(after_sample.convert("L").histogram(mask=valid)[250:])
+    highlight_fraction = highlight_pixels / max(1, valid_pixels)
     warnings = []
-    if dark_pixels / count > 0.1:
-        warnings.append("High proportion of dark/possibly uncovered texels; correction cannot recover detail")
-    if highlight_pixels / (after_sample.width*after_sample.height) > 0.1:
+    if invalid_pixels / count > 0.1:
+        warnings.append("High proportion of dark/transparent uncovered texels; correction cannot recover detail")
+    if highlight_fraction > 0.1:
         warnings.append("Bright texture clipping exceeds 10%; lower exposure or shadow lift")
     return corrected, {
-        "approx_uncovered_dark_fraction": round(dark_pixels / count, 5),
-        "approx_highlight_clip_fraction_after": round(
-            highlight_pixels / (after_sample.width*after_sample.height), 5),
+        "approx_uncovered_dark_fraction": round(invalid_pixels / count, 5),
+        "approx_highlight_clip_fraction_after": round(highlight_fraction, 5),
         "sampled_mean_rgb": [round(x, 2) for x in stats.mean[:3]],
         "neutralization_gains": [round(x, 5) for x in gains],
         "atlas_balance_ev": round(balance_ev, 5),

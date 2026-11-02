@@ -51,7 +51,9 @@ arbitrary unrelated web photos. For outdoor background contamination, use
 silhouettes, or `[mask-ai]` for optional local semantic background inference,
 and inspect the red overlays before dense MVS. Use `refine-dense-masks` to
 remove tiny mask artifacts and hand-correct individual rectified views with
-normalized include/exclude polygons in a new private revision. For projected
+normalized include/exclude polygons or a cautious contour inset in a new
+private revision. OpenMVS seam-leveling can be toggled when a specific build
+produces dark texture patches. For projected
 texture darkness, broad color cast or exposure mismatch between atlas pages,
 `finish-dense-textures --balance-atlases` creates a separately SHA-pinned
 exposure/gamma/white-balance atlas revision; import it

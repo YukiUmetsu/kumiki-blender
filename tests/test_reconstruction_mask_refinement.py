@@ -106,14 +106,35 @@ class MaskRefinementTests(unittest.TestCase):
                                    min_island_pixels=10)
         self.assertFalse(target.exists())
 
+    def test_optional_boundary_inset_removes_background_halo_and_can_restore_details(self):
+        target = self.root / "inset-r02"
+        edits = self.root / "restore.json"
+        edits.write_text(json.dumps({"images": {"view-00.jpg": {
+            "include_polygons": [[[0.19, 0.35], [0.22, 0.35],
+                                  [0.22, 0.45], [0.19, 0.45]]]
+        }}}))
+        report = refine_rectified_masks(self.sparse, self.source_masks, target,
+                                        edge_inset_pixels=2, edits=edits)
+        self.assertEqual(report["edge_inset_pixels"], 2)
+        with Image.open(target / "masks/view-00.jpg.mask.png") as refined:
+            self.assertEqual(refined.getpixel((20, 30)), 255)  # manually restored edge
+            self.assertEqual(refined.getpixel((20, 50)), 0)  # excluded halo
+            self.assertEqual(refined.getpixel((25, 50)), 255)  # inner sculpture intact
+        with self.assertRaisesRegex(ReferenceError, "edge_inset_pixels"):
+            refine_rectified_masks(self.sparse, self.source_masks, self.root / "bad-inset",
+                                   edge_inset_pixels=9)
+
     def test_cli_refine_masks_and_reject_invalid_settings(self):
         target = self.root / "cli-r02"
         with contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(main(["refine-dense-masks", "--reconstruction", str(self.sparse),
                                    "--mask-revision", str(self.source_masks),
                                    "--output", str(target),
-                                   "--min-island-pixels", "10"]), 0)
+                                   "--min-island-pixels", "10",
+                                   "--edge-inset-pixels", "1"]), 0)
         self.assertTrue((target / "mask-report.json").is_file())
+        self.assertEqual(json.loads((target / "mask-report.json").read_text())[
+            "edge_inset_pixels"], 1)
         with self.assertRaisesRegex(ReferenceError, "min_island_pixels"):
             refine_rectified_masks(self.sparse, self.source_masks, self.root / "bad",
                                    min_island_pixels=-1)

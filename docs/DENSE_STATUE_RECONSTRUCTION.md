@@ -88,7 +88,8 @@ private texture projection to produce a mesh for artistic inspection.
       --mask-revision .review/statue/masks-semantic-r01 \
       --output .review/statue/masks-r02 \
       --edits /private/statue/mask-edits.json \
-      --min-island-pixels 24 --max-hole-pixels 24
+      --min-island-pixels 24 --max-hole-pixels 24 \
+      --edge-inset-pixels 2
 
     # Use only reviewed masks; OpenMVS consumes <rectified-filename>.mask.png.
     kumiki-blender build-dense-photos \
@@ -100,6 +101,14 @@ private texture projection to produce a mesh for artistic inspection.
     kumiki-blender build-dense-photos \
       --reconstruction .review/statue/sparse-r01 \
       --output .review/statue/dense-r01 --backend openmvs
+
+    # Only if OpenMVS creates black/dark texture patches: try a separate
+    # reconstruction with seam leveling disabled and compare in Blender.
+    kumiki-blender build-dense-photos \
+      --reconstruction .review/statue/sparse-r01 \
+      --rectified-masks .review/statue/masks-r02/masks \
+      --output .review/statue/dense-no-seam-r01 --backend openmvs \
+      --no-global-seam-leveling --no-local-seam-leveling
 
     # If the monument has foliage/sky/pedestrians behind it, prepare an
     # exact-size rectified mask for EVERY undistorted registered image:
@@ -181,6 +190,16 @@ modifying the high-poly PLY**. An interrupted texture stage can be resumed
 with a lower texture decimation factor; the immutable dense/mesh stages are
 reused, not recomputed. This does not replace the original high-poly detail
 review or prove that the UV LOD captures thin features.
+OpenMVS already performs global and local texture seam leveling by default.
+Its upstream [2.4.0 black-patch regression](https://github.com/cdcseacave/openMVS/issues/1251)
+can make otherwise usable masked textures appear black; first try a newer
+fixed build. If necessary, use `--no-global-seam-leveling` and/or
+`--no-local-seam-leveling` for a **new private reconstruction revision**.
+Both options are recorded in the report and may change during `--resume`
+only when the texture stage failed. Disabling leveling may restore colored
+surfaces but increase UV seams; compare textured Blender reviews.
+Post-hoc exposure correction cannot repair black texture patches created
+during projection.
 Rectified mask files must be genuine grayscale PNGs (binary 0/255, both
 present, exact dimensions), with exact `<photo filename>.mask.png` names.
 `prepare-dense-masks` generates those files with an `approved_for_reconstruction:
@@ -207,6 +226,10 @@ immutable candidate revision with change counts and QA contact sheet, and
 OpenMVS to the new revision's `masks/` directory. Refine bad images
 in a **new output revision**; masks
 that include trees or truncate the statue produce contaminated geometry.
+`--edge-inset-pixels 1..8` is an optional inward contour erosion to trim
+background-colored halos. It may also erase thin hair or fingers: start with
+1–2 pixels, inspect contours at full resolution, and restore essential details
+using inclusion polygons (applied after the inset).
 They are SHA-pinned, copied only into the private MVS workspace, checked on
 resume, and remain absent from Git. Do **not** reuse original distorted-image
 masks by simply resizing them: regenerate/warp them in the exact rectified
@@ -268,7 +291,7 @@ optional sampled cast-neutralization and shadow lift to an independent
 OBJ/MTL/atlas revision; it protects near-black/uncovered atlas texels and
 reports their approximate coverage and highlight-clipping warnings. With
 `--balance-atlases`, it additionally matches approximate exposure across
-**multiple atlas pages** using valid non-black pixels, capped by
+**multiple atlas pages** using valid non-black, non-transparent texels, capped by
 `--max-balance-ev` (default 0.75 EV). A single page is left unchanged by
 that option. It also writes original/corrected side-by-side
 `review/` previews. All original source files, UVs and face

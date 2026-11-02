@@ -15,7 +15,7 @@ from kumiki_blender.cli import main
 from kumiki_blender.reconstruction.blender_dense import plan_dense_blender_review
 from kumiki_blender.reconstruction.references import ReferenceError
 from kumiki_blender.reconstruction.texture_finish import (
-    TextureFinishSettings, finish_dense_textures,
+    TextureFinishSettings, _atlas_correction, _sample_luminance, finish_dense_textures,
 )
 
 
@@ -166,6 +166,15 @@ class TextureFinishTests(unittest.TestCase):
         planned = plan_dense_blender_review(self.dense, self.root / "review", textured=True,
                                             texture_finish=destination)
         self.assertEqual(len(planned["texture_atlases"]), 2)
+
+    def test_atlas_balance_excludes_transparent_white_padding(self):
+        transparent = Image.new("RGBA", (64, 64), (255, 255, 255, 0))
+        transparent.paste((80, 80, 80, 255), (16, 16, 48, 48))
+        self.assertAlmostEqual(_sample_luminance(transparent, 12), 80.0, places=2)
+        _result, diagnostics = _atlas_correction(transparent, TextureFinishSettings())
+        self.assertEqual(diagnostics["approx_highlight_clip_fraction_after"], 0)
+        blank = Image.new("RGBA", (64, 64), (255, 255, 255, 0))
+        self.assertIsNone(_sample_luminance(blank, 12))
 
 
 if __name__ == "__main__":

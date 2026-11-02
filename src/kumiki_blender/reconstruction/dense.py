@@ -37,6 +37,8 @@ class DenseSettings:
     number_views: int = 5
     refine_decimate: float = 1.0
     texture_decimate: float = 1.0
+    texture_global_seam_leveling: bool = True
+    texture_local_seam_leveling: bool = True
 
     def validate(self) -> "DenseSettings":
         if self.backend not in ("openmvs", "colmap"):
@@ -67,6 +69,9 @@ class DenseSettings:
                 or not math.isfinite(self.texture_decimate)
                 or not 0 < self.texture_decimate <= 1):
             raise ReferenceError("texture_decimate must be finite in (0,1]; 1 preserves texture faces")
+        if (type(self.texture_global_seam_leveling) is not bool
+                or type(self.texture_local_seam_leveling) is not bool):
+            raise ReferenceError("Texture seam-leveling options must be booleans")
         return self
 
 
@@ -209,6 +214,10 @@ def plan_dense_reconstruction(reconstruction: str | Path, output: str | Path,
         "number_views": settings.number_views if settings.backend == "openmvs" else None,
         "refine_decimate": settings.refine_decimate if settings.backend == "openmvs" else None,
         "texture_decimate": settings.texture_decimate if settings.backend == "openmvs" else None,
+        "texture_global_seam_leveling": (
+            settings.texture_global_seam_leveling if settings.backend == "openmvs" else None),
+        "texture_local_seam_leveling": (
+            settings.texture_local_seam_leveling if settings.backend == "openmvs" else None),
         "status": "preflight-only / dense-and-artistic-review-required",
         "distribution_allowed": False,
         "limitations": "Output is private. Photo rights, monument identity, surface accuracy, scale and topology require independent review.",
@@ -310,6 +319,10 @@ def build_dense_reconstruction(reconstruction: str | Path, output: str | Path,
         if (texture_started and not texture_failed
                 and old_texture_decimate != plan["texture_decimate"]):
             raise ReferenceError("Cannot change the texture budget of a completed stage")
+        for key in ("texture_global_seam_leveling", "texture_local_seam_leveling"):
+            if (texture_started and not texture_failed
+                    and report.get(key, True) != plan[key]):
+                raise ReferenceError("Cannot change seam leveling of a completed texture stage")
         workspace = target / "workspace"
         if not workspace.is_dir() or workspace.is_symlink() or not (target / "logs").is_dir():
             raise ReferenceError("Interrupted dense workspace or logs are missing")
@@ -328,6 +341,8 @@ def build_dense_reconstruction(reconstruction: str | Path, output: str | Path,
         report.update({"status": "review-required", "failed_stage": None,
                        "exit_code": None, "refine_decimate": plan["refine_decimate"],
                        "texture_decimate": plan["texture_decimate"],
+                       "texture_global_seam_leveling": plan["texture_global_seam_leveling"],
+                       "texture_local_seam_leveling": plan["texture_local_seam_leveling"],
                        "refine": plan["refine"], "texture": plan["texture"],
                        "rectified_mask_source": plan["rectified_mask_source"],
                        "rectified_masks": plan["rectified_masks"]})
@@ -418,6 +433,8 @@ def build_dense_reconstruction(reconstruction: str | Path, output: str | Path,
                                                   else "scene_dense_mesh.ply")),
                 "--output-file", str(textured_obj), "--export-type", "obj",
                 "--decimate", str(settings.texture_decimate),
+                "--global-seam-leveling", str(int(settings.texture_global_seam_leveling)),
+                "--local-seam-leveling", str(int(settings.texture_local_seam_leveling)),
                 "--resolution-level", str(settings.resolution_level)]))
         ply = workspace / "scene_dense_mesh.ply"
         # OpenMVS 2.4 normally exports ReconstructMesh/RefineMesh as PLY even
