@@ -41,6 +41,13 @@ jobs:
             tests.test_cli.CLITests.test_sphinx_scan_build_preflights_rights_and_pairs_without_blender \
             tests.test_cli.CLITests.test_sphinx_scan_build_passes_prepared_record_to_blender \
             tests.test_asset_catalog
+      - name: Test camera registration and multiview gates
+        if: github.head_ref == 'feat/christ-redeemer-sculpture'
+        env:
+          PYTHONPATH: src
+        run: |
+          python -m pip install 'numpy>=1.26' 'scipy>=1.11' 'trimesh>=4.5'
+          python -m unittest tests.test_render_ray tests.test_multiview_registration tests.test_sculpt_hair_flow tests.test_face_reconstruction tests.test_sculpt_correction tests.test_head_graft tests.test_jaw_cage tests.test_orthographic_registration tests.test_christ_photo_anchors -v
       - name: Verify categorized 3D asset catalog and source links
         env:
           PYTHONPATH: src
@@ -85,6 +92,39 @@ jobs:
           mkdir -p "$RUNNER_TEMP/blender"
           tar -xf "$archive" -C "$RUNNER_TEMP/blender"
           echo "$RUNNER_TEMP/blender/blender-4.5.15-linux-x64" >> "$GITHUB_PATH"
+      - name: Verify Christ Redeemer camera-to-mesh registration in Blender
+        if: github.head_ref == 'feat/christ-redeemer-sculpture'
+        env:
+          KUMIKI_BLENDER_BINARY: blender
+          PYTHONPATH: src
+        run: python -m unittest tests.test_blender_camera_probe -v
+      - name: Verify experimental facial mesh corrections in Blender
+        if: github.head_ref == 'feat/christ-redeemer-sculpture'
+        env:
+          PYTHONPATH: src
+        run: blender --background --factory-startup --python-exit-code 1 --python tests/blender_face_sculpt_smoke.py
+      - name: Render Christ Redeemer anatomical carved-hair candidate (HOLD)
+        if: github.head_ref == 'feat/christ-redeemer-sculpture'
+        env:
+          PYTHONPATH: src
+          KUMIKI_BLENDER_BINARY: blender
+        run: |
+          python -m unittest tests.test_christ_carved_hair -v
+          blender --background --factory-startup --threads 4 --python-exit-code 1 \
+            --python scripts/landmarks/christ_redeemer.py -- \
+            --head-study --face-method anatomical --carved-hair --verify \
+            --output .review/ci/christ-redeemer/carved-head-HOLD.glb \
+            --blend .review/ci/christ-redeemer/carved-head-HOLD.blend \
+            --metrics .review/ci/christ-redeemer/metrics.json \
+            --views .review/ci/christ-redeemer/views \
+            --shot head_front --shot head_profile --shot head_three_quarter \
+            --shot head_low --size 850 --samples 24
+      - uses: actions/upload-artifact@v4
+        if: always() && github.head_ref == 'feat/christ-redeemer-sculpture'
+        with:
+          name: christ-redeemer-carved-hair-clay-HOLD
+          path: .review/ci/christ-redeemer/
+          if-no-files-found: warn
       - name: Render Egypt relief map (smoke profile, full scene geometry)
         env:
           KUMIKI_RENDER_PROFILE: smoke

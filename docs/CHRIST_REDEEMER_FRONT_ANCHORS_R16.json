@@ -1,0 +1,23 @@
+{
+  "subject_photo_url": "https://cdn.generationvoyage.fr/2025/02/Gros-plan-sur-le-visage-du-Christ-Redempteur-1536x1024.jpeg",
+  "image_size": [1536, 1024],
+  "model_revision": "71621eb2b77c2642f1a8af7980604ac4c125d0a2-guided-hair-r16-HOLD",
+  "annotation_warning": "Approximate hand-picked landmarks; not surveyed, auto-tracked or independently verified. Source photo reference-only; no photo bytes included.",
+  "landmarks": [
+    {"name": "left_eye_outer", "model_uv": [272, 317], "photo_uv": [586, 250]},
+    {"name": "left_eye_inner", "model_uv": [326, 320], "photo_uv": [716, 251]},
+    {"name": "right_eye_inner", "model_uv": [374, 320], "photo_uv": [807, 253]},
+    {"name": "right_eye_outer", "model_uv": [428, 318], "photo_uv": [928, 261]},
+    {"name": "nose_bridge", "model_uv": [350, 348], "photo_uv": [757, 233]},
+    {"name": "nose_tip", "model_uv": [350, 386], "photo_uv": [746, 338]},
+    {"name": "left_nostril", "model_uv": [335, 390], "photo_uv": [712, 353]},
+    {"name": "right_nostril", "model_uv": [365, 390], "photo_uv": [781, 353]},
+    {"name": "mouth_left", "model_uv": [311, 430], "photo_uv": [657, 419]},
+    {"name": "mouth_right", "model_uv": [391, 430], "photo_uv": [833, 433]},
+    {"name": "lip_center", "model_uv": [351, 441], "photo_uv": [750, 422]},
+    {"name": "chin_bottom", "model_uv": [350, 478], "photo_uv": [747, 603]},
+    {"name": "forehead_center", "model_uv": [350, 280], "photo_uv": [762, 169]},
+    {"name": "left_temple", "model_uv": [242, 334], "photo_uv": [563, 279]},
+    {"name": "right_temple", "model_uv": [458, 334], "photo_uv": [961, 300]}
+  ]
+}

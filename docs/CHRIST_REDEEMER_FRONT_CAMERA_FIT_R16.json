@@ -1,0 +1,208 @@
+{
+  "status": "HOLD_camera_bounds",
+  "success": true,
+  "camera_bounds_hit": true,
+  "rms_reprojection_px": 28.738,
+  "max_reprojection_px": 67.384,
+  "image_size": [
+    1536,
+    1024
+  ],
+  "camera": {
+    "target_world_m": [
+      0.266869,
+      -6.136005,
+      34.203337
+    ],
+    "azimuth_deg": 2.03039,
+    "elevation_deg": -9.81231,
+    "roll_deg": 3.5165,
+    "distance_m": 80.0,
+    "focal_px": 16876.4093
+  },
+  "landmarks": [
+    {
+      "name": "left_eye_outer",
+      "photo_uv": [
+        586,
+        250
+      ],
+      "reprojected_uv": [
+        617.5,
+        225.28
+      ],
+      "error_px": 40.04
+    },
+    {
+      "name": "left_eye_inner",
+      "photo_uv": [
+        716,
+        251
+      ],
+      "reprojected_uv": [
+        714.84,
+        229.8
+      ],
+      "error_px": 21.23
+    },
+    {
+      "name": "right_eye_inner",
+      "photo_uv": [
+        807,
+        253
+      ],
+      "reprojected_uv": [
+        802.69,
+        234.61
+      ],
+      "error_px": 18.88
+    },
+    {
+      "name": "right_eye_outer",
+      "photo_uv": [
+        928,
+        261
+      ],
+      "reprojected_uv": [
+        902.36,
+        242.77
+      ],
+      "error_px": 31.46
+    },
+    {
+      "name": "nose_bridge",
+      "photo_uv": [
+        757,
+        233
+      ],
+      "reprojected_uv": [
+        754.63,
+        275.24
+      ],
+      "error_px": 42.3
+    },
+    {
+      "name": "nose_tip",
+      "photo_uv": [
+        746,
+        338
+      ],
+      "reprojected_uv": [
+        750.09,
+        341.71
+      ],
+      "error_px": 5.52
+    },
+    {
+      "name": "left_nostril",
+      "photo_uv": [
+        712,
+        353
+      ],
+      "reprojected_uv": [
+        723.47,
+        356.62
+      ],
+      "error_px": 12.02
+    },
+    {
+      "name": "right_nostril",
+      "photo_uv": [
+        781,
+        353
+      ],
+      "reprojected_uv": [
+        778.45,
+        359.65
+      ],
+      "error_px": 7.12
+    },
+    {
+      "name": "mouth_left",
+      "photo_uv": [
+        657,
+        419
+      ],
+      "reprojected_uv": [
+        676.72,
+        436.56
+      ],
+      "error_px": 26.41
+    },
+    {
+      "name": "mouth_right",
+      "photo_uv": [
+        833,
+        433
+      ],
+      "reprojected_uv": [
+        823.04,
+        445.31
+      ],
+      "error_px": 15.83
+    },
+    {
+      "name": "lip_center",
+      "photo_uv": [
+        750,
+        422
+      ],
+      "reprojected_uv": [
+        747.52,
+        453.1
+      ],
+      "error_px": 31.2
+    },
+    {
+      "name": "chin_bottom",
+      "photo_uv": [
+        747,
+        603
+      ],
+      "reprojected_uv": [
+        744.0,
+        535.68
+      ],
+      "error_px": 67.38
+    },
+    {
+      "name": "forehead_center",
+      "photo_uv": [
+        762,
+        169
+      ],
+      "reprojected_uv": [
+        761.62,
+        148.24
+      ],
+      "error_px": 20.76
+    },
+    {
+      "name": "left_temple",
+      "photo_uv": [
+        563,
+        279
+      ],
+      "reprojected_uv": [
+        566.94,
+        283.91
+      ],
+      "error_px": 6.29
+    },
+    {
+      "name": "right_temple",
+      "photo_uv": [
+        961,
+        300
+      ],
+      "reprojected_uv": [
+        957.8,
+        305.38
+      ],
+      "error_px": 6.26
+    }
+  ],
+  "limitations": "Hand-annotated image points and generic-donor 3D features; camera lens/distortion unverified. Never treat as survey data.",
+  "subject_photo_url": "https://cdn.generationvoyage.fr/2025/02/Gros-plan-sur-le-visage-du-Christ-Redempteur-1536x1024.jpeg",
+  "model_revision": "71621eb2b77c2642f1a8af7980604ac4c125d0a2-guided-hair-r16-HOLD"
+}
