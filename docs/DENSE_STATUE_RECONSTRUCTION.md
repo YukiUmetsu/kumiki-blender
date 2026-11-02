@@ -513,6 +513,36 @@ subdirectories. Files and the recipe are hash-pinned before processing.
   This package does not overwrite the original UVs, mesh, material revisions
   or Blender review.
 
+To diagnose baked lighting on a finished UDIM model, render the **same
+materials** from three fixed azimuths under two opposing lights:
+
+```bash
+kumiki-blender render-udim-material-review \
+  --udim-package /path/to/udim-package \
+  --output /path/to/new-relighting-review \
+  --resolution 768 --samples 32
+```
+
+The command produces an editable Cycles `.blend`, six PNG previews, a
+`relighting-comparison.html` gallery and a hash-pinned JSON report. It runs on
+Blender's CPU path on both Apple Silicon and CUDA-capable computers without
+requiring CUDA. `--no-renders` saves only the review scene. Inspect patches
+that stay unnaturally dark when lighting reverses, plus roughness and relief
+changes on different viewpoints. Azimuths are **generic object-space views**,
+not COLMAP-calibrated camera poses, so the labels are not guaranteed to match
+the actual statue's front/side orientation. This is a material diagnostic,
+not proof of photo fidelity.
+
+If the finished atlas came from a reconstruction with pinned registered
+COLMAP photos, add `--matched-views 3 --matched-resolution-percent 25`.
+The tool also writes `photo-matched-comparison.html` with each original
+registered photograph beside two relit renders at the **same calibrated
+camera pose**. Those photos remain in a private output revision. Lighting
+is deliberately different, so judge visible geometry, UV seam placement and
+baked shadows rather than interpreting raw color differences as reconstruction
+error. When source photos or camera evidence are missing/tampered, preflight
+fails without creating an output directory.
+
 All of these outputs remain `artistic-review-required` and private; none
 establishes photo-perfect likeness. Photograph-to-material decomposition is
 ambiguous without illumination and reflectance measurements. Compare

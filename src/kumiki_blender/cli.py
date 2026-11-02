@@ -287,6 +287,18 @@ def main(argv: list[str] | None = None) -> int:
         "package-finished-udim", help="Copy a verified finished multi-atlas OBJ to numbered UDIM tiles")
     udim_parser.add_argument("--texture-finish", type=Path, required=True)
     udim_parser.add_argument("--output", type=Path, required=True)
+    udim_review = subcommands.add_parser(
+        "render-udim-material-review",
+        help="Compare one verified UDIM model from three angles under opposing lights")
+    udim_review.add_argument("--udim-package", type=Path, required=True)
+    udim_review.add_argument("--output", type=Path, required=True)
+    udim_review.add_argument("--resolution", type=int, default=512)
+    udim_review.add_argument("--samples", type=int, default=24)
+    udim_review.add_argument("--matched-views", type=int, default=0,
+                             help="Include 1–6 exact registered COLMAP/photo views, if available")
+    udim_review.add_argument("--matched-resolution-percent", type=int, default=25)
+    udim_review.add_argument("--no-renders", action="store_true")
+    udim_review.add_argument("--blender", default="blender")
     for command in ("plan-dense-blender-review", "render-dense-blender-review"):
         review_dense = subcommands.add_parser(
             command, help="Inspect or create a private editable Blender scene from a dense PLY")
@@ -473,6 +485,44 @@ def main(argv: list[str] | None = None) -> int:
             from .reconstruction.udim import package_finished_udim
             try:
                 report = package_finished_udim(args.texture_finish, args.output)
+            except ReferenceError as error:
+                raise RecipeError(str(error)) from error
+            print(json.dumps(report, indent=2))
+            return 0
+        if args.command == "render-udim-material-review":
+            from .reconstruction.references import ReferenceError
+            from .reconstruction.udim_relighting import (build_udim_relighting_review,
+                                                          validate_udim_relighting_request)
+            try:
+                validate_udim_relighting_request(args.udim_package, args.output,
+                                                 args.resolution, args.samples,
+                                                 args.matched_views,
+                                                 args.matched_resolution_percent)
+            except ReferenceError as error:
+                raise RecipeError(str(error)) from error
+            try:
+                import bpy  # type: ignore[import-not-found]
+            except ImportError:
+                executable = shutil.which(args.blender)
+                if not executable:
+                    raise RuntimeError(f"Blender executable not found: {args.blender}")
+                entry = Path(__file__).resolve().parents[2] / "scripts/blender_entry.py"
+                command = [executable, "--background", "--factory-startup",
+                           "--python-exit-code", "1", "--python", str(entry), "--",
+                           "render-udim-material-review", "--udim-package",
+                           str(args.udim_package.resolve()), "--output", str(args.output.resolve()),
+                           "--resolution", str(args.resolution), "--samples", str(args.samples),
+                           "--matched-views", str(args.matched_views),
+                           "--matched-resolution-percent", str(args.matched_resolution_percent)]
+                if args.no_renders:
+                    command.append("--no-renders")
+                return subprocess.run(command, check=False).returncode
+            try:
+                report = build_udim_relighting_review(
+                    bpy, args.udim_package, args.output, resolution=args.resolution,
+                    samples=args.samples, render_previews=not args.no_renders,
+                    matched_views=args.matched_views,
+                    matched_resolution_percent=args.matched_resolution_percent)
             except ReferenceError as error:
                 raise RecipeError(str(error)) from error
             print(json.dumps(report, indent=2))
