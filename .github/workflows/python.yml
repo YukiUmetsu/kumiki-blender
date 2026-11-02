@@ -41,7 +41,7 @@ jobs:
           PYTHONPATH: src
         run: |
           python -m pip install 'numpy>=1.26' 'scipy>=1.11'
-          python -m unittest tests.test_render_ray tests.test_multiview_registration tests.test_sculpt_hair_flow -v
+          python -m unittest tests.test_render_ray tests.test_multiview_registration tests.test_sculpt_hair_flow tests.test_face_reconstruction tests.test_sculpt_correction -v
       - name: Verify categorized 3D asset catalog and source links
         env:
           PYTHONPATH: src
@@ -92,6 +92,11 @@ jobs:
           KUMIKI_BLENDER_BINARY: blender
           PYTHONPATH: src
         run: python -m unittest tests.test_blender_camera_probe -v
+      - name: Verify experimental facial mesh corrections in Blender
+        if: github.head_ref == 'feat/christ-redeemer-sculpture'
+        env:
+          PYTHONPATH: src
+        run: blender --background --factory-startup --python-exit-code 1 --python tests/blender_face_sculpt_smoke.py
       - name: Render Christ Redeemer anatomical carved-hair candidate (HOLD)
         if: github.head_ref == 'feat/christ-redeemer-sculpture'
         env:

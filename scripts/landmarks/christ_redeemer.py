@@ -27,6 +27,7 @@ from mathutils.bvhtree import BVHTree
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from carved_hair import sculpt_carved_hair_from_anatomy
+from registered_face_sculpt import apply_candidate_face_fit
 from kumiki_blender.sculpt_hair_flow import anatomical_hairline_height
 
 TAU = math.tau
@@ -1559,6 +1560,10 @@ def main():
                    help="Clay-only artist-traced crown and neck hair study")
     p.add_argument("--carved-hair",action="store_true",
                    help="Clay-only scalp-topology hair with real carved crown grooves")
+    p.add_argument("--experimental-face-corrections",type=Path,
+                   help="Apply unapproved multi-photo triangulated facial offsets to clay only")
+    p.add_argument("--model-revision",type=str,
+                   help="Exact model revision recorded by 3D landmark probes")
     p.add_argument("--samples",type=int,default=16)
     p.add_argument("--size",type=int,default=720)
     p.add_argument("--shot",action="append",choices=("front","profile","three_quarter",
@@ -1583,6 +1588,14 @@ def main():
     if sum((args.scalp_surface_hair,args.integrated_hair,
             args.guided_hair,args.carved_hair)) > 1:
         p.error("Choose one hair reconstruction study")
+    if args.experimental_face_corrections:
+        if not args.head_study or FACE_METHOD != "anatomical":
+            p.error("Facial corrections require anatomical head-study clay mode")
+        if not args.model_revision:
+            p.error("--model-revision is required with facial corrections")
+        if any((args.scalp_surface_hair,args.integrated_hair,
+                args.guided_hair,args.carved_hair)):
+            p.error("Facial corrections require a bare head until hair collision QA passes")
     if args.head_study:
         if FACE_METHOD == "anatomical":
             build_anatomical_head_study(args.anatomy_base,args.integrated_hair,
@@ -1593,6 +1606,10 @@ def main():
         head=next(ob for ob in bpy.data.objects
                   if ob.name.startswith(("Head | integrated cheekbone",
                                           "Head | anatomical quad-topology")))
+        face_fit_metrics={}
+        if args.experimental_face_corrections:
+            report=json.loads(args.experimental_face_corrections.read_text())
+            face_fit_metrics=apply_candidate_face_fit(head,report,args.model_revision)
         head_points=[head.matrix_world @ vertex.co for vertex in head.data.vertices]
         metrics={"study":"head","head_surface_vertices":len(head.data.vertices),
                  "head_tilt_deg":HEAD_TILT_DEG,"face_method":FACE_METHOD,
@@ -1601,6 +1618,7 @@ def main():
                  "head_depth_m":round(max(p.y for p in head_points)-
                                       min(p.y for p in head_points),3),
                  "mesh_count":sum(ob.type=="MESH" for ob in bpy.data.objects)}
+        metrics.update(face_fit_metrics)
         if FACE_METHOD == "anatomical":
             metrics["integrated_hair"]=args.integrated_hair
             metrics["scalp_surface_hair"]=args.scalp_surface_hair
