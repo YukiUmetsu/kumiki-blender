@@ -21,6 +21,10 @@ jobs:
         env:
           PYTHONPATH: src
         run: python -m unittest tests.test_composer tests.test_craft_details tests.test_composer_cli tests.test_composer_texture_packs tests.test_compiled_plan tests.test_visual_qa -v
+      - name: Test photo-reference evidence and COLMAP worker boundary
+        env:
+          PYTHONPATH: src
+        run: python -m unittest tests.test_reconstruction_references tests.test_reconstruction_colmap tests.test_reconstruction_cli -v
       - name: Test measured Khufu masonry and Sphinx source intake
         env:
           PYTHONPATH: src

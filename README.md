@@ -1,5 +1,26 @@
 # Kumiki Blender
 
+## New: reference-driven statue reconstruction evidence
+
+For the Sphinx, Statue of Liberty, Christ the Redeemer, and future monuments,
+the optional [reference reconstruction foundation](docs/REFERENCE_RECONSTRUCTION.md)
+validates source-attributed local photographs, detects repeated evidence,
+reports missing camera viewpoints/anatomical regions, and can hand a curated
+set to a locally installed **COLMAP** sparse reconstruction worker. Run:
+
+```bash
+pip install -e '.[qa]'
+kumiki-blender reference-audit --manifest /path/to/references.json
+kumiki-blender reconstruct-photos --manifest /path/to/references.json \
+  --output .review/your-monument/reconstruction-r01
+```
+
+This is a genuine multi-image camera/geometry *evidence* path, not another
+procedural facial sculpt. It is not automatic statue photogrammetry from
+arbitrary web photos, and no successful technical step certifies facial
+likeness. Historical survey geometry, source-specific artistic sculpting,
+registered multi-view review and production GLB baking remain separate work.
+
 ## New: Agent-authored AssetSpec v2 composer
 
 The optional [AssetSpec v2 composer](docs/ASSET_SPEC_V2.md) adds one generic

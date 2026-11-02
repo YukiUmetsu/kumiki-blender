@@ -140,6 +140,16 @@ def main(argv: list[str] | None = None) -> int:
     visual_parser.add_argument("--max-changed", type=float, default=0.05)
     visual_parser.add_argument("--pixel-threshold", type=int, default=16)
     visual_parser.add_argument("--idiff", action="store_true", help="Also run optional OpenImageIO idiff")
+    for command in ("reference-audit", "reconstruct-photos"):
+        photo_parser = subcommands.add_parser(
+            command, help="Audit statue photo evidence or build a sparse COLMAP camera reconstruction")
+        photo_parser.add_argument("--manifest", type=Path, required=True,
+                                  help="Local reference-only image dossier JSON")
+        if command == "reconstruct-photos":
+            photo_parser.add_argument("--output", type=Path, required=True,
+                                      help="New immutable reconstruction revision directory")
+            photo_parser.add_argument("--colmap", default="colmap", help="Installed COLMAP executable")
+            photo_parser.add_argument("--timeout-seconds", type=int, default=3600)
     source_parser = subcommands.add_parser("inspect-asset")
     source_parser.add_argument("--input", type=Path, required=True)
     texture_parser = subcommands.add_parser("inspect-texture-packs")
@@ -153,6 +163,20 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     try:
+        if args.command in ("reference-audit", "reconstruct-photos"):
+            from .reconstruction.references import (ReferenceError, audit_reference_set,
+                                                    load_reference_set)
+            from .reconstruction.colmap import build_sparse_reconstruction
+            try:
+                references = load_reference_set(args.manifest)
+                report = (audit_reference_set(references) if args.command == "reference-audit" else
+                          build_sparse_reconstruction(references, args.output, colmap=args.colmap,
+                                                      timeout_seconds=args.timeout_seconds))
+            except ReferenceError as error:
+                raise RecipeError(str(error)) from error
+            print(json.dumps(report, indent=2))
+            return (3 if args.command == "reconstruct-photos" and
+                    report["status"] == "review-required" else 0)
         if args.command == "visual-qa":
             from .visual_qa import VisualQAError, inspect_visual_revision
             try:
