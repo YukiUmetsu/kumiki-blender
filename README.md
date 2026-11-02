@@ -48,7 +48,8 @@ registration. It generates private candidate meshes, not guaranteed facial
 likeness or redistributable assets. It cannot reconstruct a statue from
 arbitrary unrelated web photos. For outdoor background contamination, use
 `prepare-dense-masks` (optional `[masks]` extra) to generate rectified GrabCut
-silhouettes and inspect the red overlays before dense MVS. For projected
+silhouettes, or `[mask-ai]` for optional local semantic background inference,
+and inspect the red overlays before dense MVS. For projected
 texture darkness or broad color cast, `finish-dense-textures` creates a
 separately SHA-pinned exposure/gamma/white-balance atlas revision; import it
 with `render-dense-blender-review --textured --texture-finish`. Both remain

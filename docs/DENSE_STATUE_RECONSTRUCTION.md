@@ -18,6 +18,12 @@ private texture projection to produce a mesh for artistic inspection.
   uses OpenCV GrabCut on the *registered/rectified* photos. This is a starting
   silhouette, not an autonomous guarantee: trees, matching stone and occluded
   arms can be misclassified. Review each generated red overlay before MVS.
+  For harder outdoor photos, the optional `pip install 'kumiki-blender[mask-ai]'`
+  enables local IS-Net semantic background inference through rembg. The first
+  use may download model weights; verify those weights' usage rights independently
+  before commercial work. The expected ONNX SHA-256 is
+  `60920e99c45464f2ba57bee2ad08c919a52bbf852739e96947fbb4358c0d964a`;
+  the pipeline rejects mismatches. No model weights or reference photos are committed.
 - Run the existing photo-dossier workflow using the --undistort option first.
   The dense builder requires at least 8 registered independent photos and 60%
   registration by default; these are minimum gates, not enough evidence to
@@ -67,6 +73,13 @@ private texture projection to produce a mesh for artistic inspection.
       --reconstruction .review/statue/sparse-r01 \
       --output .review/statue/masks-r01 \
       --guides /private/statue/mask-guides.json
+
+    # Alternative: automatic semantic-first segmentation; requires [mask-ai].
+    # It runs a shared local isnet-general-use inference session, with no
+    # photo uploads, but still requires manual review of each resulting mask.
+    kumiki-blender prepare-dense-masks \
+      --reconstruction .review/statue/sparse-r01 \
+      --output .review/statue/masks-semantic-r01 --segmenter rembg
 
     # Use only reviewed masks; OpenMVS consumes <rectified-filename>.mask.png.
     kumiki-blender build-dense-photos \
@@ -168,7 +181,11 @@ false` QA report, SHA-256 input/output pins and per-image red overlays under
 normalized 0–1 boxes and optional foreground/background seed points can be
 specified for each rectified filename, with a common default. A default
 center box is available for quick drafts; use `--max-side` and `--iterations`
-to control CPU cost. Refine bad images in a **new output revision**; masks
+to control GrabCut CPU cost. The `--segmenter rembg` alternative uses the explicitly
+selected `isnet-general-use` model (not a changing rembg default); it does not
+accept rectangle/point hints. If semantic inference misses thin features,
+rerun with guided GrabCut or correct its mask externally. Refine bad images
+in a **new output revision**; masks
 that include trees or truncate the statue produce contaminated geometry.
 They are SHA-pinned, copied only into the private MVS workspace, checked on
 resume, and remain absent from Git. Do **not** reuse original distorted-image
@@ -179,6 +196,19 @@ its command and stdout/stderr. Failures preserve a diagnostic report instead
 of silently promoting an unusable mesh.
 
 ## Results and review
+
+### Real outdoor foreground test (private, 2026-11-02)
+
+Reconstructed all **32/32** cameras from the official EPFL sculpted-head
+research photographs using CPU PyCOLMAP 4.2.1 and generated masks for all
+32 rectified images in two *private* revisions. The unchecked broad-center
+GrabCut approach visibly followed nearby building facades in multiple views;
+the local `isnet-general-use` semantic model isolated the sculpture and
+pedestal substantially better on visual contact-sheet inspection. Some thin
+edges and ground/base patches still need review or manual correction. Neither
+set was promoted to an approved silhouette or used as evidence of a completed
+background-free 3D mesh. No EPFL photos, masks or renders are included in Git
+or CI (research use only without written commercial permission).
 
 - OpenMVS: workspace/scene_dense_mesh.ply, optionally
   workspace/scene_dense_mesh_refined.ply and textured OBJ/atlas outputs.

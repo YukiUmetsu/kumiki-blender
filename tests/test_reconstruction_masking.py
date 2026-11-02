@@ -9,7 +9,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import numpy as np
 from PIL import Image
@@ -17,7 +17,8 @@ from PIL import Image
 from kumiki_blender.cli import main
 from kumiki_blender.reconstruction.dense import DenseSettings, plan_dense_reconstruction
 from kumiki_blender.reconstruction.masking import (
-    _box, _load_guides, generate_rectified_masks,
+    _ISNET_SHA256, _box, _load_guides, _verified_model_sha,
+    generate_rectified_masks,
 )
 from kumiki_blender.reconstruction.references import ReferenceError
 
@@ -79,6 +80,8 @@ class DenseMaskTests(unittest.TestCase):
         self.assertFalse(report["approved_for_reconstruction"])
         self.assertEqual(len(report["images"]), 4)
         self.assertTrue((output / report["contact_sheet"]).is_file())
+        self.assertIn("Unreviewed center-box guess; add per-photo guides for busy backgrounds",
+                      report["images"][0]["warnings"])
         for entry in report["images"]:
             path = output / entry["mask"]
             self.assertTrue(path.is_file())
@@ -110,7 +113,8 @@ class DenseMaskTests(unittest.TestCase):
 
     def test_bad_parameters_leave_no_partial_revision(self):
         for kwargs in ({"max_side": 32}, {"iterations": 20},
-                       {"center_box": (0.0, 0.0, 0.01, 0.01)}):
+                       {"center_box": (0.0, 0.0, 0.01, 0.01)},
+                       {"segmenter": "unknown"}):
             with self.assertRaises(ReferenceError):
                 generate_rectified_masks(self.sparse, self.root / "output", **kwargs)
             self.assertFalse((self.root / "output").exists())
@@ -121,6 +125,37 @@ class DenseMaskTests(unittest.TestCase):
                                    "--output", str(self.root / "bad"),
                                    "--center-box", "0.1", "0.1", "0.1", "0.8"]), 2)
         self.assertFalse((self.root / "bad").exists())
+
+    def test_semantic_model_reuses_one_session_and_still_requires_review(self):
+        matte = Image.new("L", (320, 256), 0)
+        matte.paste(240, (105, 18, 222, 236))
+        rembg = Mock()
+        rembg.new_session.return_value = object()
+        rembg.remove.return_value = matte
+        output = self.root / "semantic"
+        with patch.dict(sys.modules, {"rembg": rembg}), \
+             patch("kumiki_blender.reconstruction.masking._verified_model_sha",
+                   return_value=_ISNET_SHA256):
+            report = generate_rectified_masks(self.sparse, output, segmenter="rembg")
+        rembg.new_session.assert_called_once_with("isnet-general-use")
+        self.assertEqual(rembg.remove.call_count, 4)
+        self.assertEqual(report["segmentation_model"], "isnet-general-use")
+        self.assertEqual(report["segmentation_model_sha256"], _ISNET_SHA256)
+        self.assertFalse(report["approved_for_reconstruction"])
+        self.assertEqual(len(report["images"]), 4)
+        self.assertTrue((output / report["contact_sheet"]).is_file())
+        with self.assertRaisesRegex(ReferenceError, "use grabcut"):
+            generate_rectified_masks(self.sparse, self.root / "bad",
+                                     segmenter="rembg", guides=self.root / "unused.json")
+
+    def test_semantic_model_weights_must_match_pinned_sha(self):
+        model_dir = self.root / "model"
+        model_dir.mkdir()
+        (model_dir / "isnet-general-use.onnx").write_bytes(b"different untrusted weights")
+        session = Mock()
+        session.model_dir.return_value = model_dir
+        with self.assertRaisesRegex(ReferenceError, "weights differ"):
+            _verified_model_sha(session)
 
 
 if __name__ == "__main__":

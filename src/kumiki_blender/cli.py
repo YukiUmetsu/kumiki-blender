@@ -199,6 +199,8 @@ def main(argv: list[str] | None = None) -> int:
                                    metavar=("LEFT", "TOP", "RIGHT", "BOTTOM"))
     photo_mask_parser.add_argument("--max-side", type=int, default=1280)
     photo_mask_parser.add_argument("--iterations", type=int, default=5)
+    photo_mask_parser.add_argument("--segmenter", choices=("grabcut", "rembg"), default="grabcut",
+                                   help="CPU GrabCut (guided, offline) or optional semantic IS-Net model")
     texture_finish_parser = subcommands.add_parser(
         "finish-dense-textures", help="Non-destructive UV-atlas exposure, shadow and cast correction")
     texture_finish_parser.add_argument("--dense-revision", type=Path, required=True)
@@ -292,7 +294,7 @@ def main(argv: list[str] | None = None) -> int:
                 report = generate_rectified_masks(
                     args.reconstruction, args.output, guides=args.guides,
                     center_box=tuple(args.center_box), max_side=args.max_side,
-                    iterations=args.iterations)
+                    iterations=args.iterations, segmenter=args.segmenter)
             except ReferenceError as error:
                 raise RecipeError(str(error)) from error
             print(json.dumps(report, indent=2))
