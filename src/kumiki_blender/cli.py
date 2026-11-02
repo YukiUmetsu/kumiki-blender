@@ -193,6 +193,33 @@ def main(argv: list[str] | None = None) -> int:
         if command == "build-dense-photos":
             dense_parser.add_argument("--resume", action="store_true",
                                       help="Resume an incomplete OpenMVS revision without repeating completed stages")
+    for command in ("plan-splats", "build-splats"):
+        splat_parser = subcommands.add_parser(
+            command, help="Train private Gaussian splats from multi-angle photos or COLMAP cameras")
+        splat_input = splat_parser.add_mutually_exclusive_group(required=True)
+        splat_input.add_argument("--photos", type=Path,
+                                 help="Directory of 8+ overlapping photos of one object")
+        splat_input.add_argument("--references", type=Path,
+                                 help="Local multi-view ReferenceSet manifest JSON")
+        splat_input.add_argument("--reconstruction", type=Path,
+                                 help="Successful reconstruct-photos --undistort revision")
+        splat_parser.add_argument("--asset-id", help="Required slug for --photos")
+        splat_parser.add_argument("--output", type=Path, required=True,
+                                  help="New immutable, private splat revision folder")
+        splat_parser.add_argument("--opensplat", default="opensplat",
+                                  help="OpenSplat executable, built with Metal/MPS or CUDA")
+        splat_parser.add_argument("--iterations", type=int, default=7000)
+        splat_parser.add_argument("--format", choices=("ply", "spz"), default="ply")
+        splat_parser.add_argument("--timeout-seconds", type=int, default=14_400,
+                                  help="Maximum OpenSplat training seconds")
+        splat_parser.add_argument("--engine", choices=("pycolmap", "colmap"),
+                                  default="pycolmap", help="Camera registration for --photos/--references")
+        splat_parser.add_argument("--colmap", default="colmap",
+                                  help="COLMAP binary when --engine colmap")
+        splat_parser.add_argument("--sparse-timeout-seconds", type=int, default=3600)
+        splat_parser.add_argument("--max-image-size", type=int, default=4000)
+        splat_parser.add_argument("--rectified-masks", type=Path,
+                                  help="Optional reviewed masks matching existing --reconstruction rectified photos")
     photo_mask_parser = subcommands.add_parser(
         "prepare-dense-masks", help="Create inspectable rectified foreground mask candidates with CPU GrabCut")
     photo_mask_parser.add_argument("--reconstruction", type=Path, required=True)
@@ -482,6 +509,58 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(report, indent=2))
             return (0 if args.command == "plan-dense-photos" or
                     report["status"].startswith("dense-mesh-candidate") else 3)
+        if args.command in ("plan-splats", "build-splats"):
+            from .reconstruction.references import ReferenceError, load_reference_set
+            from .reconstruction.splat_input import load_photo_folder, plan_splat_input
+            from .reconstruction.splats import (SplatSettings, build_multiview_splat_revision,
+                                                 build_splat_revision, plan_splat_revision,
+                                                 validate_camera_settings)
+            try:
+                settings = SplatSettings(iterations=args.iterations,
+                                         timeout_seconds=args.timeout_seconds,
+                                         output_format=args.format, opensplat=args.opensplat)
+                settings.validate()
+                if args.photos and not args.asset_id:
+                    raise ReferenceError("--asset-id is required with --photos")
+                if args.asset_id and not args.photos:
+                    raise ReferenceError("--asset-id is only used with --photos")
+                if args.rectified_masks and not args.reconstruction:
+                    raise ReferenceError("--rectified-masks requires --reconstruction")
+                if args.reconstruction:
+                    report = (plan_splat_revision(args.reconstruction, args.output, settings,
+                                                  rectified_masks=args.rectified_masks)
+                              if args.command == "plan-splats" else
+                              build_splat_revision(args.reconstruction, args.output, settings,
+                                                   rectified_masks=args.rectified_masks))
+                else:
+                    validate_camera_settings(args.engine, args.sparse_timeout_seconds,
+                                             args.max_image_size)
+                    references = (load_photo_folder(args.photos, args.asset_id)
+                                  if args.photos else load_reference_set(args.references))
+                    if args.command == "plan-splats":
+                        import importlib.util
+
+                        report = plan_splat_input(references)
+                        if args.output.is_symlink() or args.output.exists():
+                            raise ReferenceError(f"Output revision already exists: {args.output}")
+                        report.update(output=str(args.output.resolve()),
+                                      engine=args.engine, output_format=settings.output_format,
+                                      opensplat_available=bool(shutil.which(args.opensplat)),
+                                      camera_engine_available=(
+                                          importlib.util.find_spec("pycolmap") is not None
+                                          if args.engine == "pycolmap" else
+                                          bool(shutil.which(args.colmap))),
+                                      caution="Camera registration requires overlapping photos and an installed SfM engine.")
+                    else:
+                        report = build_multiview_splat_revision(
+                            references, args.output, settings,
+                            engine=args.engine, colmap=args.colmap,
+                            sparse_timeout_seconds=args.sparse_timeout_seconds,
+                            max_image_size=args.max_image_size)
+            except ReferenceError as error:
+                raise RecipeError(str(error)) from error
+            print(json.dumps(report, indent=2))
+            return 0 if args.command == "plan-splats" or report["status"].startswith("candidate") else 3
         if args.command == "prepare-makehuman-head":
             from .head_sources.makehuman import (fetch_makehuman_obj,
                                                  load_body_mesh, verify_makehuman_obj)

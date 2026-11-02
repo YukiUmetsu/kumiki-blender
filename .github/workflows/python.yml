@@ -25,6 +25,10 @@ jobs:
         env:
           PYTHONPATH: src
         run: python -m unittest tests.test_reconstruction_references tests.test_reconstruction_colmap tests.test_reconstruction_pycolmap tests.test_reconstruction_dense tests.test_reconstruction_blender_dense tests.test_reconstruction_masking tests.test_reconstruction_mask_refinement tests.test_reconstruction_mask_consistency tests.test_reconstruction_texture_finish tests.test_reconstruction_cli tests.test_reconstruction_cameras tests.test_reconstruction_silhouettes tests.test_reconstruction_landmarks tests.test_prepare_pix4d_eagle tests.test_prepare_epfl_statue tests.test_prepare_cycladic_figurine -v
+      - name: Test multi-photo OpenSplat staging, training boundary and CLI (no GPU needed)
+        env:
+          PYTHONPATH: src
+        run: python -m unittest tests.test_reconstruction_splats tests.test_reconstruction_splats_cli -v
       - name: Test anatomical head-base alignment and CLI preflight
         env:
           PYTHONPATH: src

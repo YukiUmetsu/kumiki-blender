@@ -15,6 +15,26 @@ without Blender, then `build-head-base --manifest ... --output ...` to export an
 editable `.blend`, an aligned GLB and QA views. This is **not** automatic
 photo-fidelity reconstruction; front/profile artistic review remains required.
 
+## New: multi-view Gaussian splat reconstruction
+
+For photo-based scene reconstruction, the **Gaussian splat pipeline** now
+accepts a folder of multiple photos from different angles, a source-attributed
+reference manifest, or a registered COLMAP revision. It reconstructs cameras
+with PyCOLMAP (Mac-friendly, CPU) and trains with an external OpenSplat binary
+compiled for **Apple Metal/MPS or NVIDIA CUDA**. Example:
+
+```bash
+kumiki-blender plan-splats --photos /path/to/object-angles --asset-id my-statue \
+  --output .review/my-statue/splats-r01
+kumiki-blender build-splats --photos /path/to/object-angles --asset-id my-statue \
+  --output .review/my-statue/splats-r01 --engine pycolmap \
+  --opensplat /path/to/OpenSplat/build/opensplat
+```
+
+See [Gaussian splat setup, input modes, output and limitations](docs/GAUSSIAN_SPLATS.md).
+Splats are not editable mesh GLBs, do not imply faithful geometry, and are not
+yet an MP4 video-rendering path. Only private review candidates are produced.
+
 ## New: reference-driven statue reconstruction evidence
 
 For the Sphinx, Statue of Liberty, Christ the Redeemer, and future monuments,
