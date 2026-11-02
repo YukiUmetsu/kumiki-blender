@@ -91,6 +91,14 @@ private texture projection to produce a mesh for artistic inspection.
       --min-island-pixels 24 --max-hole-pixels 24 \
       --edge-inset-pixels 2
 
+    # Find camera-specific mask mistakes using actual shared COLMAP 3D tracks.
+    # Red = disagreement with majority; yellow = ambiguous two-view tie.
+    # This is a private QA report, NOT an automatic mask approval.
+    kumiki-blender audit-dense-masks \
+      --reconstruction .review/statue/sparse-r01 \
+      --rectified-masks .review/statue/masks-r02/masks \
+      --output .review/statue/mask-consistency-r01
+
     # Use only reviewed masks; OpenMVS consumes <rectified-filename>.mask.png.
     kumiki-blender build-dense-photos \
       --reconstruction .review/statue/sparse-r01 \
@@ -238,10 +246,24 @@ that include trees or truncate the statue produce contaminated geometry.
 background-colored halos. It may also erase thin hair or fingers: start with
 1–2 pixels, inspect contours at full resolution, and restore essential details
 using inclusion polygons (applied after the inset).
-They are SHA-pinned, copied only into the private MVS workspace, checked on
-resume, and remain absent from Git. Do **not** reuse original distorted-image
+The masks are SHA-pinned, copied only into the private MVS workspace, checked
+on resume, and remain absent from Git. Do **not** reuse original distorted-image
 masks by simply resizing them: regenerate/warp them in the exact rectified
 camera grid and inspect the boundary before reconstruction.
+
+`audit-dense-masks` cross-checks each registered COLMAP 3D point track in the
+rectified images and reports where its **same physical feature** is foreground
+in some masks and background in other views. It reads the genuine binary or
+text COLMAP `images` model, pins the source/model/mask SHA-256 hashes, writes
+camera-specific red/yellow marker overlays, a worst-first contact sheet and
+per-view disagreement counts. A red marker means the view differs from the
+majority mask label on that 3D track; yellow means a tied track (often just
+two views), so the wrong view cannot be inferred. Neither consistent labels
+nor a small sparse sample guarantee a good silhouette: consistently included
+background features and thin untracked anatomy still require manual review.
+All previews remain private and the audit never edits masks or automatically
+approves reconstruction.
+
 Loosening thresholds does not improve a weak reconstruction. Each stage logs
 its command and stdout/stderr. Failures preserve a diagnostic report instead
 of silently promoting an unusable mesh.

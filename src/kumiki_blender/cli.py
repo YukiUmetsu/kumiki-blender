@@ -216,6 +216,12 @@ def main(argv: list[str] | None = None) -> int:
     refine_mask_parser.add_argument("--max-hole-pixels", type=int, default=0)
     refine_mask_parser.add_argument("--edge-inset-pixels", type=int, default=0,
                                     help="Optional 1–8 pixel contour inset to reduce background edge halos")
+    mask_consistency_parser = subcommands.add_parser(
+        "audit-dense-masks", help="Inspect multi-view COLMAP feature-track disagreements in rectified masks")
+    mask_consistency_parser.add_argument("--reconstruction", type=Path, required=True)
+    mask_consistency_parser.add_argument("--rectified-masks", type=Path, required=True)
+    mask_consistency_parser.add_argument("--output", type=Path, required=True)
+    mask_consistency_parser.add_argument("--max-overlay-points", type=int, default=200)
     texture_finish_parser = subcommands.add_parser(
         "finish-dense-textures", help="Non-destructive UV-atlas exposure, shadow and cast correction")
     texture_finish_parser.add_argument("--dense-revision", type=Path, required=True)
@@ -329,6 +335,17 @@ def main(argv: list[str] | None = None) -> int:
                     edits=args.edits, min_island_pixels=args.min_island_pixels,
                     max_hole_pixels=args.max_hole_pixels,
                     edge_inset_pixels=args.edge_inset_pixels)
+            except ReferenceError as error:
+                raise RecipeError(str(error)) from error
+            print(json.dumps(report, indent=2))
+            return 0
+        if args.command == "audit-dense-masks":
+            from .reconstruction.mask_consistency import audit_multiview_masks
+            from .reconstruction.references import ReferenceError
+            try:
+                report = audit_multiview_masks(
+                    args.reconstruction, args.rectified_masks, args.output,
+                    max_overlay_points=args.max_overlay_points)
             except ReferenceError as error:
                 raise RecipeError(str(error)) from error
             print(json.dumps(report, indent=2))
