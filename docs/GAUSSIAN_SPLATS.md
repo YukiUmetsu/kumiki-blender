@@ -120,6 +120,12 @@ splats-r01/
 
 - Inputs, image hashes, camera registration and training execution are audited.
   Preflight rejects output directory reuse and tampered registered photos.
+- Registered view QA checks the *actual* COLMAP camera-to-photo mapping,
+  rectified camera dimensions, finite normalized camera poses, sparse binary
+  record counts/lengths and a nonzero translation baseline. The report
+  summarizes distinct camera centers and optical-axis separation;
+  narrow-angle capture is warned about, not
+  automatically rejected (parallel-camera stereo can still be valid).
 - Failed registrations or GPU runs produce a **failed/review-required** report.
   Only a verified output artifact is marked `candidate / visual-review-required`.
 - `.ply` checks Gaussian attributes, vertex count, data length, SHA-256, and

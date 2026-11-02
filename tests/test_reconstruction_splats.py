@@ -83,8 +83,10 @@ class SplatDatasetTests(unittest.TestCase):
         images.mkdir(parents=True)
         sparse = self.source / "undistorted" / "sparse"
         sparse.mkdir()
+        import struct
         for name in ("cameras", "images", "points3D"):
-            (sparse / f"{name}.bin").write_bytes((name + "-sample").encode())
+            count = 1 if name == "cameras" else (8 if name == "images" else 250)
+            (sparse / f"{name}.bin").write_bytes(struct.pack("<Q", count) + b"\x00" * (count * 80))
         index = []
         for num in range(8):
             name = f"photo-{num:04d}.jpg"
@@ -100,11 +102,19 @@ class SplatDatasetTests(unittest.TestCase):
             "staged_independent_images": 8, "undistorted_images": 8,
             "sparse_feature_evidence": {"triangulated_points": 250,
                                         "median_reprojection_error_px": 0.7}}))
+        text_model = self.source / "undistorted" / "text-model"
+        text_model.mkdir()
+        (text_model / "cameras.txt").write_text("1 PINHOLE 128 96 120 120 64 48\n")
+        (text_model / "images.txt").write_text("".join(
+            f"{num + 1} 1 0 0 0 {-num} 0 0 1 photo-{num:04d}.jpg\n\n"
+            for num in range(8)))
 
     def test_stages_exact_rectified_images_and_colmap_camera_files(self):
         output = self.root / "dataset"
         report = stage_splat_dataset(self.source, output)
         self.assertEqual(report["registered_images"], 8)
+        self.assertEqual(report["viewpoint_qa"]["unique_camera_centers"], 8)
+        self.assertIn("narrow", " ".join(report["viewpoint_qa"]["warnings"]))
         self.assertEqual(report["images"], 8)
         self.assertFalse(report["distribution_allowed"])
         for num in range(8):
@@ -132,6 +142,22 @@ class SplatDatasetTests(unittest.TestCase):
         with patch("kumiki_blender.reconstruction.splat_input.plan_splat_dataset",
                    side_effect=altered_plan):
             with self.assertRaisesRegex(ReferenceError, "changed during staging"):
+                stage_splat_dataset(self.source, self.root / "dataset")
+
+    def test_detects_camera_binary_modified_after_preflight(self):
+        from unittest.mock import patch
+
+        def altered_plan(*args, **kwargs):
+            valid = plan_splat_dataset(*args, **kwargs)
+            file = self.source / "undistorted/sparse/images.bin"
+            data = bytearray(file.read_bytes())
+            data[-1] ^= 0x55
+            file.write_bytes(data)
+            return valid
+
+        with patch("kumiki_blender.reconstruction.splat_input.plan_splat_dataset",
+                   side_effect=altered_plan):
+            with self.assertRaisesRegex(ReferenceError, "camera model changed"):
                 stage_splat_dataset(self.source, self.root / "dataset")
 
     def test_uses_rectified_masks_and_rejects_bad_dimensions(self):
@@ -172,6 +198,51 @@ class SplatDatasetTests(unittest.TestCase):
         with self.assertRaisesRegex(ReferenceError, "triangulated"):
             plan_splat_dataset(self.source, self.root / "no-points")
         self.assertFalse((self.root / "no-points").exists())
+
+    def test_rejects_empty_binary_points_and_mismatched_binary_camera_counts(self):
+        import struct
+
+        sparse = self.source / "undistorted" / "sparse"
+        points = sparse / "points3D.bin"
+        points.write_bytes(struct.pack("<Q", 0))
+        with self.assertRaisesRegex(ReferenceError, "sparse|points"):
+            plan_splat_dataset(self.source, self.root / "empty-points")
+        points.write_bytes(struct.pack("<Q", 250) + b"\x00" * (250 * 80))
+        cameras = sparse / "images.bin"
+        cameras.write_bytes(struct.pack("<Q", 6) + b"\x00" * (6 * 80))
+        with self.assertRaisesRegex(ReferenceError, "registered.*count"):
+            plan_splat_dataset(self.source, self.root / "binary-mismatch")
+        cameras.write_bytes(struct.pack("<Q", 8) + b"\x00" * (8 * 80))
+        points.write_bytes(struct.pack("<Q", 250) + b"\x00" * 8)
+        with self.assertRaisesRegex(ReferenceError, "truncated"):
+            plan_splat_dataset(self.source, self.root / "truncated-points")
+
+    def test_rejects_camera_model_missing_registered_photo(self):
+        text_model = self.source / "undistorted" / "text-model" / "images.txt"
+        text_model.write_text(text_model.read_text().replace("photo-0007.jpg", "wrong-photo.jpg"))
+        with self.assertRaisesRegex(ReferenceError, "registered camera|indexed image"):
+            plan_splat_dataset(self.source, self.root / "bad-cameras")
+        self.assertFalse((self.root / "bad-cameras").exists())
+
+    def test_rejects_coincident_camera_centers_and_wrong_dimensions(self):
+        poses = self.source / "undistorted" / "text-model" / "images.txt"
+        original = poses.read_text()
+        poses.write_text("".join(
+            f"{num + 1} 1 0 0 0 0 0 0 1 photo-{num:04d}.jpg\n\n"
+            for num in range(8)))
+        with self.assertRaisesRegex(ReferenceError, "baseline"):
+            plan_splat_dataset(self.source, self.root / "stationary-camera")
+        poses.write_text(original)
+        cameras = self.source / "undistorted" / "text-model" / "cameras.txt"
+        cameras.write_text("1 PINHOLE 256 96 120 120 64 48\n")
+        with self.assertRaisesRegex(ReferenceError, "dimensions"):
+            plan_splat_dataset(self.source, self.root / "wrong-sensor")
+
+    def test_splatting_accepts_valid_non_square_camera_focal_lengths(self):
+        cameras = self.source / "undistorted" / "text-model" / "cameras.txt"
+        cameras.write_text("1 PINHOLE 128 96 120 108 64 48\n")
+        plan = plan_splat_dataset(self.source, self.root / "anisotropic-intrinsics")
+        self.assertEqual(plan["viewpoint_qa"]["registered_cameras"], 8)
 
     def test_rejects_invalid_nonfinite_gaussian_coordinates(self):
         import struct
@@ -239,6 +310,7 @@ print('trained from 8 images')
         self.assertEqual(report["status"], "candidate / visual-review-required")
         self.assertEqual(report["artifact"]["gaussians"], 2)
         self.assertEqual(report["sparse_feature_evidence"]["triangulated_points"], 250)
+        self.assertEqual(report["viewpoint_qa"]["registered_cameras"], 8)
         self.assertEqual(report["artifact"]["sampled_vertices"], 2)
         self.assertFalse(report["distribution_allowed"])
         self.assertTrue((output / "dataset/images/photo-0000.jpg").is_file())
