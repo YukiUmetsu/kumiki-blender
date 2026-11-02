@@ -12,6 +12,29 @@ The iconic model deliberately sacrifices realistic dimensions and geography.
 It is a miniature symbol rather than a topographic study. All landmarks and
 five-petal flowers are **actual exportable mesh**, not camera-facing sprites.
 
+## r15 — natural summit crater and subtly larger Fuji
+
+Reference: the user-supplied front and oblique winter photographs show Fuji's
+crest as a relatively broad, uneven volcano summit rather than a little
+secondary cone. [NASA's oblique astronaut view](https://science.nasa.gov/earth/earth-observatory/mount-fuji-87766/)
+also shows a dark summit depression casting its own relief shadow. These are
+**unregistered visual references**, not camera-constrained scale measurements.
+
+The prior iconic summit had an artificial **raised central triangle fan** at
+the peak, visible as a narrow dark pyramid inside a tiny caldera. r15 removes
+that artificial cone and reconnects the snowy outer shoulder with a truly
+**recessed five-ring crater bowl**, including a nonuniform rim lip, irregular
+annulus, inner wall and lowered crater floor. The shoulder now broadens
+smoothly over the upper cone; snow follows the irregular outer seam. Rim
+faces have upward-consistent normals. All surfaces remain original editable
+Blender mesh, not photographed textures or a claim of surveyed accuracy.
+
+The mountain scales up slightly to **1.76× its original height and 1.40× its
+original radius**, while its y center shifts 0.15 units south. The left sakura
+is moved a little farther forward to retain ground clearance. The compact
+**13.26 × 10.75-unit display footprint**, original pink blossoms, lacquer
+torii, blue-slate rock and white snow colors are preserved.
+
 ## r14 — slightly larger Fuji, same miniature stage
 
 The iconic mountain is now **1.70× tall** and **1.38× wide** compared with

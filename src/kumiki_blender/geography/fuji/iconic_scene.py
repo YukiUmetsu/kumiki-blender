@@ -28,12 +28,13 @@ SAKURA_PETAL_PALETTE=((.98,.46,.63),(.99,.67,.78),(.997,.83,.87),
 # Iconic staging: give the Fuji a broad, monumental silhouette while keeping
 # an intentionally small *relative* stage and human-scale shrine/trees.
 ICONIC_FUJI_BASE_Z=.57
-ICONIC_FUJI_VERTICAL_SCALE=1.70
-ICONIC_FUJI_RADIUS_SCALE=1.38
+ICONIC_FUJI_VERTICAL_SCALE=1.76
+ICONIC_FUJI_RADIUS_SCALE=1.40
+ICONIC_FUJI_CENTER_Y=.50
 ICONIC_STAGE_WIDTH=13.26
 ICONIC_STAGE_DEPTH=10.75
 ICONIC_TORII_ORIGIN=(1.65,-4.45)
-ICONIC_SAKURA_LEFT=(-4.68,-2.02)
+ICONIC_SAKURA_LEFT=(-4.68,-2.32)
 ICONIC_SAKURA_RIGHT=(5.15,-1.00)
 
 
@@ -44,8 +45,8 @@ def plan_iconic_shots() -> tuple[QualityShot, ...]:
         QualityShot("front", (0, -22.5, 9.2), (0, -.15, 2.75), 14.7),
         QualityShot("opposite", (-16.5, -15.0, 10.7), (0, .2, 2.70), 16.5),
         QualityShot("torii-and-sakura", (8.0, -12.0, 5.6), (3.05, -3.5, 1.55), 7.0),
-        QualityShot("sakura-botanical", (-8.6, -6.1, 4.1), (-4.68, -2.02, 2.0), 4.0),
-        QualityShot("snow-crown", (7.2, -7.1, 11.2), (0, .65, 6.08), 5.9),
+        QualityShot("sakura-botanical", (-8.6, -6.4, 4.1), (-4.68, -2.32, 2.0), 4.0),
+        QualityShot("snow-crown", (7.2, -7.1, 11.4), (0, ICONIC_FUJI_CENTER_Y, 6.24), 5.9),
         QualityShot("footprint", (0, -1, 24), (0, 0, .35), 15.5),
     )
 
@@ -61,6 +62,7 @@ def iconic_spec(detail: str = "standard") -> dict[str, Any]:
         "vertical_scale": "intentionally exaggerated and non-geographic",
         "fuji_vertical_multiplier": ICONIC_FUJI_VERTICAL_SCALE,
         "fuji_radius_multiplier": ICONIC_FUJI_RADIUS_SCALE,
+        "fuji_center_y": ICONIC_FUJI_CENTER_Y,
         "torii_origin": list(ICONIC_TORII_ORIGIN),
         "sakura_origins": [list(ICONIC_SAKURA_LEFT),list(ICONIC_SAKURA_RIGHT)],
         "landmarks": ["Fuji snow crown", "vermillion torii", "flowering sakura"],
@@ -282,10 +284,10 @@ def _plinth(bpy: Any, model: Any, mats: dict) -> list:
 
 
 def _fuji_profile(u: float) -> float:
-    """Compressed conical upper slopes with a smooth, calm lower shoulder."""
+    """Volcanic cone with a gently broadened summit shoulder, not a needle."""
     if u >= 1:
         return .57
-    return .57 + 4.10*(1-u)**1.22
+    return .57 + 4.10*(1-u)**1.22 + .29*(1-_ease(.105,.26,u))
 
 
 def _fuji_radius(a: float) -> float:
@@ -299,6 +301,29 @@ def _fuji_height(u: float, a: float) -> float:
     return _fuji_profile(u)+ridge
 
 
+def _summit_edge_u(a: float) -> float:
+    """Irregular outline of Fuji's broad crater shoulder, in normalized radius."""
+    return (.115+.006*math.sin(5*a+.3)+.003*math.sin(9*a-.8)
+            +.0015*math.sin(13*a+1.2))
+
+
+def _summit_bowl_rings(a: float) -> tuple[tuple[float,float], ...]:
+    """Radial cross-section of a craggy raised lip and genuinely recessed bowl.
+
+    Each (u, z) pair runs inward. The first ring meets the flank and snowcap;
+    the last is the inner floor. No raised central cone closes the depression.
+    """
+    edge_u=_summit_edge_u(a)
+    edge_z=_fuji_height(edge_u,a)+.015
+    # Keep the irregularity broad and subdued: tall sharp crenellations looked
+    # like a fantasy fortress, not the eroded lip of an alpine caldera.
+    crags=.007*math.sin(5*a+.1)+.004*math.sin(9*a-.7)+.002*math.sin(13*a+.6)
+    return ((edge_u,edge_z),(.88*edge_u,edge_z+.015+crags),
+            (.70*edge_u,edge_z-.045+.5*crags),
+            (.43*edge_u,edge_z-.116+.23*crags),
+            (.19*edge_u,edge_z-.160+.06*crags))
+
+
 def _snow_limit(a: float) -> float:
     # Snow tongues reach down the valleys: distinguishable even as a thumbnail.
     return .335 + .034*math.sin(9*a+.6) + .028*math.sin(15*a-1.1) + .015*math.sin(25*a)
@@ -310,12 +335,13 @@ def _mountain(bpy: Any, model: Any, mats: dict, divisions: int) -> list:
     radial = max(45, divisions//3)
     verts, faces, colors = [], [], []
     for k in range(radial+1):
-        u = .068 + .932*k/radial
         for j in range(n):
             a = j*math.tau/n
+            inner=_summit_edge_u(a)
+            u=inner+(1-inner)*k/radial
             radius = _fuji_radius(a)*u
             h = _fuji_height(u, a)
-            verts.append((radius*math.cos(a), .65+radius*.89*math.sin(a), h))
+            verts.append((radius*math.cos(a), ICONIC_FUJI_CENTER_Y+radius*.89*math.sin(a), h))
             value=math.sin(a*13+u*24)*math.sin(a*27-u*15)
             # Blue-slate volcanic cone and dark evergreen foot: unmistakable
             # iconic Fuji colors even in a small thumbnail or glTF viewer.
@@ -330,10 +356,8 @@ def _mountain(bpy: Any, model: Any, mats: dict, divisions: int) -> list:
         for j in range(n):
             nx = (j+1)%n
             faces.append((k*n+j, (k+1)*n+j, (k+1)*n+nx, k*n+nx))
-    verts.append((0,.65,4.54))
-    colors.append((.17,.19,.21))
-    for j in range(n):
-        faces.append((len(verts)-1,j,(j+1)%n))
+    # Keep the inner ring open. A separate bowl mesh closes it at the correct
+    # height, preventing the previous accidental pointed cone inside the crater.
     flank = _mesh(bpy, model, "Mountain / hand-shaped iconic Fuji flanks",
                   verts, faces, mats["flank_vertex"], colors=colors, smooth=True)
     # Physical cap has long jagged skirt, pale blue shadowing, snowy ridges.
@@ -343,10 +367,11 @@ def _mountain(bpy: Any, model: Any, mats: dict, divisions: int) -> list:
         v = k/snow_rows
         for j in range(n):
             a = j*math.tau/n
-            u = .068 + v*(_snow_limit(a)-.068)
+            inner=_summit_edge_u(a)
+            u = inner + v*(_snow_limit(a)-inner)
             radius = _fuji_radius(a)*u
             z = _fuji_height(u,a)+.015
-            cap_verts.append((radius*math.cos(a), .65+radius*.89*math.sin(a), z))
+            cap_verts.append((radius*math.cos(a), ICONIC_FUJI_CENTER_Y+radius*.89*math.sin(a), z))
             shade=.97-.11*v+.047*math.sin(7*a+v*3)+.018*math.sin(23*a)
             ice=_blend((.83,.90,.96),(.96,.96,.925),.55+.25*math.sin(a*4.2+v*6))
             cap_colors.append(tuple(min(1.,max(.4,c*shade)) for c in ice))
@@ -356,16 +381,23 @@ def _mountain(bpy: Any, model: Any, mats: dict, divisions: int) -> list:
             cap_faces.append((k*n+j,(k+1)*n+j,(k+1)*n+nx,k*n+nx))
     cap = _mesh(bpy, model, "Snow / sculpted five-point alpine snow crown",
                 cap_verts,cap_faces,mats["snow_vertex"],colors=cap_colors,smooth=True)
-    # Tiny summit caldera: a recessed dark bowl within the snow-silver crest.
+    # Natural summit: asymmetric stone lip, recessed inner wall and flat-bottom
+    # depression. Every outer vertex shares the snowcap's seam position.
     rim_verts, rim_faces = [], []
-    for rad,z in ((.255,4.355),(.21,4.415),(.105,4.305),(.0,4.28)):
+    ring_count=len(_summit_bowl_rings(0))
+    for k in range(ring_count):
         for j in range(n):
             a=j*math.tau/n
-            z_warp = .010*math.sin(7*a+.3) + .008*math.sin(13*a)
-            rim_verts.append((rad*math.cos(a),.65+rad*math.sin(a),z+z_warp*(rad/.255)))
-    for k in range(3):
+            u,z=_summit_bowl_rings(a)[k]
+            rad=_fuji_radius(a)*u
+            rim_verts.append((rad*math.cos(a),ICONIC_FUJI_CENTER_Y+rad*.89*math.sin(a),z))
+    for k in range(ring_count-1):
         for j in range(n):
-            rim_faces.append((k*n+j,(k+1)*n+j,(k+1)*n+(j+1)%n,k*n+(j+1)%n))
+            rim_faces.append((k*n+j,k*n+(j+1)%n,(k+1)*n+(j+1)%n,(k+1)*n+j))
+    center_z=sum(_summit_bowl_rings(j*math.tau/n)[-1][1] for j in range(n))/n
+    rim_verts.append((0,ICONIC_FUJI_CENTER_Y,center_z-.003))
+    last_ring=(ring_count-1)*n
+    rim_faces.extend((last_ring+j,last_ring+(j+1)%n,len(rim_verts)-1) for j in range(n))
     rim=_mesh(bpy,model,"Summit / recessed volcanic rim and dark caldera",
               rim_verts,rim_faces,mats["crater"],smooth=True)
     mountain=(flank,cap,rim)
@@ -374,7 +406,7 @@ def _mountain(bpy: Any, model: Any, mats: dict, divisions: int) -> list:
         # stretch from ground height so the mountain never floats above it.
         for vertex in obj.data.vertices:
             vertex.co.x*=ICONIC_FUJI_RADIUS_SCALE
-            vertex.co.y=.65+(vertex.co.y-.65)*ICONIC_FUJI_RADIUS_SCALE
+            vertex.co.y=ICONIC_FUJI_CENTER_Y+(vertex.co.y-ICONIC_FUJI_CENTER_Y)*ICONIC_FUJI_RADIUS_SCALE
             vertex.co.z=ICONIC_FUJI_BASE_Z+(vertex.co.z-ICONIC_FUJI_BASE_Z)*ICONIC_FUJI_VERTICAL_SCALE
         obj.data.update()
     return list(mountain)

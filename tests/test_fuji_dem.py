@@ -18,9 +18,11 @@ from kumiki_blender.geography.fuji.blender_scene import (ROCK_NORMAL_TILES, _val
 from kumiki_blender.geography.fuji.iconic_scene import (
     ICONIC_BLUE_BASALT, ICONIC_TREE_LINE, SAKURA_PETAL_PALETTE,
     ICONIC_FUJI_BASE_Z, ICONIC_FUJI_VERTICAL_SCALE, ICONIC_FUJI_RADIUS_SCALE,
+    ICONIC_FUJI_CENTER_Y,
     ICONIC_STAGE_WIDTH, ICONIC_STAGE_DEPTH, ICONIC_TORII_ORIGIN,
     ICONIC_SAKURA_LEFT, ICONIC_SAKURA_RIGHT,
     iconic_spec, plan_iconic_shots, _snow_limit, _fuji_profile,
+    _summit_edge_u, _summit_bowl_rings,
 )
 
 
@@ -248,8 +250,8 @@ class FujiTerrainTests(unittest.TestCase):
         self.assertEqual(plan_iconic_shots()[0].name,"hero")
         self.assertGreater(_snow_limit(.2),0.25)
         self.assertLess(_snow_limit(.2),.43)
-        self.assertGreater(ICONIC_FUJI_VERTICAL_SCALE,1.65)
-        self.assertGreater(ICONIC_FUJI_RADIUS_SCALE,1.36)  # Broad, not spire-like Fuji.
+        self.assertGreater(ICONIC_FUJI_VERTICAL_SCALE,1.75)
+        self.assertGreater(ICONIC_FUJI_RADIUS_SCALE,1.39)  # Broad, not spire-like Fuji.
         self.assertLess(ICONIC_STAGE_WIDTH,13.5)  # Miniature, proportionate plinth.
         self.assertLess(ICONIC_STAGE_DEPTH,11.0)
         outer_fuji_radius=3.53*(1+.028+.021)*ICONIC_FUJI_RADIUS_SCALE
@@ -257,10 +259,22 @@ class FujiTerrainTests(unittest.TestCase):
         # the torii is in front, the flowering trees frame both flanks.
         def cone_distance(origin):
             x,y=origin
-            return math.hypot(x,(y-.65)/.89)
+            return math.hypot(x,(y-ICONIC_FUJI_CENTER_Y)/.89)
         self.assertGreater(cone_distance(ICONIC_SAKURA_LEFT),outer_fuji_radius+.4)
         self.assertGreater(cone_distance(ICONIC_SAKURA_RIGHT),outer_fuji_radius+.2)
         self.assertGreater(cone_distance(ICONIC_TORII_ORIGIN),outer_fuji_radius+.5)
+        # Crater lip isn't a conical spike: rim forms an uneven annulus while
+        # its inner wall and floor descend below the visible shoulder.
+        for angle in (0,math.pi/4,math.pi/2,math.pi,1.7*math.pi):
+            rings=_summit_bowl_rings(angle)
+            self.assertEqual(len(rings),5)
+            self.assertGreater(_summit_edge_u(angle),.10)
+            self.assertLess(_summit_edge_u(angle),.13)
+            self.assertGreater(rings[1][1],rings[0][1])
+            self.assertGreater(rings[1][1],rings[2][1]+.045)
+            self.assertGreater(rings[2][1],rings[3][1]+.05)
+            self.assertGreater(rings[3][1],rings[4][1]+.03)
+        self.assertGreater(_fuji_profile(.115),_fuji_profile(.24)+.2)
         self.assertLess(ICONIC_SAKURA_LEFT[0],-4.5)
         self.assertGreater(ICONIC_SAKURA_RIGHT[0],4.5)
         enlarged_peak=(ICONIC_FUJI_BASE_Z+
