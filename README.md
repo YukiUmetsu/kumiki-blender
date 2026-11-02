@@ -47,18 +47,26 @@ pixel-reprojection measurements. See the [full camera and mask workflow](docs/RE
 The optional [dense photo-to-mesh workflow](docs/DENSE_STATUE_RECONSTRUCTION.md)
 includes independently sourced and hash-pinned **real statue photo benchmarks**
 (Pix4D eagle, EPFL standing figure and sculpted face), with photo rights kept
-separate and no restricted images or derived models in Git. It runs OpenMVS CPU
+separate and no restricted images or derived models in Git. An additional
+CC BY 4.0 Cycladic figurine photo set can serve as a reusable attributed QA
+benchmark. It runs OpenMVS CPU
 or COLMAP GPU reconstruction after successful sparse
 registration. It generates private candidate meshes, not guaranteed facial
 likeness or redistributable assets. It cannot reconstruct a statue from
 arbitrary unrelated web photos. For outdoor background contamination, use
 `prepare-dense-masks` (optional `[masks]` extra) to generate rectified GrabCut
 silhouettes, or `[mask-ai]` for optional local semantic background inference,
-and inspect the red overlays before dense MVS. For projected
-texture darkness or broad color cast, `finish-dense-textures` creates a
-separately SHA-pinned exposure/gamma/white-balance atlas revision; import it
+and inspect the red overlays before dense MVS. Use `refine-dense-masks` to
+remove tiny mask artifacts and hand-correct individual rectified views with
+normalized include/exclude polygons or a cautious contour inset in a new
+private revision. OpenMVS seam-leveling can be toggled when a specific build
+produces dark texture patches. For projected
+texture darkness, broad color cast or exposure mismatch between atlas pages,
+`finish-dense-textures --balance-atlases` creates a separately SHA-pinned
+exposure/gamma/white-balance atlas revision; import it
 with `render-dense-blender-review --textured --texture-finish`. Both remain
 manual-review candidates, not autonomous texture restoration.
+Very dark atlases can optionally use bounded `--auto-exposure-luma 115`.
 No technical score certifies facial likeness. Historical survey geometry,
 source-specific artistic sculpting and production GLB baking remain separate work.
 

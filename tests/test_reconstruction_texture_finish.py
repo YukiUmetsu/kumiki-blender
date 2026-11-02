@@ -15,7 +15,7 @@ from kumiki_blender.cli import main
 from kumiki_blender.reconstruction.blender_dense import plan_dense_blender_review
 from kumiki_blender.reconstruction.references import ReferenceError
 from kumiki_blender.reconstruction.texture_finish import (
-    TextureFinishSettings, finish_dense_textures,
+    TextureFinishSettings, _atlas_correction, _sample_luminance, finish_dense_textures,
 )
 
 
@@ -91,7 +91,11 @@ class TextureFinishTests(unittest.TestCase):
     def test_source_mutations_and_settings_are_rejected_before_output(self):
         for settings in (TextureFinishSettings(gamma=0),
                          TextureFinishSettings(exposure_ev=float("nan")),
-                         TextureFinishSettings(protect_black=True)):
+                         TextureFinishSettings(protect_black=True),
+                         TextureFinishSettings(max_balance_ev=-1),
+                         TextureFinishSettings(auto_exposure_luma=0),
+                         TextureFinishSettings(auto_exposure_luma=float("nan")),
+                         TextureFinishSettings(max_auto_exposure_ev=3)):
             with self.assertRaises(ReferenceError):
                 finish_dense_textures(self.dense, self.root / "unfinished", settings)
             self.assertFalse((self.root / "unfinished").exists())
@@ -107,11 +111,15 @@ class TextureFinishTests(unittest.TestCase):
         with contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(main(["finish-dense-textures", "--dense-revision", str(self.dense),
                                    "--output", str(target), "--exposure-ev", "0.75",
-                                   "--shadow-lift", "0.12", "--neutralize-cast"]), 0)
+                                   "--shadow-lift", "0.12", "--neutralize-cast",
+                                   "--auto-exposure-luma", "115",
+                                   "--max-auto-exposure-ev", "0.5"]), 0)
         settings = json.loads((target / "texture-finish-report.json").read_text())["settings"]
         self.assertEqual(settings["exposure_ev"], 0.75)
         self.assertEqual(settings["shadow_lift"], 0.12)
         self.assertTrue(settings["neutralize_cast"])
+        self.assertEqual(settings["auto_exposure_luma"], 115.0)
+        self.assertEqual(settings["max_auto_exposure_ev"], 0.5)
         with patch("kumiki_blender.cli.shutil.which", return_value="/bin/blender"), \
              patch("kumiki_blender.cli.subprocess.run") as run:
             run.return_value.returncode = 0
@@ -136,6 +144,61 @@ class TextureFinishTests(unittest.TestCase):
             self.assertEqual(corrected.mode, "RGBA")
             self.assertEqual(corrected.getpixel((2, 3))[3], 0)
             self.assertEqual(corrected.getpixel((30, 10))[3], 255)
+
+    def test_multiple_atlas_pages_are_exposure_balanced_without_changing_uvs(self):
+        second = self.atlas.parent / "scene_dense_mesh_refined_texture_material_01_map_Kd.png"
+        Image.new("RGB", (48, 32), (155, 155, 155)).save(second)
+        self.mtl.write_text(self.mtl.read_text() +
+                            f"newmtl m1\nmap_Kd {second.name}\n")
+        report_path = self.dense / "dense-report.json"
+        report = json.loads(report_path.read_text())
+        report["texture_atlases"].append({"path": str(second.relative_to(self.dense)),
+                                         "sha256": self._digest(second)})
+        report_path.write_text(json.dumps(report))
+        destination = self.root / "balanced"
+        result = finish_dense_textures(self.dense, destination,
+                                       TextureFinishSettings(balance_atlases=True,
+                                                             max_balance_ev=0.9))
+        self.assertEqual(len(result["texture_atlases"]), 2)
+        values = {item["path"]: item["atlas_balance_ev"] for item in result["texture_atlases"]}
+        self.assertGreater(values[self.atlas.name], 0)
+        self.assertLess(values[second.name], 0)
+        with Image.open(self.atlas) as dark_raw, Image.open(second) as bright_raw, \
+             Image.open(destination / self.atlas.name) as dark_finished, \
+             Image.open(destination / second.name) as bright_finished:
+            raw_gap = abs(sum(dark_raw.getpixel((30, 12))) - sum(bright_raw.getpixel((30, 12))))
+            balanced_gap = abs(sum(dark_finished.getpixel((30, 12))) -
+                               sum(bright_finished.getpixel((30, 12))))
+            self.assertLess(balanced_gap, raw_gap)
+        planned = plan_dense_blender_review(self.dense, self.root / "review", textured=True,
+                                            texture_finish=destination)
+        self.assertEqual(len(planned["texture_atlases"]), 2)
+
+    def test_opt_in_auto_exposure_brightens_dark_atlas_without_fabricating_empty_texels(self):
+        target = self.root / "auto-exposed"
+        report = finish_dense_textures(
+            self.dense, target,
+            TextureFinishSettings(auto_exposure_luma=125, max_auto_exposure_ev=1.0))
+        atlas_report = report["texture_atlases"][0]
+        self.assertGreater(atlas_report["auto_exposure_ev"], 0)
+        self.assertLessEqual(atlas_report["auto_exposure_ev"], 1.0)
+        self.assertIsNotNone(atlas_report["source_median_luma"])
+        with Image.open(self.atlas) as original, Image.open(target / self.atlas.name) as corrected:
+            self.assertGreater(sum(corrected.getpixel((30, 12))),
+                               sum(original.getpixel((30, 12))))
+            self.assertEqual(corrected.getpixel((2, 12)), (0, 0, 0))
+        planned = plan_dense_blender_review(self.dense, self.root / "review-auto",
+                                            textured=True, texture_finish=target)
+        self.assertEqual(len(planned["texture_atlases"]), 1)
+
+    def test_atlas_balance_excludes_transparent_white_padding(self):
+        transparent = Image.new("RGBA", (64, 64), (255, 255, 255, 0))
+        transparent.paste((80, 80, 80, 255), (16, 16, 48, 48))
+        self.assertAlmostEqual(_sample_luminance(transparent, 12), 80.0, places=2)
+        _result, diagnostics = _atlas_correction(transparent, TextureFinishSettings())
+        self.assertEqual(diagnostics["approx_highlight_clip_fraction_after"], 0)
+        blank = Image.new("RGBA", (64, 64), (255, 255, 255, 0))
+        self.assertIsNone(_sample_luminance(blank, 12))
 
 
 if __name__ == "__main__":

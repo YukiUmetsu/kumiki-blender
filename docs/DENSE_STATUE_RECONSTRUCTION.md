@@ -81,16 +81,34 @@ private texture projection to produce a mesh for artistic inspection.
       --reconstruction .review/statue/sparse-r01 \
       --output .review/statue/masks-semantic-r01 --segmenter rembg
 
+    # Correct unwanted ground or a missing thin feature on selected views.
+    # Edit normalized polygons in a private JSON file; never modify r01.
+    kumiki-blender refine-dense-masks \
+      --reconstruction .review/statue/sparse-r01 \
+      --mask-revision .review/statue/masks-semantic-r01 \
+      --output .review/statue/masks-r02 \
+      --edits /private/statue/mask-edits.json \
+      --min-island-pixels 24 --max-hole-pixels 24 \
+      --edge-inset-pixels 2
+
     # Use only reviewed masks; OpenMVS consumes <rectified-filename>.mask.png.
     kumiki-blender build-dense-photos \
       --reconstruction .review/statue/sparse-r01 \
-      --rectified-masks .review/statue/masks-r01/masks \
+      --rectified-masks .review/statue/masks-r02/masks \
       --output .review/statue/dense-masked-r01 --backend openmvs
 
     # CPU-capable OpenMVS meshing + refinement + texturing.
     kumiki-blender build-dense-photos \
       --reconstruction .review/statue/sparse-r01 \
       --output .review/statue/dense-r01 --backend openmvs
+
+    # Only if OpenMVS creates black/dark texture patches: try a separate
+    # reconstruction with seam leveling disabled and compare in Blender.
+    kumiki-blender build-dense-photos \
+      --reconstruction .review/statue/sparse-r01 \
+      --rectified-masks .review/statue/masks-r02/masks \
+      --output .review/statue/dense-no-seam-r01 --backend openmvs \
+      --no-global-seam-leveling --no-local-seam-leveling
 
     # If the monument has foliage/sky/pedestrians behind it, prepare an
     # exact-size rectified mask for EVERY undistorted registered image:
@@ -138,7 +156,16 @@ private texture projection to produce a mesh for artistic inspection.
       --dense-revision .review/statue/dense-masked-r01 \
       --output .review/statue/texture-finish-r01 \
       --exposure-ev 0.65 --gamma 1.12 --shadow-lift 0.06 \
-      --saturation 1.05 --neutralize-cast
+      --saturation 1.05 --neutralize-cast --balance-atlases \
+      --max-balance-ev 0.75
+
+    # Alternative: opt-in bounded automatic brightness for very dark scans.
+    # Keep manual exposure EV at zero initially to avoid double brightening.
+    kumiki-blender finish-dense-textures \
+      --dense-revision .review/statue/dense-masked-r01 \
+      --output .review/statue/texture-auto-r01 \
+      --auto-exposure-luma 115 --max-auto-exposure-ev 1.0 \
+      --balance-atlases
 
     # Blender imports the same verified OBJ/MTL/UVs with the corrected atlases
     # and packs them into the private .blend and GLB.
@@ -171,6 +198,16 @@ modifying the high-poly PLY**. An interrupted texture stage can be resumed
 with a lower texture decimation factor; the immutable dense/mesh stages are
 reused, not recomputed. This does not replace the original high-poly detail
 review or prove that the UV LOD captures thin features.
+OpenMVS already performs global and local texture seam leveling by default.
+Its upstream [2.4.0 black-patch regression](https://github.com/cdcseacave/openMVS/issues/1251)
+can make otherwise usable masked textures appear black; first try a newer
+fixed build. If necessary, use `--no-global-seam-leveling` and/or
+`--no-local-seam-leveling` for a **new private reconstruction revision**.
+Both options are recorded in the report and may change during `--resume`
+only when the texture stage failed. Disabling leveling may restore colored
+surfaces but increase UV seams; compare textured Blender reviews.
+Post-hoc exposure correction cannot repair black texture patches created
+during projection.
 Rectified mask files must be genuine grayscale PNGs (binary 0/255, both
 present, exact dimensions), with exact `<photo filename>.mask.png` names.
 `prepare-dense-masks` generates those files with an `approved_for_reconstruction:
@@ -184,9 +221,23 @@ center box is available for quick drafts; use `--max-side` and `--iterations`
 to control GrabCut CPU cost. The `--segmenter rembg` alternative uses the explicitly
 selected `isnet-general-use` model (not a changing rembg default); it does not
 accept rectangle/point hints. If semantic inference misses thin features,
-rerun with guided GrabCut or correct its mask externally. Refine bad images
+rerun with guided GrabCut or use `refine-dense-masks` to remove small detached
+foreground islands, fill small enclosed holes and draw per-image polygon
+inclusions/exclusions. The format in
+[`examples/statue-mask-edits.example.json`](../examples/statue-mask-edits.example.json)
+uses normalized (0–1) coordinates in the **rectified** image, with exclusions
+applied last. `--min-island-pixels` and `--max-hole-pixels` are pixel-area
+thresholds, not radii: keep them low to avoid erasing fingers, hair or carving.
+The command validates all source photograph and mask hashes, writes a separate
+immutable candidate revision with change counts and QA contact sheet, and
+**never auto-approves** its output. Inspect every revised overlay, then point
+OpenMVS to the new revision's `masks/` directory. Refine bad images
 in a **new output revision**; masks
 that include trees or truncate the statue produce contaminated geometry.
+`--edge-inset-pixels 1..8` is an optional inward contour erosion to trim
+background-colored halos. It may also erase thin hair or fingers: start with
+1–2 pixels, inspect contours at full resolution, and restore essential details
+using inclusion polygons (applied after the inset).
 They are SHA-pinned, copied only into the private MVS workspace, checked on
 resume, and remain absent from Git. Do **not** reuse original distorted-image
 masks by simply resizing them: regenerate/warp them in the exact rectified
@@ -246,14 +297,28 @@ against authentic photos before declaring a texture finished.
 `finish-dense-textures` applies bounded exposure EV, gamma, saturation,
 optional sampled cast-neutralization and shadow lift to an independent
 OBJ/MTL/atlas revision; it protects near-black/uncovered atlas texels and
-reports their approximate coverage, plus original/corrected side-by-side
+reports their approximate coverage and highlight-clipping warnings. With
+`--balance-atlases`, it additionally matches approximate exposure across
+**multiple atlas pages** using valid non-black, non-transparent texels, capped by
+`--max-balance-ev` (default 0.75 EV). A single page is left unchanged by
+that option. It also writes original/corrected side-by-side
 `review/` previews. All original source files, UVs and face
 indices remain untouched. `--texture-finish` requires `--textured` and
 verifies both original and corrected content hashes before Blender import.
-This can improve dark overall exposure and broad color cast, but **cannot
-invent missing photographs, paint empty atlas patches or eliminate every
-projection seam**. Use the original-versus-corrected Blender views for
+This can improve dark overall exposure, broad color cast and atlas-page
+exposure mismatch, but **cannot invent missing photographs, paint empty atlas
+patches or fix intra-page UV chart seams and baked lighting**. Use the
+original-versus-corrected Blender views for
 artistic approval; the correction remains private by default.
+For dark atlases whose desired exposure is not yet known,
+`--auto-exposure-luma 115` estimates a **bounded shared exposure offset**
+from the median of non-black, non-transparent atlas texels. The option is
+disabled by default; its allowed target range is 32–224 on the 0–255
+grayscale scale, and `--max-auto-exposure-ev` (default 1 EV) caps correction.
+Any additional manual `--exposure-ev` is additive, so review highlight-clipping
+warnings before combining them. Different stone colors and deliberately dark
+surfaces can fool median brightness: this is image enhancement, not a physical
+albedo calibration or proof of historical color.
 
 Open the PLY in Blender and compare front/profile/three-quarter views against
 authentic photos, especially eyes, chin, mouth, ears, hair and deep garment
@@ -404,3 +469,34 @@ Mercury statue photos registered with PyCOLMAP CPU at 1600px, with 11,039
 sparse matched points and median *feature* reprojection error 0.479px. This
 supports camera coverage of a challenging standing monument, not verified
 anatomical or mesh fidelity.
+
+## Reusable CC BY sculpture benchmark (Cycladic figurine)
+
+The [University of Wyoming's original Greek Cycladic Figurine photogrammetry
+dataset](https://dataverse.arcc.uwyo.edu/dataset.xhtml?persistentId=doi:10.15786/16543554)
+contains **72 photographs** of a replica sculpture (229.2 MiB ZIP). It is
+explicitly **CC BY 4.0**. Credit *Hutchens, Chad Everett; Koenig, Charles
+(2021), Greek Cycladic Figurine photogrammetry dataset, Wyoming Data
+Repository, doi:10.15786/16543554*, link the license and identify any changes.
+This small tabletop sculpture is a good legally reusable integration fixture,
+but **not** a replacement for the busy-background, large-statue benchmarks
+above. No dataset photographs or models are included in Git.
+
+    # Download the original ZIP from the official Dataverse page above.
+    # Extract privately and run the source-aware intake (72 images required).
+    python scripts/prepare_cycladic_figurine.py \
+      --unpacked /private/cycladic-figurine \
+      --archive /private/cycladic_figurine_photo_dataset.zip
+
+    kumiki-blender reconstruct-photos \
+      --manifest /private/cycladic-figurine/reference-set.json \
+      --output /private/cycladic-sparse-r01 \
+      --engine pycolmap --undistort --max-image-size 1600
+
+The intake verifies the publisher's recorded archive MD5 when supplied,
+pins the actual source ZIP SHA-256, individual photo SHA-256 values and
+attribution, and deliberately leaves camera directions unknown until SfM.
+Generated output stays private pending manual review and a valid attribution
+notice. A full OpenMVS/Blender reconstruction on this source remains a future
+benchmark; availability of photographs is not a claim that its camera
+registration or mesh appearance has already been verified.

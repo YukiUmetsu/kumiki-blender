@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import math
 import shutil
+import statistics
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -25,38 +26,73 @@ class TextureFinishSettings:
     shadow_lift: float = 0.0
     neutralize_cast: bool = False
     protect_black: int = 12
+    balance_atlases: bool = False
+    max_balance_ev: float = 0.75
+    auto_exposure_luma: float | None = None
+    max_auto_exposure_ev: float = 1.0
 
     def validate(self) -> "TextureFinishSettings":
         for name, low, high in (("exposure_ev", -3.0, 3.0),
                                 ("gamma", 0.4, 2.5),
                                 ("saturation", 0.0, 2.5),
-                                ("shadow_lift", 0.0, 0.35)):
+                                ("shadow_lift", 0.0, 0.35),
+                                ("max_balance_ev", 0.0, 2.0),
+                                ("max_auto_exposure_ev", 0.0, 2.0)):
             value = getattr(self, name)
             if type(value) not in (float, int) or not math.isfinite(value) or not low <= value <= high:
                 raise ReferenceError(f"{name} must be finite in [{low}, {high}]")
-        if type(self.neutralize_cast) is not bool:
-            raise ReferenceError("neutralize_cast must be a boolean")
+        target = self.auto_exposure_luma
+        if (target is not None and (type(target) not in (float, int)
+                or not math.isfinite(target) or not 32 <= target <= 224)):
+            raise ReferenceError("auto_exposure_luma must be finite in [32, 224]")
+        if type(self.neutralize_cast) is not bool or type(self.balance_atlases) is not bool:
+            raise ReferenceError("neutralize_cast and balance_atlases must be booleans")
         if type(self.protect_black) is not int or not 0 <= self.protect_black <= 32:
             raise ReferenceError("protect_black must be an integer between 0 and 32")
         return self
 
 
-def _atlas_correction(photo: Any, settings: TextureFinishSettings) -> tuple[Any, dict[str, Any]]:
+def _valid_texel_sample(photo: Any, protect_black: int) -> tuple[Any, Any, Any]:
+    from PIL import Image, ImageChops
+
+    sample = photo.copy()
+    sample.thumbnail((768, 768), Image.Resampling.BILINEAR)
+    rgb = sample.convert("RGB")
+    gray = rgb.convert("L")
+    valid = gray.point(lambda value: 255 if value >= max(16, protect_black) else 0)
+    if "A" in sample.getbands() or "transparency" in sample.info:
+        # Transparent white padding is just as uncovered as black padding.
+        alpha = sample.convert("RGBA").getchannel("A")
+        opaque = alpha.point(lambda value: 255 if value >= 128 else 0)
+        valid = ImageChops.multiply(valid, opaque)
+    return rgb, gray, valid
+
+
+def _sample_luminance(photo: Any, protect_black: int) -> float | None:
+    from PIL import ImageStat
+
+    _rgb, gray, valid = _valid_texel_sample(photo, protect_black)
+    if not valid.getbbox():
+        return None
+    # Median is less sensitive to highlights or shadow areas than the mean.
+    return float(ImageStat.Stat(gray, valid).median[0])
+
+
+def _atlas_correction(photo: Any, settings: TextureFinishSettings, *,
+                      balance_ev: float = 0.0,
+                      auto_ev: float = 0.0) -> tuple[Any, dict[str, Any]]:
     from PIL import Image, ImageEnhance, ImageStat
 
     original = photo.convert("RGB")
-    sample = original.copy()
-    sample.thumbnail((768, 768), Image.Resampling.BILINEAR)
-    sample_gray = sample.convert("L")
-    # OpenMVS may leave black/uncovered texels. Do not estimate color from them.
-    valid = sample_gray.point(lambda value: 255 if value >= max(settings.protect_black, 16) else 0)
+    # Ignore both black padding and transparent padding when estimating color.
+    sample, sample_gray, valid = _valid_texel_sample(photo, settings.protect_black)
     stats = ImageStat.Stat(sample, valid)
     gains = [1.0, 1.0, 1.0]
     if settings.neutralize_cast and valid.getbbox():
         means = stats.mean[:3]
         neutral = sum(means) / 3
         gains = [max(0.75, min(1.25, neutral / max(1.0, mean))) for mean in means]
-    exposure = 2**settings.exposure_ev
+    exposure = 2**(settings.exposure_ev + balance_ev + auto_ev)
     channels = original.split()
     corrected_channels = []
     for channel, gain in zip(channels, gains):
@@ -76,14 +112,26 @@ def _atlas_correction(photo: Any, settings: TextureFinishSettings) -> tuple[Any,
     matte = original.convert("L").point(
         lambda value: max(0, min(255, round((value - threshold) * 255 / 20))))
     corrected = Image.composite(corrected, original, matte)
-    dark_pixels = sum(sample_gray.histogram()[:max(threshold, 16)])
     count = sample_gray.width * sample_gray.height
+    valid_pixels = valid.histogram()[255]
+    invalid_pixels = count - valid_pixels
+    after_sample = corrected.copy()
+    after_sample.thumbnail((768, 768), Image.Resampling.BILINEAR)
+    highlight_pixels = sum(after_sample.convert("L").histogram(mask=valid)[250:])
+    highlight_fraction = highlight_pixels / max(1, valid_pixels)
+    warnings = []
+    if invalid_pixels / count > 0.1:
+        warnings.append("High proportion of dark/transparent uncovered texels; correction cannot recover detail")
+    if highlight_fraction > 0.1:
+        warnings.append("Bright texture clipping exceeds 10%; lower exposure or shadow lift")
     return corrected, {
-        "approx_uncovered_dark_fraction": round(dark_pixels / count, 5),
+        "approx_uncovered_dark_fraction": round(invalid_pixels / count, 5),
+        "approx_highlight_clip_fraction_after": round(highlight_fraction, 5),
         "sampled_mean_rgb": [round(x, 2) for x in stats.mean[:3]],
         "neutralization_gains": [round(x, 5) for x in gains],
-        "warnings": (["High proportion of dark/possibly uncovered texels; correction cannot recover detail"]
-                     if dark_pixels / count > 0.1 else []),
+        "atlas_balance_ev": round(balance_ev, 5),
+        "auto_exposure_ev": round(auto_ev, 5),
+        "warnings": warnings,
     }
 
 
@@ -109,6 +157,30 @@ def finish_dense_textures(dense_revision: str | Path, output: str | Path,
     if not str(dense_report.get("status", "")).startswith("dense-mesh-candidate"):
         raise ReferenceError("Dense texture correction requires a completed candidate mesh")
     pinned = _textured_obj_plan(source, dense_report, max_mesh_faces=10_000_000)
+    # Compute atlas-to-atlas brightness ratios from valid (non-black) texels.
+    # A bounded gain per page can reduce *between-page* seams, but it cannot
+    # repair UV chart edges or different lighting within a single atlas.
+    balance: dict[str, float] = {}
+    brightness: dict[str, float | None] = {}
+    auto_ev = 0.0
+    if settings.balance_atlases or settings.auto_exposure_luma is not None:
+        for entry in pinned["texture_atlases"]:
+            atlas_path = Path(entry["path"])
+            with Image.open(atlas_path) as image:
+                brightness[atlas_path.name] = _sample_luminance(image, settings.protect_black)
+        usable = [value for value in brightness.values() if value is not None]
+        if usable:
+            target_luma = statistics.median(usable)
+            if settings.auto_exposure_luma is not None:
+                desired_ev = math.log2(settings.auto_exposure_luma / max(1, target_luma))
+                auto_ev = max(-settings.max_auto_exposure_ev,
+                              min(settings.max_auto_exposure_ev, desired_ev))
+            if settings.balance_atlases and len(usable) > 1:
+                for filename, value in brightness.items():
+                    if value is not None:
+                        ev = math.log2(target_luma / max(1, value))
+                        balance[filename] = max(-settings.max_balance_ev,
+                                                min(settings.max_balance_ev, ev))
     original_obj, original_mtl = Path(pinned["source_obj"]), Path(pinned["source_mtl"])
     target.mkdir(parents=True, exist_ok=False)
     (target / "review").mkdir()
@@ -144,7 +216,9 @@ def finish_dense_textures(dense_revision: str | Path, output: str | Path,
                 photo.load()
                 if photo.format not in ("JPEG", "PNG"):
                     raise ReferenceError("Texture correction expects a JPEG or PNG atlas")
-                corrected, quality = _atlas_correction(photo, settings)
+                corrected, quality = _atlas_correction(
+                    photo, settings, balance_ev=balance.get(atlas.name, 0.0),
+                    auto_ev=auto_ev)
                 output_path = target / atlas.name
                 if photo.format == "JPEG":
                     corrected.save(output_path, "JPEG", quality=95, subsampling=0)
@@ -170,6 +244,7 @@ def finish_dense_textures(dense_revision: str | Path, output: str | Path,
                 "path": atlas.name, "sha256": _sha256(output_path),
                 "dimensions": list(corrected.size), "source_sha256": item["sha256"],
                 "comparison_preview": str(preview_path.relative_to(target)),
+                "source_median_luma": brightness.get(atlas.name),
                 **quality,
             })
         except Exception as error:
