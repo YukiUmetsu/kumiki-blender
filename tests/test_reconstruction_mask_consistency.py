@@ -77,6 +77,8 @@ class MaskConsistencyTests(unittest.TestCase):
         self.assertFalse(result["distribution_allowed"])
         self.assertEqual(len(result["images"]), 3)
         self.assertEqual(result["images"][2]["consensus_outliers"], 1)
+        self.assertEqual(result["images"][2]["possible_missing_subject"], 1)
+        self.assertEqual(result["images"][2]["possible_background_leaks"], 0)
         self.assertEqual(result["images"][2]["review_priority"], "high")
         self.assertEqual(result["images"][0]["review_priority"], "medium")
         self.assertTrue((target / result["contact_sheet"]).is_file())
@@ -84,6 +86,10 @@ class MaskConsistencyTests(unittest.TestCase):
                          "undistorted/sparse/images.bin"))
         for entry in result["images"]:
             self.assertTrue((target / entry["review"]).is_file())
+            for detail in entry["detail_reviews"]:
+                self.assertTrue((target / detail["review"]).is_file())
+                with Image.open(target / detail["review"]) as crop:
+                    self.assertEqual(crop.size, (100, 80))
             self.assertEqual(entry["mask_sha256"],
                              _digest(self.masks / (entry["filename"] + ".mask.png")))
 
@@ -104,9 +110,9 @@ class MaskConsistencyTests(unittest.TestCase):
         self.assertTrue(report["model_file"].endswith("images.txt"))
         self.assertEqual(report["mixed_label_tracks"], 2)
 
-    def test_overlay_budget_keeps_red_majority_outliers_ahead_of_ambiguous_ties(self):
+    def test_overlay_budget_keeps_cyan_majority_outliers_ahead_of_ambiguous_ties(self):
         # The two-view tie appears before the 3-view disagreement in the model.
-        # A one-marker preview must still show the higher-priority red marker.
+        # A one-marker preview must still show the higher-priority cyan marker.
         self.points[0].insert(2, (4, 60, 104))
         self.points[2].insert(2, (30, 65, 104))
         self._write_model()
@@ -116,10 +122,81 @@ class MaskConsistencyTests(unittest.TestCase):
         image = result["images"][2]
         self.assertEqual(image["consensus_outliers"], 1)
         self.assertEqual(image["ambiguous_observations"], 1)
+        self.assertEqual(len(image["review_targets"]), 1)
+        self.assertEqual(image["review_targets"][0]["kind"], "possible_missing_subject")
+        self.assertEqual(image["review_targets"][0]["point3d_id"], 102)
+        self.assertEqual(image["review_targets"][0]["foreground_votes"], 2)
+        self.assertTrue(any("capped" in warning for warning in image["warnings"]))
+        self.assertEqual(image["detail_reviews"][0]["kind"], "possible_missing_subject")
         with Image.open(target / image["review"]) as overlay:
-            red = overlay.convert("RGB").getpixel((9, 40))
+            cyan = overlay.convert("RGB").getpixel((9, 40))
+        self.assertGreater(cyan[1], cyan[0] * 1.5)
+        self.assertGreater(cyan[2], cyan[0] * 1.5)
+
+    def test_extra_foreground_disagreement_is_red_and_mask_tint_is_visible(self):
+        # Two other masks reject this 3D point; the current camera includes it.
+        for index, point in enumerate(((4, 70, 105), (4, 70, 105), (30, 70, 105))):
+            self.points[index].append(point)
+        self._write_model()
+        target = self.root / "directional-audit"
+        result = audit_multiview_masks(self.sparse, self.masks, target,
+                                       max_overlay_points=1)
+        image = result["images"][2]
+        self.assertEqual(image["possible_background_leaks"], 1)
+        self.assertEqual(image["possible_missing_subject"], 1)
+        self.assertEqual(len(image["review_targets"]), 1)
+        self.assertEqual(image["review_targets"][0]["kind"], "possible_background_leak")
+        leak = next(point for point in image["review_targets"]
+                    if point["kind"] == "possible_background_leak")
+        self.assertEqual(leak["point3d_id"], 105)
+        self.assertEqual(leak["background_votes"], 2)
+        self.assertAlmostEqual(leak["normalized_xy"][0], 30/99, places=5)
+        with Image.open(target / image["review"]) as overlay:
+            photo = overlay.convert("RGB")
+            red = photo.getpixel((35, 70))
+            masked = photo.getpixel((50, 50))
+            outside = photo.getpixel((10, 20))
         self.assertGreater(red[0], red[1] * 1.5)
         self.assertGreater(red[0], red[2] * 1.5)
+        self.assertGreater(masked[0], outside[0])
+        self.assertLess(masked[1], outside[1])
+
+    def test_detail_review_preserves_full_resolution_near_sparse_features(self):
+        index_path = self.sparse / "undistorted-reference-index.json"
+        index = json.loads(index_path.read_text())
+        for entry in index["images"]:
+            name = entry["filename"]
+            photo_path = self.sparse / "undistorted/images" / name
+            Image.new("RGB", (1100, 900), (118, 112, 105)).save(photo_path)
+            entry["sha256"] = _digest(photo_path)
+            entry["dimensions"] = [1100, 900]
+            mask = Image.new("L", (1100, 900), 0)
+            mask.paste(255, (20, 10, 80, 75))
+            mask.save(self.masks / (name + ".mask.png"))
+        index_path.write_text(json.dumps(index))
+        target = self.root / "large-photo-audit"
+        result = audit_multiview_masks(self.sparse, self.masks, target)
+        for entry in result["images"]:
+            self.assertEqual(entry["source_photo_sha256"],
+                             _digest(self.sparse / "undistorted/images" / entry["filename"]))
+            for detail in entry["detail_reviews"]:
+                with Image.open(target / detail["review"]) as crop:
+                    self.assertEqual(crop.size, (512, 512))
+
+    def test_normalized_review_coordinates_are_clamped_inside_photo(self):
+        for points in self.points:
+            points.append((99.8, 79.8, 106))
+        self._write_model()
+        mask_path = self.masks / "view-02.jpg.mask.png"
+        with Image.open(mask_path) as existing:
+            mask = existing.copy()
+        mask.putpixel((99, 79), 255)
+        mask.save(mask_path)
+        result = audit_multiview_masks(self.sparse, self.masks,
+                                       self.root / "boundary-audit")
+        candidates = result["images"][2]["review_targets"]
+        boundary = next(mark for mark in candidates if mark["point3d_id"] == 106)
+        self.assertEqual(boundary["normalized_xy"], [1.0, 1.0])
 
     def test_tampering_corrupt_tracks_or_no_overlap_rejects_without_output(self):
         target = self.root / "invalid"

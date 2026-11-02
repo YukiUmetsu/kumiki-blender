@@ -26,6 +26,9 @@ _MAX_MODEL_BYTES = 512 * 1024 * 1024
 _IMAGE_HEADER = struct.Struct("<i7di")
 _FEATURE = struct.Struct("<ddq")
 _COUNT = struct.Struct("<Q")
+_MARK_COLORS = {"possible_background_leak": (250, 58, 40),
+                "possible_missing_subject": (37, 218, 241),
+                "ambiguous_tie": (255, 212, 46)}
 
 
 def _exact(stream: BinaryIO, size: int) -> bytes:
@@ -169,11 +172,15 @@ def audit_multiview_masks(reconstruction: str | Path, masks: str | Path,
                          "mask_sha256": mask_hashes[name],
                          "tracked_observations": 0, "out_of_frame_observations": 0,
                          "compared_observations": 0, "consensus_outliers": 0,
+                         "possible_background_leaks": 0,
+                         "possible_missing_subject": 0,
                          "ambiguous_observations": 0, "foreground_observations": 0,
-                         "background_observations": 0, "warnings": []} for name in names}
+                         "background_observations": 0, "review_targets": [],
+                         "warnings": []} for name in names}
     index = _json(source / "undistorted-reference-index.json")
     for item in index["images"]:
         image_meta[item["filename"]]["source_photo_sha256"] = item["sha256"]
+        image_meta[item["filename"]]["dimensions"] = item["dimensions"]
     observed_points: dict[int, list[tuple[str, float, float, bool]]] = defaultdict(list)
     for name in names:
         with Image.open(mask_root / (name + ".mask.png")) as mask:
@@ -194,13 +201,16 @@ def audit_multiview_masks(reconstruction: str | Path, masks: str | Path,
                 image_meta[name]["tracked_observations"] += 1
                 image_meta[name]["foreground_observations" if foreground
                                  else "background_observations"] += 1
-    # Keep red outliers ahead of yellow ties even when the preview budget is
-    # saturated. A camera with thousands of ambiguous tracks must not hide
-    # the actual majority disagreements that warrant its high review priority.
-    red_overlays: dict[str, list[tuple[float, float]]] = {name: [] for name in names}
-    yellow_overlays: dict[str, list[tuple[float, float]]] = {name: [] for name in names}
+    # Majority outliers must remain visible if thousands of tied two-view
+    # tracks saturate a camera's marker budget. Keep both directions separate:
+    # a mask's extra foreground needs a different correction than missing
+    # statue pixels. Neither direction is automatically trusted or painted.
+    outlier_marks: dict[str, dict[str, list[dict[str, Any]]]] = {
+        name: {"possible_background_leak": [], "possible_missing_subject": []}
+        for name in names}
+    tie_marks: dict[str, list[dict[str, Any]]] = {name: [] for name in names}
     compared_tracks, mixed_tracks, ambiguous_tracks = 0, 0, 0
-    for observations in observed_points.values():
+    for point_id, observations in observed_points.items():
         if len(observations) < 2:
             continue
         compared_tracks += 1
@@ -217,14 +227,24 @@ def audit_multiview_masks(reconstruction: str | Path, masks: str | Path,
         for name, x, y, flag in observations:
             if tied:
                 image_meta[name]["ambiguous_observations"] += 1
-                points = yellow_overlays[name]
+                kind = "ambiguous_tie"
+                points = tie_marks[name]
             elif flag != majority:
                 image_meta[name]["consensus_outliers"] += 1
-                points = red_overlays[name]
+                kind = "possible_background_leak" if flag else "possible_missing_subject"
+                image_meta[name]["possible_background_leaks" if flag
+                                 else "possible_missing_subject"] += 1
+                points = outlier_marks[name][kind]
             else:
                 continue
             if len(points) < max_overlay_points:
-                points.append((x, y))
+                width, height = image_meta[name]["dimensions"]
+                points.append({"point3d_id": point_id,
+                               "x": round(x, 3), "y": round(y, 3),
+                               "normalized_xy": [round(min(1.0, x / max(1, width-1)), 6),
+                                                 round(min(1.0, y / max(1, height-1)), 6)],
+                               "kind": kind, "foreground_votes": positives,
+                               "background_votes": negatives})
     if compared_tracks == 0:
         raise ReferenceError("No shared 3D feature tracks; cross-view mask QA cannot run")
     for name in names:
@@ -236,33 +256,79 @@ def audit_multiview_masks(reconstruction: str | Path, masks: str | Path,
         if item["compared_observations"] < 25:
             item["warnings"].append("Few shared sparse points; cannot infer mask correctness")
         if item["consensus_outliers"]:
-            item["warnings"].append("Track labels disagree with multi-view majority; inspect red points")
+            item["warnings"].append("Track labels disagree with multi-view majority; inspect colored outlier points")
         if item["ambiguous_observations"]:
             item["warnings"].append("Some tracks have no majority label; inspect yellow points")
         if item["out_of_frame_observations"]:
             item["warnings"].append("Some sparse features fall outside rectified image boundaries")
+        if item["consensus_outliers"] + item["ambiguous_observations"] > max_overlay_points:
+            item["warnings"].append("Review markers were capped; counts include every observed disagreement")
     target.mkdir(parents=True, exist_ok=False)
     (target / "review").mkdir()
     for name in names:
         with Image.open(source / "undistorted/images" / name) as photo:
             original_width, original_height = photo.size
-            preview = photo.convert("RGB")
+            original_rgb = photo.convert("RGB")
+            preview = original_rgb.copy()
             preview.thumbnail((1000, 1000))
+            # Show what the current mask includes directly on the photograph.
+            # Without this tint a red/cyan marker cannot be interpreted in
+            # context, especially with trees or walls beside a large statue.
+            with Image.open(mask_root / (name + ".mask.png")) as mask:
+                mask_full = mask.convert("L")
+            alpha = mask_full.resize(preview.size, Image.Resampling.NEAREST)
+            alpha = alpha.point(lambda value: round(value * 0.20))
+            preview = Image.composite(Image.new("RGB", preview.size, (237, 92, 61)),
+                                      preview, alpha)
             draw = ImageDraw.Draw(preview)
-            selected_red = red_overlays[name][:max_overlay_points]
-            selected_yellow = yellow_overlays[name][:max_overlay_points-len(selected_red)]
-            # Paint red last so majority disagreements are visible on top.
-            for points, color in ((selected_yellow, (255, 212, 46)),
-                                  (selected_red, (250, 58, 40))):
-                for x, y in points:
-                    cx = round(x * preview.width / original_width)
-                    cy = round(y * preview.height / original_height)
-                    radius = 5
-                    draw.ellipse((cx-radius, cy-radius, cx+radius, cy+radius),
-                                 outline=color, width=3)
+            # Prefer possible background contamination over missing subject
+            # when markers are capped; both outrank ambiguous ties.
+            selected_outliers = outlier_marks[name]["possible_background_leak"][:max_overlay_points]
+            selected_outliers += outlier_marks[name]["possible_missing_subject"][
+                :max_overlay_points-len(selected_outliers)]
+            selected_ties = tie_marks[name][:max_overlay_points-len(selected_outliers)]
+            image_meta[name]["review_targets"] = selected_outliers + selected_ties
+            # Draw ties first so concrete disagreements remain visually prominent.
+            for mark in selected_ties + selected_outliers:
+                x, y = mark["x"], mark["y"]
+                color = _MARK_COLORS[mark["kind"]]
+                cx = min(preview.width-1, round(x * preview.width / original_width))
+                cy = min(preview.height-1, round(y * preview.height / original_height))
+                radius = 5
+                draw.ellipse((cx-radius-1, cy-radius-1, cx+radius+1, cy+radius+1),
+                             outline=(19, 22, 25), width=2)
+                draw.ellipse((cx-radius, cy-radius, cx+radius, cy+radius),
+                             outline=color, width=3)
             preview_file = target / "review" / (name + ".jpg")
             preview.save(preview_file, "JPEG", quality=86)
             image_meta[name]["review"] = str(preview_file.relative_to(target))
+            # The 1000px overview can hide a tiny missing eye, hand or carved
+            # contour on an 8K statue photograph. Supply bounded, full-pixel
+            # crops around the top disagreements for actual detail inspection.
+            image_meta[name]["detail_reviews"] = []
+            for detail_index, mark in enumerate((selected_outliers + selected_ties)[:3], 1):
+                crop_w, crop_h = min(512, original_width), min(512, original_height)
+                x0 = max(0, min(original_width-crop_w,
+                                round(mark["x"])-crop_w//2))
+                y0 = max(0, min(original_height-crop_h,
+                                round(mark["y"])-crop_h//2))
+                box = (x0, y0, x0+crop_w, y0+crop_h)
+                detail_rgb = original_rgb.crop(box)
+                detail_alpha = mask_full.crop(box).point(lambda value: round(value*0.20))
+                detail = Image.composite(Image.new("RGB", detail_rgb.size, (237, 92, 61)),
+                                         detail_rgb, detail_alpha)
+                detail_draw = ImageDraw.Draw(detail)
+                center_x = min(original_width-1, round(mark["x"]))-x0
+                center_y = min(original_height-1, round(mark["y"]))-y0
+                detail_draw.ellipse((center_x-9, center_y-9, center_x+9, center_y+9),
+                                    outline=(19, 22, 25), width=3)
+                detail_draw.ellipse((center_x-8, center_y-8, center_x+8, center_y+8),
+                                    outline=_MARK_COLORS[mark["kind"]], width=3)
+                path = target / "review" / (name + f".detail-{detail_index:02}.jpg")
+                detail.save(path, "JPEG", quality=92)
+                image_meta[name]["detail_reviews"].append({
+                    "review": str(path.relative_to(target)),
+                    "kind": mark["kind"], "point3d_id": mark["point3d_id"]})
     columns, cell_w, cell_h = 4, 288, 238
     contact = Image.new("RGB", (columns*cell_w,
                                  ((len(names)+columns-1)//columns)*cell_h),
@@ -285,6 +351,9 @@ def audit_multiview_masks(reconstruction: str | Path, masks: str | Path,
         "model_file": str(model.relative_to(source)),
         "model_sha256": _sha256(model),
         "max_overlay_points": max_overlay_points,
+        "marker_legend": {"possible_background_leak": "red: mask foreground / other views mostly background",
+                          "possible_missing_subject": "cyan: mask background / other views mostly foreground",
+                          "ambiguous_tie": "yellow: no multi-view majority"},
         "compared_3d_tracks": compared_tracks,
         "mixed_label_tracks": mixed_tracks,
         "ambiguous_label_tracks": ambiguous_tracks,

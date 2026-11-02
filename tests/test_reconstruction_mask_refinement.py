@@ -8,11 +8,12 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from PIL import Image
+from PIL import Image, ImageDraw
 
 from kumiki_blender.cli import main
 from kumiki_blender.reconstruction.dense import DenseSettings, plan_dense_reconstruction
-from kumiki_blender.reconstruction.mask_refinement import refine_rectified_masks
+from kumiki_blender.reconstruction.mask_refinement import (_color_refine_boundary,
+                                                            refine_rectified_masks)
 from kumiki_blender.reconstruction.references import ReferenceError
 
 
@@ -123,6 +124,80 @@ class MaskRefinementTests(unittest.TestCase):
         with self.assertRaisesRegex(ReferenceError, "edge_inset_pixels"):
             refine_rectified_masks(self.sparse, self.source_masks, self.root / "bad-inset",
                                    edge_inset_pixels=9)
+
+    def test_color_guided_boundary_removes_color_distinct_halo_without_hard_seed_changes(self):
+        import numpy as np
+
+        photo = Image.new("RGB", (100, 80), (18, 28, 44))
+        ImageDraw.Draw(photo).rectangle((32, 12, 68, 65), fill=(210, 190, 158))
+        mask = Image.new("L", (100, 80), 0)
+        ImageDraw.Draw(mask).rectangle((26, 7, 74, 70), fill=255)
+        initial = np.asarray(mask)
+        refined = _color_refine_boundary(initial, photo, band_pixels=8,
+                                         max_side=256, iterations=4)
+        self.assertEqual(refined[35, 27], 0)  # halo reclassified as background
+        self.assertEqual(refined[35, 50], 255)  # high-confidence statue core retained
+        self.assertEqual(refined[1, 1], 0)  # sure background remains background
+        self.assertGreater(int(np.count_nonzero(initial != refined)), 0)
+
+    def test_color_guided_boundary_scales_back_without_changing_far_pixels(self):
+        import cv2
+        import numpy as np
+
+        photo = Image.new("RGB", (800, 640), (18, 28, 44))
+        ImageDraw.Draw(photo).rectangle((240, 100, 560, 520), fill=(210, 190, 158))
+        mask = Image.new("L", (800, 640), 0)
+        ImageDraw.Draw(mask).rectangle((230, 90, 570, 530), fill=255)
+        initial = np.asarray(mask)
+        refined = _color_refine_boundary(initial, photo, band_pixels=16,
+                                         max_side=256, iterations=4)
+        self.assertEqual(refined[300, 400], 255)
+        self.assertEqual(refined[300, 231], 0)
+        self.assertEqual(refined[20, 20], 0)
+        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (33, 33))
+        fixed_fg = cv2.erode(initial, kernel) > 0
+        fixed_bg = cv2.dilate(initial, kernel) == 0
+        self.assertTrue(np.all(refined[fixed_fg] == 255))
+        self.assertTrue(np.all(refined[fixed_bg] == 0))
+
+    def test_color_guided_boundary_writes_separate_review_revision_and_cli(self):
+        index_path = self.sparse / "undistorted-reference-index.json"
+        index = json.loads(index_path.read_text())
+        report_path = self.source_masks / "mask-report.json"
+        existing = json.loads(report_path.read_text())
+        for entry, mask_entry in zip(index["images"], existing["images"]):
+            name = entry["filename"]
+            image_path = self.sparse / "undistorted/images" / name
+            photo = Image.new("RGB", (100, 80), (18, 28, 44))
+            ImageDraw.Draw(photo).rectangle((32, 12, 68, 65), fill=(210, 190, 158))
+            photo.save(image_path)
+            entry["sha256"] = _hash(image_path)
+            mask_entry["source_photo_sha256"] = entry["sha256"]
+            mask_path = self.source_masks / "masks" / (name + ".mask.png")
+            mask = Image.new("L", (100, 80), 0)
+            ImageDraw.Draw(mask).rectangle((26, 7, 74, 70), fill=255)
+            mask.save(mask_path)
+            mask_entry["mask_sha256"] = _hash(mask_path)
+        index_path.write_text(json.dumps(index))
+        report_path.write_text(json.dumps(existing))
+        target = self.root / "color-guided-r02"
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(main([
+                "refine-dense-masks", "--reconstruction", str(self.sparse),
+                "--mask-revision", str(self.source_masks), "--output", str(target),
+                "--color-band-pixels", "8", "--color-max-side", "256",
+                "--color-iterations", "4",
+            ]), 0)
+        result = json.loads((target / "mask-report.json").read_text())
+        self.assertEqual(result["color_band_pixels"], 8)
+        self.assertGreater(result["images"][0]["color_boundary_pixels_changed"], 0)
+        self.assertFalse(result["approved_for_reconstruction"])
+        with Image.open(target / "masks/view-00.jpg.mask.png") as refined:
+            self.assertEqual(refined.getpixel((27, 35)), 0)
+            self.assertEqual(refined.getpixel((50, 35)), 255)
+        with self.assertRaisesRegex(ReferenceError, "color_band_pixels"):
+            refine_rectified_masks(self.sparse, self.source_masks,
+                                   self.root / "invalid-color", color_band_pixels=33)
 
     def test_cli_refine_masks_and_reject_invalid_settings(self):
         target = self.root / "cli-r02"

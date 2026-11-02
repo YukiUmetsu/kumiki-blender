@@ -216,6 +216,10 @@ def main(argv: list[str] | None = None) -> int:
     refine_mask_parser.add_argument("--max-hole-pixels", type=int, default=0)
     refine_mask_parser.add_argument("--edge-inset-pixels", type=int, default=0,
                                     help="Optional 1–8 pixel contour inset to reduce background edge halos")
+    refine_mask_parser.add_argument("--color-band-pixels", type=int, default=0,
+                                    help="Optional 1–32 pixel local GrabCut boundary reclassification (candidate only)")
+    refine_mask_parser.add_argument("--color-max-side", type=int, default=1280)
+    refine_mask_parser.add_argument("--color-iterations", type=int, default=3)
     mask_consistency_parser = subcommands.add_parser(
         "audit-dense-masks", help="Inspect multi-view COLMAP feature-track disagreements in rectified masks")
     mask_consistency_parser.add_argument("--reconstruction", type=Path, required=True)
@@ -334,7 +338,10 @@ def main(argv: list[str] | None = None) -> int:
                     args.reconstruction, args.mask_revision, args.output,
                     edits=args.edits, min_island_pixels=args.min_island_pixels,
                     max_hole_pixels=args.max_hole_pixels,
-                    edge_inset_pixels=args.edge_inset_pixels)
+                    edge_inset_pixels=args.edge_inset_pixels,
+                    color_band_pixels=args.color_band_pixels,
+                    color_max_side=args.color_max_side,
+                    color_iterations=args.color_iterations)
             except ReferenceError as error:
                 raise RecipeError(str(error)) from error
             print(json.dumps(report, indent=2))

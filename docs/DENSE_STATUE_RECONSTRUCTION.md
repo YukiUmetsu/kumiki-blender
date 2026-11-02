@@ -91,18 +91,29 @@ private texture projection to produce a mesh for artistic inspection.
       --min-island-pixels 24 --max-hole-pixels 24 \
       --edge-inset-pixels 2
 
+    # Optional color-aware boundary pass: moves foreground/background labels
+    # only within six ORIGINAL pixels of the existing mask edge. Keeps
+    # definite interior subjects intact, but inspect thin hair/fingers.
+    kumiki-blender refine-dense-masks \
+      --reconstruction .review/statue/sparse-r01 \
+      --mask-revision .review/statue/masks-r02 \
+      --output .review/statue/masks-r03 \
+      --color-band-pixels 6 --color-max-side 2048 \
+      --color-iterations 4
+
     # Find camera-specific mask mistakes using actual shared COLMAP 3D tracks.
-    # Red = disagreement with majority; yellow = ambiguous two-view tie.
+    # Red = possible extra background; cyan = possible missing statue;
+    # yellow = ambiguous tie. Review all colors before editing masks.
     # This is a private QA report, NOT an automatic mask approval.
     kumiki-blender audit-dense-masks \
       --reconstruction .review/statue/sparse-r01 \
-      --rectified-masks .review/statue/masks-r02/masks \
+      --rectified-masks .review/statue/masks-r03/masks \
       --output .review/statue/mask-consistency-r01
 
     # Use only reviewed masks; OpenMVS consumes <rectified-filename>.mask.png.
     kumiki-blender build-dense-photos \
       --reconstruction .review/statue/sparse-r01 \
-      --rectified-masks .review/statue/masks-r02/masks \
+      --rectified-masks .review/statue/masks-r03/masks \
       --output .review/statue/dense-masked-r01 --backend openmvs
 
     # CPU-capable OpenMVS meshing + refinement + texturing.
@@ -246,6 +257,17 @@ that include trees or truncate the statue produce contaminated geometry.
 background-colored halos. It may also erase thin hair or fingers: start with
 1–2 pixels, inspect contours at full resolution, and restore essential details
 using inclusion polygons (applied after the inset).
+`--color-band-pixels 1..32` is an **opt-in local GrabCut edge refinement**:
+the source photograph supplies color evidence only within that many original
+pixels of each current foreground-mask boundary. Definite interiors and
+background outside that band are clamped to their original labels. Use
+`--color-max-side` (256–4096) to cap CPU/RAM and `--color-iterations` (1–8)
+to control refinement work. This can remove background-colored halos at
+high-contrast statue edges, but similar-colored walls, deep folds and thin
+hair/fingers can still be misclassified. It writes per-view changed-pixel
+counts and a **new, unapproved revision**; inspect it and restore detail with
+include polygons if necessary. A broad band or low processing resolution may
+make boundaries blockier, so start with 2–6 pixels and review at 100% zoom.
 The masks are SHA-pinned, copied only into the private MVS workspace, checked
 on resume, and remain absent from Git. Do **not** reuse original distorted-image
 masks by simply resizing them: regenerate/warp them in the exact rectified
@@ -255,10 +277,16 @@ camera grid and inspect the boundary before reconstruction.
 rectified images and reports where its **same physical feature** is foreground
 in some masks and background in other views. It reads the genuine binary or
 text COLMAP `images` model, pins the source/model/mask SHA-256 hashes, writes
-camera-specific red/yellow marker overlays, a worst-first contact sheet and
-per-view disagreement counts. A red marker means the view differs from the
-majority mask label on that 3D track; yellow means a tied track (often just
-two views), so the wrong view cannot be inferred. Neither consistent labels
+camera-specific three-color marker overlays, a tinted foreground-mask preview,
+a worst-first contact sheet, up to three full-resolution 512px detail crops
+per camera and per-view disagreement counts. **Red** marks a possible
+extra-foreground/background leak (the local mask includes a feature most
+other registered views exclude); **cyan** marks a possibly missing statue
+region (the local mask excludes a feature most other views include);
+**yellow** means a tied track (often just two views). The JSON report includes
+bounded normalized review coordinates, track IDs and label votes so a reviewer
+can find the candidate corrections at their original image resolution.
+These are diagnostic suggestions, never automatic mask edits. Neither consistent labels
 nor a small sparse sample guarantee a good silhouette: consistently included
 background features and thin untracked anatomy still require manual review.
 All previews remain private and the audit never edits masks or automatically
