@@ -163,7 +163,7 @@ def _ply_counts(path: Path) -> dict[str, int]:
     if not path.is_file() or path.is_symlink():
         raise ReferenceError("Dense mesh PLY is missing")
     with path.open("rb") as stream:
-        header = stream.read(65_537)
+        header = stream.read(65_537).replace(b"\r\n", b"\n")
     end = header.find(b"end_header\n")
     if end < 0 or end > 65_000 or not header.startswith(b"ply\n"):
         raise ReferenceError("Dense mesh has an invalid or oversized PLY header")
@@ -317,7 +317,8 @@ def build_dense_reconstruction(reconstruction: str | Path, output: str | Path,
                 return checkpoint()
     try:
         metrics = _ply_counts(ply)
-        report["mesh"] = {"ply": str(ply.relative_to(target)), **metrics}
+        report["mesh"] = {"ply": str(ply.relative_to(target)),
+                          "sha256": _sha256(ply), **metrics}
         if metrics["faces"] < settings.min_mesh_faces:
             raise ReferenceError(
                 f"Dense mesh has only {metrics['faces']} faces; needs {settings.min_mesh_faces}")

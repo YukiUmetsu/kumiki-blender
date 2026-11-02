@@ -170,6 +170,15 @@ def main(argv: list[str] | None = None) -> int:
                                   help="OpenMVS: skip refined topology")
         dense_parser.add_argument("--no-texture", action="store_true",
                                   help="Skip the private image-to-mesh texture transfer")
+    for command in ("plan-dense-blender-review", "render-dense-blender-review"):
+        review_dense = subcommands.add_parser(
+            command, help="Inspect or create a private editable Blender scene from a dense PLY")
+        review_dense.add_argument("--dense-revision", type=Path, required=True)
+        review_dense.add_argument("--output", type=Path, required=True)
+        review_dense.add_argument("--max-mesh-faces", type=int, default=5_000_000)
+        if command == "render-dense-blender-review":
+            review_dense.add_argument("--no-renders", action="store_true")
+            review_dense.add_argument("--blender", default="blender")
     camera_parser = subcommands.add_parser(
         "prepare-camera-plan", help="Align sparse COLMAP cameras to sculpt-space 3D landmarks")
     camera_parser.add_argument("--reconstruction", type=Path, required=True)
@@ -210,6 +219,40 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     try:
+        if args.command in ("plan-dense-blender-review", "render-dense-blender-review"):
+            from .reconstruction.blender_dense import (build_dense_blender_review,
+                                                       plan_dense_blender_review)
+            from .reconstruction.references import ReferenceError
+            try:
+                planned = plan_dense_blender_review(
+                    args.dense_revision, args.output, max_mesh_faces=args.max_mesh_faces)
+                if args.command == "plan-dense-blender-review":
+                    print(json.dumps(planned, indent=2))
+                    return 0
+            except ReferenceError as error:
+                raise RecipeError(str(error)) from error
+            try:
+                import bpy  # type: ignore[import-not-found]
+            except ImportError:
+                executable = shutil.which(args.blender)
+                if not executable:
+                    raise RuntimeError(f"Blender executable not found: {args.blender}")
+                entry = Path(__file__).resolve().parents[2] / "scripts/blender_entry.py"
+                if not entry.is_file():
+                    raise RuntimeError("Dense Blender review requires scripts/blender_entry.py")
+                command = [executable, "--background", "--factory-startup", "--python-exit-code", "1",
+                           "--python", str(entry), "--", "render-dense-blender-review",
+                           "--dense-revision", str(args.dense_revision.resolve()),
+                           "--output", str(args.output.resolve()),
+                           "--max-mesh-faces", str(args.max_mesh_faces)]
+                if args.no_renders:
+                    command.append("--no-renders")
+                return subprocess.run(command, check=False).returncode
+            report = build_dense_blender_review(
+                args.dense_revision, args.output, bpy_module=bpy,
+                render_previews=not args.no_renders, max_mesh_faces=args.max_mesh_faces)
+            print(json.dumps(report, indent=2))
+            return 0 if report["status"].startswith("private-Blender-mesh-candidate") else 3
         if args.command in ("plan-dense-photos", "build-dense-photos"):
             from .reconstruction.dense import (DenseSettings, build_dense_reconstruction,
                                                plan_dense_reconstruction)

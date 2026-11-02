@@ -18,6 +18,9 @@ kumiki-blender reconstruct-photos --manifest /path/to/references.json \
 kumiki-blender build-dense-photos \
   --reconstruction .review/your-monument/reconstruction-r01 \
   --output .review/your-monument/dense-r01
+kumiki-blender render-dense-blender-review \
+  --dense-revision .review/your-monument/dense-r01 \
+  --output .review/your-monument/dense-blender-review-r01
 ```
 
 Then use `prepare-camera-plan` with manually matched 3D landmark coordinates,

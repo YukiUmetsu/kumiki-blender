@@ -45,6 +45,15 @@ private texture projection to produce a mesh for artistic inspection.
       --reconstruction .review/statue/sparse-r01 \
       --output .review/statue/dense-gpu-r01 --backend colmap
 
+    # Inspect the PLY in Blender, preserving editable geometry and a
+    # PRIVATE review GLB. These are arbitrary axes, not calibrated statue views.
+    kumiki-blender plan-dense-blender-review \
+      --dense-revision .review/statue/dense-r01 \
+      --output .review/statue/blender-review-r01
+    kumiki-blender render-dense-blender-review \
+      --dense-revision .review/statue/dense-r01 \
+      --output .review/statue/blender-review-r01
+
 Options include --min-registered-images, --min-registered-fraction,
 --min-mesh-faces, --timeout-seconds, --no-refine (OpenMVS) and --no-texture.
 Loosening thresholds does not improve a weak reconstruction. Each stage logs
@@ -60,8 +69,16 @@ of silently promoting an unusable mesh.
 - workspace/: an immutable private snapshot of the registered, undistorted
   images/cameras for reproducible relative paths and downstream depth maps.
 - dense-report.json: registration fraction, input manifest, method, stage
-  statuses, vertex/face counts and review requirements.
+  statuses, vertex/face counts, PLY SHA-256 and review requirements.
 - logs/: per-stage logs, including GPU, memory and image failures.
+
+The Blender review worker validates the mesh against the recorded SHA-256 and
+face counts before importing PLY geometry. Its separate immutable folder
+contains private-dense-review.blend, private-dense-review.glb, a report and
+three 320px neutral-studio views from fixed local axes. The GLB is for
+**local artistic review only**, never an authorization to redistribute the
+original photographic texture or derived geometry. Dense photo projection
+atlases are not automatically attached to the PLY without real matching UVs.
 
 Open the PLY in Blender and compare front/profile/three-quarter views against
 authentic photos, especially eyes, chin, mouth, ears, hair and deep garment
@@ -85,6 +102,8 @@ remain separate work.
 
 The Python regression tests use controlled mock executables to verify secure
 preflight, subprocess commands, immutable workspace copies, failure
-checkpoints and mesh-output validation. Real multi-view photo quality remains
+checkpoints and mesh-output validation. A separate CI Blender 4.5 smoke
+imports a first-party synthetic PLY, renders 3 views and validates its
+private GLB and editable scene. Real multi-view photo quality remains
 unverified until the pipeline runs on a rights-cleared overlapping statue
 dataset with genuine COLMAP/OpenMVS installations.

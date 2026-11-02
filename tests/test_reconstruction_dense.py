@@ -132,8 +132,10 @@ class DenseMvsTests(unittest.TestCase):
                                             executables=self.executables)
         self.assertEqual(report["status"], "dense-mesh-candidate / artistic-and-rights-review-required")
         self.assertFalse(report["distribution_allowed"])
-        self.assertEqual(report["mesh"], {
-            "ply": "workspace/scene_dense_mesh_refined.ply", "vertices": 2400, "faces": 1900})
+        self.assertEqual(report["mesh"]["ply"], "workspace/scene_dense_mesh_refined.ply")
+        self.assertEqual(report["mesh"]["vertices"], 2400)
+        self.assertEqual(report["mesh"]["faces"], 1900)
+        self.assertEqual(len(report["mesh"]["sha256"]), 64)
         self.assertEqual([step["stage"] for step in report["commands"]],
                          ["interface", "densify", "mesh", "refine", "texture"])
         self.assertEqual(len(list((output / "logs").glob("*.log"))), 5)
