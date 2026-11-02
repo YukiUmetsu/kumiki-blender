@@ -175,7 +175,7 @@ def graft_anatomical_head(base_scene, donor_scene, *, alignment="world",
             # The donor hair is neutral clay; match the statue's metric
             # soapstone instead of mixing unrelated materials.
             p=mesh.vertices
-            uv=np.column_stack((np.arctan2(p[:,0],p[:,2]-1.3)*.95/.72,
+            uv=np.column_stack((np.arctan2(p[:,0],p[:,2]-z_center)*radius/.72,
                                 p[:,1]/.72))
             mesh.visual=trimesh.visual.TextureVisuals(
                 uv=uv,material=copy.deepcopy(head.visual.material))
