@@ -492,7 +492,39 @@ subdirectories. Files and the recipe are hash-pinned before processing.
   in all views cannot be separated reliably from real pigment. Confidence
   masks must exclude back-facing/occluded surfaces and foreground objects.
   This is a conservative multiview **color estimate**, **not calibrated
-  physical albedo** or automatic camera reprojection.
+  physical albedo**.
+  To produce the UV-space observations from your **own registered photo
+  reconstruction** (rather than painting them by hand), use:
+
+  ```bash
+  kumiki-blender project-registered-uv-views \
+    --dense-revision /path/to/private/dense-revision \
+    --output /path/to/private/projected-views \
+    --views 5 --atlas-side 2048 --camera-side 1536
+
+  kumiki-blender finish-dense-textures \
+    --dense-revision /path/to/private/dense-revision \
+    --output /path/to/private/fused-finish \
+    --surface-recipe /path/to/private/projected-views/surface-recipe.example.json \
+    --surface-multiview-strength 0.8
+  ```
+
+  The projection reads the exact hash-pinned, rectified COLMAP photo poses and
+  textured OpenMVS OBJ and projects camera pixels through a coarse photo-space
+  depth buffer onto each UV atlas. Each view has a confidence mask weighted
+  by surface-facing angle, with occluded and back-facing pixels excluded; the
+  `uv-projection-report.json` records source hashes and coverage; files are
+  private artistic-review candidates. Check the generated example recipe first:
+  its **all-white material-region mask and 0.85 roughness are placeholders**,
+  not measured or segmented material properties. Replace them with reviewed
+  masks/priors before treating the result as finished. Reject reflections,
+  cast shadows, pedestrians, specular hotspots and photographic compression
+  artifacts by editing the per-view confidence masks. The projector does not
+  recover true albedo, improve scan geometry or correct lens calibration.
+  Sparse camera registration and the textured OBJ **must share the original
+  COLMAP/OpenMVS coordinate system**. Large or intricate models may require a
+  verified reduced face-count proxy with identical UVs; `--max-triangles`
+  guards CPU work. Upsampling a smaller working atlas cannot add texture detail.
 - **Damage cleanup:** only areas explicitly painted into `damage_mask` are
   filled with nearby *same-material* colors. The mask may cover at most 5% of
   an atlas and `--surface-cleanup-radius` must be 1–16. Do not paint original

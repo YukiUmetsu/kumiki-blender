@@ -354,6 +354,15 @@ def main(argv: list[str] | None = None) -> int:
                                        help="0–1 confidence-masked fusion of 3–8 UV-reprojected photos")
     texture_finish_parser.add_argument("--surface-multiview-max-ev", type=float, default=1.5,
                                        help="Maximum per-pixel and per-material relative correction (0–2 EV)")
+    projection_parser = subcommands.add_parser(
+        "project-registered-uv-views",
+        help="Project hash-pinned COLMAP photographs onto OBJ UV atlases with occlusion masks")
+    projection_parser.add_argument("--dense-revision", type=Path, required=True)
+    projection_parser.add_argument("--output", type=Path, required=True)
+    projection_parser.add_argument("--views", type=int, default=3)
+    projection_parser.add_argument("--atlas-side", type=int, default=2048)
+    projection_parser.add_argument("--camera-side", type=int, default=1536)
+    projection_parser.add_argument("--max-triangles", type=int, default=500_000)
     udim_parser = subcommands.add_parser(
         "package-finished-udim", help="Copy a verified finished multi-atlas OBJ to numbered UDIM tiles")
     udim_parser.add_argument("--texture-finish", type=Path, required=True)
@@ -549,6 +558,18 @@ def main(argv: list[str] | None = None) -> int:
                                                     surface_cleanup_radius=args.surface_cleanup_radius,
                                                     surface_multiview_strength=args.surface_multiview_strength,
                                                     surface_multiview_max_ev=args.surface_multiview_max_ev))
+            except ReferenceError as error:
+                raise RecipeError(str(error)) from error
+            print(json.dumps(report, indent=2))
+            return 0
+        if args.command == "project-registered-uv-views":
+            from .reconstruction.photo_uv_projection import project_registered_photos_to_uv
+            from .reconstruction.references import ReferenceError
+            try:
+                report = project_registered_photos_to_uv(
+                    args.dense_revision, args.output, views=args.views,
+                    atlas_side=args.atlas_side, camera_side=args.camera_side,
+                    max_triangles=args.max_triangles)
             except ReferenceError as error:
                 raise RecipeError(str(error)) from error
             print(json.dumps(report, indent=2))
