@@ -57,13 +57,17 @@ def sculpt_carved_hair_from_anatomy(head, *, curtain_builder, scalp_builder):
     # raised bank, tapered into unmodified stone at the ends. No texture
     # trick, floating tubes, random strand noise or procedural hood loft.
     carved = 0
-    for vertex in scalp.data.vertices:
-        _,nearest,distance = tree.find(vertex.co)
+    # Freeze the original surface normals before modifying any vertices.
+    # Recomputing normals mid-pass makes the carving order-dependent.
+    originals = [(vertex.co.copy(), vertex.normal.copy())
+                 for vertex in scalp.data.vertices]
+    for vertex,(position,normal) in zip(scalp.data.vertices, originals):
+        _,nearest,distance = tree.find(position)
         if distance > .016:
             continue
         offset = stone_hair_groove(distance,projected[nearest][1])
         if abs(offset) > 1e-8:
-            vertex.co += vertex.normal * offset
+            vertex.co = position + normal * offset
             carved += 1
     if carved < 150:
         raise ValueError("Insufficient scalp density for visible stone carving")
