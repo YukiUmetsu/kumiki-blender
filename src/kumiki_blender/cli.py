@@ -1,6 +1,3 @@
-Warning: truncated output (original token count: 12286)
-Total output lines: 787
-
 """Command-line entry point for headless asset validation and building."""
 
 from __future__ import annotations
@@ -376,7 +373,24 @@ def main(argv: list[str] | None = None) -> int:
                 )
             except VisualQAError as error:
                 raise RecipeError(str(error)) from error
-            print(json.dumps…286 tokens truncated…            output = args.output.resolve()
+            print(json.dumps(report, indent=2))
+            return 3 if report["status"] == "review-required" else 0
+        if args.command in ("plan-asset", "compile-asset", "build-asset", "asset-schema"):
+            if args.command == "build-asset" and args.plan is not None:
+                # This branch is intentionally safe inside Blender 4.5's
+                # stock Python, where Pydantic and pydantic-core aren't present.
+                from .compiled_plan import CompiledPlanError, load_compiled_plan
+                try:
+                    spec, plan = load_compiled_plan(args.plan)
+                except CompiledPlanError as error:
+                    raise RecipeError(str(error)) from error
+                texture_packs = (load_texture_packs(args.texture_packs)
+                                 if args.texture_packs else ())
+                verify_texture_targets(list(spec.materials), texture_packs)
+                for assignment in texture_packs:
+                    if spec.materials[assignment.target].preset == "optical-glass":
+                        raise RecipeError("Texture packs cannot replace optical-glass transmission materials")
+                output = args.output.resolve()
                 if output.exists() or output.is_symlink():
                     raise RecipeError(f"Output already exists: {output}. Choose a new revision directory.")
                 try:
