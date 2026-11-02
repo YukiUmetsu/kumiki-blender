@@ -73,8 +73,16 @@ def plan_splat_dataset(reconstruction: str | Path, output: str | Path, *,
                        rectified_masks: str | Path | None = None) -> dict:
     """Reuse the dense-MVS camera/photo integrity gate without requiring OpenMVS."""
     settings = DenseSettings(refine=False, texture=False)
-    return plan_dense_reconstruction(reconstruction, output, settings,
+    plan = plan_dense_reconstruction(reconstruction, output, settings,
                                      rectified_masks=rectified_masks, executables={})
+    report = _json(Path(plan["source_revision"]) / "reconstruction-report.json")
+    evidence = report.get("sparse_feature_evidence")
+    if (not isinstance(evidence, dict) or
+            type(evidence.get("triangulated_points")) is not int or
+            evidence["triangulated_points"] < 1):
+        raise ReferenceError("Gaussian splats require triangulated sparse 3D points, not cameras alone")
+    plan["sparse_feature_evidence"] = evidence
+    return plan
 
 
 def stage_splat_dataset(reconstruction: str | Path, output: str | Path, *,

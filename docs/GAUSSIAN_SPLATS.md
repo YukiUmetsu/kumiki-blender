@@ -36,7 +36,7 @@ pip install -e '.[photogrammetry]'
 The default `--engine pycolmap` runs PyCOLMAP camera reconstruction without
 requiring an NVIDIA GPU. To use an already installed `colmap` executable,
 select `--engine colmap --colmap /path/to/colmap`. Sparse camera reconstruction
-must produce **undistorted images, cameras, and nonempty sparse points** before
+must produce **undistorted images, cameras, and triangulated sparse points** before
 Gaussian training can start. Camera registration does not guarantee geometry
 or historical accuracy.
 
@@ -122,9 +122,12 @@ splats-r01/
   Preflight rejects output directory reuse and tampered registered photos.
 - Failed registrations or GPU runs produce a **failed/review-required** report.
   Only a verified output artifact is marked `candidate / visual-review-required`.
-- `.ply` checks Gaussian attributes, vertex count, data length and SHA-256.
-  `.spz` checks existence/size/hash only; use a dedicated SPZ decoder to verify
-  its structure. Neither structural check proves photographic likeness.
+- `.ply` checks Gaussian attributes, vertex count, data length, SHA-256, and
+  samples up to 256 Gaussian records for non-finite values. It also reports
+  sparse point counts and COLMAP reprojection evidence when available.
+- `.spz` checks NGSP v4 or legacy gzip framing, point count, and (for v4) the
+  compressed stream-size table. A dedicated SPZ decoder is still needed to
+  verify compressed attributes. Neither check proves photographic likeness.
 - Inspect the splat in a Gaussian-splat viewer (for example
   [SuperSplat](https://playcanvas.com/supersplat/editor)) and compare it with
   the source views, including thin geometry, faces and unseen sides.

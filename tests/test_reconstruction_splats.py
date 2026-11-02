@@ -97,7 +97,9 @@ class SplatDatasetTests(unittest.TestCase):
         (self.source / "reconstruction-report.json").write_text(json.dumps({
             "status": "candidate / visual-review-required", "asset_id": "old-statue",
             "manifest_sha256": "1" * 64, "registered_images": 8,
-            "staged_independent_images": 8, "undistorted_images": 8}))
+            "staged_independent_images": 8, "undistorted_images": 8,
+            "sparse_feature_evidence": {"triangulated_points": 250,
+                                        "median_reprojection_error_px": 0.7}}))
 
     def test_stages_exact_rectified_images_and_colmap_camera_files(self):
         output = self.root / "dataset"
@@ -162,6 +164,52 @@ class SplatDatasetTests(unittest.TestCase):
         with self.assertRaisesRegex(ReferenceError, "exists"):
             stage_splat_dataset(self.source, existing)
 
+    def test_rejects_registered_cameras_without_triangulated_points(self):
+        report_file = self.source / "reconstruction-report.json"
+        report = json.loads(report_file.read_text())
+        report["sparse_feature_evidence"] = None
+        report_file.write_text(json.dumps(report))
+        with self.assertRaisesRegex(ReferenceError, "triangulated"):
+            plan_splat_dataset(self.source, self.root / "no-points")
+        self.assertFalse((self.root / "no-points").exists())
+
+    def test_rejects_invalid_nonfinite_gaussian_coordinates(self):
+        import struct
+
+        invalid = self.root / "nonfinite.ply"
+        header = "ply\nformat binary_little_endian 1.0\nelement vertex 1\n"
+        for field in ("x", "y", "z", "f_dc_0", "f_dc_1", "f_dc_2", "opacity",
+                      "scale_0", "scale_1", "scale_2", "rot_0", "rot_1", "rot_2", "rot_3"):
+            header += f"property float {field}\n"
+        invalid.write_bytes((header + "end_header\n").encode() +
+                            struct.pack("<14f", float("nan"), *([0.5] * 13)))
+        with self.assertRaisesRegex(ReferenceError, "non-finite"):
+            audit_splat_artifact(invalid)
+
+    def test_spz_rejects_unrelated_bytes_and_accepts_only_plausible_headers(self):
+        import gzip
+        import struct
+
+        wrong = self.root / "wrong.spz"
+        wrong.write_bytes(b"completely unrelated binary contents" * 3)
+        with self.assertRaisesRegex(ReferenceError, "SPZ"):
+            audit_splat_artifact(wrong)
+        valid = self.root / "candidate.spz"
+        header = struct.pack("<IIIBBBBI12s", 0x5053474e, 4, 2, 3, 12, 0, 1, 32, b"\x00" * 12)
+        valid.write_bytes(header + struct.pack("<QQ", 4, 24) + b"abcd")
+        report = audit_splat_artifact(valid)
+        self.assertEqual(report["gaussians"], 2)
+        self.assertEqual(report["spz_version"], 4)
+        self.assertFalse(report["structure_verified"])
+        invalid_toc = self.root / "invalid-toc.spz"
+        invalid_toc.write_bytes(header + struct.pack("<QQ", 400, 24) + b"abcd")
+        with self.assertRaisesRegex(ReferenceError, "stream sizes"):
+            audit_splat_artifact(invalid_toc)
+        legacy = self.root / "legacy.spz"
+        legacy.write_bytes(gzip.compress(struct.pack("<IIIBBBB", 0x5053474e, 3, 2, 3, 12, 0, 0)
+                                         + b"data"))
+        self.assertEqual(audit_splat_artifact(legacy)["spz_version"], 3)
+
     def _fake_opensplat(self, behavior="ok"):
         executable = self.root / f"opensplat-{behavior}"
         script = f'''#!{sys.executable}
@@ -190,6 +238,8 @@ print('trained from 8 images')
             SplatSettings(iterations=300, opensplat=str(self._fake_opensplat())))
         self.assertEqual(report["status"], "candidate / visual-review-required")
         self.assertEqual(report["artifact"]["gaussians"], 2)
+        self.assertEqual(report["sparse_feature_evidence"]["triangulated_points"], 250)
+        self.assertEqual(report["artifact"]["sampled_vertices"], 2)
         self.assertFalse(report["distribution_allowed"])
         self.assertTrue((output / "dataset/images/photo-0000.jpg").is_file())
         self.assertTrue((output / "logs/opensplat.log").read_text().find("trained from 8 images") >= 0)

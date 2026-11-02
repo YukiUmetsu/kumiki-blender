@@ -6,9 +6,12 @@ does not bundle or modify it and never claims that a splat is a polygon mesh.
 
 from __future__ import annotations
 
+import gzip
 import json
 import importlib.util
+import math
 import shutil
+import struct
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
@@ -24,6 +27,7 @@ _SCALAR_BYTES = {"char": 1, "uchar": 1, "short": 2, "ushort": 2,
 _GAUSSIAN_FIELDS = frozenset(("x", "y", "z", "f_dc_0", "f_dc_1", "f_dc_2",
                               "opacity", "scale_0", "scale_1", "scale_2",
                               "rot_0", "rot_1", "rot_2", "rot_3"))
+_FLOAT_TYPES = {"float": "f", "float32": "f", "double": "d", "float64": "d"}
 
 
 def validate_camera_settings(engine: str, timeout_seconds: int,
@@ -61,9 +65,7 @@ def audit_splat_artifact(path: str | Path) -> dict:
     if file.is_symlink() or not file.is_file() or file.stat().st_size < 16:
         raise ReferenceError("Gaussian splat artifact is missing, linked or empty")
     if file.suffix == ".spz":
-        return {"format": "spz", "bytes": file.stat().st_size,
-                "sha256": _sha256(file), "structure_verified": False,
-                "warning": "Compressed SPZ requires an independent format decoder for structural QA"}
+        return _audit_spz_header(file)
     if file.suffix != ".ply":
         raise ReferenceError("Gaussian splat artifact must be .ply or .spz")
     with file.open("rb") as stream:
@@ -81,6 +83,7 @@ def audit_splat_artifact(path: str | Path) -> dict:
         raise ReferenceError("Gaussian PLY must use binary little-endian encoding")
     vertex_count: int | None = None
     vertex_fields: dict[str, int] = {}
+    vertex_properties: list[tuple[str, str]] = []
     in_vertex = False
     for line in lines:
         words = line.split()
@@ -97,6 +100,7 @@ def audit_splat_artifact(path: str | Path) -> dict:
             if len(words) != 3 or words[1] not in _SCALAR_BYTES or words[2] in vertex_fields:
                 raise ReferenceError("Gaussian PLY has an unsupported vertex property")
             vertex_fields[words[2]] = _SCALAR_BYTES[words[1]]
+            vertex_properties.append((words[2], words[1]))
     if vertex_count is None or not 1 <= vertex_count <= 10_000_000:
         raise ReferenceError("Gaussian PLY must contain 1–10,000,000 vertices")
     if not _GAUSSIAN_FIELDS.issubset(vertex_fields):
@@ -104,10 +108,80 @@ def audit_splat_artifact(path: str | Path) -> dict:
     minimum = header_size + vertex_count * sum(vertex_fields.values())
     if file.stat().st_size < minimum:
         raise ReferenceError("Gaussian PLY contains truncated vertex data")
+    # Check a bounded, deterministic sample of records. This catches the
+    # common case of invalid GPU output without loading multi-GB splats into RAM.
+    offsets: dict[str, tuple[int, str]] = {}
+    stride = 0
+    for name, scalar in vertex_properties:
+        if name in _GAUSSIAN_FIELDS:
+            if scalar not in _FLOAT_TYPES:
+                raise ReferenceError(f"Gaussian PLY field {name} must be floating-point")
+            offsets[name] = (stride, _FLOAT_TYPES[scalar])
+        stride += _SCALAR_BYTES[scalar]
+    sample_count = min(vertex_count, 256)
+    indices = {i * (vertex_count - 1) // max(1, sample_count - 1)
+               for i in range(sample_count)}
+    with file.open("rb") as stream:
+        for index in sorted(indices):
+            stream.seek(header_size + index * stride)
+            row = stream.read(stride)
+            for name, (offset, scalar) in offsets.items():
+                if not math.isfinite(struct.unpack_from("<" + scalar, row, offset)[0]):
+                    raise ReferenceError(f"Gaussian PLY contains non-finite {name} values")
     return {"format": "ply", "bytes": file.stat().st_size,
             "sha256": _sha256(file), "gaussians": vertex_count,
-            "structure_verified": True,
-            "warning": "Header/data length cannot certify Gaussian finiteness or photographic likeness"}
+            "structure_verified": True, "sampled_vertices": len(indices),
+            "warning": "Finite-value samples and PLY structure cannot certify every vertex or photographic likeness"}
+
+
+def _audit_spz_header(file: Path) -> dict:
+    """Verify SPZ framing without claiming that we decoded compressed splats.
+
+    Legacy versions 1–3 are gzip-wrapped; v4 uses plaintext NGSP followed by
+    a bounded table of contents. This is deliberately *not* a ZSTD decoder.
+    """
+    size = file.stat().st_size
+    with file.open("rb") as stream:
+        prefix = stream.read(32)
+    if prefix[:4] == b"NGSP":
+        if len(prefix) != 32:
+            raise ReferenceError("SPZ v4 header is truncated")
+        magic, version, points, degree, bits, flags, streams, toc_offset, reserved = (
+            struct.unpack("<IIIBBBBI12s", prefix))
+        if (magic != 0x5053474e or version != 4 or not 1 <= points <= 10_000_000
+                or degree > 4 or bits > 31 or not 1 <= streams <= 32
+                or reserved != bytes(12) or toc_offset < 32 or toc_offset > size):
+            raise ReferenceError("SPZ v4 header contains invalid metadata")
+        if toc_offset + streams * 16 > size:
+            raise ReferenceError("SPZ v4 table of contents is truncated")
+        with file.open("rb") as stream:
+            stream.seek(toc_offset)
+            table = stream.read(streams * 16)
+        total_compressed = 0
+        for index in range(streams):
+            compressed, uncompressed = struct.unpack_from("<QQ", table, index * 16)
+            if not compressed or not uncompressed:
+                raise ReferenceError("SPZ v4 has empty compressed attribute streams")
+            total_compressed += compressed
+        if toc_offset + streams * 16 + total_compressed != size:
+            raise ReferenceError("SPZ v4 attribute stream sizes do not match file length")
+    elif prefix[:2] == b"\x1f\x8b":
+        try:
+            with gzip.open(file, "rb") as stream:
+                header = stream.read(16)
+        except (OSError, EOFError) as error:
+            raise ReferenceError("SPZ legacy gzip header is invalid") from error
+        if len(header) != 16:
+            raise ReferenceError("SPZ legacy gzip header is truncated")
+        magic, version, points = struct.unpack_from("<III", header)
+        if magic != 0x5053474e or version not in (1, 2, 3) or not 1 <= points <= 10_000_000:
+            raise ReferenceError("SPZ legacy gzip metadata is invalid")
+    else:
+        raise ReferenceError("SPZ must begin with an NGSP v4 or legacy gzip header")
+    return {"format": "spz", "bytes": size, "sha256": _sha256(file),
+            "spz_version": version, "gaussians": points,
+            "structure_verified": False,
+            "warning": "SPZ header and stream lengths checked; compressed data still requires an independent decoder"}
 
 
 def plan_splat_revision(reconstruction: str | Path, output: str | Path,
@@ -125,6 +199,7 @@ def plan_splat_revision(reconstruction: str | Path, output: str | Path,
     return {"source_revision": dataset["source_revision"], "output": str(target),
             "asset_id": dataset["asset_id"],
             "registered_images": dataset["registered_images"],
+            "sparse_feature_evidence": dataset["sparse_feature_evidence"],
             "rectified_masks": dataset["rectified_masks"],
             "opensplat_executable": str(Path(shutil.which(settings.opensplat) or "").resolve()),
             "iterations": settings.iterations, "timeout_seconds": settings.timeout_seconds,
@@ -201,6 +276,7 @@ def build_multiview_splat_revision(references: ReferenceSet, output: str | Path,
         plan = {"source_revision": dataset["source_revision"], "output": str(target),
                 "asset_id": dataset["asset_id"],
                 "registered_images": dataset["registered_images"],
+                "sparse_feature_evidence": dataset["sparse_feature_evidence"],
                 "opensplat_executable": str(Path(trainer).resolve())}
     except (ReferenceError, OSError, ValueError, KeyError) as error:
         report.update(status="failed / review-required", failed_stage="camera-registration",
@@ -223,6 +299,7 @@ def _train_in_revision(reconstruction: str | Path, target: Path,
                   "output_format": settings.output_format,
                   "opensplat_executable": plan["opensplat_executable"]},
               "registered_images": plan["registered_images"],
+              "sparse_feature_evidence": plan["sparse_feature_evidence"],
               "accelerator": "OpenSplat build-selected / not independently verified",
               "distribution_allowed": False,
               "status": "in-progress / review-required", "failed_stage": None,
