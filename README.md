@@ -59,7 +59,16 @@ silhouettes, or `[mask-ai]` for optional local semantic background inference,
 and inspect the red overlays before dense MVS. Use `refine-dense-masks` to
 remove tiny mask artifacts and hand-correct individual rectified views with
 normalized include/exclude polygons or a cautious contour inset in a new
-private revision. OpenMVS seam-leveling can be toggled when a specific build
+private revision. An optional `--color-band-pixels` GrabCut pass reclassifies
+only a narrow mask boundary while holding interior labels fixed; use
+`--color-trim-only` to forbid new foreground. Verify against the original:
+real multi-view statue tests show color cleanup can worsen mask agreement.
+`audit-dense-masks` checks whether the same COLMAP 3D
+feature is inconsistently included across rectified views and writes private
+direction-coded correction overlays, full-resolution detail crops and review
+coordinates. `compare-dense-masks` reports source-pinned before/after mask
+disagreement changes without automatically approving either revision.
+OpenMVS seam-leveling can be toggled when a specific build
 produces dark texture patches. For projected
 texture darkness, broad color cast or exposure mismatch between atlas pages,
 `finish-dense-textures --balance-atlases` creates a separately SHA-pinned
@@ -67,6 +76,8 @@ exposure/gamma/white-balance atlas revision; import it
 with `render-dense-blender-review --textured --texture-finish`. Both remain
 manual-review candidates, not autonomous texture restoration.
 Very dark atlases can optionally use bounded `--auto-exposure-luma 115`.
+Add `--uv-aware-stats` to measure brightness and missing dark texels only on
+real textured OBJ faces, with a private red-marked UV coverage preview.
 No technical score certifies facial likeness. Historical survey geometry,
 source-specific artistic sculpting and production GLB baking remain separate work.
 

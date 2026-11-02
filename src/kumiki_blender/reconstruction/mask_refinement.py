@@ -100,11 +100,75 @@ def _inset_mask(binary: Any, pixels: int) -> Any:
                      borderValue=0)
 
 
+def _color_refine_boundary(binary: Any, photo: Any, *, band_pixels: int,
+                           max_side: int, iterations: int,
+                           trim_only: bool = False) -> Any:
+    """Reclassify only a narrow original-mask boundary band via color GrabCut.
+
+    Hard foreground/background interiors never change. This is an optional
+    artist-review *candidate*: textured walls and similarly colored surfaces
+    can still fool GrabCut, especially around thin fingers and hair.
+    """
+    import cv2  # type: ignore[import-not-found]
+    import numpy as np  # type: ignore[import-not-found]
+
+    height, width = binary.shape
+    if photo.size != (width, height):
+        raise ReferenceError("Color boundary refinement requires an exactly rectified photo/mask pair")
+    scale = min(1.0, max_side / max(width, height))
+    small_w, small_h = max(8, round(width * scale)), max(8, round(height * scale))
+    small_binary = cv2.resize(binary, (small_w, small_h),
+                              interpolation=cv2.INTER_NEAREST)
+    radius = max(1, round(band_pixels * scale))
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE,
+                                       (2*radius+1, 2*radius+1))
+    fixed_fg = cv2.erode(small_binary, kernel) > 0
+    fixed_bg = cv2.dilate(small_binary, kernel) == 0
+    if not np.any(fixed_fg) or not np.any(fixed_bg):
+        raise ReferenceError("Color boundary refinement needs foreground and background seed interiors; reduce band")
+    labels = np.where(small_binary > 0, cv2.GC_PR_FGD,
+                      cv2.GC_PR_BGD).astype(np.uint8)
+    labels[fixed_fg] = cv2.GC_FGD
+    labels[fixed_bg] = cv2.GC_BGD
+    rgb = np.asarray(photo.convert("RGB"))
+    small_photo = cv2.resize(rgb, (small_w, small_h),
+                             interpolation=cv2.INTER_AREA)
+    bg_model, fg_model = np.zeros((1, 65), np.float64), np.zeros((1, 65), np.float64)
+    try:
+        cv2.grabCut(cv2.cvtColor(small_photo, cv2.COLOR_RGB2BGR), labels,
+                    None, bg_model, fg_model, iterations, cv2.GC_INIT_WITH_MASK)
+    except cv2.error as error:
+        raise ReferenceError("Color boundary GrabCut could not refine mask; try a smaller band") from error
+    result_small = np.where((labels == cv2.GC_FGD) | (labels == cv2.GC_PR_FGD),
+                            255, 0).astype(np.uint8)
+    # Interpolate before binary thresholding to avoid obvious block-shaped
+    # halos when the photo is much larger than the CPU GrabCut working grid.
+    resized = cv2.resize(result_small, (width, height),
+                         interpolation=cv2.INTER_LINEAR)
+    proposal = np.where(resized >= 128, 255, 0).astype(np.uint8)
+    full_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE,
+                                            (2*band_pixels+1, 2*band_pixels+1))
+    hard_fg = cv2.erode(binary, full_kernel) > 0
+    hard_bg = cv2.dilate(binary, full_kernel) == 0
+    proposal[hard_fg] = 255
+    proposal[hard_bg] = 0
+    if trim_only:
+        # In cluttered outdoor scenes color similarity can make GrabCut grow
+        # a semantic silhouette into architecture, pavement or foliage.
+        # Opt-in conservative mode only removes candidate background pixels.
+        proposal = np.minimum(proposal, binary)
+    return proposal
+
+
 def refine_rectified_masks(reconstruction: str | Path, mask_revision: str | Path,
                            output: str | Path, *, edits: str | Path | None = None,
                            min_island_pixels: int = 0,
                            max_hole_pixels: int = 0,
-                           edge_inset_pixels: int = 0) -> dict[str, Any]:
+                           edge_inset_pixels: int = 0,
+                           color_band_pixels: int = 0,
+                           color_max_side: int = 1280,
+                           color_iterations: int = 3,
+                           color_trim_only: bool = False) -> dict[str, Any]:
     """Create a new hash-pinned mask revision and before/after QA contact sheet."""
     for key, value in (("min_island_pixels", min_island_pixels),
                        ("max_hole_pixels", max_hole_pixels)):
@@ -112,7 +176,18 @@ def refine_rectified_masks(reconstruction: str | Path, mask_revision: str | Path
             raise ReferenceError(f"{key} must be an integer from 0 to 100000")
     if type(edge_inset_pixels) is not int or not 0 <= edge_inset_pixels <= 8:
         raise ReferenceError("edge_inset_pixels must be an integer from 0 to 8")
-    if edits is None and not (min_island_pixels or max_hole_pixels or edge_inset_pixels):
+    if type(color_band_pixels) is not int or not 0 <= color_band_pixels <= 32:
+        raise ReferenceError("color_band_pixels must be an integer from 0 to 32")
+    if type(color_max_side) is not int or not 256 <= color_max_side <= 4096:
+        raise ReferenceError("color_max_side must be an integer from 256 to 4096")
+    if type(color_iterations) is not int or not 1 <= color_iterations <= 8:
+        raise ReferenceError("color_iterations must be an integer from 1 to 8")
+    if type(color_trim_only) is not bool:
+        raise ReferenceError("color_trim_only must be a boolean")
+    if color_trim_only and not color_band_pixels:
+        raise ReferenceError("color_trim_only needs positive color_band_pixels")
+    if edits is None and not (min_island_pixels or max_hole_pixels or edge_inset_pixels
+                              or color_band_pixels):
         raise ReferenceError("Mask refinement needs edits or a positive cleanup threshold")
     try:
         import cv2  # noqa: F401  # type: ignore[import-not-found]
@@ -178,6 +253,10 @@ def refine_rectified_masks(reconstruction: str | Path, mask_revision: str | Path
         "min_island_pixels": min_island_pixels,
         "max_hole_pixels": max_hole_pixels,
         "edge_inset_pixels": edge_inset_pixels,
+        "color_band_pixels": color_band_pixels,
+        "color_max_side": color_max_side,
+        "color_iterations": color_iterations,
+        "color_trim_only": color_trim_only,
         "approved_for_reconstruction": False,
         "status": "incomplete / manual-mask-review-required",
         "images": [],
@@ -194,6 +273,16 @@ def refine_rectified_masks(reconstruction: str | Path, mask_revision: str | Path
             before = np.asarray(original.convert("L"))
             refined = _clean_mask(before, min_island_pixels=min_island_pixels,
                                   max_hole_pixels=max_hole_pixels)
+            color_changed = 0
+            if color_band_pixels:
+                with Image.open(sparse / "undistorted/images" / name) as photo:
+                    photo.load()
+                    color_refined = _color_refine_boundary(
+                        refined, photo, band_pixels=color_band_pixels,
+                        max_side=color_max_side, iterations=color_iterations,
+                        trim_only=color_trim_only)
+                color_changed = int(np.count_nonzero(refined != color_refined))
+                refined = color_refined
             refined = _inset_mask(refined, edge_inset_pixels)
             # Inclusions happen after the inset, so a thin hair/arm can be
             # selectively restored rather than permanently eroded.
@@ -215,6 +304,8 @@ def refine_rectified_masks(reconstruction: str | Path, mask_revision: str | Path
                 warnings.append("Suspicious subject coverage after refinement")
             if (added+removed)/area > 0.20:
                 warnings.append("Large mask edit; inspect contour and missing anatomy")
+            if color_band_pixels:
+                warnings.append("Color-guided boundary candidate: inspect thin anatomy and similar-colored backgrounds")
             with Image.open(sparse / "undistorted/images" / name) as photo:
                 preview = photo.convert("RGB")
                 preview.thumbnail((700, 700))
@@ -230,7 +321,8 @@ def refine_rectified_masks(reconstruction: str | Path, mask_revision: str | Path
                 "mask": str(mask_file.relative_to(target)), "mask_sha256": _sha256(mask_file),
                 "preview": str(preview_file.relative_to(target)),
                 "foreground_fraction": fraction, "pixels_added": added,
-                "pixels_removed": removed, "warnings": warnings,
+                "pixels_removed": removed, "color_boundary_pixels_changed": color_changed,
+                "warnings": warnings,
             })
         checkpoint()
     columns, width, height = 4, 288, 238

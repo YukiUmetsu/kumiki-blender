@@ -27,6 +27,7 @@ class TextureFinishSettings:
     neutralize_cast: bool = False
     protect_black: int = 12
     balance_atlases: bool = False
+    uv_aware_stats: bool = False
     max_balance_ev: float = 0.75
     auto_exposure_luma: float | None = None
     max_auto_exposure_ev: float = 1.0
@@ -45,14 +46,16 @@ class TextureFinishSettings:
         if (target is not None and (type(target) not in (float, int)
                 or not math.isfinite(target) or not 32 <= target <= 224)):
             raise ReferenceError("auto_exposure_luma must be finite in [32, 224]")
-        if type(self.neutralize_cast) is not bool or type(self.balance_atlases) is not bool:
-            raise ReferenceError("neutralize_cast and balance_atlases must be booleans")
+        if (type(self.neutralize_cast) is not bool or type(self.balance_atlases) is not bool
+                or type(self.uv_aware_stats) is not bool):
+            raise ReferenceError("neutralize_cast, balance_atlases and uv_aware_stats must be booleans")
         if type(self.protect_black) is not int or not 0 <= self.protect_black <= 32:
             raise ReferenceError("protect_black must be an integer between 0 and 32")
         return self
 
 
-def _valid_texel_sample(photo: Any, protect_black: int) -> tuple[Any, Any, Any]:
+def _valid_texel_sample(photo: Any, protect_black: int,
+                        uv_coverage: Any = None) -> tuple[Any, Any, Any]:
     from PIL import Image, ImageChops
 
     sample = photo.copy()
@@ -65,13 +68,18 @@ def _valid_texel_sample(photo: Any, protect_black: int) -> tuple[Any, Any, Any]:
         alpha = sample.convert("RGBA").getchannel("A")
         opaque = alpha.point(lambda value: 255 if value >= 128 else 0)
         valid = ImageChops.multiply(valid, opaque)
+    if uv_coverage is not None:
+        if uv_coverage.size != valid.size or uv_coverage.mode != "L":
+            raise ReferenceError("UV coverage does not match the sampled atlas dimensions")
+        valid = ImageChops.multiply(valid, uv_coverage)
     return rgb, gray, valid
 
 
-def _sample_luminance(photo: Any, protect_black: int) -> float | None:
+def _sample_luminance(photo: Any, protect_black: int,
+                      uv_coverage: Any = None) -> float | None:
     from PIL import ImageStat
 
-    _rgb, gray, valid = _valid_texel_sample(photo, protect_black)
+    _rgb, gray, valid = _valid_texel_sample(photo, protect_black, uv_coverage)
     if not valid.getbbox():
         return None
     # Median is less sensitive to highlights or shadow areas than the mean.
@@ -80,12 +88,16 @@ def _sample_luminance(photo: Any, protect_black: int) -> float | None:
 
 def _atlas_correction(photo: Any, settings: TextureFinishSettings, *,
                       balance_ev: float = 0.0,
-                      auto_ev: float = 0.0) -> tuple[Any, dict[str, Any]]:
+                      auto_ev: float = 0.0,
+                      uv_coverage: Any = None) -> tuple[Any, dict[str, Any]]:
     from PIL import Image, ImageEnhance, ImageStat
 
     original = photo.convert("RGB")
     # Ignore both black padding and transparent padding when estimating color.
-    sample, sample_gray, valid = _valid_texel_sample(photo, settings.protect_black)
+    sample, sample_gray, valid = _valid_texel_sample(photo, settings.protect_black,
+                                                   uv_coverage)
+    if uv_coverage is not None and not valid.getbbox():
+        raise ReferenceError("UV-mapped atlas has no valid colored texels to correct")
     stats = ImageStat.Stat(sample, valid)
     gains = [1.0, 1.0, 1.0]
     if settings.neutralize_cast and valid.getbbox():
@@ -112,7 +124,9 @@ def _atlas_correction(photo: Any, settings: TextureFinishSettings, *,
     matte = original.convert("L").point(
         lambda value: max(0, min(255, round((value - threshold) * 255 / 20))))
     corrected = Image.composite(corrected, original, matte)
-    count = sample_gray.width * sample_gray.height
+    total_samples = sample_gray.width * sample_gray.height
+    count = (uv_coverage.histogram()[255] if uv_coverage is not None
+             else total_samples)
     valid_pixels = valid.histogram()[255]
     invalid_pixels = count - valid_pixels
     after_sample = corrected.copy()
@@ -120,12 +134,14 @@ def _atlas_correction(photo: Any, settings: TextureFinishSettings, *,
     highlight_pixels = sum(after_sample.convert("L").histogram(mask=valid)[250:])
     highlight_fraction = highlight_pixels / max(1, valid_pixels)
     warnings = []
-    if invalid_pixels / count > 0.1:
+    if invalid_pixels / max(1, count) > 0.1:
         warnings.append("High proportion of dark/transparent uncovered texels; correction cannot recover detail")
     if highlight_fraction > 0.1:
         warnings.append("Bright texture clipping exceeds 10%; lower exposure or shadow lift")
     return corrected, {
-        "approx_uncovered_dark_fraction": round(invalid_pixels / count, 5),
+        "approx_uncovered_dark_fraction": round(invalid_pixels / max(1, count), 5),
+        "uv_mapped_atlas_fraction": (round(count / total_samples, 5)
+                                      if uv_coverage is not None else None),
         "approx_highlight_clip_fraction_after": round(highlight_fraction, 5),
         "sampled_mean_rgb": [round(x, 2) for x in stats.mean[:3]],
         "neutralization_gains": [round(x, 5) for x in gains],
@@ -140,7 +156,7 @@ def finish_dense_textures(dense_revision: str | Path, output: str | Path,
     """Copy pinned UV assets into a separately hashed color-corrected revision."""
     settings.validate()
     try:
-        from PIL import Image, ImageDraw
+        from PIL import Image, ImageChops, ImageDraw
     except ImportError as error:
         raise ReferenceError("Texture finishing requires Pillow (install the qa extra)") from error
 
@@ -157,6 +173,20 @@ def finish_dense_textures(dense_revision: str | Path, output: str | Path,
     if not str(dense_report.get("status", "")).startswith("dense-mesh-candidate"):
         raise ReferenceError("Dense texture correction requires a completed candidate mesh")
     pinned = _textured_obj_plan(source, dense_report, max_mesh_faces=10_000_000)
+    uv_coverage: dict[str, Any] = {}
+    uv_faces: dict[str, int] = {}
+    if settings.uv_aware_stats:
+        from .uv_coverage import rasterize_uv_coverage
+
+        sizes = {}
+        for entry in pinned["texture_atlases"]:
+            path = Path(entry["path"])
+            with Image.open(path) as atlas:
+                thumbnail = atlas.copy()
+                thumbnail.thumbnail((768, 768), Image.Resampling.BILINEAR)
+                sizes[path.name] = thumbnail.size
+        uv_coverage, uv_faces = rasterize_uv_coverage(
+            Path(pinned["source_obj"]), Path(pinned["source_mtl"]), sizes)
     # Compute atlas-to-atlas brightness ratios from valid (non-black) texels.
     # A bounded gain per page can reduce *between-page* seams, but it cannot
     # repair UV chart edges or different lighting within a single atlas.
@@ -167,7 +197,10 @@ def finish_dense_textures(dense_revision: str | Path, output: str | Path,
         for entry in pinned["texture_atlases"]:
             atlas_path = Path(entry["path"])
             with Image.open(atlas_path) as image:
-                brightness[atlas_path.name] = _sample_luminance(image, settings.protect_black)
+                brightness[atlas_path.name] = _sample_luminance(
+                    image, settings.protect_black, uv_coverage.get(atlas_path.name))
+        if settings.uv_aware_stats and any(value is None for value in brightness.values()):
+            raise ReferenceError("UV atlas lacks valid colored texels for exposure balancing")
         usable = [value for value in brightness.values() if value is not None]
         if usable:
             target_luma = statistics.median(usable)
@@ -218,7 +251,7 @@ def finish_dense_textures(dense_revision: str | Path, output: str | Path,
                     raise ReferenceError("Texture correction expects a JPEG or PNG atlas")
                 corrected, quality = _atlas_correction(
                     photo, settings, balance_ev=balance.get(atlas.name, 0.0),
-                    auto_ev=auto_ev)
+                    auto_ev=auto_ev, uv_coverage=uv_coverage.get(atlas.name))
                 output_path = target / atlas.name
                 if photo.format == "JPEG":
                     corrected.save(output_path, "JPEG", quality=95, subsampling=0)
@@ -240,11 +273,30 @@ def finish_dense_textures(dense_revision: str | Path, output: str | Path,
                 labels.text((608, 5), "Corrected review candidate", fill=(235, 235, 235))
                 preview_path = target / "review" / (atlas.name + ".jpg")
                 canvas.save(preview_path, "JPEG", quality=84)
+                uv_dark_review = None
+                if settings.uv_aware_stats:
+                    sample, _gray, valid = _valid_texel_sample(
+                        photo, settings.protect_black, uv_coverage[atlas.name])
+                    dark_on_mesh = ImageChops.subtract(uv_coverage[atlas.name], valid)
+                    tint = dark_on_mesh.point(lambda value: round(value * 0.65))
+                    shaded = Image.composite(Image.new("RGB", sample.size, (252, 59, 43)),
+                                             sample, tint)
+                    overview = Image.new("RGB", (sample.width, sample.height+26),
+                                         (24, 27, 31))
+                    overview.paste(shaded, (0, 26))
+                    ImageDraw.Draw(overview).text(
+                        (7, 5), "Red: dark/transparent texels inside actual mesh UV faces",
+                        fill=(236, 238, 239))
+                    uv_path = target / "review" / (atlas.name + ".uv-dark.jpg")
+                    overview.save(uv_path, "JPEG", quality=90)
+                    uv_dark_review = str(uv_path.relative_to(target))
             report["texture_atlases"].append({
                 "path": atlas.name, "sha256": _sha256(output_path),
                 "dimensions": list(corrected.size), "source_sha256": item["sha256"],
                 "comparison_preview": str(preview_path.relative_to(target)),
                 "source_median_luma": brightness.get(atlas.name),
+                "uv_mapped_faces": uv_faces.get(atlas.name),
+                "uv_dark_review": uv_dark_review,
                 **quality,
             })
         except Exception as error:

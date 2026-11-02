@@ -91,6 +91,32 @@ private texture projection to produce a mesh for artistic inspection.
       --min-island-pixels 24 --max-hole-pixels 24 \
       --edge-inset-pixels 2
 
+    # Optional separate color-aware draft to compare visually against r02.
+    # Trim-only never adds foreground; it can still remove thin anatomy.
+    kumiki-blender refine-dense-masks \
+      --reconstruction .review/statue/sparse-r01 \
+      --mask-revision .review/statue/masks-r02 \
+      --output .review/statue/masks-r03 \
+      --color-band-pixels 4 --color-trim-only --color-max-side 2048 \
+      --color-iterations 4
+
+    # Find camera-specific mask mistakes using actual shared COLMAP 3D tracks.
+    # Red = possible extra background; cyan = possible missing statue;
+    # yellow = ambiguous tie. Review all colors before editing masks.
+    # This is a private QA report, NOT an automatic mask approval.
+    kumiki-blender audit-dense-masks \
+      --reconstruction .review/statue/sparse-r01 \
+      --rectified-masks .review/statue/masks-r02/masks \
+      --output .review/statue/mask-consistency-r01
+
+    # Compare r02 and optional r03 against identical sparse feature tracks.
+    # Positive deltas signal more disagreement, NOT automatic acceptance.
+    kumiki-blender compare-dense-masks \
+      --reconstruction .review/statue/sparse-r01 \
+      --baseline-masks .review/statue/masks-r02/masks \
+      --candidate-masks .review/statue/masks-r03/masks \
+      --output .review/statue/mask-compare-r02-r03
+
     # Use only reviewed masks; OpenMVS consumes <rectified-filename>.mask.png.
     kumiki-blender build-dense-photos \
       --reconstruction .review/statue/sparse-r01 \
@@ -165,7 +191,7 @@ private texture projection to produce a mesh for artistic inspection.
       --dense-revision .review/statue/dense-masked-r01 \
       --output .review/statue/texture-auto-r01 \
       --auto-exposure-luma 115 --max-auto-exposure-ev 1.0 \
-      --balance-atlases
+      --balance-atlases --uv-aware-stats
 
     # Blender imports the same verified OBJ/MTL/UVs with the corrected atlases
     # and packs them into the private .blend and GLB.
@@ -238,10 +264,51 @@ that include trees or truncate the statue produce contaminated geometry.
 background-colored halos. It may also erase thin hair or fingers: start with
 1–2 pixels, inspect contours at full resolution, and restore essential details
 using inclusion polygons (applied after the inset).
-They are SHA-pinned, copied only into the private MVS workspace, checked on
-resume, and remain absent from Git. Do **not** reuse original distorted-image
+`--color-band-pixels 1..32` is an **opt-in local GrabCut edge refinement**:
+the source photograph supplies color evidence only within that many original
+pixels of each current foreground-mask boundary. Definite interiors and
+background outside that band are clamped to their original labels. Use
+`--color-max-side` (256–4096) to cap CPU/RAM and `--color-iterations` (1–8)
+to control refinement work. This can remove background-colored halos at
+high-contrast statue edges, but similar-colored walls, deep folds and thin
+hair/fingers can still be misclassified. It writes per-view changed-pixel
+counts and a **new, unapproved revision**; inspect it and restore detail with
+include polygons if necessary. A broad band or low processing resolution may
+make boundaries blockier, so start with 2–6 pixels and review at 100% zoom.
+`--color-trim-only` is the safer background-removal variant: only pixels
+previously labeled foreground can be removed; it cannot extend the mask into
+new background regions. This is **not** guaranteed to improve semantic masks;
+compare new and old audits before selecting a revision for dense MVS.
+The masks are SHA-pinned, copied only into the private MVS workspace, checked
+on resume, and remain absent from Git. Do **not** reuse original distorted-image
 masks by simply resizing them: regenerate/warp them in the exact rectified
 camera grid and inspect the boundary before reconstruction.
+
+`audit-dense-masks` cross-checks each registered COLMAP 3D point track in the
+rectified images and reports where its **same physical feature** is foreground
+in some masks and background in other views. It reads the genuine binary or
+text COLMAP `images` model, pins the source/model/mask SHA-256 hashes, writes
+camera-specific three-color marker overlays, a tinted foreground-mask preview,
+a worst-first contact sheet, up to three full-resolution 512px detail crops
+per camera and per-view disagreement counts. **Red** marks a possible
+extra-foreground/background leak (the local mask includes a feature most
+other registered views exclude); **cyan** marks a possibly missing statue
+region (the local mask excludes a feature most other views include);
+**yellow** means a tied track (often just two views). The JSON report includes
+bounded normalized review coordinates, track IDs and label votes so a reviewer
+can find the candidate corrections at their original image resolution.
+These are diagnostic suggestions, never automatic mask edits. Neither consistent labels
+nor a small sparse sample guarantee a good silhouette: consistently included
+background features and thin untracked anatomy still require manual review.
+All previews remain private and the audit never edits masks or automatically
+approves reconstruction.
+`compare-dense-masks` runs the same audit on a baseline and a revised mask
+folder, writes both private reviews, hashes the reports, ranks per-camera
+differences and flags increases in mixed 3D tracks or likely background leaks.
+Its `consistency_regressed` field is a **review alert**, not a proof of which
+mask is better. Keep the baseline when an optional candidate has not been
+visually justified.
+
 Loosening thresholds does not improve a weak reconstruction. Each stage logs
 its command and stdout/stderr. Failures preserve a diagnostic report instead
 of silently promoting an unusable mesh.
@@ -260,6 +327,24 @@ edges and ground/base patches still need review or manual correction. Neither
 set was promoted to an approved silhouette or used as evidence of a completed
 background-free 3D mesh. No EPFL photos, masks or renders are included in Git
 or CI (research use only without written commercial permission).
+
+The 32-photo EPFL Mask dataset was re-run with the official source ZIP SHA-256
+verified, CPU PyCOLMAP 4.2.1 registering **32/32** cameras and **7,906** shared
+3D tracks. The semantic IS-Net masks produced **468** mixed-label tracks
+(41 tied). A 4-pixel unrestricted color-boundary pass increased disagreement to
+**504** (47 tied), and the conservative `--color-trim-only` pass yielded
+**482** (40 tied). The baseline is therefore preferable on this metric;
+no revised candidate was promoted. This is a *triage metric*, not proof that
+the unchanged mask is more accurate: inspection still finds pedestal/ground
+patches with inconsistent inclusion, and isolated profile edges are hard to
+interpret from sparse tracks. Real-data runs also revealed that COLMAP can
+contain multiple observations of the same 3D track within one registered
+image; the auditor now deduplicates these votes and excludes contradictory
+within-camera labels rather than failing or double-counting them.
+The new `compare-dense-masks` command independently reproduced the conservative
+candidate's **+14 mixed tracks** and **+7 suspected excess-foreground votes**
+relative to the semantic baseline, set `consistency_regressed: true`, and
+ranked the affected cameras (notably views 012–014) for inspection.
 
 - OpenMVS: workspace/scene_dense_mesh.ply, optionally
   workspace/scene_dense_mesh_refined.ply and textured OBJ/atlas outputs.
@@ -305,6 +390,18 @@ that option. It also writes original/corrected side-by-side
 `review/` previews. All original source files, UVs and face
 indices remain untouched. `--texture-finish` requires `--textured` and
 verifies both original and corrected content hashes before Blender import.
+With `--uv-aware-stats`, exposure, optional white-balance neutralization and
+atlas-to-atlas balancing use **only texels belonging to actual OBJ UV faces**,
+not unrelated colored padding or unused atlas space. The command parses the
+pinned OBJ/MTL face materials, produces a bounded UV occupancy mask for each
+page and reports `uv_mapped_atlas_fraction`, `uv_mapped_faces`, and the fraction
+of *mapped* texels that are dark/transparent. Its separate
+`review/*.uv-dark.jpg` preview marks those on-mesh dark/empty patches in red.
+This helps identify missing texture data that overall atlas statistics can
+hide. It is disabled by default for compatibility; it rejects unsupported
+UV tiling, absent face UVs and unused atlas pages instead of guessing.
+Diagnostic masks are approximate at 768px resolution and cannot recover
+photographic details or correct UV seam geometry.
 This can improve dark overall exposure, broad color cast and atlas-page
 exposure mismatch, but **cannot invent missing photographs, paint empty atlas
 patches or fix intra-page UV chart seams and baked lighting**. Use the

@@ -216,6 +216,25 @@ def main(argv: list[str] | None = None) -> int:
     refine_mask_parser.add_argument("--max-hole-pixels", type=int, default=0)
     refine_mask_parser.add_argument("--edge-inset-pixels", type=int, default=0,
                                     help="Optional 1–8 pixel contour inset to reduce background edge halos")
+    refine_mask_parser.add_argument("--color-band-pixels", type=int, default=0,
+                                    help="Optional 1–32 pixel local GrabCut boundary reclassification (candidate only)")
+    refine_mask_parser.add_argument("--color-trim-only", action="store_true",
+                                    help="Conservative color cleanup: remove suspected background, never add foreground")
+    refine_mask_parser.add_argument("--color-max-side", type=int, default=1280)
+    refine_mask_parser.add_argument("--color-iterations", type=int, default=3)
+    mask_consistency_parser = subcommands.add_parser(
+        "audit-dense-masks", help="Inspect multi-view COLMAP feature-track disagreements in rectified masks")
+    mask_consistency_parser.add_argument("--reconstruction", type=Path, required=True)
+    mask_consistency_parser.add_argument("--rectified-masks", type=Path, required=True)
+    mask_consistency_parser.add_argument("--output", type=Path, required=True)
+    mask_consistency_parser.add_argument("--max-overlay-points", type=int, default=200)
+    mask_comparison_parser = subcommands.add_parser(
+        "compare-dense-masks", help="Compare two registered mask revisions using identical COLMAP tracks")
+    mask_comparison_parser.add_argument("--reconstruction", type=Path, required=True)
+    mask_comparison_parser.add_argument("--baseline-masks", type=Path, required=True)
+    mask_comparison_parser.add_argument("--candidate-masks", type=Path, required=True)
+    mask_comparison_parser.add_argument("--output", type=Path, required=True)
+    mask_comparison_parser.add_argument("--max-overlay-points", type=int, default=200)
     texture_finish_parser = subcommands.add_parser(
         "finish-dense-textures", help="Non-destructive UV-atlas exposure, shadow and cast correction")
     texture_finish_parser.add_argument("--dense-revision", type=Path, required=True)
@@ -228,6 +247,8 @@ def main(argv: list[str] | None = None) -> int:
     texture_finish_parser.add_argument("--protect-black", type=int, default=12)
     texture_finish_parser.add_argument("--balance-atlases", action="store_true",
                                        help="Match valid-texel exposure across multiple UV atlas pages")
+    texture_finish_parser.add_argument("--uv-aware-stats", action="store_true",
+                                       help="Sample only actual OBJ UV faces; report dark/blank texels on the mesh")
     texture_finish_parser.add_argument("--max-balance-ev", type=float, default=0.75)
     texture_finish_parser.add_argument("--auto-exposure-luma", type=float,
                                        help="Opt-in target median brightness (32–224) across all atlas pages")
@@ -328,7 +349,33 @@ def main(argv: list[str] | None = None) -> int:
                     args.reconstruction, args.mask_revision, args.output,
                     edits=args.edits, min_island_pixels=args.min_island_pixels,
                     max_hole_pixels=args.max_hole_pixels,
-                    edge_inset_pixels=args.edge_inset_pixels)
+                    edge_inset_pixels=args.edge_inset_pixels,
+                    color_band_pixels=args.color_band_pixels,
+                    color_max_side=args.color_max_side,
+                    color_iterations=args.color_iterations,
+                    color_trim_only=args.color_trim_only)
+            except ReferenceError as error:
+                raise RecipeError(str(error)) from error
+            print(json.dumps(report, indent=2))
+            return 0
+        if args.command == "audit-dense-masks":
+            from .reconstruction.mask_consistency import audit_multiview_masks
+            from .reconstruction.references import ReferenceError
+            try:
+                report = audit_multiview_masks(
+                    args.reconstruction, args.rectified_masks, args.output,
+                    max_overlay_points=args.max_overlay_points)
+            except ReferenceError as error:
+                raise RecipeError(str(error)) from error
+            print(json.dumps(report, indent=2))
+            return 0
+        if args.command == "compare-dense-masks":
+            from .reconstruction.mask_comparison import compare_multiview_masks
+            from .reconstruction.references import ReferenceError
+            try:
+                report = compare_multiview_masks(
+                    args.reconstruction, args.baseline_masks, args.candidate_masks,
+                    args.output, max_overlay_points=args.max_overlay_points)
             except ReferenceError as error:
                 raise RecipeError(str(error)) from error
             print(json.dumps(report, indent=2))
@@ -347,6 +394,7 @@ def main(argv: list[str] | None = None) -> int:
                                                     neutralize_cast=args.neutralize_cast,
                                                     protect_black=args.protect_black,
                                                     balance_atlases=args.balance_atlases,
+                                                    uv_aware_stats=args.uv_aware_stats,
                                                     max_balance_ev=args.max_balance_ev,
                                                     auto_exposure_luma=args.auto_exposure_luma,
                                                     max_auto_exposure_ev=args.max_auto_exposure_ev))
