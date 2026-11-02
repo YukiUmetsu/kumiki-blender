@@ -17,6 +17,7 @@ from kumiki_blender.reconstruction.references import ReferenceError
 from kumiki_blender.reconstruction.texture_finish import (
     TextureFinishSettings, _atlas_correction, _sample_luminance, finish_dense_textures,
 )
+from kumiki_blender.reconstruction.udim import package_finished_udim
 from kumiki_blender.reconstruction.uv_seams import _solve_page_offsets
 
 
@@ -88,6 +89,100 @@ class TextureFinishTests(unittest.TestCase):
         with self.assertRaisesRegex(ReferenceError, "Texture atlas changed"):
             plan_dense_blender_review(self.dense, self.root / "blender", textured=True,
                                       texture_finish=output)
+
+    def test_guided_surface_recipe_exports_hash_pinned_pbr_and_16bit_height(self):
+        region = self.root / "stone-mask.png"
+        guidance = self.root / "lighting.png"
+        height = self.root / "height.png"
+        Image.new("L", (48, 32), 255).save(region)
+        Image.new("L", (48, 32), 128).save(guidance)
+        Image.new("I;16", (48, 32), 32768).save(height)
+        recipe = self.root / "surface.json"
+        recipe.write_text(json.dumps({
+            "schema_version": 1,
+            "atlases": {self.atlas.name: {
+                "regions": [{"id": "limestone", "mask": region.name, "roughness": 0.88}],
+                "illumination_map": guidance.name,
+                "height_map": height.name,
+                "displacement_scale_m": 0.012,
+            }},
+        }))
+        original = self.atlas.read_bytes()
+        output = self.root / "advanced-finished"
+        report = finish_dense_textures(self.dense, output, TextureFinishSettings(
+            surface_recipe=str(recipe), surface_delight_strength=0.6))
+        self.assertEqual(self.atlas.read_bytes(), original)
+        self.assertEqual(report["surface_recipe_sha256"], self._digest(recipe))
+        entry = report["surface_maps"][0]
+        self.assertEqual(entry["atlas"], self.atlas.name)
+        self.assertEqual(entry["displacement_scale_m"], 0.012)
+        self.assertEqual(entry["quality"]["roughness_source"], "material-priors-not-measured")
+        self.assertEqual(self._digest(output / entry["roughness"]["path"]),
+                         entry["roughness"]["sha256"])
+        self.assertEqual((output / entry["height"]["path"]).read_bytes(), height.read_bytes())
+        plan = plan_dense_blender_review(self.dense, self.root / "advanced-render",
+                                         textured=True, texture_finish=output)
+        self.assertEqual(plan["surface_maps"][0]["roughness"]["path"],
+                         str(output / entry["roughness"]["path"]))
+        (output / entry["roughness"]["path"]).write_bytes(b"tampered")
+        with self.assertRaisesRegex(ReferenceError, "Surface map changed"):
+            plan_dense_blender_review(self.dense, self.root / "tampered-render",
+                                      textured=True, texture_finish=output)
+
+    def test_invalid_surface_recipe_fails_before_output_is_created(self):
+        region = self.root / "region-bad.png"
+        Image.new("L", (2, 2), 255).save(region)
+        recipe = self.root / "bad-surface.json"
+        recipe.write_text(json.dumps({"schema_version": 1, "atlases": {
+            self.atlas.name: {"regions": [{"id": "stone", "mask": region.name,
+                                            "roughness": .8}]}}}))
+        destination = self.root / "invalid-finished"
+        with self.assertRaisesRegex(ReferenceError, "dimensions"):
+            finish_dense_textures(self.dense, destination,
+                                  TextureFinishSettings(surface_recipe=str(recipe)))
+        self.assertFalse(destination.exists())
+
+    def test_udim_package_remaps_shared_uvs_and_keeps_sources_unchanged(self):
+        second = self.atlas.with_name("another-page.png")
+        Image.new("RGB", (48, 32), (110, 110, 110)).save(second)
+        self.mtl.write_text(self.mtl.read_text() + f"newmtl m1\nmap_Kd {second.name}\n")
+        self.obj.write_text(self.obj.read_text() + "usemtl m1\nf 1/1 2/2 3/3\n")
+        record_path = self.dense / "dense-report.json"
+        record = json.loads(record_path.read_text())
+        record["textured_obj"]["sha256"] = self._digest(self.obj)
+        record["texture_atlases"].append({
+            "path": str(second.relative_to(self.dense)), "sha256": self._digest(second)})
+        record_path.write_text(json.dumps(record))
+        src_before = (self.obj.read_bytes(), self.mtl.read_bytes(), second.read_bytes())
+        revision = self.root / "udim-finish"
+        finish_dense_textures(self.dense, revision, TextureFinishSettings())
+        destination = self.root / "udim-package"
+        outcome = package_finished_udim(revision, destination)
+        self.assertEqual([item["tile"] for item in outcome["tiles"]], [1001, 1002])
+        self.assertEqual(outcome["uv_remap"]["remapped_faces"], 2)
+        self.assertIn("<UDIM>", (destination / "udim.mtl").read_text())
+        self.assertIn("vt 1", (destination / "udim.obj").read_text())
+        self.assertTrue((destination / "albedo.1001.png").is_file())
+        self.assertTrue((destination / "albedo.1002.png").is_file())
+        self.assertEqual((self.obj.read_bytes(), self.mtl.read_bytes(), second.read_bytes()),
+                         src_before)
+
+    def test_cli_surface_and_udim_commands(self):
+        mask = self.root / "cli-mask.png"
+        Image.new("L", (48, 32), 255).save(mask)
+        recipe = self.root / "cli-surface.json"
+        recipe.write_text(json.dumps({"schema_version": 1, "atlases": {
+            self.atlas.name: {"regions": [{"id": "stone", "mask": mask.name,
+                                           "roughness": 0.9}]}}}))
+        finished = self.root / "cli-surface-finish"
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(main(["finish-dense-textures", "--dense-revision", str(self.dense),
+                                   "--output", str(finished), "--surface-recipe", str(recipe),
+                                   "--surface-delight-strength", "0.45",
+                                   "--surface-low-frequency-radius", "48"]), 0)
+            self.assertEqual(main(["package-finished-udim", "--texture-finish", str(finished),
+                                   "--output", str(self.root / "cli-udim")]), 0)
+        self.assertTrue((self.root / "cli-udim" / "roughness.1001.png").is_file())
 
     def test_source_mutations_and_settings_are_rejected_before_output(self):
         for settings in (TextureFinishSettings(gamma=0),

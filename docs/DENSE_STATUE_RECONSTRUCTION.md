@@ -209,6 +209,22 @@ private texture projection to produce a mesh for artistic inspection.
       --texture-finish .review/statue/texture-finish-r01 \
       --output .review/statue/blender-finished-r01 --textured --matched-views 4
 
+    # Guided material finishing: make a local surface recipe (example below)
+    # and 8-bit masks/illumination + optional MEASURED 16-bit height maps.
+    # A guidance value of 128 means neutral illumination; brighter values
+    # remove illumination highlights, darker values correct shadowed pixels.
+    kumiki-blender finish-dense-textures \
+      --dense-revision .review/statue/dense-masked-r01 \
+      --output .review/statue/finish-material-r01 \
+      --surface-recipe .review/statue/surface-materials.json \
+      --surface-delight-strength 0.7 --surface-max-delight-ev 1.0 \
+      --surface-cleanup-radius 3 --uv-aware-stats
+
+    # A completely separate editable UDIM OBJ/MTL and 1001+ texture tiles.
+    kumiki-blender package-finished-udim \
+      --texture-finish .review/statue/finish-material-r01 \
+      --output .review/statue/udim-material-r01
+
 Options include --min-registered-images, --min-registered-fraction,
 --min-mesh-faces, --timeout-seconds, --no-refine (OpenMVS) and --no-texture.
 For large statues, `--resolution-level 0` (default) preserves rectified
@@ -411,6 +427,88 @@ hide. It is disabled by default for compatibility; it rejects unsupported
 UV tiling, absent face UVs and unused atlas pages instead of guessing.
 Diagnostic masks are approximate at 768px resolution and cannot recover
 photographic details or correct UV seam geometry.
+
+### Advanced photographic material finishing
+
+Install `pip install '.[finishing]'` for Pillow + NumPy. The advanced surface
+recipe is strictly **opt-in**; existing commands and texture exports remain
+unchanged without `--surface-recipe`. Use the exact atlas filename(s) reported
+by `dense-report.json`. Each recipe has **one entry for every recorded atlas**;
+region masks are local grayscale PNGs at the full atlas resolution and may not
+overlap. Keep all referenced files next to the JSON or under safe relative
+subdirectories. Files and the recipe are hash-pinned before processing.
+
+```json
+{
+  "schema_version": 1,
+  "atlases": {
+    "scene_dense_mesh_refined_texture_material_00_map_Kd.png": {
+      "regions": [
+        {"id": "weathered-stone", "mask": "masks/stone.png", "roughness": 0.88},
+        {"id": "oxidized-metal", "mask": "masks/metal.png", "roughness": 0.72}
+      ],
+      "illumination_map": "guides/lighting.png",
+      "damage_mask": "guides/camera-artifacts.png",
+      "height_map": "maps/scanned-height-16bit.png",
+      "displacement_scale_m": 0.012
+    }
+  }
+}
+```
+
+- **Material separation:** masks identify UV-space regions for separate
+  roughness priors and de-lighting, but do not split mesh faces into new
+  material slots. Unlabeled texels use a matte fallback; black/transparent
+  gutters are protected. Manually inspect halos where regions meet.
+- **De-lighting:** guided illumination maps should be prepared from calibrated
+  reference evidence or artist review, not an unexamined raw photograph.
+  128 represents neutral light; brighter means stronger recorded illumination,
+  darker means shadow (values below 16 are treated as unknown). The correction
+  is bounded in **linear RGB** by `--surface-max-delight-ev` (0–2 EV) and
+  blended by `--surface-delight-strength` (0–1). If there is no illumination
+  map but strength is nonzero, a region-masked large-blur heuristic estimates
+  illumination; `--surface-low-frequency-radius` controls it (16–1024 pixels).
+  The fallback can remove real low-frequency pigment/weathering: inspect every
+  original/finished atlas comparison. This is NOT a solved intrinsic-image
+  decomposition problem.
+- **Damage cleanup:** only areas explicitly painted into `damage_mask` are
+  filled with nearby *same-material* colors. The mask may cover at most 5% of
+  an atlas and `--surface-cleanup-radius` must be 1–16. Do not paint original
+  cracks, chips, authentic patina or damaged monument surfaces into this mask;
+  it is for camera artifacts, small projection holes and reconstruction faults.
+- **Roughness:** region `roughness` is a deliberate 0.02–1 **prior**, not a
+  reflectance measurement. An optional per-region `roughness_map` field accepts
+  an externally authored full-resolution grayscale PNG that overrides the prior
+  inside the region. A full-resolution, grayscale, hash-pinned roughness
+  PNG is generated for the GLB's Principled BSDF. For physically estimated
+  roughness, capture calibrated cross-polarized/multi-light views and author a
+  measured roughness map in a separate material pipeline. Diffuse image
+  brightness alone cannot determine roughness.
+- **Displacement:** `height_map` is optional but, when present, **must be true
+  16-bit grayscale PNG** accompanied by a real-world `displacement_scale_m`
+  between 0.00001 and 0.5. No depth/geometry is invented from albedo. The
+  copied height image is connected to a Cycles Displacement node in the
+  editable private `.blend`; artist-controlled subdivision/displacement settings
+  are necessary for silhouette detail, and the source mesh must have a calibrated
+  meter scale for `displacement_scale_m` to be physically meaningful.
+  **glTF/GLB does not encode true height
+  displacement**, so GLB appearance will differ from a high-resolution Cycles
+  render unless geometry is intentionally baked.
+- **UDIM:** `package-finished-udim` assigns numbered tiles (1001, 1002, ...)
+  to original atlas pages, duplicates shared per-material OBJ `vt` indices,
+  and emits `udim.obj`, `udim.mtl`, `albedo.<tile>.png`, plus any roughness and
+  height tiles, with a hash/provenance report. In Blender, load the generated
+  `<UDIM>` image sequence as a **Tiled** image and wire it to Principled BSDF;
+  check material slots and UVs before rendering. glTF has no native UDIM;
+  Blender's exporter splits UDIM into tiles/materials, so validate the final
+  portable GLB separately. This package does not overwrite the original UVs,
+  mesh, material revisions or Blender review.
+
+All of these outputs remain `artistic-review-required` and private; none
+establishes photo-perfect likeness. Photograph-to-material decomposition is
+ambiguous without illumination and reflectance measurements. Compare
+re-rendered front, side and three-quarter views under multiple lights and
+review baked shadows/seams before shipping an asset.
 
 For multi-page models, `--balance-uv-seams` instead estimates per-page exposure
 differences at **shared OBJ mesh vertices along material/atlas boundaries**.

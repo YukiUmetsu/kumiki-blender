@@ -120,9 +120,99 @@ def _finished_texture_plan(root: Path, dense_report: dict[str, Any],
             or mtl_record["sha256"] != record["source_mtl_sha256"]
             or finished["textured_faces"] != original["textured_faces"]):
         raise ReferenceError("Finished texture geometry or MTL changed since original")
+    surface_entries = record.get("surface_maps", [])
+    if not isinstance(surface_entries, list) or (surface_entries and
+            {item.get("atlas") for item in surface_entries if isinstance(item, dict)}
+            != set(original_atlases)):
+        raise ReferenceError("Finished surface maps do not match original atlases")
+    verified_surface = []
+    for entry in surface_entries:
+        if not isinstance(entry, dict) or not isinstance(entry.get("atlas"), str):
+            raise ReferenceError("Invalid finished surface map record")
+        name = entry["atlas"]
+        maps: dict[str, Any] = {}
+        for channel in ("roughness", "height"):
+            asset = entry.get(channel)
+            if asset is None:
+                if channel == "roughness":
+                    raise ReferenceError("Finished material surface requires roughness map")
+                maps[channel] = None
+                continue
+            expected_name = name + (".roughness.png" if channel == "roughness" else ".height.png")
+            if (not isinstance(asset, dict) or asset.get("path") != expected_name
+                    or not isinstance(asset.get("sha256"), str)):
+                raise ReferenceError("Invalid finished surface map path/hash")
+            path = finish / expected_name
+            if (path.is_symlink() or not path.is_file()
+                    or path.stat().st_size > 512 * 1024 * 1024
+                    or _sha256(path) != asset["sha256"]):
+                raise ReferenceError(f"Surface map changed after finishing: {expected_name}")
+            from PIL import Image
+
+            with Image.open(path) as img:
+                if (img.format != "PNG" or img.mode != ("L" if channel == "roughness" else "I;16")
+                        or not 0 < img.width <= 16384 or not 0 < img.height <= 16384):
+                    raise ReferenceError("Finished surface map has invalid mode or dimensions")
+            maps[channel] = {"path": str(path), "sha256": asset["sha256"]}
+        scale = entry.get("displacement_scale_m")
+        if ((maps["height"] is None) != (scale is None)
+                or (scale is not None and (type(scale) not in (float, int)
+                                             or not math.isfinite(scale) or not .00001 <= scale <= .5))):
+            raise ReferenceError("Finished height displacement scale is invalid")
+        # Match each auxiliary map to its parent albedo dimensions.
+        from PIL import Image
+
+        albedo = finish / name
+        with Image.open(albedo) as source:
+            source_size = source.size
+        for map_record in maps.values():
+            if map_record is not None:
+                with Image.open(map_record["path"]) as image:
+                    if image.size != source_size:
+                        raise ReferenceError("Finished surface map dimensions differ from albedo")
+        verified_surface.append({"atlas": name, **maps, "displacement_scale_m": scale})
     return {**finished, "texture_finish_revision": str(finish),
             "texture_finish_settings": record.get("settings"),
+            "surface_maps": verified_surface,
             "texture_quality_verified": False}
+
+
+def _attach_finished_surface_nodes(bpy: Any, material: Any,
+                                   entry: dict[str, Any]) -> None:
+    """Use hash-checked PBR maps. True height affects Blender, not the GLB."""
+    nodes, links = material.node_tree.nodes, material.node_tree.links
+    shader = next((node for node in nodes if node.type == "BSDF_PRINCIPLED"), None)
+    if shader is None:
+        raise ReferenceError("Finished material has no Principled BSDF")
+
+    def texture(channel: str) -> Any:
+        source = entry[channel]
+        image = bpy.data.images.load(source["path"], check_existing=False)
+        image.colorspace_settings.name = "Non-Color"
+        image.pack()
+        if image.packed_file is None:
+            raise ReferenceError(f"Cannot pack finished {channel} map")
+        node = nodes.new("ShaderNodeTexImage")
+        node.label = f"Kumiki / finished {channel} / {entry['atlas']}"
+        node.image = image
+        return node
+
+    rough = texture("roughness")
+    links.new(rough.outputs["Color"], shader.inputs["Roughness"])
+    if entry["height"] is not None:
+        height = texture("height")
+        displacement = nodes.new("ShaderNodeDisplacement")
+        displacement.inputs["Scale"].default_value = entry["displacement_scale_m"]
+        displacement.inputs["Midlevel"].default_value = 0.5
+        links.new(height.outputs["Color"], displacement.inputs["Height"])
+        output = next((node for node in nodes if node.type == "OUTPUT_MATERIAL"), None)
+        if output is None:
+            raise ReferenceError("Finished material has no Material Output node")
+        links.new(displacement.outputs["Displacement"], output.inputs["Displacement"])
+        # Blender 4.x/5.x material property names differ. Do not invent a
+        # universal setting: leave a clear Displacement node for Cycles artists.
+        if hasattr(material, "displacement_method"):
+            material.displacement_method = "BOTH"
 
 
 def _matched_scan_cameras(report: dict[str, Any], count: int) -> list[dict[str, Any]]:
@@ -363,6 +453,7 @@ def build_dense_blender_review(dense_revision: str | Path, output: str | Path,
     obj.name = "Private dense scan / unverified scale and axes"
     if textured:
         linked = {Path(item["path"]).resolve() for item in plan["texture_atlases"]}
+        surface_by_name = {item["atlas"]: item for item in plan.get("surface_maps", [])}
         for material in obj.data.materials:
             if material is None or not material.use_nodes:
                 raise ReferenceError("Textured OBJ lost its image-linked material")
@@ -375,6 +466,14 @@ def build_dense_blender_review(dense_revision: str | Path, output: str | Path,
                 if shader.type == "BSDF_PRINCIPLED":
                     shader.inputs["Roughness"].default_value = 0.85
                     shader.inputs["Alpha"].default_value = 1.0
+            if surface_by_name:
+                # OBJ material groups may use shared atlases; the map is per
+                # atlas so each group receives consistent surface treatment.
+                image_names = {Path(bpy.path.abspath(img.filepath)).name for img in images}
+                if len(image_names) != 1 or next(iter(image_names)) not in surface_by_name:
+                    raise ReferenceError("Cannot uniquely associate finished material and atlas")
+                _attach_finished_surface_nodes(bpy, material,
+                                               surface_by_name[next(iter(image_names))])
         bpy.ops.file.pack_all()  # Private portable .blend; GLB embeds the atlas separately.
     else:
         material = bpy.data.materials.new("Dense statue / neutral review material")

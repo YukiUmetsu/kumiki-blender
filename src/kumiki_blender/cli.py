@@ -257,6 +257,19 @@ def main(argv: list[str] | None = None) -> int:
     texture_finish_parser.add_argument("--auto-exposure-luma", type=float,
                                        help="Opt-in target median brightness (32–224) across all atlas pages")
     texture_finish_parser.add_argument("--max-auto-exposure-ev", type=float, default=1.0)
+    texture_finish_parser.add_argument("--surface-recipe", type=Path,
+                                       help="Optional local per-atlas material masks, lighting, cleanup and height JSON")
+    texture_finish_parser.add_argument("--surface-delight-strength", type=float, default=0.0,
+                                       help="0–1 bounded linear-light photo de-lighting (guided map preferred)")
+    texture_finish_parser.add_argument("--surface-max-delight-ev", type=float, default=1.0)
+    texture_finish_parser.add_argument("--surface-low-frequency-radius", type=int, default=96,
+                                       help="Heuristic illumination blur radius when no guidance map exists")
+    texture_finish_parser.add_argument("--surface-cleanup-radius", type=int, default=0,
+                                       help="Radius 1–16 for explicitly masked small texture defects")
+    udim_parser = subcommands.add_parser(
+        "package-finished-udim", help="Copy a verified finished multi-atlas OBJ to numbered UDIM tiles")
+    udim_parser.add_argument("--texture-finish", type=Path, required=True)
+    udim_parser.add_argument("--output", type=Path, required=True)
     for command in ("plan-dense-blender-review", "render-dense-blender-review"):
         review_dense = subcommands.add_parser(
             command, help="Inspect or create a private editable Blender scene from a dense PLY")
@@ -404,7 +417,22 @@ def main(argv: list[str] | None = None) -> int:
                                                     max_seam_ev=args.max_seam_ev,
                                                     min_seam_anchors=args.min_seam_anchors,
                                                     auto_exposure_luma=args.auto_exposure_luma,
-                                                    max_auto_exposure_ev=args.max_auto_exposure_ev))
+                                                    max_auto_exposure_ev=args.max_auto_exposure_ev,
+                                                    surface_recipe=(str(args.surface_recipe)
+                                                                    if args.surface_recipe else None),
+                                                    surface_delight_strength=args.surface_delight_strength,
+                                                    surface_max_delight_ev=args.surface_max_delight_ev,
+                                                    surface_low_frequency_radius=args.surface_low_frequency_radius,
+                                                    surface_cleanup_radius=args.surface_cleanup_radius))
+            except ReferenceError as error:
+                raise RecipeError(str(error)) from error
+            print(json.dumps(report, indent=2))
+            return 0
+        if args.command == "package-finished-udim":
+            from .reconstruction.references import ReferenceError
+            from .reconstruction.udim import package_finished_udim
+            try:
+                report = package_finished_udim(args.texture_finish, args.output)
             except ReferenceError as error:
                 raise RecipeError(str(error)) from error
             print(json.dumps(report, indent=2))
