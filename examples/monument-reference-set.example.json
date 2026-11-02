@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "asset_id": "example-monument",
+  "subject": "Replace with the exact named physical monument",
+  "required_views": ["front", "left-profile", "right-profile", "front-left"],
+  "required_regions": ["face", "head", "hair", "drapery"],
+  "images": [
+    {
+      "id": "monument-front",
+      "file": "photos/monument-front.jpg",
+      "source_url": "https://example.org/replace-with-authentic-source/front",
+      "view": "front",
+      "regions": ["face", "head", "hair"]
+    },
+    {
+      "id": "monument-left",
+      "file": "photos/monument-left.jpg",
+      "source_url": "https://example.org/replace-with-authentic-source/left",
+      "view": "left-profile",
+      "regions": ["face", "head", "drapery"]
+    },
+    {
+      "id": "monument-right",
+      "file": "photos/monument-right.jpg",
+      "source_url": "https://example.org/replace-with-authentic-source/right",
+      "view": "right-profile",
+      "regions": ["face", "hair", "drapery"]
+    }
+  ]
+}

@@ -140,6 +140,46 @@ def main(argv: list[str] | None = None) -> int:
     visual_parser.add_argument("--max-changed", type=float, default=0.05)
     visual_parser.add_argument("--pixel-threshold", type=int, default=16)
     visual_parser.add_argument("--idiff", action="store_true", help="Also run optional OpenImageIO idiff")
+    for command in ("reference-audit", "reconstruct-photos"):
+        photo_parser = subcommands.add_parser(
+            command, help="Audit statue photo evidence or build a sparse COLMAP camera reconstruction")
+        photo_parser.add_argument("--manifest", type=Path, required=True,
+                                  help="Local reference-only image dossier JSON")
+        if command == "reconstruct-photos":
+            photo_parser.add_argument("--output", type=Path, required=True,
+                                      help="New immutable reconstruction revision directory")
+            photo_parser.add_argument("--colmap", default="colmap", help="Installed COLMAP executable")
+            photo_parser.add_argument("--timeout-seconds", type=int, default=3600)
+            photo_parser.add_argument("--undistort", action="store_true",
+                                      help="Rectify camera intrinsics and image pixels for accurate Blender projection")
+            photo_parser.add_argument("--max-image-size", type=int, default=4000)
+    camera_parser = subcommands.add_parser(
+        "prepare-camera-plan", help="Align sparse COLMAP cameras to sculpt-space 3D landmarks")
+    camera_parser.add_argument("--reconstruction", type=Path, required=True)
+    camera_parser.add_argument("--alignment", type=Path, required=True)
+    camera_parser.add_argument("--output", type=Path, required=True)
+    camera_parser.add_argument("--max-anchor-rms-m", type=float, default=0.10)
+    camera_parser.add_argument("--undistorted-masks", type=Path,
+                               help="Optional manually verified silhouette masks for rectified photos")
+    review_parser = subcommands.add_parser(
+        "render-reference-scene", help="Create a private Blender scene with registered reference cameras")
+    review_parser.add_argument("--plan", type=Path, required=True)
+    review_parser.add_argument("--model", type=Path, required=True, help="Local aligned sculpt GLB")
+    review_parser.add_argument("--output", type=Path, required=True)
+    review_parser.add_argument("--render-clay", action="store_true")
+    review_parser.add_argument("--max-cameras", type=int, default=8)
+    review_parser.add_argument("--blender", default="blender")
+    mask_parser = subcommands.add_parser("silhouette-qa", help="Compare registered clay alpha masks to subject masks")
+    mask_parser.add_argument("--plan", type=Path, required=True)
+    mask_parser.add_argument("--renders", type=Path, required=True)
+    mask_parser.add_argument("--output", type=Path, required=True)
+    mask_parser.add_argument("--min-iou", type=float, default=0.8)
+    landmark_parser = subcommands.add_parser(
+        "landmark-qa", help="Measure sculpt 3D landmark reprojection error in registered photos")
+    landmark_parser.add_argument("--plan", type=Path, required=True)
+    landmark_parser.add_argument("--annotations", type=Path, required=True)
+    landmark_parser.add_argument("--output", type=Path, required=True)
+    landmark_parser.add_argument("--max-error-px", type=float, default=12.0)
     source_parser = subcommands.add_parser("inspect-asset")
     source_parser.add_argument("--input", type=Path, required=True)
     texture_parser = subcommands.add_parser("inspect-texture-packs")
@@ -153,6 +193,90 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     try:
+        if args.command == "prepare-camera-plan":
+            from .reconstruction.cameras import create_camera_plan
+            from .reconstruction.references import ReferenceError
+            try:
+                report = create_camera_plan(args.reconstruction, args.alignment, args.output,
+                                            max_anchor_rms_m=args.max_anchor_rms_m,
+                                            undistorted_masks=args.undistorted_masks)
+            except ReferenceError as error:
+                raise RecipeError(str(error)) from error
+            print(json.dumps(report, indent=2))
+            return 0
+        if args.command == "silhouette-qa":
+            from .reconstruction.references import ReferenceError
+            from .reconstruction.silhouettes import compare_silhouettes
+            try:
+                report = compare_silhouettes(args.plan, args.renders, args.output,
+                                             min_iou=args.min_iou)
+            except ReferenceError as error:
+                raise RecipeError(str(error)) from error
+            print(json.dumps(report, indent=2))
+            return 0 if report["status"].startswith("mask-threshold-candidate") else 3
+        if args.command == "landmark-qa":
+            from .reconstruction.landmarks import check_landmark_reprojection
+            from .reconstruction.references import ReferenceError
+            try:
+                report = check_landmark_reprojection(args.plan, args.annotations, args.output,
+                                                     max_error_px=args.max_error_px)
+            except ReferenceError as error:
+                raise RecipeError(str(error)) from error
+            print(json.dumps(report, indent=2))
+            return 0 if report["status"].startswith("reprojection-threshold-candidate") else 3
+        if args.command == "render-reference-scene":
+            from .reconstruction.blender_reference import load_camera_plan
+            from .reconstruction.references import ReferenceError
+            try:
+                load_camera_plan(args.plan)
+                if not 1 <= args.max_cameras <= 32:
+                    raise ReferenceError("max_cameras must be 1–32")
+                output = args.output.resolve()
+                if args.output.is_symlink() or output.exists():
+                    raise ReferenceError(f"Reference scene output already exists: {output}")
+            except ReferenceError as error:
+                raise RecipeError(str(error)) from error
+            try:
+                import bpy  # type: ignore[import-not-found]
+            except ImportError:
+                executable = shutil.which(args.blender)
+                if executable is None:
+                    raise RuntimeError(f"Blender executable not found: {args.blender}")
+                entry = Path(__file__).resolve().parents[2] / "scripts/blender_entry.py"
+                if not entry.is_file():
+                    raise RuntimeError("Blender rendering requires scripts/blender_entry.py from a source checkout")
+                command = [executable, "--background", "--factory-startup", "--python-exit-code", "1",
+                           "--python", str(entry), "--", "render-reference-scene",
+                           "--plan", str(args.plan.resolve()), "--model", str(args.model.resolve()),
+                           "--output", str(output), "--max-cameras", str(args.max_cameras)]
+                if args.render_clay:
+                    command.append("--render-clay")
+                return subprocess.run(command, check=False).returncode
+            from .reconstruction.blender_reference import build_reference_scene
+            try:
+                report = build_reference_scene(args.plan, args.model, output,
+                                               render=args.render_clay, max_cameras=args.max_cameras,
+                                               bpy_module=bpy)
+            except ReferenceError as error:
+                raise RecipeError(str(error)) from error
+            print(json.dumps(report, indent=2))
+            return 0
+        if args.command in ("reference-audit", "reconstruct-photos"):
+            from .reconstruction.references import (ReferenceError, audit_reference_set,
+                                                    load_reference_set)
+            from .reconstruction.colmap import build_sparse_reconstruction
+            try:
+                references = load_reference_set(args.manifest)
+                report = (audit_reference_set(references) if args.command == "reference-audit" else
+                          build_sparse_reconstruction(references, args.output, colmap=args.colmap,
+                                                      timeout_seconds=args.timeout_seconds,
+                                                      undistort=args.undistort,
+                                                      max_image_size=args.max_image_size))
+            except ReferenceError as error:
+                raise RecipeError(str(error)) from error
+            print(json.dumps(report, indent=2))
+            return (3 if args.command == "reconstruct-photos" and
+                    report["status"] == "review-required" else 0)
         if args.command == "visual-qa":
             from .visual_qa import VisualQAError, inspect_visual_revision
             try:
