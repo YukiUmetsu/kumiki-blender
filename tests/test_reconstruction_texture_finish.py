@@ -17,6 +17,7 @@ from kumiki_blender.reconstruction.references import ReferenceError
 from kumiki_blender.reconstruction.texture_finish import (
     TextureFinishSettings, _atlas_correction, _sample_luminance, finish_dense_textures,
 )
+from kumiki_blender.reconstruction.uv_seams import _solve_page_offsets
 
 
 class TextureFinishTests(unittest.TestCase):
@@ -96,7 +97,12 @@ class TextureFinishTests(unittest.TestCase):
                          TextureFinishSettings(auto_exposure_luma=0),
                          TextureFinishSettings(auto_exposure_luma=float("nan")),
                          TextureFinishSettings(max_auto_exposure_ev=3),
-                         TextureFinishSettings(uv_aware_stats="yes")):
+                         TextureFinishSettings(uv_aware_stats="yes"),
+                         TextureFinishSettings(balance_uv_seams="yes"),
+                         TextureFinishSettings(max_seam_ev=-0.01),
+                         TextureFinishSettings(min_seam_anchors=3),
+                         TextureFinishSettings(balance_uv_seams=True,
+                                               balance_atlases=True)):
             with self.assertRaises(ReferenceError):
                 finish_dense_textures(self.dense, self.root / "unfinished", settings)
             self.assertFalse((self.root / "unfinished").exists())
@@ -306,6 +312,184 @@ class TextureFinishTests(unittest.TestCase):
             finish_dense_textures(self.dense, output,
                                   TextureFinishSettings(uv_aware_stats=True))
         self.assertFalse(output.exists())
+
+    def _set_up_cross_page_seam(self):
+        """Two uniform atlas pages meet along eleven topologically shared vertices."""
+        second = self.atlas.with_name("second-seam-page.png")
+        Image.new("RGB", (96, 96), (160, 160, 160)).save(second)
+        Image.new("RGB", (96, 96), (80, 80, 80)).save(self.atlas)
+        self.mtl.write_text(self.mtl.read_text() + f"newmtl m1\nmap_Kd {second.name}\n")
+        lines = [f"mtllib {self.mtl.name}"]
+        # A shared row of 11 vertices and unique upper/lower triangle rows.
+        for y in (0, 1, -1):
+            for i in range(11):
+                lines.append(f"v {i} {y} 0")
+        for y in (0.48, 0.70, 0.52, 0.30):
+            for i in range(11):
+                lines.append(f"vt {0.25 + i * 0.05:.4f} {y}")
+        lines.append("usemtl m0")
+        for i in range(10):
+            lines.append(f"f {i+1}/{i+1} {i+2}/{i+2} {12+i}/{12+i}")
+        lines.append("usemtl m1")
+        for i in range(10):
+            lines.append(f"f {i+1}/{23+i} {23+i}/{34+i} {i+2}/{24+i}")
+        self.obj.write_text("\n".join(lines) + "\n")
+        report_path = self.dense / "dense-report.json"
+        report = json.loads(report_path.read_text())
+        report["textured_obj"]["sha256"] = self._digest(self.obj)
+        report["texture_atlases"][0]["sha256"] = self._digest(self.atlas)
+        report["texture_atlases"].append({"path": str(second.relative_to(self.dense)),
+                                          "sha256": self._digest(second)})
+        report_path.write_text(json.dumps(report))
+        return second
+
+    def test_cross_page_uv_seam_balancing_uses_shared_vertices_not_page_medians(self):
+        second = self._set_up_cross_page_seam()
+        # The page-wide medians intentionally point the WRONG way: most texels
+        # outside the actual seam strip are brighter on page 0 and darker on
+        # page 1. Only corresponding seam texels reveal the real page mismatch.
+        for path, outside in ((self.atlas, 220), (second, 35)):
+            with Image.open(path) as source:
+                edited = source.copy()
+            for y in list(range(35)) + list(range(61, 96)):
+                for x in range(96):
+                    edited.putpixel((x, y), (outside, outside, outside))
+            edited.save(path)
+        report_path = self.dense / "dense-report.json"
+        report = json.loads(report_path.read_text())
+        report["texture_atlases"][0]["sha256"] = self._digest(self.atlas)
+        report["texture_atlases"][1]["sha256"] = self._digest(second)
+        report_path.write_text(json.dumps(report))
+        originals = {path: path.read_bytes() for path in (self.obj, self.mtl, self.atlas, second)}
+        median_result = finish_dense_textures(
+            self.dense, self.root / "wrong-page-medians",
+            TextureFinishSettings(balance_atlases=True, max_balance_ev=0.6))
+        self.assertLess(median_result["texture_atlases"][0]["atlas_balance_ev"], 0)
+        self.assertGreater(median_result["texture_atlases"][1]["atlas_balance_ev"], 0)
+        target = self.root / "seam-finished"
+        result = finish_dense_textures(
+            self.dense, target, TextureFinishSettings(balance_uv_seams=True,
+                                                      min_seam_anchors=8,
+                                                      max_seam_ev=0.6))
+        seam = result["uv_seam_balance"]
+        self.assertEqual(seam["candidate_vertices"], 11)
+        self.assertEqual(seam["valid_vertex_samples"], 11)
+        self.assertEqual(len(seam["pairs"]), 1)
+        self.assertEqual(seam["pairs"][0]["valid_anchors"], 11)
+        self.assertTrue(seam["pairs"][0]["used"])
+        self.assertAlmostEqual(seam["pairs"][0]["median_gap_ev_before"], 1.0, places=3)
+        self.assertAlmostEqual(seam["pairs"][0]["estimated_gap_ev_after"], 0, places=3)
+        by_name = {item["path"]: item for item in result["texture_atlases"]}
+        self.assertAlmostEqual(by_name[self.atlas.name]["uv_seam_balance_ev"], 0.5, places=3)
+        self.assertAlmostEqual(by_name[second.name]["uv_seam_balance_ev"], -0.5, places=3)
+        with Image.open(target / self.atlas.name) as first, Image.open(target / second.name) as last:
+            self.assertLess(abs(first.getpixel((50, 50))[0] - last.getpixel((50, 50))[0]), 3)
+        self.assertEqual({path: path.read_bytes() for path in originals}, originals)
+        planned = plan_dense_blender_review(self.dense, self.root / "seam-render", textured=True,
+                                            texture_finish=target)
+        self.assertEqual(len(planned["texture_atlases"]), 2)
+
+    def test_cli_seam_gain_is_bounded_and_settings_are_recorded(self):
+        self._set_up_cross_page_seam()
+        destination = self.root / "cli-seam"
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(main(["finish-dense-textures", "--dense-revision", str(self.dense),
+                                   "--output", str(destination), "--balance-uv-seams",
+                                   "--max-seam-ev", "0.3", "--min-seam-anchors", "10"]), 0)
+        result = json.loads((destination / "texture-finish-report.json").read_text())
+        self.assertTrue(result["settings"]["balance_uv_seams"])
+        self.assertEqual(result["settings"]["min_seam_anchors"], 10)
+        self.assertEqual(result["settings"]["max_seam_ev"], 0.3)
+        applied = [item["uv_seam_balance_ev"] for item in result["texture_atlases"]]
+        self.assertEqual(sorted(applied), [-0.3, 0.3])
+        self.assertAlmostEqual(result["uv_seam_balance"]["pairs"][0]["estimated_gap_ev_after"],
+                               0.4, places=3)
+
+    def test_cross_page_seam_fails_safe_when_anchors_sparse_or_inconsistent(self):
+        second = self._set_up_cross_page_seam()
+        # Too few confirmed correspondences: do not invent a page-level gain.
+        sparse = finish_dense_textures(
+            self.dense, self.root / "sparse-seam",
+            TextureFinishSettings(balance_uv_seams=True, min_seam_anchors=20))
+        self.assertFalse(sparse["uv_seam_balance"]["pairs"][0]["used"])
+        self.assertEqual(sparse["texture_atlases"][0]["uv_seam_balance_ev"], 0)
+        self.assertIn("insufficient-shared-anchors",
+                      sparse["uv_seam_balance"]["pairs"][0]["excluded_reason"])
+        # Rapidly changing page color along the seam suggests lighting or
+        # genuinely different material, rather than a single correctable EV.
+        with Image.open(self.atlas) as source:
+            modified = source.copy()
+        for x in range(96):
+            tone = 40 if x < 48 else 200
+            for y in range(96):
+                modified.putpixel((x, y), (tone, tone, tone))
+        modified.save(self.atlas)
+        report_path = self.dense / "dense-report.json"
+        report = json.loads(report_path.read_text())
+        report["texture_atlases"][0]["sha256"] = self._digest(self.atlas)
+        report_path.write_text(json.dumps(report))
+        inconsistent = finish_dense_textures(
+            self.dense, self.root / "inconsistent-seam",
+            TextureFinishSettings(balance_uv_seams=True, min_seam_anchors=8))
+        self.assertFalse(inconsistent["uv_seam_balance"]["pairs"][0]["used"])
+        self.assertEqual(inconsistent["uv_seam_balance"]["pairs"][0]["excluded_reason"],
+                         "inconsistent-seam-brightness")
+        self.assertEqual(inconsistent["texture_atlases"][0]["uv_seam_balance_ev"], 0)
+
+    def test_cross_page_seam_no_shared_vertices_is_reported_without_changes(self):
+        second = self._set_up_cross_page_seam()
+        # Distinct vertex indices intentionally cannot prove adjacency.
+        content = self.obj.read_text()
+        extra = [f"v {i} 0 0" for i in range(11)]
+        # Replace m1's shared vertex references with new vertex records.
+        m0, m1 = content.split("usemtl m1\n")
+        m0 = m0 + "\n".join(extra) + "\n"
+        for i in range(10):
+            m1 = m1.replace(f"f {i+1}/{23+i} ", f"f {34+i}/{23+i} ")
+            m1 = m1.replace(f" {i+2}/{24+i}\n", f" {35+i}/{24+i}\n")
+        self.obj.write_text(m0 + "usemtl m1\n" + m1)
+        report_path = self.dense / "dense-report.json"
+        report = json.loads(report_path.read_text())
+        report["textured_obj"]["sha256"] = self._digest(self.obj)
+        report_path.write_text(json.dumps(report))
+        outcome = finish_dense_textures(
+            self.dense, self.root / "unconnected-seam",
+            TextureFinishSettings(balance_uv_seams=True))
+        self.assertEqual(outcome["uv_seam_balance"]["candidate_vertices"], 0)
+        self.assertEqual(outcome["uv_seam_balance"]["pairs"], [])
+        self.assertTrue(outcome["uv_seam_balance"]["warnings"])
+        with Image.open(self.root / "unconnected-seam" / second.name) as image:
+            self.assertEqual(image.getpixel((50, 50))[0], 160)
+
+    def test_seam_analysis_rejects_tiled_uv_before_writing_any_revision(self):
+        self._set_up_cross_page_seam()
+        self.obj.write_text(self.obj.read_text().replace("vt 0.2500 0.48", "vt 1.25 0.48"))
+        report_path = self.dense / "dense-report.json"
+        report = json.loads(report_path.read_text())
+        report["textured_obj"]["sha256"] = self._digest(self.obj)
+        report_path.write_text(json.dumps(report))
+        destination = self.root / "invalid-seam"
+        with self.assertRaisesRegex(ReferenceError, "tiled/out-of-range"):
+            finish_dense_textures(self.dense, destination,
+                                  TextureFinishSettings(balance_uv_seams=True))
+        self.assertFalse(destination.exists())
+
+    def test_seam_page_graph_corrects_three_connected_pages_without_global_shift(self):
+        # Page brightness A=80, B=160, C=113: the differences must be
+        # reconciled across the cycle rather than adjusted one pair at a time.
+        solved = _solve_page_offsets([
+            ("a", "b", 1.0, 25), ("b", "c", -0.5, 30),
+            ("a", "c", 0.5, 40)], max_ev=0.75)
+        self.assertEqual(set(solved), {"a", "b", "c"})
+        self.assertAlmostEqual(sum(solved.values()), 0, places=4)
+        self.assertAlmostEqual(solved["a"] - solved["b"], 1.0, places=3)
+        self.assertAlmostEqual(solved["b"] - solved["c"], -0.5, places=3)
+        capped = _solve_page_offsets([("a", "b", 3.0, 30)], max_ev=0.4)
+        self.assertEqual(capped, {"a": 0.4, "b": -0.4})
+        uneven = _solve_page_offsets([("a", "b", 3.0, 30),
+                                      ("a", "c", 3.0, 30)], max_ev=0.4)
+        self.assertLessEqual(max(map(abs, uneven.values())), 0.400001)
+        self.assertAlmostEqual(sum(uneven.values()), 0.0, places=5)
 
 
 if __name__ == "__main__":
