@@ -25,23 +25,28 @@ ICONIC_TREE_LINE=(.082,.213,.145)
 SAKURA_PETAL_PALETTE=((.98,.46,.63),(.99,.67,.78),(.997,.83,.87),
                       (.92,.34,.51),(.97,.70,.80))
 
-# Iconic staging: Fuji deliberately dominates the shrine and flowering trees,
-# while its footprint stays inside the same compact 10.2 × 8.6 diorama base.
+# Iconic staging: give the Fuji a broad, monumental silhouette while keeping
+# an intentionally small *relative* stage and human-scale shrine/trees.
 ICONIC_FUJI_BASE_Z=.57
 ICONIC_FUJI_VERTICAL_SCALE=1.62
-ICONIC_FUJI_RADIUS_SCALE=1.06
+ICONIC_FUJI_RADIUS_SCALE=1.32
+ICONIC_STAGE_WIDTH=13.26
+ICONIC_STAGE_DEPTH=10.75
+ICONIC_TORII_ORIGIN=(1.65,-4.45)
+ICONIC_SAKURA_LEFT=(-4.68,-1.72)
+ICONIC_SAKURA_RIGHT=(5.25,.55)
 
 
 def plan_iconic_shots() -> tuple[QualityShot, ...]:
     """Hero plus scrutiny of the emblematic geometry and small-footprint layout."""
     return (
-        QualityShot("hero", (10.4, -18.4, 10.0), (0, 0, 2.82), 12.1),
-        QualityShot("front", (0, -19, 8.1), (0, 0, 2.75), 12.3),
-        QualityShot("opposite", (-13, -12, 9.0), (0, .2, 2.70), 12.5),
-        QualityShot("torii-and-sakura", (5.8, -8.8, 4.7), (1.55, -2.25, 1.55), 5.0),
-        QualityShot("sakura-botanical", (-6.4, -5.3, 3.7), (-3.1, -1.45, 2.0), 3.65),
+        QualityShot("hero", (12.6, -21.5, 11.8), (0, 0, 2.88), 16.0),
+        QualityShot("front", (0, -22.5, 9.2), (0, -.15, 2.75), 14.7),
+        QualityShot("opposite", (-16.5, -15.0, 10.7), (0, .2, 2.70), 16.5),
+        QualityShot("torii-and-sakura", (8.0, -12.0, 5.6), (3.05, -3.5, 1.55), 7.0),
+        QualityShot("sakura-botanical", (-8.6, -5.9, 4.1), (-4.68, -1.72, 2.0), 4.0),
         QualityShot("snow-crown", (7.2, -7.1, 10.7), (0, .65, 5.9), 5.7),
-        QualityShot("footprint", (0, -1, 21), (0, 0, .35), 11.5),
+        QualityShot("footprint", (0, -1, 24), (0, 0, .35), 15.5),
     )
 
 
@@ -52,10 +57,12 @@ def iconic_spec(detail: str = "standard") -> dict[str, Any]:
         "asset_id": "mount-fuji-iconic-diorama",
         "style": "iconic",
         "detail": detail,
-        "footprint_units": [10.2, 8.6],
+        "footprint_units": [ICONIC_STAGE_WIDTH, ICONIC_STAGE_DEPTH],
         "vertical_scale": "intentionally exaggerated and non-geographic",
         "fuji_vertical_multiplier": ICONIC_FUJI_VERTICAL_SCALE,
         "fuji_radius_multiplier": ICONIC_FUJI_RADIUS_SCALE,
+        "torii_origin": list(ICONIC_TORII_ORIGIN),
+        "sakura_origins": [list(ICONIC_SAKURA_LEFT),list(ICONIC_SAKURA_RIGHT)],
         "landmarks": ["Fuji snow crown", "vermillion torii", "flowering sakura"],
         "terrain_divisions": {"preview": 144, "standard": 240, "high": 360}[detail],
         "sakura_blossom_target": {"preview": 1500, "standard": 3700, "high": 8500}[detail],
@@ -231,10 +238,11 @@ def _rounded_rectangle(t: float, width: float, depth: float, radius: float) -> t
 
 
 def _plinth(bpy: Any, model: Any, mats: dict) -> list:
-    """Layered round-corner display plaque; actual 10.2 by 8.6 footprint."""
+    """Layered round-corner plaque framing the broad cone and relocated trees."""
     n = 160
-    levels = ((10.2, 8.6, 1.05, .06), (10.2, 8.6, 1.05, .34),
-              (10.02, 8.42, 1.05, .46), (9.75, 8.17, 1.06, .54))
+    w,d=ICONIC_STAGE_WIDTH,ICONIC_STAGE_DEPTH
+    levels = ((w, d, 1.25, .06), (w, d, 1.25, .34),
+              (w-.18, d-.18, 1.25, .46), (w-.45, d-.43, 1.26, .54))
     verts = [(*_rounded_rectangle(j/n, w, d, rad), z)
              for w, d, rad, z in levels for j in range(n)]
     faces = [(r*n+j, r*n+(j+1)%n, (r+1)*n+(j+1)%n, (r+1)*n+j)
@@ -250,8 +258,8 @@ def _plinth(bpy: Any, model: Any, mats: dict) -> list:
         base=_blend((.145,.267,.142),(.30,.328,.16),moss)
         leaf_litter=.18+.16*math.sin(x*2.3+y*.5)
         base=_blend(base,(.34,.242,.14),max(0,leaf_litter)*.50)
-        path=math.exp(-((x-1.76-.08*math.sin(y*1.5))/.43)**2)
-        path*=_ease(-4.0,-3.15,y)*(1-_ease(-1.7,-.75,y))
+        path=math.exp(-((x-ICONIC_TORII_ORIGIN[0]-.08*math.sin(y*1.5))/.43)**2)
+        path*=_ease(-5.35,-4.72,y)*(1-_ease(-4.22,-3.55,y))
         return _blend(base,(.39,.322,.226),path*.76)
     bands=8
     ground_verts=[(0,0,.565)]
@@ -259,7 +267,7 @@ def _plinth(bpy: Any, model: Any, mats: dict) -> list:
     for k in range(1,bands+1):
         fraction=k/bands
         for j in range(n):
-            x,y=_rounded_rectangle(j/n,9.62*fraction,8.02*fraction,1.0*fraction)
+            x,y=_rounded_rectangle(j/n,(w-.58)*fraction,(d-.58)*fraction,1.2*fraction)
             ground_verts.append((x,y,.565))
             ground_colors.append(spring_color(x,y))
     ground_faces=[(0,j+1,(j+1)%n+1) for j in range(n)]
@@ -413,7 +421,7 @@ def _tube(bpy: Any, collection: Any, name: str, points: list[tuple],
 def _torii(bpy: Any, model: Any, mats: dict) -> list:
     """Two splayed hashira, penetrated nuki, curved kasagi and shimaki lintels."""
     objects=[]
-    x,y=1.75,-3.02
+    x,y=ICONIC_TORII_ORIGIN
     for side in (-1,1):
         X=x+side*.77
         objects.append(_tube(bpy,model,"Torii / vermilion hashira pillar",
@@ -634,8 +642,8 @@ def _path_and_rocks(bpy: Any, model: Any, mats: dict) -> list:
     # Individual polygonal flagstones, each with softened outline, irregular
     # joint and height. Unlike identical boxes these read as hand-set slate.
     for i in range(8):
-        y=-3.92+i*.17
-        x=1.72+.07*math.sin(i*.85)
+        y=-5.12+i*.10
+        x=ICONIC_TORII_ORIGIN[0]+.07*math.sin(i*.85)
         rx=.23-.065*i/8
         ry=.068+rng.uniform(-.006,.012)
         stone_v=[];stone_f=[];count=10
@@ -653,9 +661,9 @@ def _path_and_rocks(bpy: Any, model: Any, mats: dict) -> list:
     # Scatter deliberate small basalt accents beyond the path.
     for i in range(23):
         a=rng.uniform(0,math.tau)
-        r=rng.uniform(3.05,4.2)
-        x=r*math.cos(a);y=r*.82*math.sin(a)
-        if abs(x-1.75)<1.1 and y< -2.5: continue
+        r=rng.uniform(4.65,5.95)
+        x=r*math.cos(a);y=r*.77*math.sin(a)
+        if abs(x-ICONIC_TORII_ORIGIN[0])<1.15 and y< -4.0: continue
         s=rng.uniform(.07,.18)
         objects.append(_box(bpy,model,"Garden / weathered volcanic stone",
                             (x,y,.591),(s*1.7,s*1.2,s*.45),mats["stone"]))
@@ -664,11 +672,11 @@ def _path_and_rocks(bpy: Any, model: Any, mats: dict) -> list:
     pinks=((.95,.63,.71),(.97,.79,.81),(.85,.42,.53),(.99,.86,.84))
     v=[];f=[];colors=[]
     for i in range(280):
-        ox,oy=((-3.1,-1.45) if i%2==0 else (3.48,.35))
+        ox,oy=(ICONIC_SAKURA_LEFT if i%2==0 else ICONIC_SAKURA_RIGHT)
         a=rng.uniform(0,math.tau)
         r=rng.uniform(.12,1.28)
         x,y=ox+r*math.cos(a),oy+.72*r*math.sin(a)
-        if abs(x)>4.4 or abs(y)>3.7:continue
+        if abs(x)>6.1 or abs(y)>4.85:continue
         length=rng.uniform(.022,.066)
         nx,ny=math.cos(a),math.sin(a)
         b=len(v)
@@ -684,9 +692,11 @@ def _path_and_rocks(bpy: Any, model: Any, mats: dict) -> list:
     stems=[];stemfaces=[];stemcolors=[]
     for i in range(170):
         a=rng.uniform(0,math.tau)
-        r=rng.uniform(3.4,4.35)
-        x,y=r*math.cos(a),r*.83*math.sin(a)
-        if abs(x)>4.5 or abs(y)>3.7 or (abs(x-1.75)<1 and y< -2.7):continue
+        r=rng.uniform(4.85,5.95)
+        x,y=r*math.cos(a),r*.78*math.sin(a)
+        if (abs(x)>6.1 or abs(y)>4.85 or
+                (abs(x-ICONIC_TORII_ORIGIN[0])<1 and y< -4.0)):
+            continue
         s=rng.uniform(.055,.16)
         for j in range(3):
             direction=a+j*math.tau/3
@@ -748,9 +758,9 @@ def build_iconic_fuji_scene(destination: Path, *, detail: str = "standard",
     objects.extend(_mountain(bpy,model,mats,spec["terrain_divisions"]))
     objects.extend(_torii(bpy,model,mats))
     flower_count=spec["sakura_blossom_target"]
-    objects.extend(_sakura(bpy,model,mats,origin=(-3.1,-1.45),scale=1.05,seed=41,
+    objects.extend(_sakura(bpy,model,mats,origin=ICONIC_SAKURA_LEFT,scale=1.05,seed=41,
                            blossoms=int(flower_count*.56)))
-    objects.extend(_sakura(bpy,model,mats,origin=(3.48,.35),scale=.79,seed=89,
+    objects.extend(_sakura(bpy,model,mats,origin=ICONIC_SAKURA_RIGHT,scale=.79,seed=89,
                            blossoms=flower_count-int(flower_count*.56)))
     objects.extend(_path_and_rocks(bpy,model,mats))
     palette_report=_bake_portable_palette_textures(bpy,objects,mats)

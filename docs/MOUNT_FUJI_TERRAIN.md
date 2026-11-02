@@ -6,11 +6,28 @@ subject but not the same geometry or scale:
 | Variant | Purpose | Geometry | Footprint |
 | --- | --- | --- | --- |
 | `--style realistic` (default) | Geographic and documentary | GSI survey DEM, 1:1 vertical scale | Approximately 26 × 26 km |
-| `--style iconic` | Read as **Mount Fuji / Japan** instantly, including at small sizes | Art-directed Fuji cone, snow tongues, curved black-and-red torii, two multi-hue sakura trees and volcanic garden | 10.2 × 8.6 arbitrary scene units |
+| `--style iconic` | Read as **Mount Fuji / Japan** instantly, including at small sizes | Art-directed Fuji cone, snow tongues, curved black-and-red torii, two multi-hue sakura trees and volcanic garden | 13.26 × 10.75 arbitrary scene units |
 
 The iconic model deliberately sacrifices realistic dimensions and geography.
 It is a miniature symbol rather than a topographic study. All landmarks and
 five-petal flowers are **actual exportable mesh**, not camera-facing sprites.
+
+## r13 — broaden Fuji and rebalance the miniature
+
+In response to the request for a substantially **wider**, not just taller,
+iconic Fuji, the mountain's radius is now **1.32×** the original (up from
+r12's 1.06×), while its **1.62× vertical exaggeration** remains. The mountain
+now reads as a broad cone rather than a thin peak. The torii is relocated
+to the clear southern forecourt at `(1.65, -4.45)`; the sakura are re-planted
+outside the mountain's base at `(-4.68, -1.72)` and `(5.25, 0.55)`.
+Their height, blossom counts and materials are unchanged. The stepping-stone
+approach, fallen petals and peripheral grasses follow the new arrangement.
+
+The compact plinth expands modestly to **13.26 × 10.75 units** so the new
+mountain and trees do not intersect or overhang the display. That measured
+growth in stage footprint is a visual-layout choice, not a geographical
+claim. All seven cameras have been reframed to show the broader silhouette,
+with 3D-GLB reimport as an independent palette/geometry check.
 
 ## r12 — Fuji as the dominant landmark
 

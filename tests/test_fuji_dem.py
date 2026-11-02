@@ -18,6 +18,8 @@ from kumiki_blender.geography.fuji.blender_scene import (ROCK_NORMAL_TILES, _val
 from kumiki_blender.geography.fuji.iconic_scene import (
     ICONIC_BLUE_BASALT, ICONIC_TREE_LINE, SAKURA_PETAL_PALETTE,
     ICONIC_FUJI_BASE_Z, ICONIC_FUJI_VERTICAL_SCALE, ICONIC_FUJI_RADIUS_SCALE,
+    ICONIC_STAGE_WIDTH, ICONIC_STAGE_DEPTH, ICONIC_TORII_ORIGIN,
+    ICONIC_SAKURA_LEFT, ICONIC_SAKURA_RIGHT,
     iconic_spec, plan_iconic_shots, _snow_limit, _fuji_profile,
 )
 
@@ -239,7 +241,7 @@ class FujiTerrainTests(unittest.TestCase):
                                    "--dem", "/not/a/real/dem.bin"]), 0)
         spec=json.loads(result.getvalue())
         self.assertEqual(spec["asset_id"],"mount-fuji-iconic-diorama")
-        self.assertEqual(spec["footprint_units"],[10.2,8.6])
+        self.assertEqual(spec["footprint_units"],[ICONIC_STAGE_WIDTH,ICONIC_STAGE_DEPTH])
         self.assertGreater(spec["sakura_blossom_target"],8000)
         self.assertEqual(len(plan_iconic_shots()),7)
         self.assertIn("sakura-botanical",[shot.name for shot in plan_iconic_shots()])
@@ -247,7 +249,20 @@ class FujiTerrainTests(unittest.TestCase):
         self.assertGreater(_snow_limit(.2),0.25)
         self.assertLess(_snow_limit(.2),.43)
         self.assertGreater(ICONIC_FUJI_VERTICAL_SCALE,1.5)
-        self.assertLess(ICONIC_FUJI_RADIUS_SCALE,1.1)  # Retain compact footprint.
+        self.assertGreater(ICONIC_FUJI_RADIUS_SCALE,1.3)  # Broad, not spire-like Fuji.
+        self.assertLess(ICONIC_STAGE_WIDTH,13.5)  # Miniature, proportionate plinth.
+        self.assertLess(ICONIC_STAGE_DEPTH,11.0)
+        outer_fuji_radius=3.53*(1+.028+.021)*ICONIC_FUJI_RADIUS_SCALE
+        # All symbolic landmarks have real floor clearance outside the cone;
+        # the torii is in front, the flowering trees frame both flanks.
+        def cone_distance(origin):
+            x,y=origin
+            return math.hypot(x,(y-.65)/.89)
+        self.assertGreater(cone_distance(ICONIC_SAKURA_LEFT),outer_fuji_radius+.4)
+        self.assertGreater(cone_distance(ICONIC_SAKURA_RIGHT),outer_fuji_radius+.2)
+        self.assertGreater(cone_distance(ICONIC_TORII_ORIGIN),outer_fuji_radius+.5)
+        self.assertLess(ICONIC_SAKURA_LEFT[0],-4.5)
+        self.assertGreater(ICONIC_SAKURA_RIGHT[0],4.5)
         enlarged_peak=(ICONIC_FUJI_BASE_Z+
                        (_fuji_profile(.068)-ICONIC_FUJI_BASE_Z)*ICONIC_FUJI_VERTICAL_SCALE)
         self.assertGreater(enlarged_peak,6.5)  # Dominates both trees and torii.
