@@ -16,6 +16,7 @@ from kumiki_blender.cli import main
 from kumiki_blender.reconstruction.mask_comparison import compare_multiview_masks
 from kumiki_blender.reconstruction.mask_consistency import audit_multiview_masks
 from kumiki_blender.reconstruction.references import ReferenceError
+from scripts.validate_foreground_splat_pipeline import validate_foreground_pipeline
 
 
 def _digest(path):
@@ -68,6 +69,59 @@ class MaskConsistencyTests(unittest.TestCase):
             for x, y, point_id in points:
                 content.extend(struct.pack("<ddq", x, y, point_id))
         (self.sparse / "undistorted/sparse/images.bin").write_bytes(content)
+
+    def _foreground_pipeline_candidates(self):
+        mask_revision = self.root / "foreground-mask"
+        mask_revision.mkdir()
+        shutil.copytree(self.masks, mask_revision / "masks")
+        images = json.loads((self.sparse / "undistorted-reference-index.json").read_text())["images"]
+        (mask_revision / "mask-report.json").write_text(json.dumps({
+            "status": "candidate / inspect-every-mask-before-dense-reconstruction",
+            "source_revision": str(self.sparse.resolve()),
+            "approved_for_reconstruction": False,
+            "images": [{"filename": item["filename"],
+                        "source_photo_sha256": item["sha256"],
+                        "mask": f'masks/{item["filename"]}.mask.png',
+                        "mask_sha256": _digest(mask_revision / "masks" /
+                                               (item["filename"] + ".mask.png")),
+                        "warnings": []} for item in images],
+        }))
+        audit_revision = self.root / "foreground-audit"
+        audit_multiview_masks(self.sparse, mask_revision / "masks", audit_revision)
+        return mask_revision, audit_revision
+
+    def test_foreground_pipeline_accepts_only_matching_review_candidates(self):
+        masks, audit = self._foreground_pipeline_candidates()
+        target = self.root / "fresh-splat"
+        report = validate_foreground_pipeline(self.sparse, masks, audit, target)
+        self.assertEqual(report["registered_photos"], 3)
+        self.assertTrue(report["high_priority_mask_reviews"])
+        self.assertEqual(report["status"], "verified / human-review-still-required")
+        self.assertFalse(target.exists())
+        # Replacing a mask after cross-view QA must invalidate the saved audit.
+        mask = masks / "masks/view-00.jpg.mask.png"
+        with Image.open(mask) as image:
+            modified = image.copy()
+        modified.putpixel((50, 50), 0)
+        modified.save(mask)
+        with self.assertRaisesRegex(ReferenceError, "provenance changed|changed since"):
+            validate_foreground_pipeline(self.sparse, masks, audit, target)
+
+    def test_foreground_pipeline_rejects_changed_audit_or_camera_model(self):
+        masks, audit = self._foreground_pipeline_candidates()
+        target = self.root / "fresh-splat"
+        report_path = audit / "mask-consistency-report.json"
+        report = json.loads(report_path.read_text())
+        report["rectified_mask_source"] = str(self.root / "different")
+        report_path.write_text(json.dumps(report))
+        with self.assertRaisesRegex(ReferenceError, "different masks"):
+            validate_foreground_pipeline(self.sparse, masks, audit, target)
+        report["rectified_mask_source"] = str(masks / "masks")
+        report_path.write_text(json.dumps(report))
+        model = self.sparse / "undistorted/sparse/images.bin"
+        model.write_bytes(model.read_bytes() + b"tamper")
+        with self.assertRaisesRegex(ReferenceError, "COLMAP model changed"):
+            validate_foreground_pipeline(self.sparse, masks, audit, target)
 
     def test_flags_one_majority_outlier_and_ambiguous_two_view_track(self):
         target = self.root / "audit"
