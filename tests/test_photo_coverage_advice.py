@@ -167,6 +167,10 @@ class PhotoCoverageAdviceTests(unittest.TestCase):
                                 for shot in report["recommended_photos"]))
             self.assertIn("Numeric target azimuths would be misleading",
                           report["recommended_photos"][0]["reason"])
+            orbit = root / "unanchored.svg"
+            self.assertTrue(advice._angle_map(report, orbit))
+            self.assertIn("No physical target azimuth", orbit.read_text())
+            self.assertNotIn("Suggested overlapping shot", orbit.read_text())
 
     def test_existing_photo_recovery_priorities_and_specific_bridge_shots(self):
         images = [
