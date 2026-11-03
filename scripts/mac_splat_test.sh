@@ -17,6 +17,8 @@ Usage:
   bash scripts/mac_splat_test.sh recover /path/to/failed-splat-revision [model-index]
   bash scripts/mac_splat_test.sh recover-qa /path/to/failed-splat-revision [model-index]
   bash scripts/mac_splat_test.sh mask /path/to/splat-revision [rembg|grabcut]
+  bash scripts/mac_splat_test.sh foreground-prep /path/to/splat-revision [rembg|grabcut]
+  MASKS_REVIEWED=1 bash scripts/mac_splat_test.sh foreground-train /path/to/splat-revision /path/to/foreground-mask-revision /path/to/foreground-audit-revision
   bash scripts/mac_splat_test.sh hybrid /path/to/splat-revision /path/to/rembg-mask-revision /path/to/grabcut-mask-revision photo-0002.png photo-0015.png
   bash scripts/mac_splat_test.sh run-masked /path/to/splat-revision /path/to/mask-revision
   bash scripts/mac_splat_test.sh qa /path/to/splat-revision
@@ -27,7 +29,7 @@ Optional environment:
   SPLAT_TRANSFORM=/absolute/path/to/splat-transform (default: splat-transform)
   OUTPUT_ROOT=/absolute/path/to/revisions (default: .review/mac-splat-smoke)
   MAX_IMAGE_SIZE=2000 ITERATIONS=3000 MAX_VIEWS=12
-  DOWNSCALE_FACTOR=4 TRAIN_CPU=0 (train-existing: reuse registered dataset; CPU=1 diagnostic)
+  DOWNSCALE_FACTOR=4 TRAIN_CPU=0 (train-existing/foreground-train/run-masked; CPU=1 for retry diagnostic)
   CRASH_QA_TIMEOUT=600 (crash-qa: LLDB timeout in seconds)
   REGISTRATION_PROFILE=standard|high-recall (high-recall: slower, CPU SIFT + guided matching)
   PHOTO_FRONT_REFERENCE=photo-0001.png (optional known frontal view for angle labels)
@@ -36,13 +38,15 @@ Optional environment:
   VIDEO_SECONDS=3 VIDEO_WIDTH=960 VIDEO_HEIGHT=540
   VIDEO_HERO_PHOTO=photo-0001.png (optional registered view for video)
   MASK_MAX_SIDE=1280 MASK_ITERATIONS=5
+  MASKS_REVIEWED=1 (required only after reviewing every foreground mask and audit)
+  FOREGROUND_AUTO_QA=1 (foreground-train: compare views after successful training)
 Outputs are private, revisioned and never overwritten.
 EOF
 }
 die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 require() { command -v "$1" >/dev/null 2>&1 || die "Missing $1. Install it, then rerun doctor."; }
 mode="${1:-}"; [[ -n "$mode" ]] || { usage; exit 2; }
-[[ "$mode" == doctor || "$mode" == plan || "$mode" == run || "$mode" == diagnose || "$mode" == cohorts || "$mode" == match-qa || "$mode" == pnp-qa || "$mode" == photo-advice || "$mode" == recover || "$mode" == recover-qa || "$mode" == train-existing || "$mode" == crash-qa || "$mode" == mask || "$mode" == hybrid || "$mode" == run-masked || "$mode" == qa || "$mode" == video ]] || { usage; exit 2; }
+[[ "$mode" == doctor || "$mode" == plan || "$mode" == run || "$mode" == diagnose || "$mode" == cohorts || "$mode" == match-qa || "$mode" == pnp-qa || "$mode" == photo-advice || "$mode" == recover || "$mode" == recover-qa || "$mode" == train-existing || "$mode" == crash-qa || "$mode" == mask || "$mode" == hybrid || "$mode" == run-masked || "$mode" == foreground-prep || "$mode" == foreground-train || "$mode" == qa || "$mode" == video ]] || { usage; exit 2; }
 if [[ "$mode" != doctor ]]; then [[ $# -ge 2 ]] || { usage; exit 2; }; fi
 [[ "$(uname -s)" == Darwin ]] || printf 'WARNING: Intended for macOS; current OS is %s\n' "$(uname -s)" >&2
 root="${OUTPUT_ROOT:-.review/mac-splat-smoke}"
@@ -182,7 +186,8 @@ elif [[ "$mode" == plan || "$mode" == run ]]; then
   python3 -c 'import pycolmap' || die 'Install photogrammetry dependencies: pip install -e ".[photogrammetry]"'
   if kumiki-blender build-splats --photos "$photos" --asset-id "$slug" --output "$output" \
     --engine pycolmap --opensplat "$trainer" --max-image-size "$max_image_size" \
-    --registration-profile "$profile" --iterations "${ITERATIONS:-3000}"; then
+    --registration-profile "$profile" --iterations "${ITERATIONS:-3000}" \
+    --downscale "${DOWNSCALE_FACTOR:-1}"; then
     printf '\nTraining output: %s\nRun QA: bash scripts/mac_splat_test.sh qa "%s"\n' "$output" "$output"
   else
     status=$?
@@ -223,6 +228,45 @@ elif [[ "$mode" == plan || "$mode" == run ]]; then
     fi
     printf 'Failed splat revision retained at: %s\n' "$output" >&2
     exit "$status"
+  fi
+elif [[ "$mode" == foreground-prep || "$mode" == foreground-train ]]; then
+  revision="$2"
+  [[ -f "$revision/splat-report.json" && -d "$revision/sparse-reconstruction" ]] || die "Expected a Sphinx splat revision containing a registered sparse reconstruction: $revision"
+  reconstruction="$revision/sparse-reconstruction"
+  if [[ "$mode" == foreground-prep ]]; then
+    segmenter="${3:-rembg}"
+    [[ "$segmenter" == rembg || "$segmenter" == grabcut ]] || die "Foreground segmenter must be rembg or grabcut"
+    [[ "$segmenter" != rembg ]] || python3 -c 'from rembg import new_session' || die 'Install semantic mask support: pip install -e ".[mask-ai]"'
+    [[ "$segmenter" != grabcut ]] || python3 -c 'import cv2' || die 'Install GrabCut support: pip install -e ".[masks]"'
+    masks="$(new_output foreground-mask)"
+    kumiki-blender prepare-dense-masks --reconstruction "$reconstruction" \
+      --output "$masks" --segmenter "$segmenter" \
+      --max-side "${MASK_MAX_SIDE:-1280}" --iterations "${MASK_ITERATIONS:-5}" >/dev/null
+    audit="$(new_output foreground-audit)"
+    kumiki-blender audit-dense-masks --reconstruction "$reconstruction" \
+      --rectified-masks "$masks/masks" --output "$audit" >/dev/null
+    python3 scripts/validate_foreground_splat_pipeline.py "$reconstruction" "$masks" "$audit" \
+      --output "$(new_output splat)"
+    printf '\nReview EVERY photo before training:\n  Masks: %s/mask-contact-sheet.jpg\n  Cross-view disagreements: %s/mask-consistency-contact-sheet.jpg\n' "$masks" "$audit"
+    printf '\nAfter reviewing/correcting the masks:\n  MASKS_REVIEWED=1 OPENSPLAT=/absolute/path/to/working/opensplat DOWNSCALE_FACTOR=4 ITERATIONS=3000 bash scripts/mac_splat_test.sh foreground-train "%s" "%s" "%s"\n' "$revision" "$masks" "$audit"
+    open "$masks/mask-contact-sheet.jpg" 2>/dev/null || true
+    open "$audit/mask-consistency-contact-sheet.jpg" 2>/dev/null || true
+  else
+    [[ $# -eq 4 ]] || die "foreground-train needs the splat, mask and cross-view audit revisions"
+    [[ "${MASKS_REVIEWED:-0}" == 1 ]] || die "Review every mask and consistency sheet, then explicitly set MASKS_REVIEWED=1"
+    check_tool "$trainer"
+    output="$(new_output splat)"
+    python3 scripts/validate_foreground_splat_pipeline.py "$reconstruction" "$3" "$4" \
+      --output "$output" >/dev/null
+    kumiki-blender build-splats --reconstruction "$reconstruction" \
+      --rectified-masks "$3/masks" --output "$output" --opensplat "$trainer" \
+      --iterations "${ITERATIONS:-3000}" --downscale "${DOWNSCALE_FACTOR:-4}"
+    printf '\nMasked splat: %s\n' "$output"
+    if [[ "${FOREGROUND_AUTO_QA:-1}" == 1 ]]; then
+      bash scripts/mac_splat_test.sh qa "$output"
+    else
+      printf 'Visual QA: bash scripts/mac_splat_test.sh qa "%s"\n' "$output"
+    fi
   fi
 elif [[ "$mode" == mask || "$mode" == hybrid || "$mode" == run-masked ]]; then
   revision="$2"
@@ -265,7 +309,8 @@ elif [[ "$mode" == mask || "$mode" == hybrid || "$mode" == run-masked ]]; then
     check_tool "$trainer"
     output="$(new_output splat)"
     kumiki-blender build-splats --reconstruction "$reconstruction" --rectified-masks "$masks/masks" \
-      --output "$output" --opensplat "$trainer" --iterations "${ITERATIONS:-3000}"
+      --output "$output" --opensplat "$trainer" --iterations "${ITERATIONS:-3000}" \
+      --downscale "${DOWNSCALE_FACTOR:-4}"
     printf '\nMasked training output: %s\nRun QA: bash scripts/mac_splat_test.sh qa "%s"\n' "$output" "$output"
   fi
 elif [[ "$mode" == qa ]]; then
