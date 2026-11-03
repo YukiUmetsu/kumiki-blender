@@ -18,6 +18,8 @@ from typing import Any, Callable
 
 from ..glb_audit import AuditError, audit_glb
 from .dense import DenseSettings, build_dense_reconstruction
+from .feedforward_sparse import (DEPTH_TOLERANCE, DEVICE_CHOICES, MAPANYTHING_DEFAULT_MODEL,
+                                 build_feedforward_sparse_reconstruction)
 from .references import ReferenceError, ReferenceSet, audit_reference_set
 
 
@@ -25,6 +27,9 @@ from .references import ReferenceError, ReferenceSet, audit_reference_set
 class PhotoModelSettings:
     engine: str = "pycolmap"
     dense_backend: str = "openmvs"
+    mapanything_model: str = MAPANYTHING_DEFAULT_MODEL
+    mapanything_device: str = "auto"
+    mapanything_depth_tolerance: float = DEPTH_TOLERANCE
     colmap: str = "colmap"
     blender: str = "blender"
     min_registered_images: int = 8
@@ -36,8 +41,15 @@ class PhotoModelSettings:
     render_previews: bool = True
 
     def validate(self) -> None:
-        if self.engine not in ("pycolmap", "colmap"):
-            raise ReferenceError("Sparse engine must be pycolmap or colmap")
+        if self.engine not in ("pycolmap", "colmap", "mapanything"):
+            raise ReferenceError("Sparse engine must be pycolmap, colmap or mapanything")
+        if not isinstance(self.mapanything_model, str) or not self.mapanything_model.strip():
+            raise ReferenceError("mapanything_model must be a nonempty Hugging Face repo id")
+        if self.mapanything_device not in DEVICE_CHOICES:
+            raise ReferenceError(f"mapanything_device must be one of {', '.join(DEVICE_CHOICES)}")
+        if (type(self.mapanything_depth_tolerance) not in (int, float)
+                or not 0.01 <= self.mapanything_depth_tolerance <= 1.0):
+            raise ReferenceError("mapanything_depth_tolerance must be in [0.01, 1.0]")
         if self.dense_backend not in ("openmvs", "colmap"):
             raise ReferenceError("Dense backend must be openmvs or colmap")
         if not isinstance(self.colmap, str) or not self.colmap.strip():
@@ -76,8 +88,14 @@ def _dependencies(settings: PhotoModelSettings) -> tuple[dict[str, str], list[st
             missing.append("pycolmap (pip install pycolmap)")
         else:
             found["pycolmap"] = "python-module"
-    else:
+    elif settings.engine == "colmap":
         names.append(settings.colmap)
+    else:
+        for module in ("torch", "mapanything"):
+            if importlib.util.find_spec(module) is None:
+                missing.append(f"{module} (pip install -e '.[mapanything]')")
+            else:
+                found[module] = "python-module"
     if settings.dense_backend == "openmvs":
         names.extend(("InterfaceCOLMAP", "DensifyPointCloud", "ReconstructMesh"))
         names.append("RefineMesh")
@@ -172,12 +190,19 @@ def build_photo_model(
     checkpoint()
     from .colmap import build_sparse_reconstruction
 
-    sparse_fn = sparse_builder or build_sparse_reconstruction
     dense_fn = dense_builder or build_dense_reconstruction
     try:
-        sparse = sparse_fn(references, target / "sparse", colmap=settings.colmap,
-                           engine=settings.engine, timeout_seconds=settings.sparse_timeout_seconds,
-                           undistort=True, max_image_size=settings.max_image_size)
+        if settings.engine == "mapanything":
+            sparse_fn = sparse_builder or build_feedforward_sparse_reconstruction
+            sparse = sparse_fn(references, target / "sparse", model_id=settings.mapanything_model,
+                               device=settings.mapanything_device,
+                               timeout_seconds=settings.sparse_timeout_seconds,
+                               depth_tolerance=settings.mapanything_depth_tolerance)
+        else:
+            sparse_fn = sparse_builder or build_sparse_reconstruction
+            sparse = sparse_fn(references, target / "sparse", colmap=settings.colmap,
+                               engine=settings.engine, timeout_seconds=settings.sparse_timeout_seconds,
+                               undistort=True, max_image_size=settings.max_image_size)
         report["sparse"] = {key: sparse.get(key) for key in
                             ("status", "registered_images", "staged_independent_images",
                              "failed_stage", "error")}
