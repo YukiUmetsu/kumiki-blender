@@ -347,6 +347,15 @@ def main(argv: list[str] | None = None) -> int:
     mask_consistency_parser.add_argument("--rectified-masks", type=Path, required=True)
     mask_consistency_parser.add_argument("--output", type=Path, required=True)
     mask_consistency_parser.add_argument("--max-overlay-points", type=int, default=200)
+    review_mask_parser = subcommands.add_parser(
+        "review-mask-suggestions", help="Accept individual verified COLMAP correction prompts into a new guides revision")
+    review_mask_parser.add_argument("--reconstruction", type=Path, required=True)
+    review_mask_parser.add_argument("--mask-revision", type=Path, required=True)
+    review_mask_parser.add_argument("--audit-revision", type=Path, required=True)
+    review_mask_parser.add_argument("--output", type=Path, required=True)
+    review_mask_parser.add_argument("--accept", nargs="+", required=True,
+                                    metavar="PHOTO:POINT3D_ID",
+                                    help="Human-confirmed non-tied feature suggestions; never applied to masks directly")
     mask_comparison_parser = subcommands.add_parser(
         "compare-dense-masks", help="Compare two registered mask revisions using identical COLMAP tracks")
     mask_comparison_parser.add_argument("--reconstruction", type=Path, required=True)
@@ -635,6 +644,17 @@ def main(argv: list[str] | None = None) -> int:
                 report = audit_multiview_masks(
                     args.reconstruction, args.rectified_masks, args.output,
                     max_overlay_points=args.max_overlay_points)
+            except ReferenceError as error:
+                raise RecipeError(str(error)) from error
+            print(json.dumps(report, indent=2))
+            return 0
+        if args.command == "review-mask-suggestions":
+            from .reconstruction.mask_prompt_review import accept_mask_point_suggestions
+            from .reconstruction.references import ReferenceError
+            try:
+                report = accept_mask_point_suggestions(
+                    args.reconstruction, args.mask_revision, args.audit_revision,
+                    args.output, accept=args.accept)
             except ReferenceError as error:
                 raise RecipeError(str(error)) from error
             print(json.dumps(report, indent=2))

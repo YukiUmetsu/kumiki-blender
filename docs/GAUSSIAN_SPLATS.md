@@ -694,6 +694,33 @@ markers indicate ambiguous tracks. These are review cues, not automatic truth.
 The audit now writes `mask-correction-recommendations.json` with tentative
 positive/negative point prompts, never automatically applied: background
 tracks, occluded surfaces and repeated textures may fool feature consensus.
+If a colored marker is **confirmed against the actual photograph**, accept
+only its `point3d_id` in that specific photo into a **new guide revision**:
+
+```bash
+MASKS=.review/mac-splat-smoke/foreground-mask-<timestamp>
+AUDIT=.review/mac-splat-smoke/foreground-audit-<timestamp>
+kumiki-blender review-mask-suggestions \
+  --reconstruction "$SOURCE/sparse-reconstruction" \
+  --mask-revision "$MASKS" --audit-revision "$AUDIT" \
+  --output .review/mac-splat-smoke/accepted-mask-guides-r02 \
+  --accept 'photo-0003.png:12345' 'photo-0011.png:67890'
+
+# Edit the new guide file to add/adjust component boxes and visible-part
+# landmarks, then resegment into fresh masks and rerun cross-view QA.
+MASK_GUIDES=.review/mac-splat-smoke/accepted-mask-guides-r02/mask-guides.json \
+SAM2_CHECKPOINT=/absolute/path/to/sam2.1_hiera_small.pt \
+  bash scripts/mac_splat_test.sh foreground-prep "$SOURCE" sam2
+```
+
+The IDs above are placeholders; select real IDs from that view's audited
+`correction_recommendations`. Cyan prompts become positive points; red prompts
+become negative points. Tied/unknown points cannot be accepted. The command
+checks source mask, photo and camera-model hashes before saving; it neither
+changes prior masks nor trusts suggestions automatically. If a positive point
+lies outside annotated component boxes, expand the correct anatomy box by
+hand before accepting. **The previous audit cannot approve the new masks.**
+
 If segmentation cuts away genuine statue surfaces, improve per-image SAM 2
 boxes/points or use `refine-dense-masks --edits` with include/exclude polygons,
 then
