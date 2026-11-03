@@ -150,23 +150,35 @@ def _view_label(yaw: float, front_known: bool) -> str:
 
 def _shot_plan(angles: dict[str, dict], *, front_known: bool,
                anchor: str | None, weak_track_count: int,
-               missing_count: int) -> list[dict]:
+               missing_count: int, subject_type: str) -> list[dict]:
     """Suggest near-term adjacent views, never fabricate an unregistered pose."""
-    base = ("Keep the same statue region in 60–80% overlap with adjacent "
-            "photos; consistent light, focus, distance and focal length. "
-            "Include shared head, neck, and torso landmarks where visible.")
+    landmarks = {
+        "statue": "shared head, neck, torso and base landmarks",
+        "building": "shared facade, corners, windows and adjacent walls",
+        "landscape": "shared ridges, rock formations and stable terrain landmarks",
+        "object": "shared distinctive object features and silhouette",
+    }
+    medium = {
+        "statue": "medium-distance, head/neck/upper torso together",
+        "building": "medium-distance, facade corner with adjacent walls",
+        "landscape": "medium-wide terrain with overlapping stable landmarks",
+        "object": "medium-distance, whole object plus identifiable details",
+    }[subject_type]
+    base = (f"Keep the same subject region in 60–80% overlap with adjacent "
+            f"photos; consistent light, focus, distance and focal length. "
+            f"Include {landmarks[subject_type]} where visible.")
     result = []
     if not angles:
         return [
             {"priority": 1, "kind": "overlap-bridge", "target_azimuth_deg": None,
              "target_elevation_deg": None, "view": "unknown until cameras register",
-             "framing": "medium-distance, head/neck/upper torso together",
+             "framing": medium,
              "reason": "No reliable same-model camera positions exist to calculate angle gaps. "
                        "Collect a continuous 10–15 degree sequence around one visible side.",
              "capture_guidance": base, "evidence": "generic-capture-guidance"},
             {"priority": 2, "kind": "detail-and-context", "target_azimuth_deg": None,
              "target_elevation_deg": None, "view": "unknown until cameras register",
-             "framing": "alternate close face and medium context views with shared landmarks",
+             "framing": "alternate close detail and medium context views with shared landmarks",
              "reason": "Ensure detailed photos overlap the wider reconstruction.",
              "capture_guidance": base, "evidence": "generic-capture-guidance"},
         ]
@@ -209,8 +221,8 @@ def _shot_plan(angles: dict[str, dict], *, front_known: bool,
             "target_azimuth_deg": round(yaw, 1),
             "target_elevation_deg": round(elevation, 1),
             "view": _view_label(yaw, front_known),
-            "framing": "medium-distance, head/neck/upper torso together"
-                       if weak_track_count else "same scale and region as adjacent registered photos",
+            "framing": medium if weak_track_count else
+                       "same scale and region as adjacent registered photos",
             "reason": why + ("; weak 2D-to-3D track support is widespread"
                               if weak_track_count else ""),
             "capture_guidance": base,
@@ -299,8 +311,10 @@ def _status(photo: dict, *, registered: bool, alternate: bool,
 
 def analyze(revision: Path, *, source_index: Path | None = None,
             front_photo: str | None = None, annotations: Path | None = None,
-            vision_model: str | None = None,
+            vision_model: str | None = None, subject_type: str = "object",
             vision_endpoint: str = "http://127.0.0.1:11434/api/generate") -> dict:
+    if subject_type not in ("object", "statue", "building", "landscape"):
+        raise ValueError("subject_type must be object, statue, building or landscape")
     registration = _load_script("diagnose_splat_registration")
     pnp = _load_script("diagnose_sfm_pnp_support")
     geometry = _load_script("analyze_sfm_geometry")
@@ -417,7 +431,8 @@ def analyze(revision: Path, *, source_index: Path | None = None,
                       for item in images)
     shots = _shot_plan(angles, front_known=front_known, anchor=anchor,
                        weak_track_count=weak_tracks,
-                       missing_count=len(images) - len(best_files))
+                       missing_count=len(images) - len(best_files),
+                       subject_type=subject_type)
     visual_counts = {}
     if vision:
         visual_counts = {
@@ -435,9 +450,12 @@ def analyze(revision: Path, *, source_index: Path | None = None,
             (item["view"] != "unknown" or item["framing"] != "unknown")
             for item in vision.values())
         semantic_gaps = [
-            ("head-and-torso", "medium-distance head, neck and torso",
-             "Vision labels found no head-and-torso context shot bridging detail and body",
-             "head-and-torso" not in framing_counts),
+            ("head-and-torso" if subject_type == "statue" else "medium-context",
+             "medium-distance context showing the whole subject and shared detail",
+             "Vision labels found no medium-context shot bridging close details and wide views",
+             not any(name in framing_counts for name in
+                     (("head-and-torso", "medium-context") if subject_type == "statue"
+                      else ("medium-context", "head-and-torso")))),
             ("side profiles", "head-and-shoulders side profile with shared landmarks",
              "Vision labels found no clear side profile",
              not any(name in view_counts for name in ("left-profile", "right-profile"))),
@@ -459,6 +477,7 @@ def analyze(revision: Path, *, source_index: Path | None = None,
     return {
         "schema_version": 1,
         "source_revision": str(revision),
+        "subject_type": subject_type,
         "status": "evidence-based-photo-triage / not a ground-truth view classifier",
         "best_model": best_name,
         "photos": len(images),
@@ -694,6 +713,9 @@ def main() -> int:
     parser.add_argument("--front-photo", help="Known frontal staged or original filename (must be registered)")
     parser.add_argument("--annotations", type=Path,
                         help="Optional JSON keyed by filename: view/framing/notes tags; never guessed")
+    parser.add_argument("--subject-type", default="object",
+                        choices=("object", "statue", "building", "landscape"),
+                        help="Choose object-specific framing guidance (default: object)")
     parser.add_argument("--vision-model",
                         help="Optional installed local Ollama vision model tag; photos stay on this Mac")
     parser.add_argument("--vision-endpoint", default="http://127.0.0.1:11434/api/generate",
@@ -702,7 +724,8 @@ def main() -> int:
     try:
         report = analyze(args.revision, source_index=args.source_index,
                          front_photo=args.front_photo, annotations=args.annotations,
-                         vision_model=args.vision_model, vision_endpoint=args.vision_endpoint)
+                         vision_model=args.vision_model, subject_type=args.subject_type,
+                         vision_endpoint=args.vision_endpoint)
         if args.output.exists() or args.output.is_symlink():
             raise FileExistsError(f"Output already exists: {args.output}")
         args.output.mkdir(parents=True, exist_ok=False)
