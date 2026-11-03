@@ -146,6 +146,30 @@ class OpenSplatRetryTests(unittest.TestCase):
         self.assertIn("MASKS and AUDIT are empty", result.stderr)
         self.assertFalse((self.root / "foreground-output").exists())
 
+    def test_legacy_run_masked_requires_a_fresh_cross_view_audit(self):
+        repo_root = Path(__file__).resolve().parents[1]
+        cli_dir = self.root / "legacy-bin"
+        cli_dir.mkdir()
+        cli = cli_dir / "kumiki-blender"
+        cli.write_text("#!/bin/sh\nprintf called >> " + str(self.root / "trainer-invoked") + "\n")
+        cli.chmod(0o755)
+        (self.source / "splat-report.json").write_text('{"status":"failed"}')
+        (self.source / "sparse-reconstruction").mkdir(exist_ok=True)
+        bad_masks = self.root / "bad-mask-revision"
+        bad_masks.mkdir()
+        (bad_masks / "masks").mkdir()
+        (bad_masks / "mask-report.json").write_text('{"status":"candidate"}')
+        env = os.environ.copy()
+        env.update({"PATH": str(cli_dir) + os.pathsep + env.get("PATH", ""),
+                    "OUTPUT_ROOT": str(self.root / "legacy-output")})
+        run = subprocess.run(["bash", str(repo_root / "scripts/mac_splat_test.sh"),
+                              "run-masked", str(self.source), str(bad_masks)],
+                             cwd=repo_root, env=env, text=True, capture_output=True, timeout=15)
+        self.assertNotEqual(run.returncode, 0)
+        self.assertIn("audit", run.stderr.lower())
+        self.assertFalse((self.root / "trainer-invoked").exists())
+
+
     def test_invalid_downscale_and_nested_output_refused(self):
         trainer = str(self.fixture._fake_opensplat())
         with self.assertRaisesRegex(ValueError, "Downscale"):

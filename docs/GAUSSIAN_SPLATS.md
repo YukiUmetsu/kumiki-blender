@@ -625,22 +625,78 @@ visual QA into two explicit stages. Original photographs and camera poses are
 preserved. **Mask generation alone is never approval to train:** removing part
 of a head, ear or weathered stone will teach OpenSplat an incorrect silhouette.
 
-First generate masks on the **registered, undistorted** photos and audit their
-3D track consistency. This does not rerun SfM or launch OpenSplat:
+For the Sphinx, prefer locally prompted **SAM 2.1** to whole-image IS-Net:
+the previous IS-Net candidate retained some heads while erasing the body and
+paws. SAM 2.1 supports per-photo head/headdress/neck/torso/paws/tail boxes,
+positive anatomy landmarks and negative scenery points. The independent
+component masks are unioned. It is still a candidate generator, *not* an
+automatic guarantee of a complete statue.
+
+On Apple Silicon M4/24 GB, start with **SAM 2.1 small** (tiny for lower
+memory). The official implementation supports local MPS/CPU inference; MPS
+may be slower or fail on unsupported operations, so use CPU if necessary.
+Install the optional PyTorch dependencies and the official package without
+CUDA, then download **sam2.1_hiera_small.pt** from the
+[Meta SAM 2 checkpoint list](https://github.com/facebookresearch/sam2#download-checkpoints).
+No weights are downloaded implicitly by kumiki-blender; their SHA-256 is
+recorded in every mask revision.
+
+```bash
+python3 -m pip install -e '.[mask-sam2]'
+git clone https://github.com/facebookresearch/sam2.git ../sam2
+SAM2_BUILD_CUDA=0 python3 -m pip install -e ../sam2
+
+# Create a JSON guide with EXACT rectified names from
+# "$SOURCE/sparse-reconstruction/undistorted-reference-index.json".
+# Start from examples/sphinx-sam2-guides.example.json, but replace every
+# example coordinate with coordinates measured on your actual photos.
+SOURCE=.review/mac-splat-smoke/splat-20261103T063944Z-55327
+MASK_GUIDES=/absolute/path/to/sphinx-guides.json \
+SAM2_CHECKPOINT=/absolute/path/to/sam2.1_hiera_small.pt \
+SAM2_SIZE=small SAM2_DEVICE=auto PYTORCH_ENABLE_MPS_FALLBACK=1 \
+  bash scripts/mac_splat_test.sh foreground-prep "$SOURCE" sam2
+```
+
+Each box is `[left,top,right,bottom]` and point `[x,y]`, normalized to
+the rectified image dimensions (0–1). Annotate **all visible** anatomy per
+view, not automatically all six parts: a tightly cropped face shot cannot
+be expected to show paws or tail. Include a box for each visible part and
+one or more `part_points` on its real stone surface. Mark sky, sand,
+pyramids, people and scaffolding with negative points. The example numbers
+are *not* Sphinx annotations. Use `--sam2-device cpu` through
+`SAM2_DEVICE=cpu` if MPS fails; the default bounded 1280-pixel inference
+controls peak memory and produces full-size binary mask outputs.
+
+For the older baseline, generate masks with rembg (or guided GrabCut) on the
+same **registered, undistorted** photos. Neither stage reruns SfM or starts
+OpenSplat:
 
 ```bash
 SOURCE=.review/mac-splat-smoke/splat-20261103T063944Z-55327
 bash scripts/mac_splat_test.sh foreground-prep "$SOURCE" rembg
 ```
 
-The command prints an immutable `foreground-mask-...` revision and a separate
-`foreground-audit-...` revision. Inspect **every** photo in
+The command prints immutable `foreground-mask-...`, `foreground-audit-...`,
+and `foreground-quality-...` revisions. The quality report includes per-view
+area, landmark preservation, background seed violations, track outlier
+fractions and actionable corrections. It **blocks** training if any visible
+part landmark is missing, any mask retains less than 5% or more than 90%
+foreground, more than 5% of its foreground lies outside annotated component
+boxes, a camera has over 20% majority outliers, there are fewer than 25
+compared tracks, or more than 15% shared tracks have inconsistent labels.
+These are conservative rejection gates, not proof of correctness.
+
+Inspect **every** photo in
 `mask-contact-sheet.jpg`, especially facial edges, headdress, body and tail.
 Also inspect the cross-view `mask-consistency-contact-sheet.jpg`: red markers
 suggest background leakage; cyan markers suggest missing subject, and yellow
 markers indicate ambiguous tracks. These are review cues, not automatic truth.
-If semantic segmentation cuts away genuine statue surfaces, generate guided
-GrabCut alternatives or use `refine-dense-masks` / `compose-dense-masks`, then
+The audit now writes `mask-correction-recommendations.json` with tentative
+positive/negative point prompts, never automatically applied: background
+tracks, occluded surfaces and repeated textures may fool feature consensus.
+If segmentation cuts away genuine statue surfaces, improve per-image SAM 2
+boxes/points or use `refine-dense-masks --edits` with include/exclude polygons,
+then
 rerun `kumiki-blender audit-dense-masks` on the corrected revision.
 
 After that human review, opt into training with an explicit acknowledgement:
@@ -654,9 +710,10 @@ MASKS_REVIEWED=1 \
   bash scripts/mac_splat_test.sh foreground-train "$SOURCE" "$MASKS" "$AUDIT"
 ```
 
-The training gate checks mask-report hashes, photo provenance, registered
-camera source, binary/full-resolution masks, multi-view audit coverage and
-COLMAP model integrity. It refuses unreviewed masks by default. Successful
+The Mac training gate checks mask-report hashes, photo provenance, registered
+camera source, binary/full-resolution masks, multi-view audit coverage,
+COLMAP model integrity, **statue landmarks and quantified consistency**.
+It refuses unreviewed or low-quality masks by default. Successful
 training automatically generates a paired multi-angle splat contact sheet
 (unless `FOREGROUND_AUTO_QA=0`). The `--downscale` setting reaches the
 registered-reconstruction OpenSplat path, allowing realistic memory budgets
@@ -706,7 +763,11 @@ segmentation hashes and selected origins are recorded in the hybrid report.
 
 ```bash
 MASKS=".review/mac-splat-smoke/mask-<timestamp>"  # Printed by the mask step
-ITERATIONS=3000 bash scripts/mac_splat_test.sh run-masked "$SOURCE" "$MASKS"
+AUDIT=".review/mac-splat-smoke/foreground-audit-<timestamp>"
+# Generate AUDIT with: kumiki-blender audit-dense-masks --reconstruction ...
+# --rectified-masks "$MASKS/masks" --output "$AUDIT"
+MASKS_REVIEWED=1 ITERATIONS=3000 \
+  bash scripts/mac_splat_test.sh run-masked "$SOURCE" "$MASKS" "$AUDIT"
 # Use the NEW splat revision printed by run-masked for qa and video.
 # Optional: favor a chosen source photograph for the video hero angle:
 VIDEO_HERO_PHOTO=photo-0001.png bash scripts/mac_splat_test.sh video \

@@ -16,11 +16,11 @@ Usage:
   bash scripts/mac_splat_test.sh photo-advice /path/to/failed-splat-revision [cohort-source-index.json] [front-photo]
   bash scripts/mac_splat_test.sh recover /path/to/failed-splat-revision [model-index]
   bash scripts/mac_splat_test.sh recover-qa /path/to/failed-splat-revision [model-index]
-  bash scripts/mac_splat_test.sh mask /path/to/splat-revision [rembg|grabcut]
-  bash scripts/mac_splat_test.sh foreground-prep /path/to/splat-revision [rembg|grabcut]
+  bash scripts/mac_splat_test.sh mask /path/to/splat-revision [rembg|grabcut|sam2]
+  bash scripts/mac_splat_test.sh foreground-prep /path/to/splat-revision [rembg|grabcut|sam2]
   MASKS_REVIEWED=1 bash scripts/mac_splat_test.sh foreground-train /path/to/splat-revision /path/to/foreground-mask-revision /path/to/foreground-audit-revision
   bash scripts/mac_splat_test.sh hybrid /path/to/splat-revision /path/to/rembg-mask-revision /path/to/grabcut-mask-revision photo-0002.png photo-0015.png
-  bash scripts/mac_splat_test.sh run-masked /path/to/splat-revision /path/to/mask-revision
+  MASKS_REVIEWED=1 bash scripts/mac_splat_test.sh run-masked /path/to/splat-revision /path/to/mask-revision /path/to/audit-revision
   bash scripts/mac_splat_test.sh qa /path/to/splat-revision
   bash scripts/mac_splat_test.sh video /path/to/splat-revision
 
@@ -38,6 +38,8 @@ Optional environment:
   VIDEO_SECONDS=3 VIDEO_WIDTH=960 VIDEO_HEIGHT=540
   VIDEO_HERO_PHOTO=photo-0001.png (optional registered view for video)
   MASK_MAX_SIDE=1280 MASK_ITERATIONS=5
+  MASK_GUIDES=/path/to/per-image-guides.json (SAM2 component boxes, landmarks, positive/negative points)
+  SAM2_CHECKPOINT=/path/to/sam2.1_hiera_small.pt SAM2_SIZE=small SAM2_DEVICE=auto|mps|cpu
   MASKS_REVIEWED=1 (required only after reviewing every foreground mask and audit)
   FOREGROUND_AUTO_QA=1 (foreground-train: compare views after successful training)
 Outputs are private, revisioned and never overwritten.
@@ -63,6 +65,7 @@ if [[ "$mode" == doctor ]]; then
   python3 -c 'import pycolmap; print("OK: pycolmap")' 2>/dev/null || printf 'MISSING: pycolmap (pip install -e ".[photogrammetry]")\n'
   python3 -c 'from PIL import Image; print("OK: Pillow")' 2>/dev/null || printf 'MISSING: Pillow (pip install Pillow)\n'
   python3 -c 'from rembg import new_session; print("OK: rembg (semantic masks)")' 2>/dev/null || printf 'OPTIONAL: rembg (pip install -e ".[mask-ai]")\n'
+  python3 -c 'from sam2.sam2_image_predictor import SAM2ImagePredictor; print("OK: SAM 2.1 (promptable masks)")' 2>/dev/null || printf 'OPTIONAL: SAM 2.1 (install official facebookresearch/sam2 package)\n'
   if command -v "$rasterizer" >/dev/null 2>&1 || [[ -x "$rasterizer" ]]; then "$rasterizer" --list-gpus || printf 'WARNING: GPU discovery failed\n'; fi
   printf 'OpenSplat must be built with Metal/MPS; a detected executable alone does not prove GPU acceleration.\n'
   exit 0
@@ -75,6 +78,18 @@ new_output() {
   local candidate="$root/$1-$stamp-$$"
   [[ ! -e "$candidate" ]] || die "Output already exists: $candidate"
   printf '%s\n' "$candidate"
+}
+prepare_mask_revision() {
+  local reconstruction="$1" output="$2" segmenter="$3"
+  local args=(--reconstruction "$reconstruction" --output "$output" --segmenter "$segmenter"
+              --max-side "${MASK_MAX_SIDE:-1280}" --iterations "${MASK_ITERATIONS:-5}")
+  [[ -z "${MASK_GUIDES:-}" ]] || args+=(--guides "$MASK_GUIDES")
+  if [[ "$segmenter" == sam2 ]]; then
+    [[ -n "${SAM2_CHECKPOINT:-}" && -f "$SAM2_CHECKPOINT" ]] || die 'SAM2_CHECKPOINT must point to existing local SAM 2.1 weights'
+    args+=(--sam2-checkpoint "$SAM2_CHECKPOINT" --sam2-size "${SAM2_SIZE:-small}"
+           --sam2-device "${SAM2_DEVICE:-auto}")
+  fi
+  kumiki-blender prepare-dense-masks "${args[@]}"
 }
 if [[ "$mode" == diagnose ]]; then
   [[ -d "$2" ]] || die "Splat revision directory not found: $2"
@@ -235,19 +250,21 @@ elif [[ "$mode" == foreground-prep || "$mode" == foreground-train ]]; then
   reconstruction="$revision/sparse-reconstruction"
   if [[ "$mode" == foreground-prep ]]; then
     segmenter="${3:-rembg}"
-    [[ "$segmenter" == rembg || "$segmenter" == grabcut ]] || die "Foreground segmenter must be rembg or grabcut"
+    [[ "$segmenter" == rembg || "$segmenter" == grabcut || "$segmenter" == sam2 ]] || die "Foreground segmenter must be rembg, grabcut or sam2"
     [[ "$segmenter" != rembg ]] || python3 -c 'from rembg import new_session' || die 'Install semantic mask support: pip install -e ".[mask-ai]"'
     [[ "$segmenter" != grabcut ]] || python3 -c 'import cv2' || die 'Install GrabCut support: pip install -e ".[masks]"'
     masks="$(new_output foreground-mask)"
-    kumiki-blender prepare-dense-masks --reconstruction "$reconstruction" \
-      --output "$masks" --segmenter "$segmenter" \
-      --max-side "${MASK_MAX_SIDE:-1280}" --iterations "${MASK_ITERATIONS:-5}" >/dev/null
+    prepare_mask_revision "$reconstruction" "$masks" "$segmenter" >/dev/null
     audit="$(new_output foreground-audit)"
     kumiki-blender audit-dense-masks --reconstruction "$reconstruction" \
       --rectified-masks "$masks/masks" --output "$audit" >/dev/null
-    printf '\nGenerated candidate revisions (keep these even if validation fails):\n  MASKS=%s\n  AUDIT=%s\n' "$masks" "$audit"
+    quality="$(new_output foreground-quality)"
+    mkdir "$quality"
     python3 scripts/validate_foreground_splat_pipeline.py "$reconstruction" "$masks" "$audit" \
-      --output "$(new_output splat)"
+      --output "$(new_output splat)" --allow-failures \
+      --report-output "$quality/mask-quality-report.json" >/dev/null
+    printf '\nGenerated candidate revisions (retain even if blocked):\n  MASKS=%s\n  AUDIT=%s\n  QUALITY=%s/mask-quality-report.json\n' "$masks" "$audit" "$quality"
+    python3 -c 'import json,sys; r=json.load(open(sys.argv[1])); print("Mask quality:", r["status"]); [print("  -", s) for s in r["quality_failures"][:15]]; print("Review all failures in the JSON report before training.") if r["quality_failures"] else None' "$quality/mask-quality-report.json"
     printf '\nReview EVERY photo before training:\n  Masks: %s/mask-contact-sheet.jpg\n  Cross-view disagreements: %s/mask-consistency-contact-sheet.jpg\n' "$masks" "$audit"
     printf '\nAfter reviewing/correcting the masks:\n  MASKS_REVIEWED=1 OPENSPLAT=/absolute/path/to/working/opensplat DOWNSCALE_FACTOR=4 ITERATIONS=3000 bash scripts/mac_splat_test.sh foreground-train "%s" "%s" "%s"\n' "$revision" "$masks" "$audit"
     open "$masks/mask-contact-sheet.jpg" 2>/dev/null || true
@@ -258,10 +275,10 @@ elif [[ "$mode" == foreground-prep || "$mode" == foreground-train ]]; then
     [[ -n "$3" && -n "$4" ]] || die 'MASKS and AUDIT are empty. Use the actual foreground-mask-* and foreground-audit-* directories printed by foreground-prep.'
     [[ -f "$3/mask-report.json" && -d "$3/masks" ]] || die "Invalid mask revision: $3 (expected mask-report.json and masks/; check the MASKS variable)"
     [[ -f "$4/mask-consistency-report.json" ]] || die "Invalid audit revision: $4 (expected mask-consistency-report.json; check the AUDIT variable)"
-    check_tool "$trainer"
     output="$(new_output splat)"
     python3 scripts/validate_foreground_splat_pipeline.py "$reconstruction" "$3" "$4" \
       --output "$output" >/dev/null
+    check_tool "$trainer"
     kumiki-blender build-splats --reconstruction "$reconstruction" \
       --rectified-masks "$3/masks" --output "$output" --opensplat "$trainer" \
       --iterations "${ITERATIONS:-3000}" --downscale "${DOWNSCALE_FACTOR:-4}"
@@ -278,15 +295,14 @@ elif [[ "$mode" == mask || "$mode" == hybrid || "$mode" == run-masked ]]; then
   reconstruction="$revision/sparse-reconstruction"
   if [[ "$mode" == mask ]]; then
     segmenter="${3:-rembg}"
-    [[ "$segmenter" == rembg || "$segmenter" == grabcut ]] || die "Segmenter must be rembg or grabcut"
+    [[ "$segmenter" == rembg || "$segmenter" == grabcut || "$segmenter" == sam2 ]] || die "Segmenter must be rembg, grabcut or sam2"
     if [[ "$segmenter" == rembg ]]; then
       python3 -c 'from rembg import new_session' || die 'Install semantic mask support: pip install -e ".[mask-ai]"'
-    else
+    elif [[ "$segmenter" == grabcut ]]; then
       python3 -c 'import cv2' || die 'Install GrabCut support: pip install -e ".[masks]"'
     fi
     output="$(new_output mask)"
-    kumiki-blender prepare-dense-masks --reconstruction "$reconstruction" --output "$output" \
-      --segmenter "$segmenter" --max-side "${MASK_MAX_SIDE:-1280}" --iterations "${MASK_ITERATIONS:-5}"
+    prepare_mask_revision "$reconstruction" "$output" "$segmenter"
     printf '\nInspect EVERY subject mask before training: %s/mask-contact-sheet.jpg\n' "$output"
     printf 'To train with reviewed masks: bash scripts/mac_splat_test.sh run-masked "%s" "%s"\n' "$revision" "$output"
     open "$output/mask-contact-sheet.jpg" 2>/dev/null || true
@@ -304,14 +320,17 @@ elif [[ "$mode" == mask || "$mode" == hybrid || "$mode" == run-masked ]]; then
     printf 'Retrain after review: bash scripts/mac_splat_test.sh run-masked "%s" "%s"\n' "$revision" "$output"
     open "$output/mask-contact-sheet.jpg" 2>/dev/null || true
   else
-    [[ $# -eq 3 ]] || die "run-masked requires splat and mask revision paths"
+    [[ $# -eq 4 ]] || die "run-masked requires splat, mask and matching cross-view audit revisions"
+    [[ "${MASKS_REVIEWED:-0}" == 1 ]] || die "Review every mask, then explicitly set MASKS_REVIEWED=1"
     masks="$3"
     [[ -f "$masks/mask-report.json" && -d "$masks/masks" ]] || die "Expected prepare-dense-masks revision: $masks"
     # Match the mask report's immutable reconstruction source, so a mask
     # set cannot be accidentally applied to differently registered photos.
     python3 -c 'import json,pathlib,sys; report=json.loads((pathlib.Path(sys.argv[1])/"mask-report.json").read_text()); source=pathlib.Path(report["source_revision"]).resolve(); expected=pathlib.Path(sys.argv[2]).resolve(); sys.exit(0 if source == expected and report["status"].startswith("candidate") else 3)' "$masks" "$reconstruction" || die "Mask provenance check failed"
-    check_tool "$trainer"
     output="$(new_output splat)"
+    python3 scripts/validate_foreground_splat_pipeline.py "$reconstruction" "$masks" "$4" \
+      --output "$output" >/dev/null
+    check_tool "$trainer"
     kumiki-blender build-splats --reconstruction "$reconstruction" --rectified-masks "$masks/masks" \
       --output "$output" --opensplat "$trainer" --iterations "${ITERATIONS:-3000}" \
       --downscale "${DOWNSCALE_FACTOR:-4}"

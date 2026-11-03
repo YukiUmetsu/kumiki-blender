@@ -322,6 +322,7 @@ def refine_rectified_masks(reconstruction: str | Path, mask_revision: str | Path
                 "preview": str(preview_file.relative_to(target)),
                 "foreground_fraction": fraction, "pixels_added": added,
                 "pixels_removed": removed, "color_boundary_pixels_changed": color_changed,
+                "guide": entries[name].get("guide"),
                 "warnings": warnings,
             })
         checkpoint()

@@ -158,6 +158,7 @@ def compose_rectified_masks(reconstruction: str | Path, primary_mask_revision: s
             "mask": str(destination.relative_to(target)), "mask_sha256": original_hash,
             "preview": str(preview_path.relative_to(target)),
             "foreground_fraction": occupancy, "warnings": warnings,
+            "guide": entry.get("guide"),
         })
         checkpoint()
     columns, width, height = 4, 288, 238

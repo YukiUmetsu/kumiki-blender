@@ -19,6 +19,7 @@ finishing = ["Pillow>=11,<13", "numpy>=1.26,<3"]
 photogrammetry = ["Pillow>=11,<13", "pycolmap>=4.0.2,<5"]
 masks = ["Pillow>=11,<13", "numpy>=1.26,<3", "opencv-python-headless>=4.10,<5"]
 mask-ai = ["Pillow>=11,<13", "numpy>=1.26,<3", "rembg[cpu]>=2.0.67,<3"]
+mask-sam2 = ["Pillow>=11,<13", "numpy>=1.26,<3", "torch>=2.5.1,<3", "torchvision>=0.20.1,<1"]
 
 [project.scripts]
 kumiki-blender = "kumiki_blender.cli:main"

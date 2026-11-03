@@ -59,6 +59,13 @@ def _guide(value: Any, *, default_box: tuple[float, ...]) -> dict[str, Any]:
     if len(components) > 6:
         raise ReferenceError("Too many component boxes")
     checked_boxes = {name: list(_box(bounds)) for name, bounds in components.items()}
+    if checked_boxes and set(landmarks) - set(checked_boxes):
+        raise ReferenceError("Every visible part landmark needs a matching component box")
+    if checked_boxes:
+        for x, y in points["foreground_points"]:
+            if not any(left <= x <= right and top <= y <= bottom
+                       for left, top, right, bottom in checked_boxes.values()):
+                raise ReferenceError("Foreground point lies outside every component box")
     checked_points: dict[str, list[list[float]]] = {}
     for name, raw in landmarks.items():
         if not isinstance(raw, list) or not 1 <= len(raw) <= 20:

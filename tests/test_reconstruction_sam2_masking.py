@@ -76,6 +76,10 @@ class Sam2MaskTests(TestCase):
             {"part_points": {"tail": [[1.1, 0.5]]}},
             {"component_boxes": {"head": [0.2, 0.2, 0.4, 0.4]},
              "part_points": {"head": [[0.8, 0.8]]}},
+            {"component_boxes": {"head": [0.2, 0.2, 0.4, 0.4]},
+             "foreground_points": [[0.8, 0.8]]},
+            {"component_boxes": {"head": [0.2, 0.2, 0.4, 0.4]},
+             "part_points": {"tail": [[0.3, 0.3]]}},
         ):
             bad.write_text(json.dumps({"images": {"view-00.png": value}}))
             with self.assertRaises(ReferenceError):
