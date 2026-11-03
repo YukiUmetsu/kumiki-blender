@@ -94,6 +94,10 @@ class PhotoVisionClassifierTests(unittest.TestCase):
                 result = vision.classify_images(root, ["photo.png"], model="vision")
             self.assertEqual(result["photo.png"]["view"], "unknown")
             self.assertIn("failed", result["photo.png"]["source"])
+            with patch.object(vision, "classify", side_effect=RuntimeError("unavailable")):
+                limited = vision.classify_images(
+                    root, ["first.png", "second.png"], model="vision", max_images=1)
+            self.assertEqual(limited["second.png"]["source"], "local-vision-model / not-run")
             with self.assertRaisesRegex(ValueError, "Unsafe staged filename"):
                 vision.classify_images(root, ["../../outside.png"], model="vision")
 
