@@ -129,7 +129,12 @@ seed poses during resumed mapping. The script reports point counts
 before/after retriangulation, newly registered cameras, any lost seed
 cameras, and whether the **same** 8-camera/60% registration gate was met.
 It does not train splats or claim that successful registration means
-photo-faithful geometry.
+photo-faithful geometry. Recovered models also export `text-models/`
+for a follow-up `pnp-qa` run on the new recovery revision:
+
+```bash
+bash scripts/mac_splat_test.sh pnp-qa .review/mac-splat-smoke/recovery-<timestamp>
+```
 
 If registration does not improve, inspect `recovery-report.json`. The
 remaining options are better overlapping source photographs, carefully
