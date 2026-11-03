@@ -41,6 +41,36 @@ must produce **undistorted images, cameras, and triangulated sparse points** bef
 Gaussian training can start. Camera registration does not guarantee geometry
 or historical accuracy.
 
+### Mixed JPEG, PNG, and WebP photo compatibility
+
+Camera reconstruction stages each image as a **private, standard RGB PNG**
+before passing it to COLMAP or PyCOLMAP. This prevents the FreeImage decoder
+from silently skipping readable WebP or unusual JPEG inputs. EXIF orientation
+is applied to the staged pixels and corresponding masks; transparent pixels
+are composited over white. Original photos remain untouched. The
+`sparse-reconstruction/staged-reference-index.json` records original filenames,
+source SHA-256, staged SHA-256, dimensions and normalization metadata.
+
+After feature extraction, the pipeline checks the actual COLMAP SQLite
+database against the staged photo index. If photos were skipped, it stops with
+`feature_extraction_incomplete` and lists the missing images, rather than
+attempting an unreliable reconstruction.
+
+**If registration still fails**, diagnose the existing revision without
+retraining or modifying its photos:
+
+```bash
+python3 scripts/diagnose_splat_registration.py \
+  .review/mac-splat-smoke/splat-<failed-revision> \
+  --contact-sheet /tmp/splat-registration.jpg
+open /tmp/splat-registration.jpg
+```
+
+The diagnostic shows imported and missing photos, connected matching groups,
+isolated images and the strongest verified pairs. A successful import is
+necessary but not sufficient: diverse online photos may still lack the
+overlap and parallax needed to recover eight consistent camera poses.
+
 ## Install OpenSplat (external GPU trainer)
 
 OpenSplat is **not** bundled with Kumiki Blender. It is a separately installed
