@@ -32,6 +32,121 @@ def _report(path: Path, data: dict) -> None:
         stream.write("\n")
 
 
+MAX_IMAGE_ID = 2_147_483_647
+
+
+def _database_match_evidence(database: Path, seed_names: set[str],
+                             *, min_inliers: int = 15) -> dict:
+    """Read-only verification of match edges connecting the seed to missing photos.
+
+    This is database evidence, not proof that PnP or incremental mapping will
+    succeed: geometric spread, camera calibration and 3D tracks still matter.
+    """
+    with sqlite3.connect(database.as_uri() + "?mode=ro", uri=True) as db:
+        names = dict(db.execute("SELECT image_id, name FROM images"))
+        tables = {row[0] for row in db.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'")}
+        if "two_view_geometries" not in tables:
+            return {
+                "status": "no-two-view-geometry-table",
+                "verified_pairs": 0, "seed_to_missing_pairs": 0,
+                "unregistered_photo_advice": [],
+                "interpretation": "Cannot inspect verified pair geometry in this database.",
+            }
+        stats = {
+            name: {"filename": name, "verified_pairs_to_seed": 0,
+                   "inliers_to_seed": 0, "strong_pairs_to_seed": 0,
+                   "max_pair_inliers_to_seed": 0, "strong_pairs_to_other_missing": 0}
+            for name in names.values() if name not in seed_names
+        }
+        raw_pairs = db.execute("SELECT COUNT(*) FROM matches").fetchone()[0] if (
+            "matches" in tables) else None
+        geometry_rows = 0
+        verified_pairs = 0
+        strong_pairs = 0
+        seed_to_missing_pairs = 0
+        strong_seed_to_missing_pairs = 0
+        seed_to_seed_pairs = 0
+        missing_to_missing_pairs = 0
+        for pair_id, rows, config in db.execute(
+            "SELECT pair_id, rows, config FROM two_view_geometries"
+        ):
+            geometry_rows += 1
+            if not isinstance(rows, int) or rows < 1 or config in (0, 1):
+                continue
+            first, second = divmod(pair_id, MAX_IMAGE_ID)
+            if first not in names or second not in names:
+                continue
+            verified_pairs += 1
+            if rows >= min_inliers:
+                strong_pairs += 1
+            left, right = names[first], names[second]
+            left_seed, right_seed = left in seed_names, right in seed_names
+            if left_seed and right_seed:
+                seed_to_seed_pairs += 1
+            elif left_seed != right_seed:
+                seed_to_missing_pairs += 1
+                if rows >= min_inliers:
+                    strong_seed_to_missing_pairs += 1
+                missing = right if left_seed else left
+                evidence = stats[missing]
+                evidence["verified_pairs_to_seed"] += 1
+                evidence["inliers_to_seed"] += rows
+                evidence["max_pair_inliers_to_seed"] = max(
+                    evidence["max_pair_inliers_to_seed"], rows)
+                if rows >= min_inliers:
+                    evidence["strong_pairs_to_seed"] += 1
+            else:
+                missing_to_missing_pairs += 1
+                if rows >= min_inliers:
+                    stats[left]["strong_pairs_to_other_missing"] += 1
+                    stats[right]["strong_pairs_to_other_missing"] += 1
+        for entry in stats.values():
+            if entry["strong_pairs_to_seed"] == 0:
+                entry["assessment"] = "no-strong-seed-overlap"
+                entry["next_action"] = (
+                    "Find or capture intermediate overlapping views between this photo "
+                    "and a registered seed camera; compare its strongest match neighbors.")
+            elif entry["strong_pairs_to_seed"] == 1:
+                entry["assessment"] = "single-seed-connection"
+                entry["next_action"] = (
+                    "Add views bridging this photo to a second registered seed camera; "
+                    "one matched pair may not provide enough 2D-to-3D PnP support.")
+            else:
+                entry["assessment"] = "matching-but-unregistered"
+                entry["next_action"] = (
+                    "Check 2D-to-3D track support, parallax, feature distribution and "
+                    "camera calibration; do not assume more photos alone will fix it.")
+        advice = sorted(stats.values(), key=lambda item: (
+            item["strong_pairs_to_seed"], item["inliers_to_seed"], item["filename"]))
+        if not verified_pairs:
+            status = "no-verified-pair-correspondences"
+        elif not strong_seed_to_missing_pairs:
+            status = "no-strong-seed-to-missing-bridges"
+        else:
+            status = "some-verified-seed-to-missing-bridges"
+        return {
+            "status": status,
+            "min_pair_inliers": min_inliers,
+            "database_images": len(names),
+            "raw_match_pairs": raw_pairs,
+            "geometry_rows": geometry_rows,
+            "verified_pairs": verified_pairs,
+            "strong_verified_pairs": strong_pairs,
+            "seed_to_seed_pairs": seed_to_seed_pairs,
+            "seed_to_missing_pairs": seed_to_missing_pairs,
+            "strong_seed_to_missing_pairs": strong_seed_to_missing_pairs,
+            "missing_to_missing_pairs": missing_to_missing_pairs,
+            "unregistered_photo_advice": advice,
+            "interpretation": (
+                "COLMAP may filter verified matches by camera/geometry/track criteria. "
+                "A zero 'Loading matches' log is not evidence that the whole database "
+                "contains zero matches. Only seed-to-missing verified edges can "
+                "directly support seeded registration; even those do not guarantee PnP."
+            ),
+        }
+
+
 def recover(revision: Path, output: Path, *, model: int = 0,
             retriangulate: bool = True, fix_seed_poses: bool = True,
             pycolmap_module=None) -> dict:
@@ -83,6 +198,7 @@ def recover(revision: Path, output: Path, *, model: int = 0,
         "seed_registered_filenames": sorted(seed_names),
         "retriangulate": retriangulate,
         "fix_seed_poses": fix_seed_poses,
+        "match_evidence": _database_match_evidence(database, seed_names),
         "status": "running",
         "interpretation": "Seeded registration and extra triangulation are experiments; "
                           "only registered cameras from ONE model count. "
@@ -171,6 +287,17 @@ def main(argv: list[str] | None = None) -> int:
               f"{report['source_images']} cameras, {model['points3D']} points, "
               f"new photos: {', '.join(model['new_registered_filenames']) or '(none)'}, "
               f"camera gate: {model['camera_gate_met']}")
+    evidence = report["match_evidence"]
+    print(f"Verified database pairs: {evidence['verified_pairs']}; "
+          f"strong seed-to-missing pairs: {evidence['strong_seed_to_missing_pairs']}")
+    print(f"Seed match graph: {evidence['status']}")
+    if report["status"] == "no-registration-improvement":
+        print("No new cameras. Do not repeat recovery unchanged; inspect "
+              "the per-photo seed-match evidence and run photo-advice.")
+        for photo in evidence["unregistered_photo_advice"][:10]:
+            print(f"  {photo['filename']}: {photo['assessment']} "
+                  f"({photo['strong_pairs_to_seed']} strong seed links); "
+                  f"{photo['next_action']}")
     print(f"Status: {report['status']}")
     print(f"Report: {args.output / 'recovery-report.json'}")
     return 0
