@@ -37,6 +37,13 @@ class TextureFinishSettings:
     min_seam_anchors: int = 8
     auto_exposure_luma: float | None = None
     max_auto_exposure_ev: float = 1.0
+    surface_recipe: str | None = None
+    surface_delight_strength: float = 0.0
+    surface_max_delight_ev: float = 1.0
+    surface_low_frequency_radius: int = 96
+    surface_cleanup_radius: int = 0
+    surface_multiview_strength: float = 0.0
+    surface_multiview_max_ev: float = 1.5
 
     def validate(self) -> "TextureFinishSettings":
         for name, low, high in (("exposure_ev", -3.0, 3.0),
@@ -56,7 +63,7 @@ class TextureFinishSettings:
         if (type(self.neutralize_cast) is not bool or type(self.balance_atlases) is not bool
                 or type(self.uv_aware_stats) is not bool or type(self.balance_uv_seams) is not bool
                 or type(self.pad_uv_gutters) is not bool):
-            raise ReferenceError("neutralize_cast, balance_atlases, balance_uv_seams, pad_uv_gutters and uv_aware_stats must be booleans")
+            raise ReferenceError("Texture finish flags must be booleans")
         if self.balance_atlases and self.balance_uv_seams:
             raise ReferenceError("Choose either median atlas balancing or UV seam balancing, not both")
         if type(self.min_seam_anchors) is not int or not 4 <= self.min_seam_anchors <= 256:
@@ -65,6 +72,18 @@ class TextureFinishSettings:
             raise ReferenceError("gutter_pixels must be an integer between 1 and 16")
         if type(self.protect_black) is not int or not 0 <= self.protect_black <= 32:
             raise ReferenceError("protect_black must be an integer between 0 and 32")
+        from .surface_finish import SurfaceOptions
+
+        SurfaceOptions(self.surface_delight_strength, self.surface_max_delight_ev,
+                       self.surface_low_frequency_radius, self.surface_cleanup_radius,
+                       self.surface_multiview_strength, self.surface_multiview_max_ev).validate()
+        if self.surface_recipe is not None and (not isinstance(self.surface_recipe, str)
+                                                 or not self.surface_recipe):
+            raise ReferenceError("surface_recipe must be a nonempty path")
+        if (self.surface_recipe is None and (self.surface_delight_strength != 0
+                                              or self.surface_cleanup_radius != 0
+                                              or self.surface_multiview_strength != 0)):
+            raise ReferenceError("Advanced surface operations require a surface_recipe")
         return self
 
 
@@ -195,15 +214,27 @@ def finish_dense_textures(dense_revision: str | Path, output: str | Path,
         from .uv_coverage import rasterize_uv_coverage
         from .uv_gutters import _MAX_ATLAS_PIXELS
 
-        # Reject malformed UVs/unused texture pages and oversized images
-        # before creating a corrected revision. Full-res masks are generated
-        # one atlas at a time later to keep multi-page memory bounded.
-        rasterize_uv_coverage(original_obj, original_mtl,
-                              {name: (1, 1) for name in pinned_atlas_names})
+        # Validate every UV and atlas before creating a destination revision.
+        rasterize_uv_coverage(
+            original_obj, original_mtl, {name: (1, 1) for name in pinned_atlas_names})
         for entry in pinned["texture_atlases"]:
             with Image.open(entry["path"]) as atlas:
                 if atlas.width * atlas.height > _MAX_ATLAS_PIXELS:
                     raise ReferenceError("UV gutter atlas exceeds the 100-megapixel safety budget")
+    surface_specs: dict[str, Any] = {}
+    surface_options = None
+    if settings.surface_recipe is not None:
+        from .surface_finish import SurfaceOptions, load_surface_recipe
+
+        surface_specs = load_surface_recipe(settings.surface_recipe, {
+            Path(item["path"]).name: Path(item["path"])
+            for item in pinned["texture_atlases"]})
+        surface_options = SurfaceOptions(settings.surface_delight_strength,
+                                         settings.surface_max_delight_ev,
+                                         settings.surface_low_frequency_radius,
+                                         settings.surface_cleanup_radius,
+                                         settings.surface_multiview_strength,
+                                         settings.surface_multiview_max_ev)
     seam_balance: dict[str, float] = {}
     seam_diagnostics: dict[str, Any] | None = None
     if settings.balance_uv_seams:
@@ -274,6 +305,9 @@ def finish_dense_textures(dense_revision: str | Path, output: str | Path,
         "mtl": {"path": original_mtl.name,
                 "sha256": _sha256(target / original_mtl.name)},
         "texture_atlases": [],
+        "surface_maps": [],
+        "surface_recipe_sha256": (_sha256(Path(settings.surface_recipe))
+                                   if settings.surface_recipe is not None else None),
         "status": "incomplete / texture-review-required",
         "distribution_allowed": False,
     }
@@ -292,8 +326,37 @@ def finish_dense_textures(dense_revision: str | Path, output: str | Path,
                 photo.load()
                 if photo.format not in ("JPEG", "PNG"):
                     raise ReferenceError("Texture correction expects a JPEG or PNG atlas")
+                advanced_quality = None
+                if surface_options is not None:
+                    from .surface_finish import finish_surface_atlas
+
+                    advanced_photo, roughness, advanced_quality = finish_surface_atlas(
+                        photo, surface_specs[atlas.name], surface_options,
+                        protect_black=settings.protect_black)
+                    rough_path = target / (atlas.name + ".roughness.png")
+                    roughness.save(rough_path, "PNG")
+                    entry: dict[str, Any] = {
+                        "atlas": atlas.name,
+                        "roughness": {"path": rough_path.name, "sha256": _sha256(rough_path)},
+                        "height": None,
+                        "displacement_scale_m": None,
+                        "quality": advanced_quality,
+                    }
+                    height = surface_specs[atlas.name].height_map
+                    if height is not None:
+                        height.open_verified()  # Verify byte pin before copying.
+                        height_path = target / (atlas.name + ".height.png")
+                        shutil.copy2(height.path, height_path)
+                        if _sha256(height_path) != height.sha256:
+                            raise ReferenceError("Height source changed while copying")
+                        entry["height"] = {"path": height_path.name,
+                                           "sha256": _sha256(height_path)}
+                        entry["displacement_scale_m"] = surface_specs[atlas.name].displacement_scale_m
+                    report["surface_maps"].append(entry)
+                else:
+                    advanced_photo = photo
                 corrected, quality = _atlas_correction(
-                    photo, settings, balance_ev=balance.get(atlas.name, 0.0),
+                    advanced_photo, settings, balance_ev=balance.get(atlas.name, 0.0),
                     seam_ev=seam_balance.get(atlas.name, 0.0),
                     auto_ev=auto_ev, uv_coverage=uv_coverage.get(atlas.name))
                 if "A" in photo.getbands() or "transparency" in photo.info:
@@ -305,7 +368,7 @@ def finish_dense_textures(dense_revision: str | Path, output: str | Path,
 
                     masks, _faces = rasterize_uv_coverage(
                         original_obj, original_mtl, {atlas.name: corrected.size},
-                        atlas_names=pinned_atlas_names)
+                        atlas_names=pinned_atlas_names, conservative=True)
                     padding = pad_uv_gutters(
                         corrected, photo, masks[atlas.name],
                         radius=settings.gutter_pixels, protect_black=settings.protect_black)

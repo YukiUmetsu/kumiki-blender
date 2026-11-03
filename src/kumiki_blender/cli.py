@@ -21,6 +21,9 @@ from .egyptian_monuments import MonumentError, make_monument_study
 from .egypt_map import CITY_MARKERS, LABELS, RIVER_CHANNELS, EgyptMapSpec
 from .geography.fuji import load_dem
 from .glb_audit import AuditError, audit_glb
+from .glb_motion import MotionExportError, write_glb_motion
+from .physics_plan import PhysicsPlanError, load_physics_plan
+from .deformation_plan import DeformationPlanError, load_deformation_plan
 from .lattice import make_lattice_tower
 from .landmark_scan import prepare_sphinx_scan
 from .material_overrides import load_material_overrides, verify_material_overrides
@@ -132,6 +135,27 @@ def main(argv: list[str] | None = None) -> int:
     audit_parser = subcommands.add_parser("audit")
     audit_parser.add_argument("--model", type=Path, required=True)
     audit_parser.add_argument("--require-pbr-textures", action="store_true")
+    motion_parser = subcommands.add_parser(
+        "export-motion", help="Convert Blender-baked glTF node clips into Kumiki PM2 motion JSON")
+    motion_parser.add_argument("--model", type=Path, required=True, help="Animated Blender-exported GLB")
+    motion_parser.add_argument("--clip", help="Clip name; optional when GLB has exactly one animation")
+    motion_parser.add_argument("--output", type=Path, required=True, help="New PM2 baked-actions.json")
+    motion_parser.add_argument("--action-id", help="Optional Kumiki action ID; defaults to <clip>-baked")
+    motion_parser.add_argument("--contacts", type=Path, help="Optional validated contact cue array JSON")
+    motion_parser.add_argument("--merge-clips", action="store_true", help="Combine disjoint per-object simulation clips into one PM2 action")
+    motion_parser.add_argument("--resample-mixed", action="store_true", help="Permit mixed glTF STEP/LINEAR channels via frame-exact 30-fps resampling")
+    for command in ("plan-physics", "build-physics"):
+        physics_parser = subcommands.add_parser(command, help="Validate or bake a declarative Blender rigid-body shot")
+        physics_parser.add_argument("--spec", type=Path, required=True)
+        if command == "build-physics":
+            physics_parser.add_argument("--output", type=Path, required=True,
+                                        help="New, immutable motion bundle (requires Blender background with a loaded .blend)")
+    for command in ("plan-deformation", "build-deformation"):
+        deform_parser = subcommands.add_parser(command, help="Validate or bake one topology-stable deforming Blender mesh into glTF morph animation")
+        deform_parser.add_argument("--spec", type=Path, required=True)
+        if command == "build-deformation":
+            deform_parser.add_argument("--output", type=Path, required=True,
+                                      help="New GLB/manifest bundle (requires Blender background with a saved .blend)")
     revision_parser = subcommands.add_parser("audit-revision")
     revision_parser.add_argument("--root", type=Path, required=True)
     visual_parser = subcommands.add_parser("visual-qa", help="Contact sheet and optional render regression")
@@ -142,6 +166,13 @@ def main(argv: list[str] | None = None) -> int:
     visual_parser.add_argument("--max-changed", type=float, default=0.05)
     visual_parser.add_argument("--pixel-threshold", type=int, default=16)
     visual_parser.add_argument("--idiff", action="store_true", help="Also run optional OpenImageIO idiff")
+    parity_parser = subcommands.add_parser("bridge-parity", help="Compare native Blender/WebGL silhouette capture receipts")
+    parity_parser.add_argument("--plan", type=Path, required=True, help="Byte-identical capture plan used by both renderers")
+    parity_parser.add_argument("--blender-dir", type=Path, required=True, help="Native Blender frame/receipt directory")
+    parity_parser.add_argument("--web-dir", type=Path, required=True, help="WebGL frame/receipt directory")
+    parity_parser.add_argument("--output", type=Path, required=True, help="New review report/contact-sheet directory")
+    parity_parser.add_argument("--min-iou", type=float, default=.90)
+    parity_parser.add_argument("--max-center-delta", type=float, default=.035)
     for command in ("reference-audit", "reconstruct-photos"):
         photo_parser = subcommands.add_parser(
             command, help="Audit statue photo evidence or build a sparse COLMAP camera reconstruction")
@@ -157,6 +188,30 @@ def main(argv: list[str] | None = None) -> int:
             photo_parser.add_argument("--undistort", action="store_true",
                                       help="Rectify camera intrinsics and image pixels for accurate Blender projection")
             photo_parser.add_argument("--max-image-size", type=int, default=4000)
+    for command in ("plan-photo-model", "build-photo-model"):
+        photo_model_parser = subcommands.add_parser(
+            command, help="From one folder of overlapping object photographs to a private mesh GLB")
+        photo_model_input = photo_model_parser.add_mutually_exclusive_group(required=True)
+        photo_model_input.add_argument("--photos", type=Path,
+                                       help="Folder of 8–256 photos of the same object")
+        photo_model_input.add_argument("--manifest", type=Path,
+                                       help="Curated multi-view ReferenceSet JSON manifest")
+        photo_model_parser.add_argument("--asset-id", help="Required with --photos")
+        photo_model_parser.add_argument("--output", type=Path, required=True,
+                                        help="New private, immutable output revision")
+        photo_model_parser.add_argument("--engine", choices=("pycolmap", "colmap"),
+                                        default="pycolmap", help="Sparse registration engine")
+        photo_model_parser.add_argument("--backend", choices=("openmvs", "colmap"),
+                                        default="openmvs", help="Dense meshing backend")
+        photo_model_parser.add_argument("--colmap", default="colmap")
+        photo_model_parser.add_argument("--blender", default="blender")
+        photo_model_parser.add_argument("--min-registered-images", type=int, default=8)
+        photo_model_parser.add_argument("--min-registered-fraction", type=float, default=0.25)
+        photo_model_parser.add_argument("--sparse-timeout-seconds", type=int, default=3600)
+        photo_model_parser.add_argument("--dense-timeout-seconds", type=int, default=7200)
+        photo_model_parser.add_argument("--max-image-size", type=int, default=3200)
+        photo_model_parser.add_argument("--no-texture", action="store_true")
+        photo_model_parser.add_argument("--no-renders", action="store_true")
     for command in ("plan-dense-photos", "build-dense-photos"):
         dense_parser = subcommands.add_parser(
             command, help="Review or reconstruct a private dense statue mesh from registered cameras")
@@ -193,6 +248,75 @@ def main(argv: list[str] | None = None) -> int:
         if command == "build-dense-photos":
             dense_parser.add_argument("--resume", action="store_true",
                                       help="Resume an incomplete OpenMVS revision without repeating completed stages")
+    for command in ("plan-splats", "build-splats"):
+        splat_parser = subcommands.add_parser(
+            command, help="Train private Gaussian splats from multi-angle photos or COLMAP cameras")
+        splat_input = splat_parser.add_mutually_exclusive_group(required=True)
+        splat_input.add_argument("--photos", type=Path,
+                                 help="Directory of 8+ overlapping photos of one object")
+        splat_input.add_argument("--references", type=Path,
+                                 help="Local multi-view ReferenceSet manifest JSON")
+        splat_input.add_argument("--reconstruction", type=Path,
+                                 help="Successful reconstruct-photos --undistort revision")
+        splat_parser.add_argument("--asset-id", help="Required slug for --photos")
+        splat_parser.add_argument("--output", type=Path, required=True,
+                                  help="New immutable, private splat revision folder")
+        splat_parser.add_argument("--opensplat", default="opensplat",
+                                  help="OpenSplat executable, built with Metal/MPS or CUDA")
+        splat_parser.add_argument("--iterations", type=int, default=7000)
+        splat_parser.add_argument("--format", choices=("ply", "spz"), default="ply")
+        splat_parser.add_argument("--timeout-seconds", type=int, default=14_400,
+                                  help="Maximum OpenSplat training seconds")
+        splat_parser.add_argument("--engine", choices=("pycolmap", "colmap"),
+                                  default="pycolmap", help="Camera registration for --photos/--references")
+        splat_parser.add_argument("--colmap", default="colmap",
+                                  help="COLMAP binary when --engine colmap")
+        splat_parser.add_argument("--sparse-timeout-seconds", type=int, default=3600)
+        splat_parser.add_argument("--max-image-size", type=int, default=4000)
+        splat_parser.add_argument("--rectified-masks", type=Path,
+                                  help="Optional reviewed masks matching existing --reconstruction rectified photos")
+    for command in ("plan-splat-video", "render-splat-video"):
+        video_parser = subcommands.add_parser(
+            command, help="GPU-render Gaussian splat orbit frames and encode private H.264 MP4")
+        video_parser.add_argument("--splat", type=Path, required=True,
+                                  help="Candidate splat revision directory or Gaussian .ply/.spz")
+        video_parser.add_argument("--output", type=Path, required=True,
+                                  help="New immutable video revision directory")
+        video_parser.add_argument("--camera-track", type=Path,
+                                  help="Existing SplatTransform/SuperSplat camera track (instead of auto orbit)")
+        video_parser.add_argument("--fps", type=int, default=30)
+        video_parser.add_argument("--seconds", type=int, default=6)
+        video_parser.add_argument("--width", type=int, default=1920)
+        video_parser.add_argument("--height", type=int, default=1080)
+        video_parser.add_argument("--fov", type=float, default=50.0)
+        video_parser.add_argument("--start-degrees", type=float, default=-65.0)
+        video_parser.add_argument("--orbit-degrees", type=float, default=115.0)
+        video_parser.add_argument("--elevation-degrees", type=float, default=12.0)
+        video_parser.add_argument("--target", type=float, nargs=3, metavar=("X", "Y", "Z"))
+        video_parser.add_argument("--distance", type=float)
+        video_parser.add_argument("--hero-photo",
+                                  help="Registered photo filename to anchor an observed-angle orbit (e.g. photo-0001.png)")
+        video_parser.add_argument("--shutter", type=float, default=0.0,
+                                  help="Motion blur shutter fraction 0–1 (0 disables)")
+        video_parser.add_argument("--viewer", action="store_true",
+                                  help="Also build a self-contained private splat viewer.html")
+        video_parser.add_argument("--splat-transform", default="splat-transform")
+        video_parser.add_argument("--ffmpeg", default="ffmpeg")
+        video_parser.add_argument("--ffprobe", default="ffprobe")
+        video_parser.add_argument("--timeout-seconds", type=int, default=7200)
+    for command in ("plan-splat-view-qa", "compare-splat-views"):
+        qa_parser = subcommands.add_parser(
+            command, help="GPU-render COLMAP-matched splat views and compare them with pinned photos")
+        qa_parser.add_argument("--splat", type=Path, required=True,
+                               help="Complete splat revision with registered source cameras/photos")
+        qa_parser.add_argument("--output", type=Path, required=True,
+                               help="New private, immutable multi-angle QA revision")
+        qa_parser.add_argument("--max-views", type=int, default=12,
+                               help="Pose-spread selection of 3–48 registered photographs")
+        qa_parser.add_argument("--max-dimension", type=int, default=1280,
+                               help="Limit longest rendered photo edge to 256–4096 pixels")
+        qa_parser.add_argument("--splat-transform", default="splat-transform")
+        qa_parser.add_argument("--timeout-seconds", type=int, default=900)
     photo_mask_parser = subcommands.add_parser(
         "prepare-dense-masks", help="Create inspectable rectified foreground mask candidates with CPU GrabCut")
     photo_mask_parser.add_argument("--reconstruction", type=Path, required=True)
@@ -222,6 +346,14 @@ def main(argv: list[str] | None = None) -> int:
                                     help="Conservative color cleanup: remove suspected background, never add foreground")
     refine_mask_parser.add_argument("--color-max-side", type=int, default=1280)
     refine_mask_parser.add_argument("--color-iterations", type=int, default=3)
+    hybrid_mask_parser = subcommands.add_parser(
+        "compose-dense-masks", help="Select the best registered masks photo by photo across two candidate revisions")
+    hybrid_mask_parser.add_argument("--reconstruction", type=Path, required=True)
+    hybrid_mask_parser.add_argument("--primary-mask-revision", type=Path, required=True)
+    hybrid_mask_parser.add_argument("--alternate-mask-revision", type=Path, required=True)
+    hybrid_mask_parser.add_argument("--output", type=Path, required=True)
+    hybrid_mask_parser.add_argument("--use-alternate", nargs="+", required=True,
+                                    metavar="PHOTO", help="Exact filenames selected from the alternate revision")
     mask_consistency_parser = subcommands.add_parser(
         "audit-dense-masks", help="Inspect multi-view COLMAP feature-track disagreements in rectified masks")
     mask_consistency_parser.add_argument("--reconstruction", type=Path, required=True)
@@ -261,6 +393,101 @@ def main(argv: list[str] | None = None) -> int:
     texture_finish_parser.add_argument("--auto-exposure-luma", type=float,
                                        help="Opt-in target median brightness (32–224) across all atlas pages")
     texture_finish_parser.add_argument("--max-auto-exposure-ev", type=float, default=1.0)
+    texture_finish_parser.add_argument("--surface-recipe", type=Path,
+                                       help="Optional local per-atlas material masks, lighting, cleanup and height JSON")
+    texture_finish_parser.add_argument("--surface-delight-strength", type=float, default=0.0,
+                                       help="0–1 bounded linear-light photo de-lighting (guided map preferred)")
+    texture_finish_parser.add_argument("--surface-max-delight-ev", type=float, default=1.0)
+    texture_finish_parser.add_argument("--surface-low-frequency-radius", type=int, default=96,
+                                       help="Heuristic illumination blur radius when no guidance map exists")
+    texture_finish_parser.add_argument("--surface-cleanup-radius", type=int, default=0,
+                                       help="Radius 1–16 for explicitly masked small texture defects")
+    texture_finish_parser.add_argument("--surface-multiview-strength", type=float, default=0.0,
+                                       help="0–1 confidence-masked fusion of 3–8 UV-reprojected photos")
+    texture_finish_parser.add_argument("--surface-multiview-max-ev", type=float, default=1.5,
+                                       help="Maximum per-pixel and per-material relative correction (0–2 EV)")
+    for command in ("plan-material-separation", "propose-material-separation"):
+        separate_parser = subcommands.add_parser(
+            command, help="Propose reviewable UV material masks from labeled seeds and registered photo views")
+        separate_parser.add_argument("--dense-revision", type=Path, required=True)
+        separate_parser.add_argument("--seed-recipe", type=Path, required=True,
+                                     help="Normal surface recipe whose region masks are sparse seed strokes")
+        separate_parser.add_argument("--output", type=Path, required=True)
+        separate_parser.add_argument("--min-margin", type=float, default=.25)
+        separate_parser.add_argument("--max-distance", type=float, default=3.5)
+        separate_parser.add_argument("--min-evidence-views", type=int, default=2)
+        separate_parser.add_argument("--max-side", type=int, default=8192)
+        separate_parser.add_argument("--max-mesh-faces", type=int, default=5_000_000)
+    defect_parser = subcommands.add_parser(
+        "detect-photo-texture-defects",
+        help="Detect localized photographic texture inconsistencies as review-only masks")
+    defect_parser.add_argument("--dense-revision", type=Path, required=True)
+    defect_parser.add_argument("--surface-recipe", type=Path, required=True)
+    defect_parser.add_argument("--output", type=Path, required=True)
+    defect_parser.add_argument("--color-difference", type=int, default=45)
+    defect_parser.add_argument("--local-excess", type=int, default=20)
+    defect_parser.add_argument("--spatial-radius", type=int, default=12)
+    defect_parser.add_argument("--max-side", type=int, default=8192)
+    defect_parser.add_argument("--max-mesh-faces", type=int, default=5_000_000)
+    illumination_parser = subcommands.add_parser(
+        "estimate-uv-illumination",
+        help="Build bounded per-material illumination guides from 3+ registered UV photos")
+    illumination_parser.add_argument("--dense-revision", type=Path, required=True)
+    illumination_parser.add_argument("--surface-recipe", type=Path, required=True)
+    illumination_parser.add_argument("--output", type=Path, required=True)
+    illumination_parser.add_argument("--smoothing-radius", type=int, default=32)
+    illumination_parser.add_argument("--max-illumination-ev", type=float, default=1.5)
+    illumination_parser.add_argument("--max-side", type=int, default=8192)
+    illumination_parser.add_argument("--max-mesh-faces", type=int, default=5_000_000)
+    polarized_parser = subcommands.add_parser(
+        "inspect-polarized-uv",
+        help="Inspect controlled parallel/cross polarization pairs; contrast is NOT measured roughness")
+    polarized_parser.add_argument("--dense-revision", type=Path, required=True)
+    polarized_parser.add_argument("--surface-recipe", type=Path, required=True)
+    polarized_parser.add_argument("--captures", type=Path, required=True,
+                                  help="JSON with 3–8 UV-aligned parallel/cross photo pairs per atlas")
+    polarized_parser.add_argument("--output", type=Path, required=True)
+    polarized_parser.add_argument("--max-side", type=int, default=8192)
+    polarized_parser.add_argument("--min-views", type=int, default=3)
+    polarized_parser.add_argument("--max-mesh-faces", type=int, default=5_000_000)
+    projection_parser = subcommands.add_parser(
+        "project-registered-uv-views",
+        help="Project hash-pinned COLMAP photographs onto OBJ UV atlases with occlusion masks")
+    projection_parser.add_argument("--dense-revision", type=Path, required=True)
+    projection_parser.add_argument("--output", type=Path, required=True)
+    projection_parser.add_argument("--views", type=int, default=3)
+    projection_parser.add_argument("--atlas-side", type=int, default=2048)
+    projection_parser.add_argument("--camera-side", type=int, default=1536)
+    projection_parser.add_argument("--max-triangles", type=int, default=500_000)
+    for command in ("plan-scan-displacement", "bake-scan-displacement"):
+        scan_bake_parser = subcommands.add_parser(
+            command, help="Bake real dense PLY relief into signed 16-bit UV displacement")
+        scan_bake_parser.add_argument("--dense-revision", type=Path, required=True)
+        scan_bake_parser.add_argument("--output", type=Path, required=True)
+        scan_bake_parser.add_argument("--meters-per-unit", type=float, required=True,
+                                     help="Measured physical metres per COLMAP world unit")
+        scan_bake_parser.add_argument("--max-offset-m", type=float, default=.05)
+        scan_bake_parser.add_argument("--max-side", type=int, default=2048)
+        scan_bake_parser.add_argument("--max-mesh-faces", type=int, default=5_000_000)
+        scan_bake_parser.add_argument("--max-uv-triangles", type=int, default=500_000)
+        if command == "bake-scan-displacement":
+            scan_bake_parser.add_argument("--blender", default="blender")
+    udim_parser = subcommands.add_parser(
+        "package-finished-udim", help="Copy a verified finished multi-atlas OBJ to numbered UDIM tiles")
+    udim_parser.add_argument("--texture-finish", type=Path, required=True)
+    udim_parser.add_argument("--output", type=Path, required=True)
+    udim_review = subcommands.add_parser(
+        "render-udim-material-review",
+        help="Compare one verified UDIM model from three angles under opposing lights")
+    udim_review.add_argument("--udim-package", type=Path, required=True)
+    udim_review.add_argument("--output", type=Path, required=True)
+    udim_review.add_argument("--resolution", type=int, default=512)
+    udim_review.add_argument("--samples", type=int, default=24)
+    udim_review.add_argument("--matched-views", type=int, default=0,
+                             help="Include 1–6 exact registered COLMAP/photo views, if available")
+    udim_review.add_argument("--matched-resolution-percent", type=int, default=25)
+    udim_review.add_argument("--no-renders", action="store_true")
+    udim_review.add_argument("--blender", default="blender")
     for command in ("plan-dense-blender-review", "render-dense-blender-review"):
         review_dense = subcommands.add_parser(
             command, help="Inspect or create a private editable Blender scene from a dense PLY")
@@ -337,6 +564,44 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     try:
+        if args.command in ("plan-deformation", "build-deformation"):
+            shot = load_deformation_plan(args.spec)
+            if args.command == "plan-deformation":
+                print(json.dumps({"asset_id": shot.asset_id, "action_id": shot.action_id,
+                                  "target": shot.target, "frames": list(shot.frames),
+                                  "morph_targets": len(shot.frames) - 1,
+                                  "max_vertices": shot.max_vertices}, indent=2))
+                return 0
+            try:
+                import bpy  # type: ignore[import-not-found]
+            except ImportError as error:
+                raise DeformationPlanError("build-deformation needs Blender: blender -b source.blend --python scripts/blender_entry.py -- build-deformation --spec plan.json --output new-revision") from error
+            from .blender_deformation import build_deformation_shot
+            print(json.dumps(build_deformation_shot(bpy, shot, args.output), indent=2))
+            return 0
+        if args.command in ("plan-physics", "build-physics"):
+            shot = load_physics_plan(args.spec)
+            if args.command == "plan-physics":
+                print(json.dumps({"asset_id": shot.asset_id, "action_id": shot.action_id,
+                                  "duration_frames": shot.duration_frames,
+                                  "rules": len(shot.bodies), "active_rules": sum(body.kind == "active" for body in shot.bodies),
+                                  "constraints": len(shot.constraints), "ground": shot.ground is not None,
+                                  "gravity_mps2": shot.gravity_mps2}, indent=2))
+                return 0
+            try:
+                import bpy  # type: ignore[import-not-found]
+            except ImportError as error:
+                raise PhysicsPlanError("build-physics requires Blender: blender --background source.blend --python scripts/blender_entry.py -- build-physics --spec plan.json --output new-revision") from error
+            from .blender_physics import build_physics_shot
+            print(json.dumps(build_physics_shot(bpy, shot, args.output), indent=2))
+            return 0
+        if args.command == "export-motion":
+            print(json.dumps(write_glb_motion(args.model, args.output, clip_name=args.clip,
+                                              action_id=args.action_id,
+                                              contacts_path=args.contacts,
+                                              merge_clips=args.merge_clips,
+                                              resample_mixed=args.resample_mixed), indent=2))
+            return 0
         if args.command == "prepare-dense-masks":
             from .reconstruction.masking import generate_rectified_masks
             from .reconstruction.references import ReferenceError
@@ -362,6 +627,18 @@ def main(argv: list[str] | None = None) -> int:
                     color_max_side=args.color_max_side,
                     color_iterations=args.color_iterations,
                     color_trim_only=args.color_trim_only)
+            except ReferenceError as error:
+                raise RecipeError(str(error)) from error
+            print(json.dumps(report, indent=2))
+            return 0
+        if args.command == "compose-dense-masks":
+            from .reconstruction.mask_selection import compose_rectified_masks
+            from .reconstruction.references import ReferenceError
+            try:
+                report = compose_rectified_masks(
+                    args.reconstruction, args.primary_mask_revision,
+                    args.alternate_mask_revision, args.output,
+                    alternate_images=args.use_alternate)
             except ReferenceError as error:
                 raise RecipeError(str(error)) from error
             print(json.dumps(report, indent=2))
@@ -410,7 +687,175 @@ def main(argv: list[str] | None = None) -> int:
                                                     max_seam_ev=args.max_seam_ev,
                                                     min_seam_anchors=args.min_seam_anchors,
                                                     auto_exposure_luma=args.auto_exposure_luma,
-                                                    max_auto_exposure_ev=args.max_auto_exposure_ev))
+                                                    max_auto_exposure_ev=args.max_auto_exposure_ev,
+                                                    surface_recipe=(str(args.surface_recipe)
+                                                                    if args.surface_recipe else None),
+                                                    surface_delight_strength=args.surface_delight_strength,
+                                                    surface_max_delight_ev=args.surface_max_delight_ev,
+                                                    surface_low_frequency_radius=args.surface_low_frequency_radius,
+                                                    surface_cleanup_radius=args.surface_cleanup_radius,
+                                                    surface_multiview_strength=args.surface_multiview_strength,
+                                                    surface_multiview_max_ev=args.surface_multiview_max_ev))
+            except ReferenceError as error:
+                raise RecipeError(str(error)) from error
+            print(json.dumps(report, indent=2))
+            return 0
+        if args.command in ("plan-material-separation", "propose-material-separation"):
+            from .reconstruction.material_separation import (
+                SeparationOptions, plan_material_separation, propose_material_regions,
+            )
+            from .reconstruction.references import ReferenceError
+            options = SeparationOptions(min_margin=args.min_margin,
+                                        max_distance=args.max_distance,
+                                        min_evidence_views=args.min_evidence_views,
+                                        max_side=args.max_side,
+                                        max_mesh_faces=args.max_mesh_faces)
+            operation = (plan_material_separation if args.command == "plan-material-separation"
+                         else propose_material_regions)
+            try:
+                report = operation(args.dense_revision, args.seed_recipe, args.output,
+                                   options=options)
+            except ReferenceError as error:
+                raise RecipeError(str(error)) from error
+            print(json.dumps(report, indent=2))
+            return 0
+        if args.command == "detect-photo-texture-defects":
+            from .reconstruction.texture_defects import DefectDetectionOptions, detect_texture_defects
+            from .reconstruction.references import ReferenceError
+            try:
+                report = detect_texture_defects(
+                    args.dense_revision, args.surface_recipe, args.output,
+                    options=DefectDetectionOptions(color_difference=args.color_difference,
+                                                   local_excess=args.local_excess,
+                                                   spatial_radius=args.spatial_radius,
+                                                   max_side=args.max_side,
+                                                   max_mesh_faces=args.max_mesh_faces))
+            except ReferenceError as error:
+                raise RecipeError(str(error)) from error
+            print(json.dumps(report, indent=2))
+            return 0
+        if args.command == "estimate-uv-illumination":
+            from .reconstruction.illumination_guides import (
+                IlluminationGuideOptions, estimate_uv_illumination)
+            from .reconstruction.references import ReferenceError
+            try:
+                report = estimate_uv_illumination(
+                    args.dense_revision, args.surface_recipe, args.output,
+                    options=IlluminationGuideOptions(
+                        smoothing_radius=args.smoothing_radius,
+                        max_illumination_ev=args.max_illumination_ev,
+                        max_side=args.max_side, max_mesh_faces=args.max_mesh_faces))
+            except ReferenceError as error:
+                raise RecipeError(str(error)) from error
+            print(json.dumps(report, indent=2))
+            return 0
+        if args.command == "inspect-polarized-uv":
+            from .reconstruction.polarized_qa import PolarizedQAOptions, inspect_polarized_uv
+            from .reconstruction.references import ReferenceError
+            try:
+                report = inspect_polarized_uv(
+                    args.dense_revision, args.surface_recipe, args.captures, args.output,
+                    options=PolarizedQAOptions(max_side=args.max_side,
+                                               min_views=args.min_views,
+                                               max_mesh_faces=args.max_mesh_faces))
+            except ReferenceError as error:
+                raise RecipeError(str(error)) from error
+            print(json.dumps(report, indent=2))
+            return 0
+        if args.command == "project-registered-uv-views":
+            from .reconstruction.photo_uv_projection import project_registered_photos_to_uv
+            from .reconstruction.references import ReferenceError
+            try:
+                report = project_registered_photos_to_uv(
+                    args.dense_revision, args.output, views=args.views,
+                    atlas_side=args.atlas_side, camera_side=args.camera_side,
+                    max_triangles=args.max_triangles)
+            except ReferenceError as error:
+                raise RecipeError(str(error)) from error
+            print(json.dumps(report, indent=2))
+            return 0
+        if args.command in ("plan-scan-displacement", "bake-scan-displacement"):
+            from .reconstruction.references import ReferenceError
+            from .reconstruction.scan_displacement import (bake_scanned_displacement,
+                                                           plan_scan_displacement)
+            options = dict(meters_per_unit=args.meters_per_unit,
+                           max_offset_m=args.max_offset_m, max_side=args.max_side,
+                           max_mesh_faces=args.max_mesh_faces,
+                           max_uv_triangles=args.max_uv_triangles)
+            try:
+                plan = plan_scan_displacement(args.dense_revision, args.output, **options)
+            except ReferenceError as error:
+                raise RecipeError(str(error)) from error
+            if args.command == "plan-scan-displacement":
+                print(json.dumps(plan, indent=2))
+                return 0
+            try:
+                import bpy  # type: ignore[import-not-found]
+            except ImportError:
+                executable = shutil.which(args.blender)
+                if not executable:
+                    raise RuntimeError(f"Blender executable not found: {args.blender}")
+                entry = Path(__file__).resolve().parents[2] / "scripts/blender_entry.py"
+                command = [executable, "--background", "--factory-startup", "--python-exit-code", "1",
+                           "--python", str(entry), "--", "bake-scan-displacement",
+                           "--dense-revision", str(args.dense_revision.resolve()),
+                           "--output", str(args.output.resolve()),
+                           "--meters-per-unit", str(args.meters_per_unit),
+                           "--max-offset-m", str(args.max_offset_m),
+                           "--max-side", str(args.max_side),
+                           "--max-mesh-faces", str(args.max_mesh_faces),
+                           "--max-uv-triangles", str(args.max_uv_triangles)]
+                return subprocess.run(command, check=False).returncode
+            try:
+                report = bake_scanned_displacement(bpy, args.dense_revision,
+                                                   args.output, **options)
+            except ReferenceError as error:
+                raise RecipeError(str(error)) from error
+            print(json.dumps(report, indent=2))
+            return 0
+        if args.command == "package-finished-udim":
+            from .reconstruction.references import ReferenceError
+            from .reconstruction.udim import package_finished_udim
+            try:
+                report = package_finished_udim(args.texture_finish, args.output)
+            except ReferenceError as error:
+                raise RecipeError(str(error)) from error
+            print(json.dumps(report, indent=2))
+            return 0
+        if args.command == "render-udim-material-review":
+            from .reconstruction.references import ReferenceError
+            from .reconstruction.udim_relighting import (build_udim_relighting_review,
+                                                          validate_udim_relighting_request)
+            try:
+                validate_udim_relighting_request(args.udim_package, args.output,
+                                                 args.resolution, args.samples,
+                                                 args.matched_views,
+                                                 args.matched_resolution_percent)
+            except ReferenceError as error:
+                raise RecipeError(str(error)) from error
+            try:
+                import bpy  # type: ignore[import-not-found]
+            except ImportError:
+                executable = shutil.which(args.blender)
+                if not executable:
+                    raise RuntimeError(f"Blender executable not found: {args.blender}")
+                entry = Path(__file__).resolve().parents[2] / "scripts/blender_entry.py"
+                command = [executable, "--background", "--factory-startup",
+                           "--python-exit-code", "1", "--python", str(entry), "--",
+                           "render-udim-material-review", "--udim-package",
+                           str(args.udim_package.resolve()), "--output", str(args.output.resolve()),
+                           "--resolution", str(args.resolution), "--samples", str(args.samples),
+                           "--matched-views", str(args.matched_views),
+                           "--matched-resolution-percent", str(args.matched_resolution_percent)]
+                if args.no_renders:
+                    command.append("--no-renders")
+                return subprocess.run(command, check=False).returncode
+            try:
+                report = build_udim_relighting_review(
+                    bpy, args.udim_package, args.output, resolution=args.resolution,
+                    samples=args.samples, render_previews=not args.no_renders,
+                    matched_views=args.matched_views,
+                    matched_resolution_percent=args.matched_resolution_percent)
             except ReferenceError as error:
                 raise RecipeError(str(error)) from error
             print(json.dumps(report, indent=2))
@@ -488,6 +933,128 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(report, indent=2))
             return (0 if args.command == "plan-dense-photos" or
                     report["status"].startswith("dense-mesh-candidate") else 3)
+        if args.command in ("plan-photo-model", "build-photo-model"):
+            from .reconstruction.photo_model import (PhotoModelSettings, build_photo_model,
+                                                     plan_photo_model)
+            from .reconstruction.references import ReferenceError, load_reference_set
+            from .reconstruction.splat_input import load_photo_folder
+            try:
+                if args.photos and not args.asset_id:
+                    raise ReferenceError("--asset-id is required with --photos")
+                if args.asset_id and not args.photos:
+                    raise ReferenceError("--asset-id is only used with --photos")
+                references = (load_photo_folder(args.photos, args.asset_id)
+                              if args.photos else load_reference_set(args.manifest))
+                settings = PhotoModelSettings(
+                    engine=args.engine, dense_backend=args.backend, colmap=args.colmap,
+                    blender=args.blender, min_registered_images=args.min_registered_images,
+                    min_registered_fraction=args.min_registered_fraction,
+                    sparse_timeout_seconds=args.sparse_timeout_seconds,
+                    dense_timeout_seconds=args.dense_timeout_seconds,
+                    max_image_size=args.max_image_size,
+                    texture=not args.no_texture, render_previews=not args.no_renders)
+                report = (plan_photo_model(references, args.output, settings)
+                          if args.command == "plan-photo-model" else
+                          build_photo_model(references, args.output, settings))
+            except ReferenceError as error:
+                raise RecipeError(str(error)) from error
+            print(json.dumps(report, indent=2))
+            return (0 if args.command == "plan-photo-model" or
+                    report["status"].startswith("private-GLB-candidate") else 3)
+        if args.command in ("plan-splats", "build-splats"):
+            from .reconstruction.references import ReferenceError, load_reference_set
+            from .reconstruction.splat_input import load_photo_folder, plan_splat_input
+            from .reconstruction.splats import (SplatSettings, build_multiview_splat_revision,
+                                                 build_splat_revision, plan_splat_revision,
+                                                 validate_camera_settings)
+            try:
+                settings = SplatSettings(iterations=args.iterations,
+                                         timeout_seconds=args.timeout_seconds,
+                                         output_format=args.format, opensplat=args.opensplat)
+                settings.validate()
+                if args.photos and not args.asset_id:
+                    raise ReferenceError("--asset-id is required with --photos")
+                if args.asset_id and not args.photos:
+                    raise ReferenceError("--asset-id is only used with --photos")
+                if args.rectified_masks and not args.reconstruction:
+                    raise ReferenceError("--rectified-masks requires --reconstruction")
+                if args.reconstruction:
+                    report = (plan_splat_revision(args.reconstruction, args.output, settings,
+                                                  rectified_masks=args.rectified_masks)
+                              if args.command == "plan-splats" else
+                              build_splat_revision(args.reconstruction, args.output, settings,
+                                                   rectified_masks=args.rectified_masks))
+                else:
+                    validate_camera_settings(args.engine, args.sparse_timeout_seconds,
+                                             args.max_image_size)
+                    references = (load_photo_folder(args.photos, args.asset_id)
+                                  if args.photos else load_reference_set(args.references))
+                    if args.command == "plan-splats":
+                        import importlib.util
+
+                        report = plan_splat_input(references)
+                        if args.output.is_symlink() or args.output.exists():
+                            raise ReferenceError(f"Output revision already exists: {args.output}")
+                        report.update(output=str(args.output.resolve()),
+                                      engine=args.engine, output_format=settings.output_format,
+                                      opensplat_available=bool(shutil.which(args.opensplat)),
+                                      camera_engine_available=(
+                                          importlib.util.find_spec("pycolmap") is not None
+                                          if args.engine == "pycolmap" else
+                                          bool(shutil.which(args.colmap))),
+                                      caution="Camera registration requires overlapping photos and an installed SfM engine.")
+                    else:
+                        report = build_multiview_splat_revision(
+                            references, args.output, settings,
+                            engine=args.engine, colmap=args.colmap,
+                            sparse_timeout_seconds=args.sparse_timeout_seconds,
+                            max_image_size=args.max_image_size)
+            except ReferenceError as error:
+                raise RecipeError(str(error)) from error
+            print(json.dumps(report, indent=2))
+            return 0 if args.command == "plan-splats" or report["status"].startswith("candidate") else 3
+        if args.command in ("plan-splat-video", "render-splat-video"):
+            from .reconstruction.references import ReferenceError
+            from .reconstruction.splat_video import (SplatVideoSettings, plan_splat_video,
+                                                     render_splat_video)
+            try:
+                settings = SplatVideoSettings(
+                    fps=args.fps, seconds=args.seconds, width=args.width, height=args.height,
+                    fov=args.fov, orbit_degrees=args.orbit_degrees,
+                    start_degrees=args.start_degrees,
+                    elevation_degrees=args.elevation_degrees,
+                    target=tuple(args.target) if args.target is not None else None,
+                    distance=args.distance, hero_photo=args.hero_photo,
+                    shutter=args.shutter, viewer=args.viewer,
+                    splat_transform=args.splat_transform, ffmpeg=args.ffmpeg,
+                    ffprobe=args.ffprobe, timeout_seconds=args.timeout_seconds)
+                report = (plan_splat_video(args.splat, args.output, settings,
+                                           camera_track=args.camera_track)
+                          if args.command == "plan-splat-video" else
+                          render_splat_video(args.splat, args.output, settings,
+                                             camera_track=args.camera_track))
+            except ReferenceError as error:
+                raise RecipeError(str(error)) from error
+            print(json.dumps(report, indent=2))
+            return (0 if args.command == "plan-splat-video" or
+                    report["status"].startswith("candidate") else 3)
+        if args.command in ("plan-splat-view-qa", "compare-splat-views"):
+            from .reconstruction.references import ReferenceError
+            from .reconstruction.splat_visual_qa import (
+                SplatViewQASettings, plan_splat_view_qa, render_splat_view_qa)
+            try:
+                settings = SplatViewQASettings(
+                    max_views=args.max_views, max_dimension=args.max_dimension,
+                    splat_transform=args.splat_transform,
+                    timeout_seconds=args.timeout_seconds)
+                report = (plan_splat_view_qa(args.splat, args.output, settings)
+                          if args.command == "plan-splat-view-qa" else
+                          render_splat_view_qa(args.splat, args.output, settings))
+            except ReferenceError as error:
+                raise RecipeError(str(error)) from error
+            print(json.dumps(report, indent=2))
+            return (0 if args.command == "plan-splat-view-qa" or
+                    report["status"].startswith("candidate") else 3)
         if args.command == "prepare-makehuman-head":
             from .head_sources.makehuman import (fetch_makehuman_obj,
                                                  load_body_mesh, verify_makehuman_obj)
@@ -638,6 +1205,15 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(report, indent=2))
             return (3 if args.command == "reconstruct-photos" and
                     report["status"] == "review-required" else 0)
+        if args.command == "bridge-parity":
+            from .bridge_parity import BridgeParityError, compare_captures
+            try:
+                report = compare_captures(args.plan, args.blender_dir, args.web_dir, args.output,
+                                          min_iou=args.min_iou, max_center_delta=args.max_center_delta)
+            except BridgeParityError as error:
+                raise RecipeError(str(error)) from error
+            print(json.dumps(report, indent=2))
+            return 3 if report["status"] == "review-required" else 0
         if args.command == "visual-qa":
             from .visual_qa import VisualQAError, inspect_visual_revision
             try:
@@ -1052,7 +1628,7 @@ def main(argv: list[str] | None = None) -> int:
         manifest = build_scene(recipe, plan, output, bpy_module=bpy)
         print(json.dumps(manifest, indent=2))
         return 0
-    except (CatalogError, RecipeError, PorticoError, FacadeError, MonumentError, GeometryError, AssetImportError, HeadFitError, MakeHumanSourceError, RenderProfileError, RevisionAuditError, AuditError, ExportAuditError,
+    except (CatalogError, RecipeError, PorticoError, FacadeError, MonumentError, GeometryError, AssetImportError, HeadFitError, MakeHumanSourceError, RenderProfileError, RevisionAuditError, AuditError, ExportAuditError, MotionExportError, PhysicsPlanError, DeformationPlanError,
             SurfaceError, RuntimeError, OSError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 2

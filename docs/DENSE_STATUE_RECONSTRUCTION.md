@@ -81,6 +81,15 @@ private texture projection to produce a mesh for artistic inspection.
       --reconstruction .review/statue/sparse-r01 \
       --output .review/statue/masks-semantic-r01 --segmenter rembg
 
+    # Preserve the best method per registered photo. Every image in both
+    # revisions must match the same immutable rectified camera/photo set.
+    kumiki-blender compose-dense-masks \
+      --reconstruction .review/statue/sparse-r01 \
+      --primary-mask-revision .review/statue/masks-semantic-r01 \
+      --alternate-mask-revision .review/statue/masks-grabcut-r01 \
+      --use-alternate photo-0002.png photo-0015.png \
+      --output .review/statue/masks-hybrid-r01
+
     # Correct unwanted ground or a missing thin feature on selected views.
     # Edit normalized polygons in a private JSON file; never modify r01.
     kumiki-blender refine-dense-masks \
@@ -215,6 +224,22 @@ private texture projection to produce a mesh for artistic inspection.
       --dense-revision .review/statue/dense-masked-r01 \
       --texture-finish .review/statue/texture-finish-r01 \
       --output .review/statue/blender-finished-r01 --textured --matched-views 4
+
+    # Guided material finishing: make a local surface recipe (example below)
+    # and 8-bit masks/illumination + optional MEASURED 16-bit height maps.
+    # A guidance value of 128 means neutral illumination; brighter values
+    # remove illumination highlights, darker values correct shadowed pixels.
+    kumiki-blender finish-dense-textures \
+      --dense-revision .review/statue/dense-masked-r01 \
+      --output .review/statue/finish-material-r01 \
+      --surface-recipe .review/statue/surface-materials.json \
+      --surface-delight-strength 0.7 --surface-max-delight-ev 1.0 \
+      --surface-cleanup-radius 3 --uv-aware-stats
+
+    # A completely separate editable UDIM OBJ/MTL and 1001+ texture tiles.
+    kumiki-blender package-finished-udim \
+      --texture-finish .review/statue/finish-material-r01 \
+      --output .review/statue/udim-material-r01
 
 Options include --min-registered-images, --min-registered-fraction,
 --min-mesh-faces, --timeout-seconds, --no-refine (OpenMVS) and --no-texture.
@@ -418,6 +443,379 @@ hide. It is disabled by default for compatibility; it rejects unsupported
 UV tiling, absent face UVs and unused atlas pages instead of guessing.
 Diagnostic masks are approximate at 768px resolution and cannot recover
 photographic details or correct UV seam geometry.
+
+### Advanced photographic material finishing
+
+Install `pip install '.[finishing]'` for Pillow + NumPy. The advanced surface
+recipe is strictly **opt-in**; existing commands and texture exports remain
+unchanged without `--surface-recipe`. Use the exact atlas filename(s) reported
+by `dense-report.json`. Each recipe has **one entry for every recorded atlas**;
+region masks are local grayscale PNGs at the full atlas resolution and may not
+overlap. Keep all referenced files next to the JSON or under safe relative
+subdirectories. Files and the recipe are hash-pinned before processing.
+
+```json
+{
+  "schema_version": 1,
+  "atlases": {
+    "scene_dense_mesh_refined_texture_material_00_map_Kd.png": {
+      "regions": [
+        {"id": "weathered-stone", "mask": "masks/stone.png", "roughness": 0.88},
+        {"id": "oxidized-metal", "mask": "masks/metal.png", "roughness": 0.72}
+      ],
+      "illumination_map": "guides/lighting.png",
+      "observations": [
+        {"id": "front", "photo": "reprojected/front-uv.png", "confidence": "masks/front-visible.png"},
+        {"id": "left", "photo": "reprojected/left-uv.png", "confidence": "masks/left-visible.png"},
+        {"id": "right", "photo": "reprojected/right-uv.png", "confidence": "masks/right-visible.png"}
+      ],
+      "damage_mask": "guides/camera-artifacts.png",
+      "height_map": "maps/scanned-height-16bit.png",
+      "displacement_scale_m": 0.012
+    }
+  }
+}
+```
+
+- **Material separation:** masks identify UV-space regions for separate
+  roughness priors and de-lighting, but do not split mesh faces into new
+  material slots. Unlabeled texels use a matte fallback; black/transparent
+  gutters are protected. Manually inspect halos where regions meet.
+
+  **Automatic reviewable material proposals from a few seed strokes:**
+  take `projected-views/surface-recipe.example.json` from the projection
+  step below. Replace its all-white region with 2–8 differently named
+  `regions`, each pointing to a small, *binary* white-on-black PNG seed mask
+  painted over known parts of its material. Every seed mask must match the
+  original UV atlas dimensions and contain at least 16 white pixels. Each
+  label has an artist-chosen `roughness` prior. Keep the existing 3–8
+  UV-reprojected `observations` and their occlusion/confidence masks. For
+  example, draw one stroke on bare stone and another on painted lettering.
+  **Do not use raw camera photographs as UV observations.**
+
+  ```bash
+  kumiki-blender plan-material-separation \
+    --dense-revision /private/statue-dense \
+    --seed-recipe /private/projected-views/seed-recipe.json \
+    --output /private/material-proposal
+
+  kumiki-blender propose-material-separation \
+    --dense-revision /private/statue-dense \
+    --seed-recipe /private/projected-views/seed-recipe.json \
+    --output /private/material-proposal
+
+  kumiki-blender finish-dense-textures \
+    --dense-revision /private/statue-dense \
+    --surface-recipe /private/material-proposal/surface-recipe.json \
+    --surface-multiview-strength 0.8 \
+    --output /private/reviewed-material-finish
+  ```
+
+  `material-proposal` contains separate binary masks for each seed material,
+  `labels-preview.png`, `confidence.png`, and `unassigned.png` per atlas, plus
+  a hash-pinned report and an immediately loadable surface recipe. Registered
+  observations, displacement, illumination, damage and roughness maps are
+  verified and copied into the proposal so the recipe remains self-contained.
+  The method takes the **visibility-weighted median of registered views**,
+  compares normalized linear RGB chromaticity and downweighted lightness to
+  labeled examples, and assigns only pixels that clear both a distance bound
+  and a separation margin. Weakly supported, occluded or ambiguous texels are
+  left unassigned instead of hallucinating a material. Seed regions are never
+  changed. All source photographs, OBJ, atlas and seed strokes remain intact.
+  Check every boundary and manually refine masks, particularly if materials
+  differ mostly by brightness, patina or specular behavior. The automatic
+  labels are **not verified physical material identities** and this is not
+  automatic roughness estimation. Work is capped at 8K per atlas and 512M
+  total atlas-view texels for workstation memory safety.
+- **De-lighting:** guided illumination maps should be prepared from calibrated
+  reference evidence or artist review, not an unexamined raw photograph.
+  128 represents neutral light; brighter means stronger recorded illumination,
+  darker means shadow (values below 16 are treated as unknown). The correction
+  is bounded in **linear RGB** by `--surface-max-delight-ev` (0–2 EV) and
+  blended by `--surface-delight-strength` (0–1). If there is no illumination
+  map but strength is nonzero, a region-masked large-blur heuristic estimates
+  illumination; `--surface-low-frequency-radius` controls it (16–1024 pixels).
+  The fallback can remove real low-frequency pigment/weathering: inspect every
+  original/finished atlas comparison. This is NOT a solved intrinsic-image
+  decomposition problem.
+
+  **Estimate a candidate guide from registered camera views:** once the
+  `surface-recipe.json` has reviewed material regions and three or more
+  independently visible UV-projected photos, generate a separate,
+  non-destructive relative illumination revision:
+
+  ```bash
+  kumiki-blender estimate-uv-illumination \
+    --dense-revision /private/statue-dense \
+    --surface-recipe /private/material-proposal/surface-recipe.json \
+    --output /private/illumination-guide \
+    --smoothing-radius 32 --max-illumination-ev 1.5
+
+  # Inspect each before-fused-corrected.png before using the generated guide.
+  kumiki-blender finish-dense-textures \
+    --dense-revision /private/statue-dense \
+    --surface-recipe /private/illumination-guide/surface-recipe.json \
+    --surface-delight-strength 0.8 --surface-max-delight-ev 1.5 \
+    --output /private/illumination-review
+  ```
+
+  The estimator uses the existing per-material, independently masked
+  multiview median to compare original and recovered **linear-light**
+  luminance. It normalizes each material separately and smooths the relative
+  field only through observed UV texels within the same material region.
+  Unknown regions and texels with fewer than three visible camera views remain
+  neutral (128), not imagined. It emits a standalone hash-pinned recipe,
+  `illumination-map.png`, `guided-coverage.png`, and a side-by-side preview
+  showing original, registered-fusion candidate and guided correction.
+  Existing roughness, height, damage and photo evidence are preserved.
+  The neutral-128 8-bit format has a smaller **positive** representable EV
+  range than negative EV; `positive_ev_clip_fraction` reports saturation.
+  Review skin, painted inscriptions, patina, hard shadows and UV seams; if a
+  shadow exists in every photo, it cannot be reliably separated from pigment.
+  Do not also enable multiview color fusion for the same finishing pass unless
+  comparing a deliberately different, separately reviewed variant.
+- **Controlled polarization capture QA (optional):** when a photographer has
+  real, **UV-reprojected** parallel and cross-polarized pairs from the same
+  viewpoint, exposure and light position, inspect relative specular contrast
+  before considering additional material authoring. This is *not* possible
+  with unrelated online photographs. For each of 3–8 independent capture
+  pairs per atlas, supply RGB PNGs and a grayscale UV-visibility mask:
+
+  ```json
+  {
+    "schema_version": 1,
+    "atlases": {
+      "stone.png": [
+        {"id": "light-01", "parallel": "parallel-01.png", "cross": "cross-01.png",
+         "confidence": "visible-01.png", "same_exposure": true,
+         "unchanged_lighting": true, "analyzer_rotation_degrees": 90},
+        {"id": "light-02", "parallel": "parallel-02.png", "cross": "cross-02.png",
+         "confidence": "visible-02.png", "same_exposure": true,
+         "unchanged_lighting": true, "analyzer_rotation_degrees": 90},
+        {"id": "light-03", "parallel": "parallel-03.png", "cross": "cross-03.png",
+         "confidence": "visible-03.png", "same_exposure": true,
+         "unchanged_lighting": true, "analyzer_rotation_degrees": 90}
+      ]
+    }
+  }
+  ```
+
+  Paths are relative to the capture JSON. All atlas pages must be present.
+  The declared capture conditions cannot be independently verified by the
+  CLI. Use fixed white balance, identical exposure/tone response, an actual
+  analyzer rotation of roughly 90°, and calibrated UV projections. Saturated,
+  underexposed and negative-difference texels are excluded.
+
+  ```bash
+  kumiki-blender inspect-polarized-uv \
+    --dense-revision /private/statue-dense \
+    --surface-recipe /private/material-proposal/surface-recipe.json \
+    --captures /private/polarization/pairs.json \
+    --output /private/polarization-review
+  ```
+
+  Inspect `atlas-*/source-contrast-coverage.png` and
+  `polarized-qa-report.json`. The 8-bit `specular-contrast.png` is a
+  **relative, view/light-dependent diagnostic**, not a roughness map and not
+  suitable for a PBR roughness input. Physical roughness still requires
+  calibrated normal/view/light geometry, camera response, and a measured
+  BRDF or reliable roughness standards. No original atlas or region prior is
+  modified.
+- **Multiple photographic views (opt-in):** supply 3–8 *distinct UV-reprojected*
+  RGB PNGs of the **same object in the same UV coordinates**, with one
+  grayscale visibility/confidence mask for each. These are **not raw camera
+  JPGs**; an image taken from a side angle cannot be used as a UV map until
+  calibrated reprojection and visibility/occlusion masking have been performed.
+  Use `--surface-multiview-strength 0.8 --surface-multiview-max-ev 1.5` to
+  normalize view illumination **separately for each material region** and
+  blend the confidence-weighted median in **linear RGB**. A pixel changes only
+  with at least three independent valid observations; unobserved islands,
+  source-black gutters and transparent padding stay untouched. The EV bound
+  prevents aggressive color invention. See the per-atlas `quality.multiview`
+  report for view gains, coverage, input hashes and change rate. A shadow
+  appearing in only one of three views can be reduced, but a shadow present
+  in all views cannot be separated reliably from real pigment. Confidence
+  masks must exclude back-facing/occluded surfaces and foreground objects.
+  This is a conservative multiview **color estimate**, **not calibrated
+  physical albedo**.
+  To produce the UV-space observations from your **own registered photo
+  reconstruction** (rather than painting them by hand), use:
+
+  ```bash
+  kumiki-blender project-registered-uv-views \
+    --dense-revision /path/to/private/dense-revision \
+    --output /path/to/private/projected-views \
+    --views 5 --atlas-side 2048 --camera-side 1536
+
+  kumiki-blender finish-dense-textures \
+    --dense-revision /path/to/private/dense-revision \
+    --output /path/to/private/fused-finish \
+    --surface-recipe /path/to/private/projected-views/surface-recipe.example.json \
+    --surface-multiview-strength 0.8
+  ```
+
+  The projection reads the exact hash-pinned, rectified COLMAP photo poses and
+  textured OpenMVS OBJ and projects camera pixels through a coarse photo-space
+  depth buffer onto each UV atlas. Each view has a confidence mask weighted
+  by surface-facing angle, with occluded and back-facing pixels excluded; the
+  `uv-projection-report.json` records source hashes and coverage; files are
+  private artistic-review candidates. Check the generated example recipe first:
+  its **all-white material-region mask and 0.85 roughness are placeholders**,
+  not measured or segmented material properties. Replace them with reviewed
+  masks/priors before treating the result as finished. Reject reflections,
+  cast shadows, pedestrians, specular hotspots and photographic compression
+  artifacts by editing the per-view confidence masks. The projector does not
+  recover true albedo, improve scan geometry or correct lens calibration.
+  Sparse camera registration and the textured OBJ **must share the original
+  COLMAP/OpenMVS coordinate system**. Large or intricate models may require a
+  verified reduced face-count proxy with identical UVs; `--max-triangles`
+  guards CPU work. Upsampling a smaller working atlas cannot add texture detail.
+- **Damage cleanup:** only areas explicitly painted into `damage_mask` are
+  filled with nearby *same-material* colors. The mask may cover at most 5% of
+  an atlas and `--surface-cleanup-radius` must be 1–16. Do not paint original
+  cracks, chips, authentic patina or damaged monument surfaces into this mask;
+  it is for camera artifacts, small projection holes and reconstruction faults.
+
+  **Optional photographic defect detection (review only):** compare each
+  original atlas with confidence-weighted fusion of at least **three distinct
+  UV-registered views** within the current material masks:
+
+  ```bash
+  kumiki-blender detect-photo-texture-defects \
+    --dense-revision /private/statue-dense \
+    --surface-recipe /private/material-proposal/surface-recipe.json \
+    --output /private/defect-candidates
+  ```
+
+  Inspect `atlas-01/review-overlay.png`, `defect-severity.png` and
+  `candidate-damage-mask.png`, and the per-atlas QA in
+  `texture-defect-report.json`. The detector compares the atlas against a
+  bounded per-material multiview estimate and flags only **localized** color
+  deviations with three valid camera observations, inside reviewed material
+  islands and away from their borders. It intentionally does **not** inpaint
+  or modify the atlas. Consistent real cracks and patina should remain
+  unmarked, but camera-registration errors, cast-light boundaries and true
+  damage can still create false positives. Inspect each red area, erase genuine
+  surface details from the proposed mask, and only then copy the approved
+  PNG into a future surface recipe as `damage_mask`. The existing cleanup
+  requires the approved mask to remain under 5% of the atlas with each hole
+  small enough for the selected cleanup radius; that rule is not bypassed.
+- **Roughness:** region `roughness` is a deliberate 0.02–1 **prior**, not a
+  reflectance measurement. An optional per-region `roughness_map` field accepts
+  an externally authored full-resolution grayscale PNG that overrides the prior
+  inside the region. A full-resolution, grayscale, hash-pinned roughness
+  PNG is generated for the GLB's Principled BSDF. For physically estimated
+  roughness, capture calibrated cross-polarized/multi-light views and author a
+  measured roughness map in a separate material pipeline. Diffuse image
+  brightness alone cannot determine roughness.
+- **Displacement:** `height_map` is optional but, when present, **must be true
+  16-bit grayscale PNG** accompanied by a real-world `displacement_scale_m`
+  between 0.00001 and 0.5. No depth/geometry is invented from albedo. The
+  copied height image is connected to a Cycles Displacement node in the
+  editable private `.blend`; artist-controlled subdivision/displacement settings
+  are necessary for silhouette detail, and the source mesh must have a calibrated
+  meter scale for `displacement_scale_m` to be physically meaningful.
+  **glTF/GLB does not encode true height
+  displacement**, so GLB appearance will differ from a high-resolution Cycles
+  render unless geometry is intentionally baked.
+
+  To bake **real measured scan geometry** rather than inventing bumps from a
+  color photograph, the dense PLY and UV-textured OBJ can be used together:
+
+  ```bash
+  # Verify the scale from survey measurements first. Example below assumes
+  # ONE COLMAP world unit is ONE real-world metre; do not guess this value.
+  kumiki-blender plan-scan-displacement \
+    --dense-revision .review/statue/dense-masked-r01 \
+    --output .review/statue/scan-height-r01 \
+    --meters-per-unit 1.0 --max-offset-m 0.05
+
+  kumiki-blender bake-scan-displacement \
+    --dense-revision .review/statue/dense-masked-r01 \
+    --output .review/statue/scan-height-r01 \
+    --meters-per-unit 1.0 --max-offset-m 0.05 \
+    --max-side 4096 --blender blender
+
+  kumiki-blender finish-dense-textures \
+    --dense-revision .review/statue/dense-masked-r01 \
+    --output .review/statue/finished-with-height-r01 \
+    --surface-recipe .review/statue/scan-height-r01/surface-recipe.example.json
+
+  kumiki-blender package-finished-udim \
+    --texture-finish .review/statue/finished-with-height-r01 \
+    --output .review/statue/scan-height-udim-r01
+  ```
+
+  Blender ray-casts each UV texel on the textured low mesh against the verified
+  high-density PLY. It exports a signed **16-bit grayscale height map** with
+  neutral midpoint, an 8-bit geometric coverage mask, a signed-relief preview
+  for quick visual QA, and pinned provenance.
+  `scan-displacement-report.json` distinguishes valid mapped UV texels from
+  missing intersections or overlapping islands; it records signed-offset
+  percentiles and warns about low ray coverage or nearly flat results. Both
+  meshes MUST be in the
+  same reconstruction frame. `--meters-per-unit` is mandatory because COLMAP
+  geometry alone has no known metric scale; obtain it from surveyed dimensions
+  or known-distance markers. `--max-offset-m` limits the sampled relief and
+  the Cycles displacement scale. Increase it only when the geometry supports
+  it. `--max-side` limits expensive ray samples; upscaling smaller samples to
+  the original atlas resolution does **not** recover missing geometric detail.
+  Review gaps and normal correspondence before accepting output. The example
+  region mask and roughness prior are NOT physical material measurements.
+- **UDIM:** `package-finished-udim` assigns numbered tiles (1001, 1002, ...)
+  to original atlas pages, duplicates shared per-material OBJ `vt` indices,
+  and emits `udim.obj`, `udim.mtl`, `albedo.<tile>.png`, plus any roughness and
+  height tiles and per-tile displacement scales, with a hash/provenance report.
+  Import the package in Blender's Python console or a Blender background script
+  using `from kumiki_blender.reconstruction.blender_udim import
+  import_finished_udim_package` and
+  `import_finished_udim_package(bpy, "/absolute/path/to/udim-package")`.
+  This checks hashes and material assignments, creates real **Tiled** image
+  datablocks for albedo/roughness/height, and connects the Principled and
+  Displacement shaders. Make `kumiki_blender` importable in Blender's Python
+  (for example `PYTHONPATH=/path/to/kumiki-blender/src blender --background
+  --python your-script.py`); the importer has no Pillow requirement. Keep the
+  image package directory with the `.blend` file and check UVs and material
+  slots before rendering. glTF has **no native UDIM or height displacement**;
+  bake/split UV tiles per material for portable GLB and verify it separately.
+  This package does not overwrite the original UVs, mesh, material revisions
+  or Blender review.
+
+To diagnose baked lighting on a finished UDIM model, render the **same
+materials** from three fixed azimuths under two opposing lights:
+
+```bash
+kumiki-blender render-udim-material-review \
+  --udim-package /path/to/udim-package \
+  --output /path/to/new-relighting-review \
+  --resolution 768 --samples 32
+```
+
+The command produces an editable Cycles `.blend`, six PNG previews, a
+`relighting-comparison.html` gallery and a hash-pinned JSON report. It runs on
+Blender's CPU path on both Apple Silicon and CUDA-capable computers without
+requiring CUDA. `--no-renders` saves only the review scene. Inspect patches
+that stay unnaturally dark when lighting reverses, plus roughness and relief
+changes on different viewpoints. Azimuths are **generic object-space views**,
+not COLMAP-calibrated camera poses, so the labels are not guaranteed to match
+the actual statue's front/side orientation. This is a material diagnostic,
+not proof of photo fidelity.
+
+If the finished atlas came from a reconstruction with pinned registered
+COLMAP photos, add `--matched-views 3 --matched-resolution-percent 25`.
+The tool also writes `photo-matched-comparison.html` with each original
+registered photograph beside two relit renders at the **same calibrated
+camera pose**. Those photos remain in a private output revision. Lighting
+is deliberately different, so judge visible geometry, UV seam placement and
+baked shadows rather than interpreting raw color differences as reconstruction
+error. When source photos or camera evidence are missing/tampered, preflight
+fails without creating an output directory.
+
+All of these outputs remain `artistic-review-required` and private; none
+establishes photo-perfect likeness. Photograph-to-material decomposition is
+ambiguous without illumination and reflectance measurements. Compare
+re-rendered front, side and three-quarter views under multiple lights and
+review baked shadows/seams before shipping an asset.
 
 For multi-page models, `--balance-uv-seams` instead estimates per-page exposure
 differences at **shared OBJ mesh vertices along material/atlas boundaries**.

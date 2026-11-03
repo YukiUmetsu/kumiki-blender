@@ -1,5 +1,17 @@
 # Kumiki Blender
 
+**New: Blender physics → Kumiki motion:** [export baked GLB rigid-body clips to portable PM2 actions](docs/KUMIKI_MOTION_BRIDGE.md) with `kumiki-blender export-motion --model model.glb --output baked-actions.json`. No extra Python dependencies, manual coordinate conversion or per-model browser animation code.
+
+**Deforming meshes → Kumiki:** [bake Blender Cloth/Soft Body or topology-stable modifier motion into a native animated glTF morph GLB](docs/KUMIKI_DEFORMATION_BRIDGE.md) using `plan-deformation` and `build-deformation`. One JSON plan; no custom browser vertex-cache player or runtime solver.
+
+For fully automated rigid-body shots, use `kumiki-blender plan-physics --spec examples/desk-lamp-physics-shot.json`, then `build-physics` under Blender with a saved `.blend` loaded. A declarative plan generates a new editable physics scene, GLB, and PM2 animation sidecar; it never overwrites source geometry.
+
+The same plan now supports native `hinge`, `slider` and `fixed` joints (see `examples/mechanical-constraints-physics-shot.json`) and conservative, measured ground-impact cues for SFX. Every constraint/impact is backed by a real Blender simulation; no per-model animation code is required.
+
+For a real **body-on-body collision**, add explicit `contact_pairs` as in [`examples/pair-impact-physics-shot.json`](examples/pair-impact-physics-shot.json). The worker cross-checks Bullet trajectories against mesh-surface proximity and post-impact slowdown before emitting semantic SFX cues; these are conservative geometric estimates, not native Bullet impulses.
+
+To check whether a real Blender shot projects onto the same pixels in Kumiki Storybook, use the [offline Blender ↔ WebGL silhouette parity workflow](docs/BRIDGE_SILHOUETTE_PARITY.md). Its paired SHA-verified frame receipts, IoU overlays and report test camera/pose/geometry agreement only; browser capture stays outside CI.
+
 **New to Blender, 3D modeling, and this repository?** Start with the
 [beginner's step-by-step Wiki](https://github.com/YukiUmetsu/kumiki-blender/wiki): install the tools, generate your
 first tower, open it in Blender, change its color and dimensions, and learn how
@@ -15,7 +27,48 @@ without Blender, then `build-head-base --manifest ... --output ...` to export an
 editable `.blend`, an aligned GLB and QA views. This is **not** automatic
 photo-fidelity reconstruction; front/profile artistic review remains required.
 
+## New: multi-view Gaussian splat reconstruction
+
+For photo-based scene reconstruction, the **Gaussian splat pipeline** now
+accepts a folder of multiple photos from different angles, a source-attributed
+reference manifest, or a registered COLMAP revision. It reconstructs cameras
+with PyCOLMAP (Mac-friendly, CPU) and trains with an external OpenSplat binary
+compiled for **Apple Metal/MPS or NVIDIA CUDA**. Example:
+
+```bash
+kumiki-blender plan-splats --photos /path/to/object-angles --asset-id my-statue \
+  --output .review/my-statue/splats-r01
+kumiki-blender build-splats --photos /path/to/object-angles --asset-id my-statue \
+  --output .review/my-statue/splats-r01 --engine pycolmap \
+  --opensplat /path/to/OpenSplat/build/opensplat
+kumiki-blender render-splat-video --splat .review/my-statue/splats-r01 \
+  --output .review/my-statue/video-r01 --viewer
+```
+
+See [Gaussian splat setup, input modes, output and limitations](docs/GAUSSIAN_SPLATS.md).
+Splats are not editable mesh GLBs, do not imply faithful geometry, and are not
+riggable assets. Optional GPU SplatTransform rendering produces a private
+camera-tour MP4 and HTML viewer; both still require visual and license review.
+
 ## New: reference-driven statue reconstruction evidence
+
+**One photo folder → editable 3D mesh:** The `plan-photo-model` and
+`build-photo-model` commands join real multi-photo camera registration, dense
+surface meshing, Blender export and photo-matched preview rendering in one
+private revision. They accept 8–256 source photos, including 30-angle statue
+sets, and produce `model.glb` plus a `.blend` **only if the photos actually
+register and yield a dense mesh**. There is no procedural fallback or invented
+Sphinx geometry. On Apple Silicon use PyCOLMAP + CPU OpenMVS + Blender; NVIDIA
+systems can select COLMAP CUDA dense meshing. Example:
+
+```bash
+kumiki-blender plan-photo-model --photos /path/to/statue-photos \
+  --asset-id great-sphinx --output .review/great-sphinx/mesh-r01
+kumiki-blender build-photo-model --photos /path/to/statue-photos \
+  --asset-id great-sphinx --output .review/great-sphinx/mesh-r01
+```
+
+See [one-command photo-to-mesh setup and failure reporting](docs/PHOTO_TO_GLB.md).
 
 For the Sphinx, Statue of Liberty, Christ the Redeemer, and future monuments,
 the optional [reference reconstruction foundation](docs/REFERENCE_RECONSTRUCTION.md)
@@ -75,6 +128,13 @@ texture darkness, broad color cast or exposure mismatch between atlas pages,
 exposure/gamma/white-balance atlas revision; import it
 with `render-dense-blender-review --textured --texture-finish`. Both remain
 manual-review candidates, not autonomous texture restoration.
+
+For relightable scans, `finish-dense-textures --surface-recipe` adds opt-in
+mask-guided linear-light de-lighting, material-specific roughness priors,
+camera-artifact cleanup and measured 16-bit height/Blender displacement maps.
+`package-finished-udim` exports a separate UV-remapped 1001+ tile package.
+These private artist-review candidates cannot guarantee measured reflectance
+or recover lost surface geometry; see [dense statue reconstruction](docs/DENSE_STATUE_RECONSTRUCTION.md#advanced-photographic-material-finishing).
 Very dark atlases can optionally use bounded `--auto-exposure-luma 115`.
 Add `--uv-aware-stats` to measure brightness and missing dark texels only on
 real textured OBJ faces, with a private red-marked UV coverage preview.

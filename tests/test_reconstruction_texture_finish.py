@@ -4,6 +4,9 @@ import contextlib
 import hashlib
 import io
 import json
+import os
+import struct
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -13,10 +16,14 @@ from PIL import Image, ImageDraw
 
 from kumiki_blender.cli import main
 from kumiki_blender.reconstruction.blender_dense import plan_dense_blender_review
+from kumiki_blender.reconstruction.photo_uv_projection import (
+    _Triangle, _project_view, project_registered_photos_to_uv,
+)
 from kumiki_blender.reconstruction.references import ReferenceError
 from kumiki_blender.reconstruction.texture_finish import (
     TextureFinishSettings, _atlas_correction, _sample_luminance, finish_dense_textures,
 )
+from kumiki_blender.reconstruction.udim import package_finished_udim
 from kumiki_blender.reconstruction.uv_seams import _solve_page_offsets
 from kumiki_blender.reconstruction.uv_gutters import pad_uv_gutters
 from kumiki_blender.reconstruction.uv_coverage import rasterize_uv_coverage
@@ -90,6 +97,520 @@ class TextureFinishTests(unittest.TestCase):
         with self.assertRaisesRegex(ReferenceError, "Texture atlas changed"):
             plan_dense_blender_review(self.dense, self.root / "blender", textured=True,
                                       texture_finish=output)
+
+    def test_guided_surface_recipe_exports_hash_pinned_pbr_and_16bit_height(self):
+        region = self.root / "stone-mask.png"
+        guidance = self.root / "lighting.png"
+        height = self.root / "height.png"
+        Image.new("L", (48, 32), 255).save(region)
+        Image.new("L", (48, 32), 128).save(guidance)
+        Image.new("I;16", (48, 32), 32768).save(height)
+        recipe = self.root / "surface.json"
+        recipe.write_text(json.dumps({
+            "schema_version": 1,
+            "atlases": {self.atlas.name: {
+                "regions": [{"id": "limestone", "mask": region.name, "roughness": 0.88}],
+                "illumination_map": guidance.name,
+                "height_map": height.name,
+                "displacement_scale_m": 0.012,
+            }},
+        }))
+        original = self.atlas.read_bytes()
+        output = self.root / "advanced-finished"
+        report = finish_dense_textures(self.dense, output, TextureFinishSettings(
+            surface_recipe=str(recipe), surface_delight_strength=0.6))
+        self.assertEqual(self.atlas.read_bytes(), original)
+        self.assertEqual(report["surface_recipe_sha256"], self._digest(recipe))
+        entry = report["surface_maps"][0]
+        self.assertEqual(entry["atlas"], self.atlas.name)
+        self.assertEqual(entry["displacement_scale_m"], 0.012)
+        self.assertEqual(entry["quality"]["roughness_source"], "material-priors-not-measured")
+        self.assertEqual(self._digest(output / entry["roughness"]["path"]),
+                         entry["roughness"]["sha256"])
+        self.assertEqual((output / entry["height"]["path"]).read_bytes(), height.read_bytes())
+        plan = plan_dense_blender_review(self.dense, self.root / "advanced-render",
+                                         textured=True, texture_finish=output)
+        self.assertEqual(plan["surface_maps"][0]["roughness"]["path"],
+                         str(output / entry["roughness"]["path"]))
+        report_path = output / "texture-finish-report.json"
+        original_report = report_path.read_text()
+        altered = json.loads(original_report)
+        altered["surface_maps"].append(dict(altered["surface_maps"][0]))
+        report_path.write_text(json.dumps(altered))
+        with self.assertRaisesRegex(ReferenceError, "duplicate|exactly one"):
+            plan_dense_blender_review(self.dense, self.root / "duplicate-render",
+                                      textured=True, texture_finish=output)
+        altered["surface_maps"] = []
+        report_path.write_text(json.dumps(altered))
+        with self.assertRaisesRegex(ReferenceError, "missing|exactly one"):
+            plan_dense_blender_review(self.dense, self.root / "missing-render",
+                                      textured=True, texture_finish=output)
+        report_path.write_text(original_report)
+        (output / entry["roughness"]["path"]).write_bytes(b"tampered")
+        with self.assertRaisesRegex(ReferenceError, "Surface map changed"):
+            plan_dense_blender_review(self.dense, self.root / "tampered-render",
+                                      textured=True, texture_finish=output)
+
+    def test_invalid_surface_recipe_fails_before_output_is_created(self):
+        region = self.root / "region-bad.png"
+        Image.new("L", (2, 2), 255).save(region)
+        recipe = self.root / "bad-surface.json"
+        recipe.write_text(json.dumps({"schema_version": 1, "atlases": {
+            self.atlas.name: {"regions": [{"id": "stone", "mask": region.name,
+                                            "roughness": .8}]}}}))
+        destination = self.root / "invalid-finished"
+        with self.assertRaisesRegex(ReferenceError, "dimensions"):
+            finish_dense_textures(self.dense, destination,
+                                  TextureFinishSettings(surface_recipe=str(recipe)))
+        self.assertFalse(destination.exists())
+
+    def test_cli_multiview_uv_observation_fusion_is_opt_in_and_pinned(self):
+        mask = self.root / "fusion-mask.png"
+        Image.new("L", (48, 32), 255).save(mask)
+        observations = []
+        for index in range(3):
+            view = self.root / f"fusion-view-{index}.png"
+            confidence = self.root / f"fusion-confidence-{index}.png"
+            with Image.open(self.atlas) as source:
+                copy = source.convert("RGB")
+            if index == 0:
+                for y in range(10, 20):
+                    for x in range(20, 30):
+                        copy.putpixel((x, y), (25, 35, 45))
+            copy.save(view)
+            Image.new("L", (48, 32), 255).save(confidence)
+            observations.append({"id": f"angle-{index}",
+                                 "photo": view.name, "confidence": confidence.name})
+        recipe = self.root / "fusion-surface.json"
+        recipe.write_text(json.dumps({"schema_version": 1, "atlases": {
+            self.atlas.name: {"regions": [{"id": "stone", "mask": mask.name,
+                                             "roughness": .9}],
+                              "observations": observations}}}))
+        original = self.atlas.read_bytes()
+        destination = self.root / "fusion-finished"
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(main(["finish-dense-textures", "--dense-revision", str(self.dense),
+                                   "--output", str(destination), "--surface-recipe", str(recipe),
+                                   "--surface-multiview-strength", "1",
+                                   "--surface-multiview-max-ev", "1.5"]), 0)
+        record = json.loads((destination / "texture-finish-report.json").read_text())
+        fusion = record["surface_maps"][0]["quality"]["multiview"]
+        self.assertEqual(fusion["view_count"], 3)
+        self.assertGreater(fusion["independently_covered_fraction"], .5)
+        self.assertEqual(fusion["method"],
+                         "UV-registered-photo-weighted-median / not-calibrated-reflectance")
+        self.assertEqual(self.atlas.read_bytes(), original)
+        plan = plan_dense_blender_review(self.dense, self.root / "fused-blender",
+                                         textured=True, texture_finish=destination)
+        self.assertEqual(len(plan["surface_maps"]), 1)
+        bad = self.root / "invalid-no-recipe"
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(main(["finish-dense-textures", "--dense-revision", str(self.dense),
+                                   "--output", str(bad),
+                                   "--surface-multiview-strength", "1"]), 2)
+        self.assertFalse(bad.exists())
+
+    def _prepare_registered_photo_projection(self):
+        source = self.root / "registered-sparse"
+        model = source / "undistorted/text-model"
+        model.mkdir(parents=True)
+        photos = source / "undistorted/images"
+        photos.mkdir()
+        (model / "cameras.txt").write_text("1 PINHOLE 128 128 90 90 64 64\n")
+        entries = []
+        poses = []
+        for index, center_x in enumerate((-0.15, 0.50, 1.15), start=1):
+            filename = f"registered-{index:02d}.jpg"
+            Image.new("RGB", (128, 128), (100 + index*5, 120, 140)).save(photos / filename)
+            entries.append({"filename": filename, "sha256": self._digest(photos / filename),
+                            "dimensions": [128, 128]})
+            # COLMAP world-to-camera R is diag(1,-1,-1). Blender matched-view
+            # orientation is identity: the camera looks along world -Z.
+            poses.append(f"{index} 0 1 0 0 {-center_x} 0.5 2 1 {filename}\n\n")
+        (model / "images.txt").write_text("".join(poses))
+        (source / "undistorted-reference-index.json").write_text(json.dumps({"images": entries}))
+        (source / "reconstruction-report.json").write_text(json.dumps({
+            "status": "candidate / visual-review-required", "registered_images": 3}))
+        self.obj.write_text(
+            f"mtllib {self.mtl.name}\n"
+            "v 0 0 0\nv 1 0 0\nv 1 1 0\nv 0 1 0\n"
+            "vt 0 0\nvt 1 0\nvt 1 1\nvt 0 1\n"
+            "usemtl m0\nf 1/1 2/2 3/3\nf 1/1 3/3 4/4\n")
+        record_path = self.dense / "dense-report.json"
+        record = json.loads(record_path.read_text())
+        record["source_revision"] = str(source)
+        record["textured_obj"]["sha256"] = self._digest(self.obj)
+        record_path.write_text(json.dumps(record))
+        return photos
+
+    def test_registered_photo_projection_cli_generates_fusable_and_pinned_uv_observations(self):
+        photos = self._prepare_registered_photo_projection()
+        target = self.root / "projected-views"
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(main(["project-registered-uv-views", "--dense-revision", str(self.dense),
+                                   "--output", str(target), "--views", "3",
+                                   "--atlas-side", "128", "--camera-side", "128",
+                                   "--max-triangles", "100"]), 0)
+        report = json.loads((target / "uv-projection-report.json").read_text())
+        self.assertFalse(report["distribution_allowed"])
+        self.assertEqual(report["triangle_count"], 2)
+        views = report["atlases"][self.atlas.name]["views"]
+        self.assertEqual(len(views), 3)
+        self.assertTrue(all(view["visible_fraction"] > .45 for view in views))
+        self.assertTrue(all(self._digest(target / view["photo"]["path"])
+                            == view["photo"]["sha256"] for view in views))
+        with Image.open(target / views[0]["photo"]["path"]) as observed:
+            self.assertAlmostEqual(observed.getpixel((24, 16))[0], 105, delta=3)
+        recipe = target / "surface-recipe.example.json"
+        finished = self.root / "finished-projected-views"
+        result = finish_dense_textures(self.dense, finished,
+                                       TextureFinishSettings(surface_recipe=str(recipe),
+                                                             surface_multiview_strength=1))
+        self.assertEqual(result["surface_maps"][0]["quality"]["multiview"]["view_count"], 3)
+        self.assertGreater(result["surface_maps"][0]["quality"]["multiview"]
+                           ["independently_covered_fraction"], .4)
+        self.assertEqual(self._digest(photos / "registered-01.jpg"),
+                         views[0]["source_photo_sha256"])
+
+    def test_registered_photo_projection_refuses_changed_camera_evidence_before_output(self):
+        photos = self._prepare_registered_photo_projection()
+        (photos / "registered-02.jpg").write_bytes(b"tampered")
+        output = self.root / "tampered-projection"
+        with self.assertRaisesRegex(ReferenceError, "Rectified photo changed"):
+            project_registered_photos_to_uv(self.dense, output, atlas_side=128,
+                                           camera_side=128, max_triangles=100)
+        self.assertFalse(output.exists())
+
+    def test_registered_photo_projection_rejects_hash_pinned_undecodable_photo(self):
+        photos = self._prepare_registered_photo_projection()
+        photo = photos / "registered-03.jpg"
+        photo.write_bytes(b"not actually a JPEG")
+        index = photos.parent.parent / "undistorted-reference-index.json"
+        entries = json.loads(index.read_text())
+        entries["images"][2]["sha256"] = self._digest(photo)
+        index.write_text(json.dumps(entries))
+        output = self.root / "invalid-photo-projection"
+        with self.assertRaisesRegex(ReferenceError, "not a decodable image"):
+            project_registered_photos_to_uv(self.dense, output,
+                                           atlas_side=128, camera_side=128,
+                                           max_triangles=100)
+        self.assertFalse(output.exists())
+
+    def test_registered_photo_projection_rejects_malformed_obj_numbers(self):
+        self._prepare_registered_photo_projection()
+        self.obj.write_text(self.obj.read_text().replace("v 0 0 0", "v bad 0 0"))
+        report_path = self.dense / "dense-report.json"
+        report = json.loads(report_path.read_text())
+        report["textured_obj"]["sha256"] = self._digest(self.obj)
+        report_path.write_text(json.dumps(report))
+        output = self.root / "invalid-obj-projection"
+        with self.assertRaisesRegex(ReferenceError, "invalid vertices"):
+            project_registered_photos_to_uv(self.dense, output,
+                                           atlas_side=128, camera_side=128,
+                                           max_triangles=100)
+        self.assertFalse(output.exists())
+
+    def test_registered_photo_projection_will_not_write_inside_source_photo_revision(self):
+        photos = self._prepare_registered_photo_projection()
+        output = photos.parent.parent / "generated-observations"
+        with self.assertRaisesRegex(ReferenceError, "outside both source revisions"):
+            project_registered_photos_to_uv(self.dense, output, atlas_side=128,
+                                           camera_side=128, max_triangles=100)
+        self.assertFalse(output.exists())
+
+    def test_camera_depth_rejects_occluded_uv_face(self):
+        import numpy as np
+
+        camera = {"location_colmap": (0.5, 0.5, 2),
+                  "rotation_3x3": [[1, 0, 0], [0, 1, 0], [0, 0, 1]],
+                  "intrinsics": {"width": 128, "height": 128,
+                                 "fx_px": 90, "fy_px": 90, "cx_px": 64, "cy_px": 64},
+                  "source_photo_path": str(self.root / "depth-photo.png")}
+        Image.new("RGB", (128, 128), (210, 120, 80)).save(camera["source_photo_path"])
+        # Identical projected surfaces at two depths but disjoint UV islands.
+        # The front triangle owns the left half; the back triangle cannot
+        # contribute visible evidence to the right half.
+        triangles = [
+            _Triangle("atlas.png", ((0, 0, .3), (1, 0, .3), (0, 1, .3)),
+                      ((0, 0), (.5, 0), (0, 1))),
+            _Triangle("atlas.png", ((0, 0, 0), (1, 0, 0), (0, 1, 0)),
+                      ((.5, 0), (1, 0), (.5, 1))),
+        ]
+        result, counts = _project_view(triangles, camera, {"atlas.png": (128, 128)},
+                                       camera_side=128, np=np, Image=Image)
+        mask = result["atlas.png"][1]
+        self.assertGreater(int(np.count_nonzero(mask[:, :64])), 100)
+        self.assertEqual(int(np.count_nonzero(mask[:, 64:])), 0)
+        self.assertGreater(counts["occluded_samples"], 100)
+
+    @unittest.skipUnless(os.environ.get("KUMIKI_BLENDER_EXECUTABLE"), "requires real Blender 4.2+")
+    def test_real_blender_packs_roughness_and_height_and_exports_glb(self):
+        region = self.root / "render-region.png"
+        height = self.root / "render-height.png"
+        Image.new("L", (48, 32), 255).save(region)
+        Image.new("I;16", (48, 32), 32768).save(height)
+        recipe = self.root / "render-surface.json"
+        recipe.write_text(json.dumps({"schema_version": 1, "atlases": {
+            self.atlas.name: {
+                "regions": [{"id": "limestone", "mask": region.name, "roughness": .84}],
+                "height_map": height.name, "displacement_scale_m": .008,
+            }}}))
+        finished = self.root / "render-finish"
+        finish_dense_textures(self.dense, finished,
+                              TextureFinishSettings(surface_recipe=str(recipe)))
+        render = self.root / "render-output"
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(main(["render-dense-blender-review",
+                                   "--dense-revision", str(self.dense),
+                                   "--texture-finish", str(finished),
+                                   "--output", str(render), "--textured", "--no-renders",
+                                   "--blender", os.environ["KUMIKI_BLENDER_EXECUTABLE"]]), 0)
+        report = json.loads((render / "blender-review-report.json").read_text())
+        self.assertTrue(report["status"].startswith("private-Blender-mesh-candidate"))
+        glb = render / report["review_glb"]
+        self.assertTrue(glb.is_file())
+        with glb.open("rb") as stream:
+            self.assertEqual(stream.read(4), b"glTF")
+            stream.read(8)
+            length, kind = struct.unpack("<I4s", stream.read(8))
+            self.assertEqual(kind, b"JSON")
+            gltf = json.loads(stream.read(length))
+        materials = gltf["materials"]
+        self.assertTrue(any("metallicRoughnessTexture" in m.get("pbrMetallicRoughness", {})
+                            for m in materials))
+        self.assertGreaterEqual(len(gltf.get("images", [])), 2)
+        # Inspect the actual editable .blend as well: GLB cannot carry height
+        # displacement, but Cycles must retain the packed 16-bit source.
+        expression = (
+            "import bpy; "
+            "m = next(m for m in bpy.data.materials if m.use_nodes); "
+            "nodes = list(m.node_tree.nodes); "
+            "shader = next(n for n in nodes if n.type == 'BSDF_PRINCIPLED'); "
+            "output = next(n for n in nodes if n.type == 'OUTPUT_MATERIAL'); "
+            "assert shader.inputs['Roughness'].is_linked; "
+            "assert output.inputs['Displacement'].is_linked; "
+            "assert m.displacement_method == 'BOTH'; "
+            "assert len([n for n in nodes if n.type == 'TEX_IMAGE' and "
+            "n.image and n.image.packed_file]) >= 3"
+        )
+        verified = subprocess.run([os.environ["KUMIKI_BLENDER_EXECUTABLE"],
+                                   "--background", str(render / report["review_blend"]),
+                                   "--python-exit-code", "1", "--python-expr", expression],
+                                  capture_output=True, text=True, check=False)
+        self.assertEqual(verified.returncode, 0, verified.stdout + verified.stderr)
+
+    def test_udim_package_remaps_shared_uvs_and_keeps_sources_unchanged(self):
+        second = self.atlas.with_name("another-page.png")
+        Image.new("RGB", (48, 32), (110, 110, 110)).save(second)
+        self.mtl.write_text(self.mtl.read_text() + f"newmtl m1\nmap_Kd {second.name}\n")
+        self.obj.write_text(self.obj.read_text() + "usemtl m1\nf 1/1 2/2 3/3\n")
+        record_path = self.dense / "dense-report.json"
+        record = json.loads(record_path.read_text())
+        record["textured_obj"]["sha256"] = self._digest(self.obj)
+        record["texture_atlases"].append({
+            "path": str(second.relative_to(self.dense)), "sha256": self._digest(second)})
+        record_path.write_text(json.dumps(record))
+        src_before = (self.obj.read_bytes(), self.mtl.read_bytes(), second.read_bytes())
+        revision = self.root / "udim-finish"
+        finish_dense_textures(self.dense, revision, TextureFinishSettings())
+        destination = self.root / "udim-package"
+        outcome = package_finished_udim(revision, destination)
+        self.assertEqual([item["tile"] for item in outcome["tiles"]], [1001, 1002])
+        self.assertEqual(outcome["uv_remap"]["remapped_faces"], 2)
+        self.assertIn("<UDIM>", (destination / "udim.mtl").read_text())
+        self.assertIn("vt 1", (destination / "udim.obj").read_text())
+        self.assertTrue((destination / "albedo.1001.png").is_file())
+        self.assertTrue((destination / "albedo.1002.png").is_file())
+        self.assertEqual((self.obj.read_bytes(), self.mtl.read_bytes(), second.read_bytes()),
+                         src_before)
+
+    @unittest.skipUnless(os.environ.get("KUMIKI_BLENDER_EXECUTABLE"), "requires real Blender 4.2+")
+    def test_udim_package_opens_as_tiled_material_in_blender(self):
+        second = self._set_up_cross_page_seam()
+        recipe = self.root / "udim-surface.json"
+        atlases = {}
+        for index, path in enumerate((self.atlas, second)):
+            mask = self.root / f"udim-mask-{index}.png"
+            height = self.root / f"udim-height-{index}.png"
+            Image.new("L", (96, 96), 255).save(mask)
+            Image.new("I;16", (96, 96), 32768).save(height)
+            atlases[path.name] = {
+                "regions": [{"id": "stone", "mask": mask.name, "roughness": .84}],
+                "height_map": height.name,
+                "displacement_scale_m": .004 if index == 0 else .012,
+            }
+        recipe.write_text(json.dumps({"schema_version": 1, "atlases": atlases}))
+        finished = self.root / "udim-blender-finish"
+        finish_dense_textures(self.dense, finished,
+                              TextureFinishSettings(surface_recipe=str(recipe)))
+        target = self.root / "udim-blender-package"
+        package_finished_udim(finished, target)
+        expression = (
+            "import bpy, sys; "
+            f"sys.path.insert(0, {str(Path(__file__).resolve().parents[1] / 'src')!r}); "
+            "from kumiki_blender.reconstruction.blender_udim import import_finished_udim_package; "
+            f"import_finished_udim_package(bpy, {str(target)!r}); "
+            "images = [n.image for m in bpy.data.materials if m.use_nodes "
+            "for n in m.node_tree.nodes if n.type == 'TEX_IMAGE' and n.image]; "
+            "assert images, 'UDIM OBJ lost diffuse images'; "
+            "assert len(set(i.name for i in images)) == 3, 'UDIM PBR/height maps missing'; "
+            "assert all(i.source == 'TILED' and len(i.tiles) >= 2 for i in images), "
+            "'UDIM map not configured as a tiled image'; "
+            "assert all(i.has_data and tuple(i.size) == (96, 96) for i in images), "
+            "'UDIM image tile pixel data was not loaded'; "
+            "scales = sorted(n.inputs['Scale'].default_value for m in bpy.data.materials "
+            "if m.use_nodes for n in m.node_tree.nodes if n.type == 'DISPLACEMENT'); "
+            "assert len(scales) == 2 and abs(scales[0] - .004) < 1e-6 "
+            "and abs(scales[1] - .012) < 1e-6, 'UDIM displacement scale lost'"
+        )
+        process = subprocess.run([os.environ["KUMIKI_BLENDER_EXECUTABLE"],
+                                  "--background", "--factory-startup",
+                                  "--python-exit-code", "1", "--python-expr", expression],
+                                 capture_output=True, text=True, check=False)
+        self.assertEqual(process.returncode, 0, process.stdout + process.stderr)
+
+    def test_blender_udim_rejects_tampered_tiles_and_duplicate_assignments(self):
+        from kumiki_blender.reconstruction.blender_udim import _validated_package
+
+        self._set_up_cross_page_seam()
+        finished = self.root / "tamper-finish"
+        finish_dense_textures(self.dense, finished, TextureFinishSettings())
+        target = self.root / "tamper-udim"
+        package_finished_udim(finished, target)
+        report_file = target / "udim-report.json"
+        original_report = report_file.read_text()
+        report = json.loads(original_report)
+        report["tiles"][1]["tile"] = 1001
+        report_file.write_text(json.dumps(report))
+        with self.assertRaisesRegex(ReferenceError, "unique"):
+            _validated_package(target)
+        report_file.write_text(original_report)
+        (target / "albedo.1001.png").write_bytes(b"tampered")
+        with self.assertRaisesRegex(ReferenceError, "changed"):
+            _validated_package(target)
+
+    @unittest.skipUnless(os.environ.get("KUMIKI_BLENDER_EXECUTABLE"), "requires real Blender 4.2+")
+    def test_real_udim_relighting_gallery_has_fixed_camera_opposing_light_renders(self):
+        self._set_up_cross_page_seam()
+        source = self.root / "matched-sparse"
+        model = source / "undistorted/text-model"
+        model.mkdir(parents=True)
+        photos = source / "undistorted/images"
+        photos.mkdir()
+        (model / "cameras.txt").write_text("1 PINHOLE 128 96 115 115 64 48\n")
+        (model / "images.txt").write_text("".join(
+            f"{index + 1} 1 0 0 0 {-5 + index * 2} 0 -10 1 frame-{index}.jpg\n\n"
+            for index in range(2)))
+        images = []
+        for index in range(2):
+            name = f"frame-{index}.jpg"
+            Image.new("RGB", (128, 96), (120 + index * 20, 130, 140)).save(photos / name)
+            images.append({"filename": name, "sha256": self._digest(photos / name),
+                           "dimensions": [128, 96]})
+        (source / "undistorted-reference-index.json").write_text(json.dumps({"images": images}))
+        (source / "reconstruction-report.json").write_text(json.dumps({
+            "status": "candidate / visual-review-required", "registered_images": 2}))
+        dense_file = self.dense / "dense-report.json"
+        dense_record = json.loads(dense_file.read_text())
+        dense_record["source_revision"] = str(source)
+        dense_file.write_text(json.dumps(dense_record))
+        finished = self.root / "relight-finish"
+        finish_dense_textures(self.dense, finished, TextureFinishSettings())
+        package = self.root / "relight-tiles"
+        package_finished_udim(finished, package)
+        result = self.root / "relighting-review"
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(main(["render-udim-material-review", "--udim-package", str(package),
+                                   "--output", str(result), "--resolution", "96", "--samples", "4",
+                                   "--matched-views", "2", "--matched-resolution-percent", "25",
+                                   "--blender", os.environ["KUMIKI_BLENDER_EXECUTABLE"]]), 0)
+        report = json.loads((result / "material-review-report.json").read_text())
+        self.assertFalse(report["distribution_allowed"])
+        self.assertFalse(report["photo_fidelity_verified"])
+        self.assertEqual(len(report["comparison"]), 6)
+        self.assertEqual(report["azimuths_deg"], [0, 55, 110])
+        self.assertIn("key-left", (result / report["gallery"]).read_text())
+        self.assertTrue((result / report["blend"]["path"]).is_file())
+        self.assertEqual(len(report["photo_matched_comparison"]), 2)
+        self.assertTrue((result / report["matched_gallery"]).is_file())
+        for item in report["photo_matched_comparison"]:
+            self.assertEqual(len(item["rendered_lights"]), 2)
+            self.assertEqual(self._digest(result / item["reference_photo"]),
+                             item["reference_sha256"])
+            for shot in item["rendered_lights"]:
+                self.assertEqual(self._digest(result / shot["path"]), shot["sha256"])
+                with Image.open(result / shot["path"]) as image:
+                    self.assertEqual(image.size, (32, 24))
+        for item in report["comparison"]:
+            path = result / item["path"]
+            self.assertEqual(self._digest(path), item["sha256"])
+            with Image.open(path) as image:
+                self.assertEqual(image.size, (96, 96))
+        left = next(item for item in report["comparison"] if item["azimuth_deg"] == 55
+                    and item["lighting"] == "key-left")
+        right = next(item for item in report["comparison"] if item["azimuth_deg"] == 55
+                     and item["lighting"] == "key-right")
+        self.assertNotEqual(left["sha256"], right["sha256"])
+        scene_only = self.root / "relighting-scene-only"
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(main(["render-udim-material-review", "--udim-package", str(package),
+                                   "--output", str(scene_only), "--no-renders",
+                                   "--blender", os.environ["KUMIKI_BLENDER_EXECUTABLE"]]), 0)
+        solo = json.loads((scene_only / "material-review-report.json").read_text())
+        self.assertEqual(solo["comparison"], [])
+        self.assertIsNone(solo["gallery"])
+        self.assertTrue((scene_only / solo["blend"]["path"]).is_file())
+        first_photo = photos / "frame-0.jpg"
+        original_photo_bytes = first_photo.read_bytes()
+        first_photo.write_bytes(b"changed registered photograph")
+        broken_output = self.root / "relighting-broken-source"
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(main(["render-udim-material-review", "--udim-package", str(package),
+                                   "--output", str(broken_output), "--matched-views", "2"]), 2)
+        self.assertFalse(broken_output.exists())
+        first_photo.write_bytes(original_photo_bytes)
+        modified_dense = json.loads(dense_file.read_text())
+        modified_dense["source_revision"] = str(source) + "/changed"
+        dense_file.write_text(json.dumps(modified_dense))
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(main(["render-udim-material-review", "--udim-package", str(package),
+                                   "--output", str(broken_output), "--matched-views", "2"]), 2)
+        self.assertFalse(broken_output.exists())
+
+    def test_udim_relighting_validates_before_output_directory(self):
+        self._set_up_cross_page_seam()
+        finished = self.root / "bad-review-finish"
+        finish_dense_textures(self.dense, finished, TextureFinishSettings())
+        package = self.root / "bad-review-package"
+        package_finished_udim(finished, package)
+        output = self.root / "bad-review"
+        with contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(main(["render-udim-material-review", "--udim-package", str(package),
+                                   "--output", str(output), "--resolution", "16"]), 2)
+        self.assertFalse(output.exists())
+
+    def test_unpinned_mtl_resource_directives_cannot_reach_blender(self):
+        self.mtl.write_text(self.mtl.read_text() + "bump ../../untrusted-normal.png\n")
+        with self.assertRaisesRegex(ReferenceError, "unsupported or unpinned"):
+            plan_dense_blender_review(self.dense, self.root / "unsafe-review", textured=True)
+        self.assertFalse((self.root / "unsafe-review").exists())
+
+    def test_cli_surface_and_udim_commands(self):
+        mask = self.root / "cli-mask.png"
+        Image.new("L", (48, 32), 255).save(mask)
+        recipe = self.root / "cli-surface.json"
+        recipe.write_text(json.dumps({"schema_version": 1, "atlases": {
+            self.atlas.name: {"regions": [{"id": "stone", "mask": mask.name,
+                                           "roughness": 0.9}]}}}))
+        finished = self.root / "cli-surface-finish"
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(main(["finish-dense-textures", "--dense-revision", str(self.dense),
+                                   "--output", str(finished), "--surface-recipe", str(recipe),
+                                   "--surface-delight-strength", "0.45",
+                                   "--surface-low-frequency-radius", "48"]), 0)
+            self.assertEqual(main(["package-finished-udim", "--texture-finish", str(finished),
+                                   "--output", str(self.root / "cli-udim")]), 0)
+        self.assertTrue((self.root / "cli-udim" / "roughness.1001.png").is_file())
 
     def test_source_mutations_and_settings_are_rejected_before_output(self):
         for settings in (TextureFinishSettings(gamma=0),
@@ -555,6 +1076,36 @@ class TextureFinishTests(unittest.TestCase):
             self.assertEqual(after.getpixel((15, 30)), after.getpixel((16, 30)))
             self.assertGreater(after.getpixel((15, 30))[0], 90)
         self.assertGreater(boosted["texture_atlases"][0]["uv_gutter_padding"]["padded_pixels"], 0)
+
+
+    def test_slanted_subpixel_uv_edge_is_not_overwritten(self):
+        # Rasterized integer vertices omit some texels intersected by a
+        # subpixel slanted edge. Preserve them even when dark/transparent.
+        self.obj.write_text(
+            f"mtllib {self.mtl.name}\n"
+            "v 0 0 0\nv 1 0 0\nv 0 1 0\n"
+            f"vt {20.49 / 63} {1 - 20.49 / 63}\n"
+            f"vt {60.49 / 63} {1 - 20.49 / 63}\n"
+            f"vt {20.49 / 63} {1 - 60.49 / 63}\n"
+            "usemtl m0\nf 1/1 2/2 3/3\n"
+        )
+        original = Image.new("RGB", (64, 64), (0, 0, 0))
+        ImageDraw.Draw(original).polygon(
+            [(20, 20), (60, 20), (20, 60)], fill=(90, 110, 140))
+        original.putpixel((40, 41), (0, 0, 0))
+        sizes = {self.atlas.name: original.size}
+        coarse, _ = rasterize_uv_coverage(self.obj, self.mtl, sizes)
+        precise, _ = rasterize_uv_coverage(
+            self.obj, self.mtl, sizes, conservative=True)
+        self.assertEqual(coarse[self.atlas.name].getpixel((40, 41)), 0)
+        self.assertEqual(precise[self.atlas.name].getpixel((40, 41)), 255)
+        # A genuinely outside texel to the left is still safe to pad.
+        self.assertEqual(precise[self.atlas.name].getpixel((15, 30)), 0)
+        corrected = original.copy()
+        stats = pad_uv_gutters(
+            corrected, original, precise[self.atlas.name], radius=4, protect_black=12)
+        self.assertEqual(corrected.getpixel((40, 41)), (0, 0, 0))
+        self.assertGreater(stats["padded_pixels"], 0)
 
     def test_transparent_uv_gutter_padding_preserves_inside_holes_and_outside_alpha(self):
         self._set_up_square_uv_gutter(transparent=True)
