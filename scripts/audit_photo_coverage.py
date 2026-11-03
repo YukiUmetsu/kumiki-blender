@@ -813,8 +813,9 @@ def _contact_sheet(revision: Path, report: dict, path: Path) -> None:
         draw.text((x+10, y+207), item["assessment"][:36],
                   fill=palette.get(item["assessment"], (220, 220, 220)))
         view = item["estimated_view"]
-        detail = (f"az {view['relative_azimuth_deg']:+.0f} el {view['relative_elevation_deg']:+.0f}"
-                  if view else "angle unknown")
+        detail = ((f"{'rel ' if report['angle_reference']['kind'] != 'annotated-front' else ''}"
+                   f"az {view['relative_azimuth_deg']:+.0f} el {view['relative_elevation_deg']:+.0f}")
+                  if view else "angle unmeasured")
         pnp = item["pnp_support"]
         detail += f" | {pnp['conservative_one_to_one_2d3d']} 3D candidates" if pnp else ""
         visual = item["vision_estimate"]
