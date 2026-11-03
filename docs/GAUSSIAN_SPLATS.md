@@ -99,6 +99,40 @@ REGISTRATION_PROFILE=high-recall MAX_IMAGE_SIZE=3200 \
   bash scripts/mac_splat_test.sh run ~/Pictures/statue-photos/sphinx sphinx
 ```
 
+#### Inspect actual verified image correspondences (no new SfM run)
+
+When photos all have strong match-graph edges but only a few camera poses
+register, the next step is **not** increasing SIFT or repeatedly removing
+photos. Inspect where the verified feature matches lie in the photos.
+
+```bash
+bash scripts/mac_splat_test.sh match-qa \
+  .review/mac-splat-smoke/splat-20261103T053355Z-11041 \
+  .review/mac-splat-smoke/cohorts-20261103T053322Z-10742/cohort-01/source-index.json
+```
+
+This creates a new `.review/mac-splat-smoke/match-qa-...` folder with:
+
+- `match-contact-sheet.jpg`: actual COLMAP verified 2D inlier
+  correspondences drawn between image pairs; prioritizes
+  registered-to-unregistered photo pairs, plus control examples
+- `match-qa.json`: image-space 4×4 grid coverage, inlier counts,
+  registration status and, with the optional `source-index.json`, the
+  original 26-photo staged IDs
+
+**Cohort photo IDs were renumbered by `--photos` intake.** Do not compare
+`photo-0007.png` in the 14-photo cohort with the same name in the 26-photo
+revision without using the source index.
+
+The visualization may reveal matches on pyramids, ground, tourists, photo
+cutout edges, or other background objects instead of the Sphinx.
+High match counts or broad image coverage do not prove useful parallax.
+If the matches mostly land on the monument but registration still fails,
+investigate camera intrinsics and seed-pair geometry; if they land on the
+background, use carefully reviewed foreground masks at **feature extraction**
+(not only OpenSplat training). Do not claim successful surface reconstruction
+from these diagnostic images.
+
 #### Split disconnected Sphinx photographs into independent registration cohorts
 
 For the 26-photo Sphinx set, the high-recall run registered 7 cameras in one
