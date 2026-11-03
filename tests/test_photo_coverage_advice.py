@@ -138,6 +138,80 @@ class PhotoCoverageAdviceTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "subject_type"):
                 advice.analyze(root, subject_type="unknown")
 
+    def test_filename_hints_are_unverified_and_not_physical_camera_angles(self):
+        self.assertEqual(advice._filename_view_hint("sphinx-face-front.webp")["view"], "front")
+        self.assertEqual(advice._filename_view_hint("sphinx-face-front.webp")["framing"],
+                         "face detail")
+        self.assertEqual(advice._filename_view_hint("sphinx-left-back.jpg")["view"],
+                         "left rear three-quarter")
+        self.assertEqual(advice._filename_view_hint("sphinx-top-view.jpg")["view"],
+                         "overhead")
+        self.assertEqual(advice._filename_view_hint("Great-Sphinx-Side.jpg")["view"],
+                         "side, direction unknown")
+        self.assertIsNone(advice._filename_view_hint("photo-0011.png"))
+        self.assertIn("unverified",
+                      advice._filename_view_hint("sphinx-face-front.webp")["source"])
+
+    def test_unanchored_shots_never_claim_numeric_target_azimuths(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sparse = _fixture(root)
+            _add_camera_geometry(sparse)
+            report = advice.analyze(root)
+            self.assertEqual(report["angle_reference"]["kind"],
+                             "arbitrary-reference-camera")
+            self.assertTrue(report["recommended_photos"])
+            self.assertTrue(all(shot["target_azimuth_deg"] is None
+                                for shot in report["recommended_photos"]))
+            self.assertTrue(all(shot["target_elevation_deg"] is None
+                                for shot in report["recommended_photos"]))
+            self.assertIn("Numeric target azimuths would be misleading",
+                          report["recommended_photos"][0]["reason"])
+
+    def test_existing_photo_recovery_priorities_and_specific_bridge_shots(self):
+        images = [
+            {"original_filename": "face-near.jpg", "assessment": "recover-first",
+             "pnp_support": {
+                 "conservative_one_to_one_2d3d": 75,
+                 "one_to_one_4x4_image_coverage": 0.25,
+                 "registered_neighbor_details": [{
+                     "original_filename": "right-profile.jpg",
+                     "inliers_touching_existing_3d_tracks": 49,
+                 }]},
+             "filename_view_hint": None},
+            {"original_filename": "sphinx-face10.jpg",
+             "assessment": "needs-overlap-bridge",
+             "pnp_support": {
+                 "conservative_one_to_one_2d3d": 93,
+                 "one_to_one_4x4_image_coverage": 0.0625,
+                 "registered_neighbor_details": [{
+                     "original_filename": "right-profile.jpg",
+                     "inliers_touching_existing_3d_tracks": 105,
+                 }]},
+             "filename_view_hint": {"view": "unknown"}},
+            {"original_filename": "sphinx-face-front.webp",
+             "assessment": "low-current-value", "pnp_support": None,
+             "filename_view_hint": advice._filename_view_hint("sphinx-face-front.webp")},
+            {"original_filename": "sphinx-top-view.jpg",
+             "assessment": "low-current-value", "pnp_support": None,
+             "filename_view_hint": advice._filename_view_hint("sphinx-top-view.jpg")},
+            {"original_filename": "sphinx-face-left.jpg",
+             "assessment": "keep-separate-model", "pnp_support": None,
+             "filename_view_hint": advice._filename_view_hint("sphinx-face-left.jpg")},
+        ]
+        priorities = advice._photo_priorities(images)
+        self.assertEqual(priorities[0]["filename"], "face-near.jpg")
+        self.assertEqual(priorities[0]["kind"], "try-registration-first")
+        self.assertEqual(priorities[1]["best_registered_bridge_photo"],
+                         "right-profile.jpg")
+        self.assertEqual(priorities[2]["kind"], "connect-separate-sparse-model")
+        shots = advice._bridge_shots(images, subject_type="statue")
+        self.assertEqual(shots[0]["target_existing_photo"], "sphinx-face10.jpg")
+        self.assertEqual(shots[0]["registered_reference_photo"], "right-profile.jpg")
+        self.assertIsNone(shots[0]["target_azimuth_deg"])
+        self.assertTrue(any("front" in shot["view"] for shot in shots))
+        self.assertTrue(any("overhead" in shot["view"] for shot in shots))
+
     def test_near_duplicate_camera_requires_no_critical_tracks(self):
         photo = {"imported": True, "keypoints": 1000, "strong_neighbors": 4}
         contribution = {
