@@ -32,7 +32,10 @@ def validate_foreground_pipeline(reconstruction: Path, mask_revision: Path,
     masks = _mask_source(reconstruction, target, mask_revision, filenames)
     audit_file = audit_revision / "mask-consistency-report.json"
     _check_regular(audit_file, audit_revision)
-    audit = _json(audit_file)
+    # A 26+ camera audit can contain thousands of bounded per-feature review
+    # markers and exceed the normal 1 MiB reconstruction metadata limit.
+    # Keep that default for all other evidence; only this audit gets 16 MiB.
+    audit = _json(audit_file, max_bytes=16 * 1024 * 1024)
     if (audit.get("status") != "candidate / multi-view-mask-review-required" or
             audit.get("source_revision") != str(reconstruction) or
             audit.get("rectified_mask_source") != str(mask_revision / "masks") or
