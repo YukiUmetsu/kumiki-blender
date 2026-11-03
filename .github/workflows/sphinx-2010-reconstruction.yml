@@ -1,0 +1,54 @@
+name: Sphinx 2010 Commons photogrammetry experiment
+
+# One-off, source-grounded experiment on this feature branch. Does not run
+# on ordinary PRs or on main, and does not publish fabricated monument GLBs.
+on:
+  push:
+    branches:
+      - feat/splat-registration-diagnostics
+    paths:
+      - .github/workflows/sphinx-2010-reconstruction.yml
+  workflow_dispatch:
+
+jobs:
+  reconstruct:
+    if: github.repository == 'YukiUmetsu/kumiki-blender'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install CPU photogrammetry and point-cloud export dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e '.[photogrammetry]' 'trimesh>=4,<5' 'numpy>=1.26,<3'
+      - name: Download verified Commons originals and attempt PyCOLMAP SfM
+        env:
+          PYTHONPATH: src
+          OMP_NUM_THREADS: '2'
+          OPENBLAS_NUM_THREADS: '2'
+        run: |
+          python scripts/experiment_sphinx_commons_2010.py \
+            --output .review/sphinx-2010-reconstruction \
+            --profile high-recall \
+            --max-image-size 2400
+      - name: Upload camera and sparse-point evidence (no source photos)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sphinx-2010-sfm-evidence
+          if-no-files-found: warn
+          retention-days: 14
+          path: |
+            .review/sphinx-2010-reconstruction/result.json
+            .review/sphinx-2010-reconstruction/CREDITS.md
+            .review/sphinx-2010-reconstruction/source-metadata.json
+            .review/sphinx-2010-reconstruction/registration-graph.json
+            .review/sphinx-2010-reconstruction/registration-contact-sheet.jpg
+            .review/sphinx-2010-reconstruction/sparse-points.ply
+            .review/sphinx-2010-reconstruction/sparse-points.glb
+            .review/sphinx-2010-reconstruction/sparse-reconstruction/reconstruction-report.json
+            .review/sphinx-2010-reconstruction/sparse-reconstruction/logs/*.log
+            .review/sphinx-2010-reconstruction/sparse-reconstruction/text-models/**/*
