@@ -46,10 +46,16 @@ class SplatSettings:
     timeout_seconds: int = 14_400
     output_format: str = "ply"
     opensplat: str = "opensplat"
+    downscale_factor: float = 1.0
 
     def validate(self) -> "SplatSettings":
         if type(self.iterations) is not int or not 100 <= self.iterations <= 50_000:
             raise ReferenceError("OpenSplat iterations must be 100–50,000")
+        if (isinstance(self.downscale_factor, bool) or
+                not isinstance(self.downscale_factor, (int, float)) or
+                not math.isfinite(self.downscale_factor) or
+                not 1 <= self.downscale_factor <= 16):
+            raise ReferenceError("OpenSplat downscale must be finite and between 1 and 16")
         if type(self.timeout_seconds) is not int or not 1 <= self.timeout_seconds <= 86_400:
             raise ReferenceError("OpenSplat timeout must be 1–86,400 seconds")
         if self.output_format not in ("ply", "spz"):
@@ -204,7 +210,7 @@ def plan_splat_revision(reconstruction: str | Path, output: str | Path,
             "rectified_masks": dataset["rectified_masks"],
             "opensplat_executable": str(Path(shutil.which(settings.opensplat) or "").resolve()),
             "iterations": settings.iterations, "timeout_seconds": settings.timeout_seconds,
-            "output_format": settings.output_format,
+            "output_format": settings.output_format, "downscale_factor": settings.downscale_factor,
             "status": "preflight-only / GPU-training-and-review-required"}
 
 
@@ -303,6 +309,7 @@ def _train_in_revision(reconstruction: str | Path, target: Path,
     report = {"schema_version": 1, "asset_id": plan["asset_id"],
               "source_revision": plan["source_revision"], "settings": {
                   "iterations": settings.iterations,
+                  "downscale_factor": settings.downscale_factor,
                   "timeout_seconds": settings.timeout_seconds,
                   "output_format": settings.output_format,
                   "opensplat_executable": plan["opensplat_executable"]},
@@ -336,6 +343,8 @@ def _train_in_revision(reconstruction: str | Path, target: Path,
     artifact = target / f"splat.{settings.output_format}"
     command = [plan["opensplat_executable"], str(target / "dataset"),
                "-n", str(settings.iterations), "-o", str(artifact)]
+    if settings.downscale_factor != 1:
+        command.extend(["-d", str(settings.downscale_factor)])
     report["command"] = command
     try:
         with (logs / "opensplat.log").open("w", encoding="utf-8") as log:
