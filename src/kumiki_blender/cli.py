@@ -309,8 +309,13 @@ def main(argv: list[str] | None = None) -> int:
                                    metavar=("LEFT", "TOP", "RIGHT", "BOTTOM"))
     photo_mask_parser.add_argument("--max-side", type=int, default=1280)
     photo_mask_parser.add_argument("--iterations", type=int, default=5)
-    photo_mask_parser.add_argument("--segmenter", choices=("grabcut", "rembg"), default="grabcut",
-                                   help="CPU GrabCut (guided, offline) or optional semantic IS-Net model")
+    photo_mask_parser.add_argument("--segmenter", choices=("grabcut", "rembg", "sam2"), default="grabcut",
+                                   help="CPU GrabCut, semantic IS-Net, or offline guided SAM 2.1")
+    photo_mask_parser.add_argument("--sam2-checkpoint", type=Path,
+                                   help="Existing official SAM 2.1 weights (.pt); no automatic download")
+    photo_mask_parser.add_argument("--sam2-size", choices=("tiny", "small", "base_plus", "large"),
+                                   default="small")
+    photo_mask_parser.add_argument("--sam2-device", choices=("auto", "mps", "cpu"), default="auto")
     refine_mask_parser = subcommands.add_parser(
         "refine-dense-masks", help="Remove tiny mask islands/holes or apply camera-specific polygon cleanup")
     refine_mask_parser.add_argument("--reconstruction", type=Path, required=True)
@@ -587,7 +592,9 @@ def main(argv: list[str] | None = None) -> int:
                 report = generate_rectified_masks(
                     args.reconstruction, args.output, guides=args.guides,
                     center_box=tuple(args.center_box), max_side=args.max_side,
-                    iterations=args.iterations, segmenter=args.segmenter)
+                    iterations=args.iterations, segmenter=args.segmenter,
+                    sam2_checkpoint=args.sam2_checkpoint, sam2_size=args.sam2_size,
+                    sam2_device=args.sam2_device)
             except ReferenceError as error:
                 raise RecipeError(str(error)) from error
             print(json.dumps(report, indent=2))
