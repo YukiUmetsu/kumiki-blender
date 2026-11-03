@@ -71,6 +71,41 @@ isolated images and the strongest verified pairs. A successful import is
 necessary but not sufficient: diverse online photos may still lack the
 overlap and parallax needed to recover eight consistent camera poses.
 
+### When all photos import but only a few cameras register
+
+The photo decoder is not the remaining bottleneck if
+`feature_import.imported_images == feature_import.staged_images`. For example,
+a 26-photo monument set with only four registered cameras has insufficient
+verified cross-view geometry even if its reprojection error is low.
+
+First inspect the **failed revision without retraining**:
+
+```bash
+bash scripts/mac_splat_test.sh diagnose \
+  .review/mac-splat-smoke/splat-<failed-revision>
+```
+
+Review the contact sheet and the verified-match graph. If the largest connected
+group is still tiny, high-recall SIFT may recover more matches, but cannot invent
+overlap or parallax between unrelated photographs. The optional, slower CPU
+PyCOLMAP profile increases SIFT features, lowers the detection threshold,
+attempts affine/domain-size feature extraction when supported, relaxes the
+descriptor ratio slightly and enables guided geometric matching. It retains
+the same geometric verification and minimum eight-camera / 60% registration
+gate; it does not force weak photos into a reconstruction.
+
+```bash
+REGISTRATION_PROFILE=high-recall MAX_IMAGE_SIZE=3200 \
+  bash scripts/mac_splat_test.sh run ~/Pictures/statue-photos/sphinx sphinx
+```
+
+This creates a **new immutable revision**. Inspect the new
+`camera_reconstruction.models`, `feature_import`, `registered_images`
+and registration diagnostic. If high-recall still registers only a few images,
+curate a coherent overlapping photo subset or obtain new sequential
+photographs/verified survey geometry. Do not weaken the 8-view gate merely to
+train a misleading splat.
+
 ## Install OpenSplat (external GPU trainer)
 
 OpenSplat is **not** bundled with Kumiki Blender. It is a separately installed
