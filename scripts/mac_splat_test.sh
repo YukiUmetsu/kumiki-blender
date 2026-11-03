@@ -122,6 +122,18 @@ elif [[ "$mode" == recover ]]; then
   python3 -c 'import pycolmap' || die 'Install photogrammetry dependencies: pip install -e ".[photogrammetry]"'
   output="$(new_output recovery)"
   python3 scripts/recover_sfm_tracks.py "$2" --model "${3:-0}" --output "$output"
+  if python3 -c 'import json,sys; sys.exit(0 if json.load(open(sys.argv[1]))["status"] == "no-registration-improvement" else 1)' "$output/recovery-report.json"; then
+    advice="$(new_output photo-advice)"
+    advice_args=(--subject-type "${PHOTO_SUBJECT_TYPE:-object}")
+    [[ -z "${PHOTO_FRONT_REFERENCE:-}" ]] || advice_args+=(--front-photo "$PHOTO_FRONT_REFERENCE")
+    [[ -z "${PHOTO_VISION_MODEL:-}" ]] || advice_args+=(--vision-model "$PHOTO_VISION_MODEL")
+    if python3 scripts/audit_photo_coverage.py "$2" --output "$advice" "${advice_args[@]}"; then
+      printf '\nNo registration improvement. Per-photo and missing-angle report: %s/photo-advice.md\n' "$advice"
+      [[ -f "$advice/photo-advice.jpg" ]] && open "$advice/photo-advice.jpg" 2>/dev/null || true
+    else
+      printf 'WARNING: Could not generate photo advice; recovery report remains available.\n' >&2
+    fi
+  fi
 elif [[ "$mode" == plan || "$mode" == run ]]; then
   photos="$2"; [[ -d "$photos" ]] || die "Photo directory not found: $photos"
   slug="${3:-mac-splat-test}"
