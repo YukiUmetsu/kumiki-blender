@@ -99,6 +99,42 @@ REGISTRATION_PROFILE=high-recall MAX_IMAGE_SIZE=3200 \
   bash scripts/mac_splat_test.sh run ~/Pictures/statue-photos/sphinx sphinx
 ```
 
+#### Split disconnected Sphinx photographs into independent registration cohorts
+
+For the 26-photo Sphinx set, the high-recall run registered 7 cameras in one
+sparse model and 5 in another, with 14 photos in the largest verified-match
+graph component. **Do not concatenate the two models**: their camera coordinate
+frames have not been aligned.
+
+Create new, provenance-preserving photo folders from the existing failed
+revision, without downloading or retraining:
+
+```bash
+bash scripts/mac_splat_test.sh cohorts \
+  .review/mac-splat-smoke/splat-20261103T052755Z-7115
+```
+
+The command creates a new `.review/mac-splat-smoke/cohorts-...` revision
+containing a `cohort-plan.json` and `cohort-01/photos`,
+`cohort-02/photos` (if both matching groups still meet the default three-photo
+minimum). All staged photo hashes are verified before copying, and the
+original photo revision is never modified.
+
+For this particular diagnostic, expect **14** photos in the first connected
+component and **5** in the second; five photos with no strong neighbor are
+excluded. The first group has 7 registered cameras so far and needs at least
+**9 of its 14** cameras to register to satisfy both the eight-camera and 60%
+gates. The second group is **too small for production splat training**.
+The script prints a reproducible re-run command for each eligible cohort.
+
+A match-graph component is **not** a proof of correct camera poses. Background
+matches, scale differences and low parallax may still prevent registration.
+Inspect the labeled contact sheet before spending time on another run. The
+five-photo group can be examined with the sparse-only
+`scripts/experiment_sphinx_commons_2010.py --photos-dir <cohort-02/photos>`
+command, but it cannot pass the production splat gate without additional
+overlapping views.
+
 This creates a **new immutable revision**. Inspect the new
 `camera_reconstruction.models`, `feature_import`, `registered_images`
 and registration diagnostic. If high-recall still registers only a few images,
