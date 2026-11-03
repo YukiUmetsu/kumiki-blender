@@ -116,6 +116,27 @@ class OpenSplatRetryTests(unittest.TestCase):
                                  opensplat=str(self.fixture._fake_opensplat()))
         self.assertFalse(output.exists())
 
+    def test_foreground_train_refuses_unreviewed_masks_before_training(self):
+        repo_root = Path(__file__).resolve().parents[1]
+        bin_dir = self.root / "bin"
+        bin_dir.mkdir()
+        cli = bin_dir / "kumiki-blender"
+        cli.write_text("#!/bin/sh\nexit 0\n")
+        cli.chmod(0o755)
+        (self.source / "splat-report.json").write_text('{"status":"failed"}')
+        (self.source / "sparse-reconstruction").mkdir()
+        env = os.environ.copy()
+        env.update({"PATH": str(bin_dir) + os.pathsep + env.get("PATH", ""),
+                    "OUTPUT_ROOT": str(self.root / "foreground-output"),
+                    "MASKS_REVIEWED": "0"})
+        result = subprocess.run(
+            ["bash", str(repo_root / "scripts/mac_splat_test.sh"),
+             "foreground-train", str(self.source), "unused-masks", "unused-audit"],
+            cwd=repo_root, env=env, text=True, capture_output=True, timeout=15)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("MASKS_REVIEWED=1", result.stderr)
+        self.assertFalse((self.root / "foreground-output").exists())
+
     def test_invalid_downscale_and_nested_output_refused(self):
         trainer = str(self.fixture._fake_opensplat())
         with self.assertRaisesRegex(ValueError, "Downscale"):
