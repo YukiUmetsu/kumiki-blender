@@ -396,7 +396,8 @@ def analyze(revision: Path, *, source_index: Path | None = None,
         framing_counts = visual_counts["framing"]
         elevation_counts = visual_counts["elevation"]
         successful_labels = sum(
-            item["source"] == "local-vision-model / not verified"
+            item["source"] == "local-vision-model / not verified" and
+            (item["view"] != "unknown" or item["framing"] != "unknown")
             for item in vision.values())
         semantic_gaps = [
             ("head-and-torso", "medium-distance head, neck and torso",
