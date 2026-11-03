@@ -18,17 +18,16 @@ sys.path.insert(0, str(ROOT / "src"))
 import bpy  # noqa: E402
 from mathutils import Quaternion, Vector  # noqa: E402
 from kumiki_blender.bridge_parity import (BridgeParityError, camera_pose, frame_name,
-                                          load_plan, make_receipt, sha256)  # noqa: E402
+                                          load_plan, make_receipt, verify_native_source)  # noqa: E402
 
 
 def render(plan_path: Path, model_path: Path, output: Path) -> None:
     plan = load_plan(plan_path)
-    if sha256(model_path) != plan["model_sha256"]:
-        raise BridgeParityError("Model hash does not match capture plan")
     if not bpy.data.filepath:
         raise BridgeParityError("Load the native physics source .blend before capturing parity")
-    if output.is_symlink() or output.exists():
-        raise BridgeParityError("Native capture destination must be a new directory")
+    provenance = verify_native_source(plan, bpy.data.filepath, model_path)
+    if output.is_symlink() or output.exists() or output.resolve().is_relative_to(Path(bpy.data.filepath).resolve().parent):
+        raise BridgeParityError("Native capture destination must be new and outside the source revision")
     scene = bpy.context.scene
     meshes = [obj for obj in scene.objects if obj.type == "MESH" and not obj.hide_render]
     if not meshes:
@@ -91,7 +90,7 @@ def render(plan_path: Path, model_path: Path, output: Path) -> None:
             scene.render.filepath = str(output / frame_name(frame))
             bpy.ops.render.render(write_still=True)
     receipt = make_receipt(plan_path, model_path, output, "blender")
-    receipt["source_blend_sha256"] = sha256(Path(bpy.data.filepath))
+    receipt.update(provenance)
     (output / "capture.json").write_text(json.dumps(receipt, indent=2) + "\n", encoding="utf-8")
     print("KUMIKI_BRIDGE_PARITY_NATIVE_OK", output)
 

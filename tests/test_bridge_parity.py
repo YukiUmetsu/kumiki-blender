@@ -10,7 +10,7 @@ import pytest
 from PIL import Image, ImageDraw
 
 from kumiki_blender.bridge_parity import (BridgeParityError, camera_pose, compare_captures,
-                                           frame_name, load_plan, make_receipt)
+                                           frame_name, load_plan, make_receipt, verify_native_source)
 
 
 def _plan(model: Path) -> dict:
@@ -99,6 +99,61 @@ def test_missing_inputs_fail_with_actionable_error(tmp_path: Path) -> None:
     plan, blender, _web = _captures(tmp_path)
     with pytest.raises(BridgeParityError, match="Cannot locate parity input"):
         compare_captures(plan, blender, tmp_path / "missing-web", tmp_path / "report")
+
+
+def _native_revision(tmp_path: Path) -> tuple[dict, Path, Path, Path]:
+    root = tmp_path / "physics-r01"
+    root.mkdir()
+    source = root / "source.blend"
+    source.write_bytes(b"Native Blender source")
+    revision_model = root / "model.glb"
+    revision_model.write_bytes(b"audited mesh bytes")
+    imported = tmp_path / "imported-model.glb"
+    imported.write_bytes(revision_model.read_bytes())
+    plan = _plan(imported)
+    native_manifest = {"schema_version": 1, "generator": "blender-physics-shot-bake",
+        "asset_id": plan["asset_id"], "physics": {"action_id": plan["action_id"], "duration_frames": 100},
+        "files": {"source": "source.blend", "model": "model.glb"},
+        "output_bytes": {"source.blend": source.stat().st_size, "model.glb": revision_model.stat().st_size}}
+    (root / "manifest.json").write_text(json.dumps(native_manifest))
+    return plan, source, imported, revision_model
+
+
+def test_native_source_requires_hash_pinned_physics_revision(tmp_path: Path) -> None:
+    plan, source, imported, _ = _native_revision(tmp_path)
+    provenance = verify_native_source(plan, source, imported)
+    assert provenance["model_sha256"] == plan["model_sha256"]
+    assert len(provenance["source_blend_sha256"]) == 64
+    assert len(provenance["revision_manifest_sha256"]) == 64
+
+
+def test_native_source_rejects_wrong_action_and_tampered_model(tmp_path: Path) -> None:
+    plan, source, imported, revision_model = _native_revision(tmp_path)
+    different_action = {**plan, "action_id": "wrong-action"}
+    with pytest.raises(BridgeParityError, match="different asset/action"):
+        verify_native_source(different_action, source, imported)
+    revision_model.write_bytes(b"modified mesh geometry")
+    manifest = json.loads((source.parent / "manifest.json").read_text())
+    manifest["output_bytes"]["model.glb"] = revision_model.stat().st_size
+    (source.parent / "manifest.json").write_text(json.dumps(manifest))
+    with pytest.raises(BridgeParityError, match="identical geometry bytes"):
+        verify_native_source(plan, source, imported)
+
+
+def test_native_source_rejects_unsafe_manifest_and_symlink(tmp_path: Path) -> None:
+    plan, source, imported, _ = _native_revision(tmp_path)
+    manifest_path = source.parent / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["files"]["model"] = "../other.glb"
+    manifest_path.write_text(json.dumps(manifest))
+    with pytest.raises(BridgeParityError, match="Invalid native revision GLB filename"):
+        verify_native_source(plan, source, imported)
+    manifest["files"]["model"] = "model.glb"
+    manifest_path.write_text(json.dumps(manifest))
+    linked = tmp_path / "source.blend"
+    linked.symlink_to(source)
+    with pytest.raises(BridgeParityError, match="symbolic link"):
+        verify_native_source(plan, linked, imported)
 
 
 @pytest.mark.parametrize("frames", [[1, 1], [2, 1], [-1], list(range(25)), [True]])

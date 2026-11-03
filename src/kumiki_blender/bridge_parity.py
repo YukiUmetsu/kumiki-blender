@@ -10,6 +10,7 @@ import hashlib
 import json
 import math
 from pathlib import Path
+import re
 from typing import Any
 
 
@@ -84,6 +85,59 @@ def camera_pose(plan: dict[str, Any]) -> tuple[tuple[float, float, float], tuple
 
 def frame_name(frame: int) -> str:
     return f"frame-{frame:05d}.png"
+
+
+def verify_native_source(plan: dict[str, Any], source_blend: str | Path,
+                         exported_model: str | Path) -> dict[str, str]:
+    """Require native geometry to come from the same authored physics revision.
+
+    A user-supplied `.blend` is *not* sufficient provenance on its own: a
+    mismatched source can produce valid-looking but meaningless mask scores.
+    The revision's exported GLB must be byte-identical to the web fixture.
+    """
+    requested_source = Path(source_blend)
+    if requested_source.is_symlink():
+        raise BridgeParityError("Native source.blend must not be a symbolic link")
+    try:
+        source = requested_source.resolve(strict=True)
+        model = Path(exported_model).resolve(strict=True)
+    except OSError as error:
+        raise BridgeParityError(f"Cannot locate native revision input: {error}") from error
+    if not source.is_file() or source.name != "source.blend" or not model.is_file():
+        raise BridgeParityError("Native capture requires a saved source.blend and actual GLB")
+    root = source.parent
+    manifest_file = root / "manifest.json"
+    if manifest_file.is_symlink():
+        raise BridgeParityError("Symlinked native revision manifests are not trusted")
+    try:
+        if manifest_file.stat().st_size > 1_048_576:
+            raise BridgeParityError("Native revision manifest exceeds 1 MiB")
+        manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        raise BridgeParityError(f"Cannot read native physics revision: {error}") from error
+    if not isinstance(manifest, dict) or manifest.get("schema_version") != 1 or manifest.get("generator") != "blender-physics-shot-bake":
+        raise BridgeParityError("Native source must belong to a kumiki-blender physics bake revision")
+    if manifest.get("asset_id") != plan["asset_id"] or not isinstance(manifest.get("physics"), dict) or manifest["physics"].get("action_id") != plan["action_id"]:
+        raise BridgeParityError("Native source revision has different asset/action IDs")
+    duration = manifest["physics"].get("duration_frames")
+    if type(duration) is not int or duration < plan["frames"][-1]:
+        raise BridgeParityError("Native physics bake does not cover requested parity frames")
+    files, sizes = manifest.get("files"), manifest.get("output_bytes")
+    if not isinstance(files, dict) or not isinstance(sizes, dict) or files.get("source") != "source.blend":
+        raise BridgeParityError("Native revision must name its source.blend")
+    model_name = files.get("model")
+    if not isinstance(model_name, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,120}\.glb", model_name):
+        raise BridgeParityError("Invalid native revision GLB filename")
+    revision_model = root / model_name
+    if revision_model.is_symlink() or not revision_model.is_file():
+        raise BridgeParityError("Native revision GLB is missing or symlinked")
+    if sizes.get("source.blend") != source.stat().st_size or sizes.get(model_name) != revision_model.stat().st_size:
+        raise BridgeParityError("Native revision source/model sizes no longer match its manifest")
+    model_digest = sha256(model)
+    if model_digest != plan["model_sha256"] or sha256(revision_model) != model_digest:
+        raise BridgeParityError("Native revision GLB and Kumiki model do not contain identical geometry bytes")
+    return {"revision_manifest_sha256": sha256(manifest_file),
+            "source_blend_sha256": sha256(source), "model_sha256": model_digest}
 
 
 def make_receipt(plan_path: Path, model_path: Path, output: Path, renderer: str) -> dict[str, Any]:
