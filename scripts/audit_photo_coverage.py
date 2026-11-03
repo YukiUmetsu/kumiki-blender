@@ -588,6 +588,65 @@ def _contact_sheet(revision: Path, report: dict, path: Path) -> None:
     canvas.save(path, quality=90)
 
 
+def _angle_map(report: dict, path: Path) -> bool:
+    """SVG orbit overview: reconstructed relative azimuths and *suggested* shots."""
+    from xml.sax.saxutils import escape
+    known = [item for item in report["images"] if item["estimated_view"]]
+    if not known:
+        return False
+    center, radius = 320, 218
+    def xy(degrees, distance):
+        radians = math.radians(degrees)
+        return (round(center + distance * math.sin(radians), 1),
+                round(center - distance * math.cos(radians), 1))
+    front = report["angle_reference"]["kind"] == "annotated-front"
+    title = "Front-relative camera orbit" if front else "Reference-relative camera orbit"
+    parts = [
+        '<svg xmlns="http://www.w3.org/2000/svg" width="640" height="690" viewBox="0 0 640 690">',
+        '<rect width="640" height="690" fill="#161c24"/>',
+        f'<text x="320" y="36" text-anchor="middle" fill="#f5f7fa" font-size="22">{title}</text>',
+        '<text x="320" y="61" text-anchor="middle" fill="#bdc7d1" font-size="12">'
+        'Estimated COLMAP poses only. Not surveyed. Unregistered photos have no angles.</text>',
+        f'<circle cx="{center}" cy="{center}" r="{radius}" fill="none" stroke="#627386" stroke-width="2"/>',
+        f'<circle cx="{center}" cy="{center}" r="{radius/2}" fill="none" stroke="#3d4b59" stroke-dasharray="4 6"/>',
+        '<line x1="320" y1="102" x2="320" y2="538" stroke="#3d4b59"/>',
+        '<line x1="102" y1="320" x2="538" y2="320" stroke="#3d4b59"/>',
+        '<circle cx="320" cy="320" r="9" fill="#8e9bac"/>',
+    ]
+    for degree, label in ((0, "FRONT" if front else "REFERENCE"),
+                          (90, "+90°"), (-90, "-90°"), (180, "±180°")):
+        x, y = xy(degree, radius+27)
+        parts.append(f'<text x="{x}" y="{y+5}" fill="#e2e8f0" font-size="13" '
+                     f'text-anchor="middle">{label}</text>')
+    for shot in report["recommended_photos"]:
+        az = shot["target_azimuth_deg"]
+        if az is None:
+            continue
+        x, y = xy(az, radius)
+        parts.append(f'<circle cx="{x}" cy="{y}" r="7" fill="none" '
+                     f'stroke="#efb65d" stroke-width="3"/>')
+    for item in known:
+        view = item["estimated_view"]
+        az = view["relative_azimuth_deg"]
+        x, y = xy(az, radius)
+        name = escape(item["original_filename"][:25])
+        parts.append(f'<circle cx="{x}" cy="{y}" r="6" fill="#62d49a" stroke="#0d1720" stroke-width="2"/>')
+        tx, ty = xy(az, radius-27)
+        parts.append(f'<text x="{tx}" y="{ty}" fill="#f1f5f9" font-size="10" '
+                     f'text-anchor="middle">{name}</text>')
+    parts.extend([
+        '<circle cx="95" cy="598" r="6" fill="#62d49a"/>',
+        '<text x="110" y="602" fill="#dce4ed" font-size="13">Registered camera</text>',
+        '<circle cx="95" cy="627" r="7" fill="none" stroke="#efb65d" stroke-width="3"/>',
+        '<text x="110" y="631" fill="#dce4ed" font-size="13">Suggested overlapping shot</text>',
+        '<text x="320" y="667" fill="#bdc7d1" text-anchor="middle" font-size="11">'
+        'Angles relative to median reconstructed points; not true monument center.</text>',
+        '</svg>',
+    ])
+    path.write_text("\n".join(parts), encoding="utf-8")
+    return True
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("revision", type=Path)
@@ -613,6 +672,7 @@ def main() -> int:
             json.dump(report, stream, indent=2)
             stream.write("\n")
         (args.output / "photo-advice.md").write_text(_markdown(report), encoding="utf-8")
+        _angle_map(report, args.output / "photo-angle-map.svg")
         try:
             _contact_sheet(args.revision.resolve(), report, args.output / "photo-advice.jpg")
         except ImportError:
@@ -633,6 +693,8 @@ def main() -> int:
               f"{shot['reason']}")
     print(f"Report: {args.output / 'photo-advice.md'}")
     print(f"JSON: {args.output / 'photo-advice.json'}")
+    if (args.output / "photo-angle-map.svg").is_file():
+        print(f"Angle map: {args.output / 'photo-angle-map.svg'}")
     print(f"Contact sheet: {args.output / 'photo-advice.jpg'} (if Pillow installed)")
     return 0
 
