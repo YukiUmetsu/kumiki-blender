@@ -7,6 +7,7 @@ Usage:
   bash scripts/mac_splat_test.sh doctor
   bash scripts/mac_splat_test.sh plan /absolute/path/to/photos [asset-slug]
   bash scripts/mac_splat_test.sh run /absolute/path/to/photos [asset-slug]
+  bash scripts/mac_splat_test.sh train-existing /path/to/failed-splat-revision
   bash scripts/mac_splat_test.sh diagnose /path/to/failed-splat-revision
   bash scripts/mac_splat_test.sh cohorts /path/to/failed-splat-revision
   bash scripts/mac_splat_test.sh match-qa /path/to/failed-splat-revision [cohort-source-index.json]
@@ -25,6 +26,7 @@ Optional environment:
   SPLAT_TRANSFORM=/absolute/path/to/splat-transform (default: splat-transform)
   OUTPUT_ROOT=/absolute/path/to/revisions (default: .review/mac-splat-smoke)
   MAX_IMAGE_SIZE=2000 ITERATIONS=3000 MAX_VIEWS=12
+  DOWNSCALE_FACTOR=4 TRAIN_CPU=0 (train-existing: reuse registered dataset; CPU=1 diagnostic)
   REGISTRATION_PROFILE=standard|high-recall (high-recall: slower, CPU SIFT + guided matching)
   PHOTO_FRONT_REFERENCE=photo-0001.png (optional known frontal view for angle labels)
   PHOTO_VISION_MODEL=<installed-ollama-vision-model> (optional, local image view/framing labels)
@@ -38,7 +40,7 @@ EOF
 die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 require() { command -v "$1" >/dev/null 2>&1 || die "Missing $1. Install it, then rerun doctor."; }
 mode="${1:-}"; [[ -n "$mode" ]] || { usage; exit 2; }
-[[ "$mode" == doctor || "$mode" == plan || "$mode" == run || "$mode" == diagnose || "$mode" == cohorts || "$mode" == match-qa || "$mode" == pnp-qa || "$mode" == photo-advice || "$mode" == recover || "$mode" == recover-qa || "$mode" == mask || "$mode" == hybrid || "$mode" == run-masked || "$mode" == qa || "$mode" == video ]] || { usage; exit 2; }
+[[ "$mode" == doctor || "$mode" == plan || "$mode" == run || "$mode" == diagnose || "$mode" == cohorts || "$mode" == match-qa || "$mode" == pnp-qa || "$mode" == photo-advice || "$mode" == recover || "$mode" == recover-qa || "$mode" == train-existing || "$mode" == mask || "$mode" == hybrid || "$mode" == run-masked || "$mode" == qa || "$mode" == video ]] || { usage; exit 2; }
 if [[ "$mode" != doctor ]]; then [[ $# -ge 2 ]] || { usage; exit 2; }; fi
 [[ "$(uname -s)" == Darwin ]] || printf 'WARNING: Intended for macOS; current OS is %s\n' "$(uname -s)" >&2
 root="${OUTPUT_ROOT:-.review/mac-splat-smoke}"
@@ -139,6 +141,15 @@ elif [[ "$mode" == recover ]]; then
       printf 'WARNING: Could not generate photo advice; recovery report remains available.\n' >&2
     fi
   fi
+elif [[ "$mode" == train-existing ]]; then
+  [[ -d "$2/dataset" ]] || die "Existing staged dataset not found: $2/dataset"
+  check_tool "$trainer"
+  output="$(new_output splat-retry)"
+  retry_args=()
+  [[ "${TRAIN_CPU:-0}" != 1 ]] || retry_args+=(--cpu)
+  python3 scripts/retry_opensplat_training.py "$2" --output "$output" \
+    --opensplat "$trainer" --iterations "${ITERATIONS:-300}" \
+    --downscale "${DOWNSCALE_FACTOR:-4}" "${retry_args[@]}"
 elif [[ "$mode" == plan || "$mode" == run ]]; then
   photos="$2"; [[ -d "$photos" ]] || die "Photo directory not found: $photos"
   slug="${3:-mac-splat-test}"
@@ -161,9 +172,22 @@ elif [[ "$mode" == plan || "$mode" == run ]]; then
     printf '\nTraining output: %s\nRun QA: bash scripts/mac_splat_test.sh qa "%s"\n' "$output" "$output"
   else
     status=$?
-    if [[ -f "$output/sparse-reconstruction/database.db" ]]; then
+    failed_stage=""
+    if [[ -f "$output/splat-report.json" ]]; then
+      failed_stage="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("failed_stage") or "")' "$output/splat-report.json" 2>/dev/null || true)"
+    fi
+    if [[ "$failed_stage" == opensplat* ]]; then
+      printf '\nCamera registration succeeded; OpenSplat training failed (%s).\n' "$failed_stage" >&2
+      printf 'Native training log: %s/logs/opensplat.log\n' "$output" >&2
+      if [[ -f "$output/logs/opensplat.log" ]]; then
+        printf '\nLast 35 trainer log lines:\n' >&2
+        tail -n 35 "$output/logs/opensplat.log" >&2
+      fi
+      printf '\nRetry training without repeating SfM:\n  DOWNSCALE_FACTOR=4 ITERATIONS=300 bash scripts/mac_splat_test.sh train-existing "%s"\n' "$output" >&2
+      printf 'If MPS still crashes, set TRAIN_CPU=1 to isolate the native GPU path.\n' >&2
+    elif [[ -f "$output/sparse-reconstruction/database.db" ]]; then
       diagnostic="$(new_output registration)"
-      printf '\nCamera reconstruction failed. Generating read-only registration diagnosis...\n' >&2
+      printf '\nCamera registration incomplete. Generating read-only registration diagnosis...\n' >&2
       if python3 scripts/diagnose_splat_registration.py "$output" --contact-sheet "$diagnostic.jpg" --json-output "$diagnostic.json"; then
         printf '\nRegistration contact sheet: %s.jpg\nRegistration report: %s.json\n' "$diagnostic" "$diagnostic" >&2
         open "$diagnostic.jpg" 2>/dev/null || true
