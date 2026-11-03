@@ -6,8 +6,11 @@ on:
   workflow_dispatch:
 
 jobs:
+  # Do not publish illustrative/proxy Sphinx GLBs as CI visual evidence.
+  # Real Sphinx likeness QA requires authenticated geometry and registered photos;
+  # retain only scan-intake contract tests until that evidence is available.
   focused-tests:
-    name: Focused Egypt, Sphinx and asset catalog tests (Python 3.11)
+    name: Focused Egypt, scan intake and asset catalog tests (Python 3.11)
     if: github.event_name != 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
@@ -37,7 +40,7 @@ jobs:
         env:
           PYTHONPATH: src:tests
         run: python -m unittest tests.test_physics_plan tests.test_deformation_plan tests.test_blender_physics tests.test_glb_motion tests.test_impact_measurement -v
-      - name: Test measured Khufu masonry and Sphinx source intake
+      - name: Test measured Khufu masonry and scan-source intake
         env:
           PYTHONPATH: src
         run: |
@@ -45,14 +48,8 @@ jobs:
             tests.test_egyptian_monuments.EgyptianMonumentTests.test_petrie_survey_has_203_measured_levels_and_observed_course_height_variation \
             tests.test_egyptian_monuments.EgyptianMonumentTests.test_khufu_petrie_preset_batches_real_course_heights_and_open_stone_joints \
             tests.test_egyptian_monuments.EgyptianMonumentTests.test_khufu_petrie_rejects_misleading_custom_parameters_or_unsurveyed_site_layout \
-            tests.test_egyptian_monuments.EgyptianMonumentTests.test_sphinx_is_organic_and_has_independent_anatomy \
-            tests.test_egyptian_monuments.EgyptianMonumentTests.test_rounded_lion_silhouette_and_head_are_not_cartoon_proportioned \
-            tests.test_egyptian_monuments.EgyptianMonumentTests.test_sphinx_reference_has_four_distinct_toes_per_forepaw \
-            tests.test_egyptian_monuments.EgyptianMonumentTests.test_face_relief_preserves_smooth_back_of_head \
             tests.test_rock_weathering.RockWeatheringTests.test_differential_bedding_and_mineral_pits_are_real_closed_relief \
-            tests.test_rock_weathering.RockWeatheringTests.test_sphinx_has_rough_anatomical_surfaces_not_smooth_loft \
             tests.test_landmark_scan \
-            tests.test_sphinx_sculpt \
             tests.test_egypt_map \
             tests.test_cli.CLITests.test_sphinx_scan_build_preflights_rights_and_pairs_without_blender \
             tests.test_cli.CLITests.test_sphinx_scan_build_passes_prepared_record_to_blender \
@@ -422,14 +419,6 @@ jobs:
             --python scripts/blender_entry.py -- \
             build-portico --bays 2 --order tuscan --arch-style pointed --balustrade \
             --output .review/ci/pointed-balustrade-portico
-      - name: Render Egyptian pyramid and sculpted Sphinx detail study
-        env:
-          KUMIKI_RENDER_PROFILE: smoke
-        run: |
-          blender --background --factory-startup --threads 1 --python-exit-code 1 \
-            --python scripts/blender_entry.py -- \
-            build-monument --kind giza-study --pyramid-courses 18 \
-            --output .review/ci/egyptian-monuments
       - name: Render historic Khufu course-height masonry study
         env:
           KUMIKI_RENDER_PROFILE: smoke
@@ -438,20 +427,6 @@ jobs:
             --python scripts/blender_entry.py -- \
             build-monument --kind pyramid --pyramid-preset khufu-petrie \
             --output .review/ci/khufu-petrie
-      - name: Create a first-party Sphinx replacement GLB fixture
-        run: |
-          blender --background --factory-startup --threads 1 --python-exit-code 1 \
-            --python scripts/blender_sphinx_scan_fixture.py
-      - name: Render combined pyramid scene with imported Sphinx proxy
-        env:
-          KUMIKI_RENDER_PROFILE: smoke
-        run: |
-          blender --background --factory-startup --threads 1 --python-exit-code 1 \
-            --python scripts/blender_entry.py -- \
-            build-monument --kind giza-study \
-            --sphinx-source .review/ci/first-party-sphinx-proxy.glb \
-            --sphinx-provenance examples/first-party-sphinx-scan.json \
-            --output .review/ci/sphinx-scan-integration
       - name: Render reusable architectural facade detail kit
         env:
           KUMIKI_RENDER_PROFILE: smoke
@@ -523,9 +498,7 @@ jobs:
           python -m kumiki_blender audit --model .review/ci/portico/model.glb --require-pbr-textures
           python -m kumiki_blender audit --model .review/ci/doric-portico/model.glb --require-pbr-textures
           python -m kumiki_blender audit --model .review/ci/pointed-balustrade-portico/model.glb --require-pbr-textures
-          python -m kumiki_blender audit --model .review/ci/egyptian-monuments/model.glb --require-pbr-textures
           python -m kumiki_blender audit --model .review/ci/khufu-petrie/model.glb --require-pbr-textures
-          python -m kumiki_blender audit --model .review/ci/sphinx-scan-integration/model.glb --require-pbr-textures
           python -m kumiki_blender audit --model .review/ci/facade/model.glb --require-pbr-textures
           python -m kumiki_blender audit --model .review/ci/imported-portico/model.glb --require-pbr-textures
           python -m kumiki_blender audit --model .review/ci/restyled-portico/model.glb --require-pbr-textures
@@ -535,9 +508,7 @@ jobs:
           python -m kumiki_blender audit-revision --root .review/ci/portico
           python -m kumiki_blender audit-revision --root .review/ci/doric-portico
           python -m kumiki_blender audit-revision --root .review/ci/pointed-balustrade-portico
-          python -m kumiki_blender audit-revision --root .review/ci/egyptian-monuments
           python -m kumiki_blender audit-revision --root .review/ci/khufu-petrie
-          python -m kumiki_blender audit-revision --root .review/ci/sphinx-scan-integration
           python -m kumiki_blender audit-revision --root .review/ci/facade
           python -m kumiki_blender audit-revision --root .review/ci/imported-portico
           python -m kumiki_blender audit-revision --root .review/ci/restyled-portico
@@ -547,9 +518,7 @@ jobs:
           gltf-transform validate .review/ci/portico/model.glb
           gltf-transform validate .review/ci/doric-portico/model.glb
           gltf-transform validate .review/ci/pointed-balustrade-portico/model.glb
-          gltf-transform validate .review/ci/egyptian-monuments/model.glb
           gltf-transform validate .review/ci/khufu-petrie/model.glb
-          gltf-transform validate .review/ci/sphinx-scan-integration/model.glb
           gltf-transform validate .review/ci/facade/model.glb
           gltf-transform validate .review/ci/imported-portico/model.glb
           gltf-transform validate .review/ci/restyled-portico/model.glb
@@ -558,7 +527,6 @@ jobs:
           python -c 'import json; m=json.load(open(".review/ci/restyled-portico/manifest.json")); assert len(m["material_overrides"]) == 1 and m["material_overrides"][0]["preset"] == "natural-stone"'
           python -c 'import json; m=json.load(open(".review/ci/scanned-facade/manifest.json")); assert len(m["texture_packs"]) == 2 and all(v["pack"]["maps"]["normal"]["sha256"] for v in m["texture_packs"])'
           python -c 'import json; m=json.load(open(".review/ci/scanned-portico/manifest.json")); assert len(m["texture_packs"]) == 1 and m["texture_packs"][0]["target"] == "Architectural stone.004"'
-          python -c 'import json; m=json.load(open(".review/ci/sphinx-scan-integration/manifest.json")); assert m["sphinx_scan"]["mesh_objects"] == 4 and m["sphinx_scan"]["provenance"]["commercial_use_allowed"] and m["sphinx_sculpt_union"]["mode"] == "external-scan" and m["sphinx_scan"]["source_materials"] >= 1'
           python -c 'import json; m=json.load(open(".review/ci/khufu-petrie/manifest.json")); assert m["parameters"]["pyramid_courses"] == 201 and m["parameters"]["pyramid_preset"] == "khufu-petrie" and m["named_parts"]["pyramid_parts"] == 805'
           python -m unittest tests.test_export_audit tests.test_glb_audit -v
           test -s .review/ci/lattice-tower/previews/detail.png
@@ -568,12 +536,7 @@ jobs:
           test -s .review/ci/doric-portico/previews/capital.png
           test -s .review/ci/pointed-balustrade-portico/previews/detail.png
           test -s .review/ci/pointed-balustrade-portico/previews/capital.png
-          test -s .review/ci/egyptian-monuments/previews/masonry.png
           test -s .review/ci/khufu-petrie/previews/masonry.png
-          test -s .review/ci/egyptian-monuments/previews/sphinx.png
-          test -s .review/ci/egyptian-monuments/previews/sphinx-profile.png
-          test -s .review/ci/egyptian-monuments/previews/sphinx-face.png
-          test -s .review/ci/sphinx-scan-integration/previews/sphinx-face.png
           test -s .review/ci/facade/previews/detail.png
           test -s .review/ci/imported-portico/previews/detail.png
           test -s .review/ci/restyled-portico/previews/detail.png
@@ -599,7 +562,7 @@ jobs:
           include-hidden-files: true
 
   blender-focused:
-    name: Khufu pyramid, procedural Sphinx and sourced-Sphinx Blender QA
+    name: Khufu pyramid Blender QA
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
     timeout-minutes: 20
@@ -643,51 +606,14 @@ jobs:
             --python scripts/blender_entry.py -- \
             build-monument --kind pyramid --pyramid-preset khufu-petrie \
             --output .review/ci/khufu-petrie
-      - name: Render newly sculpted procedural Sphinx and anatomical views
-        env:
-          KUMIKI_RENDER_PROFILE: smoke
-        run: |
-          blender --background --factory-startup --threads 1 --python-exit-code 1 \
-            --python scripts/blender_entry.py -- \
-            build-monument --kind sphinx \
-            --output .review/ci/sphinx-procedural
-      - name: Create first-party Sphinx scan integration fixture
-        run: |
-          blender --background --factory-startup --threads 1 --python-exit-code 1 \
-            --python scripts/blender_sphinx_scan_fixture.py
-      - name: Render Sphinx external geometry intake and anatomical views
-        env:
-          KUMIKI_RENDER_PROFILE: smoke
-        run: |
-          blender --background --factory-startup --threads 1 --python-exit-code 1 \
-            --python scripts/blender_entry.py -- \
-            build-monument --kind sphinx \
-            --sphinx-source .review/ci/first-party-sphinx-proxy.glb \
-            --sphinx-provenance examples/first-party-sphinx-scan.json \
-            --output .review/ci/sphinx-scan-integration
-      - name: Audit Khufu export, Sphinx sculpt union and previews
+      - name: Audit Khufu export and previews
         env:
           PYTHONPATH: src
         run: |
           python -m kumiki_blender audit-revision --root .review/ci/khufu-petrie
-          python -m kumiki_blender audit-revision --root .review/ci/sphinx-procedural
-          python -m kumiki_blender audit-revision --root .review/ci/sphinx-scan-integration
           python -m kumiki_blender audit --model .review/ci/khufu-petrie/model.glb --require-pbr-textures
-          python -m kumiki_blender audit --model .review/ci/sphinx-procedural/model.glb --require-pbr-textures
-          # The deliberately small first-party Sphinx proxy has no PBR maps;
-          # preserve a static-mesh/attribution gate without treating it as a
-          # production-quality scan.
-          python -m kumiki_blender audit --model .review/ci/sphinx-scan-integration/model.glb
           python -c 'import json; m=json.load(open(".review/ci/khufu-petrie/manifest.json")); assert m["parameters"]["pyramid_courses"] == 201 and m["named_parts"]["pyramid_parts"] == 805'
-          python -c 'import json; m=json.load(open(".review/ci/sphinx-procedural/manifest.json")); assert m["sphinx_sculpt_union"]["body"]["sources"] == 8 and m["sphinx_sculpt_union"]["head"]["sources"] == 6 and m["named_parts"]["sphinx_parts"] == 23'
-          python -c 'import json; m=json.load(open(".review/ci/sphinx-scan-integration/manifest.json")); s=m["sphinx_scan"]; assert s["provenance"]["commercial_use_allowed"] and s["mesh_objects"] >= 1 and "passes_bounding_envelope_screen" in s["source_geometry_review"] and not s["source_readiness_review"]["technical_screen_passed"] and not s["source_readiness_review"]["monument_source_authenticated"]'
           test -s .review/ci/khufu-petrie/previews/masonry.png
-          test -s .review/ci/sphinx-procedural/previews/sphinx.png
-          test -s .review/ci/sphinx-procedural/previews/sphinx-profile.png
-          test -s .review/ci/sphinx-procedural/previews/sphinx-face.png
-          test -s .review/ci/sphinx-scan-integration/previews/sphinx.png
-          test -s .review/ci/sphinx-scan-integration/previews/sphinx-profile.png
-          test -s .review/ci/sphinx-scan-integration/previews/sphinx-face.png
       - name: Upload focused Blender previews and source artifacts
         if: always()
         uses: actions/upload-artifact@v4
@@ -719,10 +645,4 @@ jobs:
         run: |
           python scripts/emit_qa_jpegs.py \
             .review/ci/khufu-petrie/preview.png \
-            .review/ci/khufu-petrie/previews/masonry.png \
-            .review/ci/sphinx-procedural/previews/sphinx.png \
-            .review/ci/sphinx-procedural/previews/sphinx-profile.png \
-            .review/ci/sphinx-procedural/previews/sphinx-face.png \
-            .review/ci/sphinx-scan-integration/previews/sphinx.png \
-            .review/ci/sphinx-scan-integration/previews/sphinx-profile.png \
-            .review/ci/sphinx-scan-integration/previews/sphinx-face.png
+            .review/ci/khufu-petrie/previews/masonry.png
