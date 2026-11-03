@@ -20,6 +20,28 @@ The photos are available under **CC BY-SA 3.0** (or GFDL).
 The downloader records source URLs, author, license, original SHA256, and
 dimensions. Original photos remain private and are not committed to GitHub.
 
+## Preferred: use your existing 26 Sphinx photographs (no Wikimedia requests)
+
+The local mode stages all top-level JPEG, PNG and WebP files, including the
+mixed-format photographs already in `~/Pictures/statue-photos/sphinx`.
+It records their hashes, but **does not invent authorship, public URLs or
+reuse permissions**.
+
+```bash
+python3 -m pip install -e '.[photogrammetry]' 'trimesh>=4,<5'
+python3 scripts/experiment_sphinx_commons_2010.py \
+  --photos-dir ~/Pictures/statue-photos/sphinx \
+  --output ".review/sphinx-local-$(date -u +%Y%m%dT%H%M%SZ)" \
+  --profile high-recall --max-image-size 3200
+```
+
+Use a **new output directory** on every run. A failed download may have
+already created the previous revision, which is intentionally immutable.
+
+This runs camera registration and exports real sparse points, if any.
+It **does not automatically generate a surface mesh** or bypass the existing
+8-camera/60% production quality gate. It can register fewer than all photos.
+
 ## Run on a Mac with PyCOLMAP
 
 ```bash
