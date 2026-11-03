@@ -86,6 +86,67 @@ class OpenSplatCrashQATests(unittest.TestCase):
             crash.diagnose(self.retry, output, lldb=str(self.debugger))
         self.assertFalse(output.exists())
 
+    def test_debugger_launch_failure_is_not_reported_as_captured_trace(self):
+        self.debugger.write_text(
+            "#!/usr/bin/env python3\n"
+            "print('error: process launch failed: Operation not permitted')\n"
+        )
+        self.debugger.chmod(0o755)
+        output = self.root / "blocked-debugger"
+        report = crash.diagnose(self.retry, output, lldb=str(self.debugger))
+        self.assertEqual(report["status"], "debugger-launch-failed")
+        self.assertFalse(report["saw_native_crash"])
+        self.assertFalse(any("frame #" in line for line in report["frame_excerpt"]))
+        self.assertIn("process launch failed", report["frame_excerpt"][0])
+        self.assertIn("process launch failed", report["log_tail"])
+
+    def test_debugger_without_crash_or_backtrace_is_inconclusive(self):
+        self.debugger.write_text(
+            "#!/usr/bin/env python3\nprint('Process exited with status = 0')\n"
+        )
+        self.debugger.chmod(0o755)
+        report = crash.diagnose(self.retry, self.root / "no-crash",
+                                lldb=str(self.debugger))
+        self.assertEqual(report["status"], "trace-inconclusive")
+        self.assertFalse(report["saw_native_crash"])
+
+    def test_debugger_breakpoint_is_not_a_native_crash(self):
+        self.debugger.write_text(
+            "#!/usr/bin/env python3\n"
+            "print('stop reason = breakpoint 1.1')\n"
+            "print('frame #0: opensplat main')\n"
+        )
+        self.debugger.chmod(0o755)
+        report = crash.diagnose(self.retry, self.root / "breakpoint",
+                                lldb=str(self.debugger))
+        self.assertEqual(report["status"], "trace-inconclusive")
+        self.assertFalse(report["saw_native_crash"])
+
+    def test_crash_marker_without_backtrace_is_not_a_complete_trace(self):
+        self.debugger.write_text(
+            "#!/usr/bin/env python3\nprint('stop reason = EXC_BAD_ACCESS')\n"
+        )
+        self.debugger.chmod(0o755)
+        report = crash.diagnose(self.retry, self.root / "no-frames",
+                                lldb=str(self.debugger))
+        self.assertEqual(report["status"], "crash-seen / no-backtrace")
+        self.assertTrue(report["saw_native_crash"])
+
+    def test_long_debugger_log_preserves_first_crashing_frame(self):
+        self.debugger.write_text(
+            "#!/usr/bin/env python3\n"
+            "print('stop reason = EXC_BAD_ACCESS')\n"
+            "print('frame #0: libtorch_cpu.dylib crashing_function')\n"
+            "print('verbose diagnostic' * 100000)\n"
+        )
+        self.debugger.chmod(0o755)
+        report = crash.diagnose(self.retry, self.root / "long-log",
+                                lldb=str(self.debugger))
+        self.assertEqual(report["status"], "trace-captured / inspect-log")
+        self.assertTrue(report["saw_native_crash"])
+        self.assertTrue(any("frame #0" in frame for frame in report["frame_excerpt"]))
+        self.assertLessEqual(len(report["log_tail"]), 12000)
+
     def test_wrapper_crash_qa_mode(self):
         bindir = self.root / "bin"
         bindir.mkdir()
