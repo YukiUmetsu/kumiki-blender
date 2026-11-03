@@ -111,7 +111,7 @@ elif [[ "$mode" == photo-advice ]]; then
     advice_args+=(--front-photo "$PHOTO_FRONT_REFERENCE")
   fi
   python3 scripts/audit_photo_coverage.py "$2" --output "$output" "${advice_args[@]}"
-  printf '\\nRead: %s/photo-advice.md\\nPhoto contact sheet: %s/photo-advice.jpg\\n' "$output" "$output"
+  printf '\nRead: %s/photo-advice.md\nPhoto contact sheet: %s/photo-advice.jpg\n' "$output" "$output"
   [[ -f "$output/photo-advice.jpg" ]] && open "$output/photo-advice.jpg" 2>/dev/null || true
 elif [[ "$mode" == recover ]]; then
   [[ -d "$2" ]] || die "Splat revision directory not found: $2"
