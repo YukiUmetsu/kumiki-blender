@@ -124,6 +124,28 @@ Candidate masks are not automatically approved. For offline guided GrabCut,
 install `.[masks]` and use `mask "$SOURCE" grabcut`. See
 [Reference Reconstruction](REFERENCE_RECONSTRUCTION.md) for corrections.
 
+When rembg misses a back/side head (for example, `photo-0002.png` and
+`photo-0015.png`) but GrabCut recovers it while leaking scenery, compose a
+**hybrid review candidate**. All 15 images remain pinned to the same
+rectified photos and camera registration; neither original mask revision is
+edited:
+
+```bash
+REMBG=".review/mac-splat-smoke/mask-<rembg-timestamp>"
+GRABCUT=".review/mac-splat-smoke/mask-<grabcut-timestamp>"
+bash scripts/mac_splat_test.sh hybrid "$SOURCE" "$REMBG" "$GRABCUT" \
+  photo-0002.png photo-0015.png
+```
+
+The command prints a new `mask-...` folder, including labeled per-photo
+overlays and a `mask-contact-sheet.jpg`. `alternate` is used **only** for the
+named photos; rembg remains primary elsewhere. This is not an automatic
+approval: manually remove sky, city, platform or other leaked regions using
+`refine-dense-masks --edits` (normalized exclusion polygons), and inspect the
+new revision before passing its `masks` directory to OpenSplat. A prominent
+`approved_for_reconstruction: false` remains in the reports. Original
+segmentation hashes and selected origins are recorded in the hybrid report.
+
 ```bash
 MASKS=".review/mac-splat-smoke/mask-<timestamp>"  # Printed by the mask step
 ITERATIONS=3000 bash scripts/mac_splat_test.sh run-masked "$SOURCE" "$MASKS"

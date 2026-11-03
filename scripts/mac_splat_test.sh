@@ -8,6 +8,7 @@ Usage:
   bash scripts/mac_splat_test.sh plan /absolute/path/to/photos [asset-slug]
   bash scripts/mac_splat_test.sh run /absolute/path/to/photos [asset-slug]
   bash scripts/mac_splat_test.sh mask /path/to/splat-revision [rembg|grabcut]
+  bash scripts/mac_splat_test.sh hybrid /path/to/splat-revision /path/to/rembg-mask-revision /path/to/grabcut-mask-revision photo-0002.png photo-0015.png
   bash scripts/mac_splat_test.sh run-masked /path/to/splat-revision /path/to/mask-revision
   bash scripts/mac_splat_test.sh qa /path/to/splat-revision
   bash scripts/mac_splat_test.sh video /path/to/splat-revision
@@ -26,7 +27,7 @@ EOF
 die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 require() { command -v "$1" >/dev/null 2>&1 || die "Missing $1. Install it, then rerun doctor."; }
 mode="${1:-}"; [[ -n "$mode" ]] || { usage; exit 2; }
-[[ "$mode" == doctor || "$mode" == plan || "$mode" == run || "$mode" == mask || "$mode" == run-masked || "$mode" == qa || "$mode" == video ]] || { usage; exit 2; }
+[[ "$mode" == doctor || "$mode" == plan || "$mode" == run || "$mode" == mask || "$mode" == hybrid || "$mode" == run-masked || "$mode" == qa || "$mode" == video ]] || { usage; exit 2; }
 if [[ "$mode" != doctor ]]; then [[ $# -ge 2 ]] || { usage; exit 2; }; fi
 [[ "$(uname -s)" == Darwin ]] || printf 'WARNING: Intended for macOS; current OS is %s\n' "$(uname -s)" >&2
 root="${OUTPUT_ROOT:-.review/mac-splat-smoke}"
@@ -71,7 +72,7 @@ if [[ "$mode" == plan || "$mode" == run ]]; then
   kumiki-blender build-splats --photos "$photos" --asset-id "$slug" --output "$output" \
     --engine pycolmap --opensplat "$trainer" --max-image-size "${MAX_IMAGE_SIZE:-2000}" --iterations "${ITERATIONS:-3000}"
   printf '\nTraining output: %s\nRun QA: bash scripts/mac_splat_test.sh qa "%s"\n' "$output" "$output"
-elif [[ "$mode" == mask || "$mode" == run-masked ]]; then
+elif [[ "$mode" == mask || "$mode" == hybrid || "$mode" == run-masked ]]; then
   revision="$2"
   [[ -f "$revision/splat-report.json" && -d "$revision/sparse-reconstruction" ]] || die "Expected a completed multiview splat revision with sparse-reconstruction: $revision"
   reconstruction="$revision/sparse-reconstruction"
@@ -88,6 +89,19 @@ elif [[ "$mode" == mask || "$mode" == run-masked ]]; then
       --segmenter "$segmenter" --max-side "${MASK_MAX_SIDE:-1280}" --iterations "${MASK_ITERATIONS:-5}"
     printf '\nInspect EVERY subject mask before training: %s/mask-contact-sheet.jpg\n' "$output"
     printf 'To train with reviewed masks: bash scripts/mac_splat_test.sh run-masked "%s" "%s"\n' "$revision" "$output"
+    open "$output/mask-contact-sheet.jpg" 2>/dev/null || true
+  elif [[ "$mode" == hybrid ]]; then
+    [[ $# -ge 5 ]] || die "hybrid requires a splat revision, two mask revisions and at least one photo filename"
+    primary_masks="$3"
+    alternate_masks="$4"
+    shift 4
+    output="$(new_output mask)"
+    kumiki-blender compose-dense-masks --reconstruction "$reconstruction" \
+      --primary-mask-revision "$primary_masks" --alternate-mask-revision "$alternate_masks" \
+      --output "$output" --use-alternate "$@"
+    printf '\nReview every hybrid mask: %s/mask-contact-sheet.jpg\n' "$output"
+    printf 'Optional leakage cleanup: kumiki-blender refine-dense-masks --reconstruction "%s" --mask-revision "%s" --output /path/to/new-mask-revision --edits /path/to/edits.json\n' "$reconstruction" "$output"
+    printf 'Retrain after review: bash scripts/mac_splat_test.sh run-masked "%s" "%s"\n' "$revision" "$output"
     open "$output/mask-contact-sheet.jpg" 2>/dev/null || true
   else
     [[ $# -eq 3 ]] || die "run-masked requires splat and mask revision paths"
