@@ -27,6 +27,10 @@ def main(folder: str) -> None:
         obj.scale = size
         bpy.ops.object.transform_apply(location=False, rotation=False, scale=True)
         obj["kumiki_part"] = name
+        surface = bpy.data.materials.new(name + "-surface")
+        surface.diffuse_color = ((.55, .38, .23, 1) if name == "swinging-rod" else
+                                 (.49, .5, .54, 1) if name == "strike-peg" else (.22, .24, .27, 1))
+        obj.data.materials.append(surface)
 
     cube("swinging-rod", (.75, 0, 1.4), (1.5, .12, .12))
     cube("pivot-pin", (0, 0, 1.4), (.08, .12, .08))
