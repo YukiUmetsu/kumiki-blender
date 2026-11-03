@@ -26,8 +26,8 @@ def sha256(path: Path) -> str:
 
 
 def load_plan(path: str | Path) -> dict[str, Any]:
-    target = Path(path).resolve(strict=True)
     try:
+        target = Path(path).resolve(strict=True)
         plan = json.loads(target.read_text(encoding="utf-8"))
         if not isinstance(plan, dict) or plan.get("schema_version") != 1:
             raise BridgeParityError("Expected parity plan schema_version 1")
@@ -109,6 +109,8 @@ def _receipt(folder: Path, plan: dict[str, Any], plan_digest: str, expected: str
     if path.is_symlink():
         raise BridgeParityError("Symlinked receipts are not accepted")
     try:
+        if path.stat().st_size > 1_048_576:
+            raise BridgeParityError(f"{expected} receipt exceeds 1 MiB")
         receipt = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, json.JSONDecodeError) as error:
         raise BridgeParityError(f"Cannot read {expected} receipt: {error}") from error
@@ -127,7 +129,6 @@ def _receipt(folder: Path, plan: dict[str, Any], plan_digest: str, expected: str
 
 
 def _mask(image: Any, *, threshold: int) -> Any:
-    from PIL import Image
     return image.convert("RGB").convert("L").point(lambda value: 255 if value >= threshold else 0, mode="1").convert("L")
 
 
@@ -168,9 +169,12 @@ def compare_captures(plan_file: str | Path, blender_dir: str | Path, web_dir: st
         from PIL import Image, ImageDraw
     except ImportError as error:
         raise BridgeParityError("Install Pillow (kumiki-blender[qa]) for silhouette comparison") from error
-    plan_path = Path(plan_file).resolve(strict=True)
+    try:
+        plan_path = Path(plan_file).resolve(strict=True)
+        native_dir, browser_dir = Path(blender_dir).resolve(strict=True), Path(web_dir).resolve(strict=True)
+    except OSError as error:
+        raise BridgeParityError(f"Cannot locate parity input: {error}") from error
     plan = load_plan(plan_path)
-    native_dir, browser_dir = Path(blender_dir).resolve(strict=True), Path(web_dir).resolve(strict=True)
     requested_output = Path(output)
     if requested_output.is_symlink():
         raise BridgeParityError("Comparison output cannot be a symbolic link")
@@ -185,8 +189,12 @@ def compare_captures(plan_file: str | Path, blender_dir: str | Path, web_dir: st
         name = frame_name(frame)
         try:
             with Image.open(native_dir / name) as image:
+                if image.size != (plan["width"], plan["height"]):
+                    raise BridgeParityError(f"Native capture dimensions disagree with plan: {name}")
                 b = image.convert("RGB")
             with Image.open(browser_dir / name) as image:
+                if image.size != (plan["width"], plan["height"]):
+                    raise BridgeParityError(f"WebGL capture dimensions disagree with plan: {name}")
                 w = image.convert("RGB")
         except (OSError, Image.DecompressionBombError) as error:
             raise BridgeParityError(f"Invalid capture PNG: {name}: {error}") from error

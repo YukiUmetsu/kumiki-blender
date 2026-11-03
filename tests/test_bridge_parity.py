@@ -93,6 +93,14 @@ def test_rejects_uninformative_frame_and_existing_output(tmp_path: Path) -> None
         compare_captures(plan, blender, web, tmp_path / "report")
 
 
+def test_missing_inputs_fail_with_actionable_error(tmp_path: Path) -> None:
+    with pytest.raises(BridgeParityError, match="Cannot read parity plan"):
+        load_plan(tmp_path / "missing-plan.json")
+    plan, blender, _web = _captures(tmp_path)
+    with pytest.raises(BridgeParityError, match="Cannot locate parity input"):
+        compare_captures(plan, blender, tmp_path / "missing-web", tmp_path / "report")
+
+
 @pytest.mark.parametrize("frames", [[1, 1], [2, 1], [-1], list(range(25)), [True]])
 def test_rejects_invalid_frame_list(tmp_path: Path, frames: list[int]) -> None:
     model = tmp_path / "model.glb"
