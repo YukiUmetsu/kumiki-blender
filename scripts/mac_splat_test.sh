@@ -71,7 +71,7 @@ elif [[ "$mode" == cohorts ]]; then
   [[ -d "$2" ]] || die "Splat revision directory not found: $2"
   output="$(new_output cohorts)"
   python3 scripts/prepare_sfm_cohorts.py "$2" --output "$output"
-  printf '\\nPhoto cohorts and provenance: %s/cohort-plan.json\\n' "$output"
+  printf '\nPhoto cohorts and provenance: %s/cohort-plan.json\n' "$output"
 elif [[ "$mode" == plan || "$mode" == run ]]; then
   photos="$2"; [[ -d "$photos" ]] || die "Photo directory not found: $photos"
   slug="${3:-mac-splat-test}"
