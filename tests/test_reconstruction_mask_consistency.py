@@ -123,6 +123,19 @@ class MaskConsistencyTests(unittest.TestCase):
         with self.assertRaisesRegex(ReferenceError, "COLMAP model changed"):
             validate_foreground_pipeline(self.sparse, masks, audit, target)
 
+    def test_foreground_pipeline_accepts_large_cross_view_audit(self):
+        masks, audit = self._foreground_pipeline_candidates()
+        report_path = audit / "mask-consistency-report.json"
+        report = json.loads(report_path.read_text())
+        # 26-camera runs can legitimately exceed the standard 1 MiB
+        # reconstruction evidence cap with per-feature review markers.
+        report["large_review_metadata"] = "x" * (1024 * 1024)
+        report_path.write_text(json.dumps(report))
+        self.assertGreater(report_path.stat().st_size, 1024 * 1024)
+        result = validate_foreground_pipeline(
+            self.sparse, masks, audit, self.root / "large-audit-splat")
+        self.assertEqual(result["registered_photos"], 3)
+
     def test_flags_one_majority_outlier_and_ambiguous_two_view_track(self):
         target = self.root / "audit"
         result = audit_multiview_masks(self.sparse, self.masks, target)
