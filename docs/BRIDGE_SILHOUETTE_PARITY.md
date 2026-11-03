@@ -4,6 +4,8 @@ This bridge checks whether a Blender physics asset projects onto **the same pixe
 
 The camera and frame list live in one JSON plan (in `kumiki-ui/src/craft/fixtures/blender-rotational-impacts/visual-parity-plan.json`). Its SHA-256, the GLB SHA-256, dimensions, ordered frames, and renderer identity are verified in each capture receipt. Neither renderer can silently substitute a different asset/camera.
 
+The native render also verifies the loaded `source.blend` belongs to a **kumiki-blender physics revision**: adjacent `manifest.json` must identify the same asset/action, cover every requested frame, match recorded source/model sizes, and contain a sibling GLB byte-identical to Kumiki's imported model. `source_blend_sha256` and `revision_manifest_sha256` are recorded in the native receipt. Rendering into that immutable revision directory is rejected.
+
 ## One-time example: real Bullet swinging rod
 
 From the `kumiki-blender` repository, with Blender installed (replace `blender` with your executable path):
