@@ -43,7 +43,9 @@ class OpenSplatRetryTests(unittest.TestCase):
         self.assertEqual(report["registered_images"], 8)
         self.assertEqual(report["artifact"]["gaussians"], 2)
         self.assertEqual(report["downscale_factor"], 4.0)
-        self.assertEqual(report["command"][1], str(output / "dataset"))
+        # macOS resolves /var/... to /private/var/... for the same directory.
+        self.assertEqual(Path(report["command"][1]).resolve(),
+                         (output / "dataset").resolve())
         self.assertEqual(retry._sha256(original), before)
         self.assertEqual(retry._sha256(output / "dataset/images/photo-0000.jpg"), before)
         self.assertTrue((output / "logs/opensplat.log").is_file())
