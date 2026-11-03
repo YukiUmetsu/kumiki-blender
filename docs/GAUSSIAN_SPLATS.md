@@ -99,6 +99,33 @@ REGISTRATION_PROFILE=high-recall MAX_IMAGE_SIZE=3200 \
   bash scripts/mac_splat_test.sh run ~/Pictures/statue-photos/sphinx sphinx
 ```
 
+#### Measure reconstructed camera baselines before changing SfM settings
+
+After reviewing the match lines, run the existing read-only registration diagnosis
+again on the **14-photo cohort**:
+
+```bash
+bash scripts/mac_splat_test.sh diagnose \
+  .review/mac-splat-smoke/splat-20261103T053355Z-11041
+```
+
+The new `estimated_geometry.models[]` section in `registration-*.json` reports:
+
+- Distinct camera IDs, camera models and estimated focal length divided by
+  the largest image dimension (a dimensionless diagnostic)
+- Per-model **median maximum triangulation angle** for reconstructed 3D point
+  tracks, and percentage of tracks with ray angles below 1°, 2° and 5°
+- A separate result for each disconnected COLMAP sparse model; never mix
+  coordinate frames across models
+
+If most reconstructed points have ray angles below ~2°, the fitted
+cameras provide little reliable depth leverage. If angles look reasonable
+but many cameras still fail to register, investigate mapper initialization,
+unregistered-photo pose estimation, image calibration, and possible false
+matches on repetitive stone layers. These angles are **computed from the
+estimated COLMAP poses**: they are not independently measured ground truth,
+and good-looking values do not prove the reconstruction is correct.
+
 #### Inspect actual verified image correspondences (no new SfM run)
 
 When photos all have strong match-graph edges but only a few camera poses
