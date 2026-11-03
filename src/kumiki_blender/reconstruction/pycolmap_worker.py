@@ -12,6 +12,38 @@ import sys
 from pathlib import Path
 
 
+def _set_supported_option(options: object, name: str, value: object, *, required: bool = False) -> bool:
+    """Do not silently claim a high-recall setting on an incompatible PyCOLMAP."""
+    if not hasattr(options, name):
+        if required:
+            raise ValueError(f"Installed PyCOLMAP lacks high-recall option {name}")
+        return False
+    setattr(options, name, value)
+    return True
+
+
+def _configure_high_recall_extraction(options: object) -> None:
+    """Increase SIFT coverage for small details and viewpoint/scale changes."""
+    # PyCOLMAP 4.2.1 exposes these on FeatureExtractionOptions.sift,
+    # not on the outer FeatureExtractionOptions object.
+    sift = getattr(options, "sift", None)
+    if sift is None:
+        raise ValueError("Installed PyCOLMAP lacks FeatureExtractionOptions.sift")
+    _set_supported_option(sift, "max_num_features", 12_000, required=True)
+    _set_supported_option(sift, "peak_threshold", 0.003, required=True)
+    _set_supported_option(sift, "estimate_affine_shape", True)
+    _set_supported_option(sift, "domain_size_pooling", True)
+
+
+def _configure_high_recall_matching(options: object) -> None:
+    """Expand candidate matches but keep geometric verification mandatory."""
+    sift = getattr(options, "sift", None)
+    if sift is None:
+        raise ValueError("Installed PyCOLMAP lacks FeatureMatchingOptions.sift")
+    _set_supported_option(sift, "max_ratio", 0.85, required=True)
+    _set_supported_option(options, "guided_matching", True, required=True)
+
+
 def main(argv: list[str] | None = None) -> int:
     values = sys.argv[1:] if argv is None else argv
     if values == ["--version"]:
@@ -42,6 +74,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--FeatureExtraction.use_gpu", dest="feature_gpu")
     parser.add_argument("--FeatureMatching.use_gpu", dest="matching_gpu")
     parser.add_argument("--max_image_size", type=int, default=3200)
+    parser.add_argument("--registration-profile", choices=("standard", "high-recall"), default="standard")
     args = parser.parse_args(values[1:])
     import pycolmap
 
@@ -55,13 +88,23 @@ def main(argv: list[str] | None = None) -> int:
             reader.mask_path = str(args.mask_path)
         options = pycolmap.FeatureExtractionOptions()
         options.max_image_size = args.max_image_size
+        if args.registration_profile == "high-recall":
+            _configure_high_recall_extraction(options)
         pycolmap.extract_features(args.database_path, args.image_path,
                                   reader_options=reader, extraction_options=options,
                                   device=pycolmap.Device.cpu)
     elif stage == "exhaustive_matcher":
         if args.matching_gpu != "0":
             raise ValueError("PyCOLMAP worker is CPU-only")
-        pycolmap.match_exhaustive(args.database_path, device=pycolmap.Device.cpu)
+        if args.registration_profile == "high-recall":
+            if not hasattr(pycolmap, "FeatureMatchingOptions"):
+                raise ValueError("Installed PyCOLMAP lacks FeatureMatchingOptions for high-recall matching")
+            options = pycolmap.FeatureMatchingOptions()
+            _configure_high_recall_matching(options)
+            pycolmap.match_exhaustive(args.database_path, matching_options=options,
+                                      device=pycolmap.Device.cpu)
+        else:
+            pycolmap.match_exhaustive(args.database_path, device=pycolmap.Device.cpu)
     elif stage == "mapper":
         maps = pycolmap.incremental_mapping(args.database_path, args.image_path,
                                             args.output_path,

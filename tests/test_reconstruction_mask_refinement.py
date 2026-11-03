@@ -68,6 +68,13 @@ class MaskRefinementTests(unittest.TestCase):
         }}}))
 
     def test_island_hole_and_polygon_cleanup_preserves_source_and_openmvs_compatibility(self):
+        source_report = self.source_masks / "mask-report.json"
+        before = json.loads(source_report.read_text())
+        before["requires_anatomy_inventory"] = True
+        before["images"][0]["guide"] = {"part_points": {"head": [[0.5, 0.4]],
+                                                         "torso": [[0.5, 0.7]]},
+                                        "background_points": [[0.05, 0.1]]}
+        source_report.write_text(json.dumps(before))
         first_source = self.source_masks / "masks/view-00.jpg.mask.png"
         digest = _hash(first_source)
         target = self.root / "masks-r02"
@@ -76,6 +83,7 @@ class MaskRefinementTests(unittest.TestCase):
                                         max_hole_pixels=10)
         self.assertEqual(report["status"], "candidate / refined-mask-review-required")
         self.assertFalse(report["approved_for_reconstruction"])
+        self.assertTrue(report["requires_anatomy_inventory"])
         self.assertEqual(len(report["images"]), 3)
         self.assertTrue((target / report["contact_sheet"]).is_file())
         with Image.open(target / "masks/view-00.jpg.mask.png") as output:
@@ -85,6 +93,7 @@ class MaskRefinementTests(unittest.TestCase):
             self.assertEqual(output.getpixel((30, 30)), 255)  # sculpture retained
         self.assertEqual(_hash(first_source), digest)
         self.assertGreater(report["images"][0]["pixels_removed"], 10)
+        self.assertEqual(report["images"][0]["guide"], before["images"][0]["guide"])
         dense = plan_dense_reconstruction(self.sparse, self.root / "dense",
                                           DenseSettings(min_registered_images=3),
                                           rectified_masks=target / "masks", executables={})

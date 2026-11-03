@@ -75,8 +75,8 @@ class DenseSettings:
         return self
 
 
-def _json(path: Path) -> dict[str, Any]:
-    if path.is_symlink() or not path.is_file() or path.stat().st_size > 1024 * 1024:
+def _json(path: Path, *, max_bytes: int = 1024 * 1024) -> dict[str, Any]:
+    if path.is_symlink() or not path.is_file() or path.stat().st_size > max_bytes:
         raise ReferenceError(f"Missing or oversized reconstruction evidence: {path.name}")
     try:
         result = json.loads(path.read_text(encoding="utf-8"))

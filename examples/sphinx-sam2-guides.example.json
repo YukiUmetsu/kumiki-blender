@@ -1,0 +1,36 @@
+{
+  "default": {
+    "box": [0.05, 0.05, 0.95, 0.95],
+    "background_points": [[0.02, 0.06], [0.98, 0.06]]
+  },
+  "images": {
+    "photo-0001.png": {
+      "component_boxes": {
+        "head": [0.42, 0.10, 0.62, 0.42],
+        "headdress": [0.36, 0.08, 0.67, 0.46],
+        "neck": [0.40, 0.36, 0.64, 0.57],
+        "torso": [0.18, 0.43, 0.84, 0.79],
+        "paws": [0.25, 0.73, 0.91, 0.93],
+        "tail": [0.08, 0.64, 0.29, 0.86]
+      },
+      "part_points": {
+        "head": [[0.53, 0.27]],
+        "headdress": [[0.46, 0.31]],
+        "neck": [[0.52, 0.48]],
+        "torso": [[0.65, 0.63]],
+        "paws": [[0.68, 0.85]],
+        "tail": [[0.18, 0.76]]
+      },
+      "part_visibility": {
+        "head": "visible",
+        "headdress": "visible",
+        "neck": "visible",
+        "torso": "visible",
+        "paws": "visible",
+        "tail": "visible"
+      },
+      "foreground_points": [[0.52, 0.7]],
+      "background_points": [[0.02, 0.05], [0.97, 0.12], [0.95, 0.95]]
+    }
+  }
+}

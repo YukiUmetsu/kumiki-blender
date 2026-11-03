@@ -4,6 +4,7 @@ import json
 import io
 import os
 import shutil
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
@@ -12,7 +13,7 @@ from unittest.mock import patch
 from PIL import Image, ImageDraw
 
 from kumiki_blender.reconstruction.colmap import (
-    _prepare_images, _registered_image_count, _repair_jpeg_orientation, _sparse_point_metrics,
+    _prepare_images, _feature_import_report, _registered_image_count, _repair_jpeg_orientation, _sparse_point_metrics,
     build_sparse_reconstruction,
 )
 from kumiki_blender.reconstruction.references import ReferenceError, load_reference_set
@@ -201,16 +202,15 @@ class ColmapWorkflowTests(unittest.TestCase):
 
     def test_partial_staging_failure_persists_diagnostic_report(self):
         source = self.references()
-        real_copy = shutil.copyfile
+        real_read = Path.read_bytes
 
-        def fail_second_image(src, dst):
-            if Path(src).name == "left.png":
+        def fail_second_image(path):
+            if path.name == "left.png":
                 raise OSError("simulated exhausted storage")
-            return real_copy(src, dst)
+            return real_read(path)
 
         output = self.root / "r01"
-        with patch("kumiki_blender.reconstruction.colmap.shutil.copyfile",
-                   side_effect=fail_second_image):
+        with patch.object(Path, "read_bytes", fail_second_image):
             report = build_sparse_reconstruction(source, output, colmap=str(self.fake))
         self.assertEqual(report["status"], "review-required")
         self.assertEqual(report["failed_stage"], "staging")
@@ -276,6 +276,85 @@ class ColmapWorkflowTests(unittest.TestCase):
                 self.assertEqual(Image.open(io.BytesIO(repaired)).getexif()[274], 1)
                 self.assertEqual(_repair_jpeg_orientation(repaired), (repaired, False))
         self.assertEqual(_repair_jpeg_orientation(b"not a JPEG"), (b"not a JPEG", False))
+
+    def test_normalizes_webp_and_mislabelled_jpeg_without_changing_sources(self):
+        from kumiki_blender.reconstruction.references import ReferenceImage
+        import hashlib
+
+        source_webp = self.images / "photo.webp"
+        source_jpg = self.images / "odd.jpg"
+        source_png = self.images / "photo.png"
+        Image.new("RGB", (96, 72), (40, 120, 210)).save(source_webp, format="WEBP")
+        # A WebP payload with a JPEG extension reproduces decoder incompatibility.
+        source_jpg.write_bytes(source_webp.read_bytes())
+        Image.new("RGB", (96, 72), (100, 150, 210)).save(source_png, format="PNG")
+        originals = {path: path.read_bytes() for path in (source_webp, source_jpg, source_png)}
+        refs = [
+            ReferenceImage(f"photo-{i:04d}", path, "local-unattributed", "unknown",
+                           ("object",), None, None, hashlib.sha256(path.read_bytes()).hexdigest(),
+                           (96, 72), 0)
+            for i, path in enumerate(originals, 1)
+        ]
+        output = self.root / "normalized"
+        output.mkdir()
+        self.assertFalse(_prepare_images(refs, output, normalize_for_colmap=True))
+        index = json.loads((output / "staged-reference-index.json").read_text())["images"]
+        self.assertEqual(len(index), 3)
+        self.assertTrue(all(item["normalized_for_colmap"] for item in index))
+        self.assertEqual([item["source_format"] for item in index], ["WEBP", "WEBP", "PNG"])
+        for item in index:
+            self.assertEqual(item["dimensions"], [96, 72])
+            self.assertTrue(item["filename"].endswith(".png"))
+            with Image.open(output / "images" / item["filename"]) as image:
+                self.assertEqual(image.format, "PNG")
+                self.assertEqual(image.mode, "RGB")
+        for path, original in originals.items():
+            self.assertEqual(path.read_bytes(), original)
+
+    def test_normalization_applies_exif_orientation_to_image_and_mask(self):
+        from kumiki_blender.reconstruction.references import ReferenceImage
+        import hashlib
+
+        photo = self.images / "rotated.jpg"
+        mask = self.images / "rotated-mask.png"
+        exif = Image.Exif()
+        exif[274] = 6
+        Image.new("RGB", (96, 72), (210, 140, 90)).save(photo, exif=exif)
+        Image.new("L", (96, 72), 255).save(mask)
+        source = ReferenceImage("rotated", photo, "local-unattributed", "unknown",
+                                ("object",), mask, hashlib.sha256(mask.read_bytes()).hexdigest(),
+                                hashlib.sha256(photo.read_bytes()).hexdigest(), (96, 72), 0)
+        output = self.root / "oriented"
+        output.mkdir()
+        self.assertTrue(_prepare_images([source], output, normalize_for_colmap=True))
+        index = json.loads((output / "staged-reference-index.json").read_text())["images"][0]
+        self.assertEqual(index["original_dimensions"], [96, 72])
+        self.assertEqual(index["dimensions"], [72, 96])
+        self.assertEqual(index["exif_orientation_applied"], 6)
+        with Image.open(output / "images/rotated.png") as staged:
+            self.assertEqual(staged.size, (72, 96))
+        with Image.open(output / "masks/rotated.png.png") as staged:
+            self.assertEqual(staged.size, (72, 96))
+        with Image.open(photo) as original:
+            self.assertEqual(original.size, (96, 72))
+
+    def test_feature_import_audit_detects_missing_images(self):
+        directory = self.root / "imports"
+        directory.mkdir()
+        index = directory / "staged-reference-index.json"
+        index.write_text(json.dumps({"images": [
+            {"filename": "a.png"}, {"filename": "b.png"}]}))
+        database = directory / "database.db"
+        with sqlite3.connect(database) as db:
+            db.execute("CREATE TABLE images (name TEXT)")
+            db.execute("INSERT INTO images VALUES ('a.png')")
+        report = _feature_import_report(database, index)
+        self.assertEqual(report["status"], "incomplete")
+        self.assertEqual(report["imported_images"], 1)
+        self.assertEqual(report["missing_images"], ["b.png"])
+        with sqlite3.connect(database) as db:
+            db.execute("INSERT INTO images VALUES ('b.png')")
+        self.assertEqual(_feature_import_report(database, index)["status"], "complete")
 
     def test_staged_photos_record_original_and_repaired_hashes(self):
         photo = self.images / "bad-orientation.jpg"

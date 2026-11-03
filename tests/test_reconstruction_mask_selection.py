@@ -76,14 +76,22 @@ class HybridMaskTests(unittest.TestCase):
             alternate_images=photos if photos is not None else ["photo-0002.png"])
 
     def test_selected_masks_preserve_pinned_photo_hashes_and_work_in_dense_or_splats(self):
+        source_report = self.alternate / "mask-report.json"
+        source_data = json.loads(source_report.read_text())
+        source_data["requires_anatomy_inventory"] = True
+        source_data["images"][1]["guide"] = {"part_points": {"torso": [[0.5, 0.5]]},
+                                             "background_points": [[0.02, 0.02]]}
+        source_report.write_text(json.dumps(source_data))
         source_hash = digest(self.alternate / "masks/photo-0002.png.mask.png")
         report = self.compose()
         target = self.root / "hybrid-r01"
         self.assertEqual(report["status"], "candidate / hybrid-mask-review-required")
         self.assertFalse(report["approved_for_reconstruction"])
+        self.assertTrue(report["requires_anatomy_inventory"])
         self.assertEqual(len(report["images"]), 3)
         self.assertEqual([entry["selected_source"] for entry in report["images"]],
                          ["primary", "alternate", "primary"])
+        self.assertEqual(report["images"][1]["guide"], source_data["images"][1]["guide"])
         self.assertEqual(digest(target / "masks/photo-0002.png.mask.png"), source_hash)
         self.assertEqual(digest(self.alternate / "masks/photo-0002.png.mask.png"), source_hash)
         self.assertTrue((target / "mask-contact-sheet.jpg").is_file())

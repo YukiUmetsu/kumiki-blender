@@ -188,6 +188,8 @@ def main(argv: list[str] | None = None) -> int:
             photo_parser.add_argument("--undistort", action="store_true",
                                       help="Rectify camera intrinsics and image pixels for accurate Blender projection")
             photo_parser.add_argument("--max-image-size", type=int, default=4000)
+            photo_parser.add_argument("--registration-profile", choices=("standard", "high-recall"),
+                                      default="standard", help="Optional high-recall CPU PyCOLMAP matching")
     for command in ("plan-photo-model", "build-photo-model"):
         photo_model_parser = subcommands.add_parser(
             command, help="From one folder of overlapping object photographs to a private mesh GLB")
@@ -264,6 +266,8 @@ def main(argv: list[str] | None = None) -> int:
         splat_parser.add_argument("--opensplat", default="opensplat",
                                   help="OpenSplat executable, built with Metal/MPS or CUDA")
         splat_parser.add_argument("--iterations", type=int, default=7000)
+        splat_parser.add_argument("--downscale", type=float, default=1.0,
+                                  help="OpenSplat image downscale factor (1–16), useful for limited GPU memory")
         splat_parser.add_argument("--format", choices=("ply", "spz"), default="ply")
         splat_parser.add_argument("--timeout-seconds", type=int, default=14_400,
                                   help="Maximum OpenSplat training seconds")
@@ -273,6 +277,8 @@ def main(argv: list[str] | None = None) -> int:
                                   help="COLMAP binary when --engine colmap")
         splat_parser.add_argument("--sparse-timeout-seconds", type=int, default=3600)
         splat_parser.add_argument("--max-image-size", type=int, default=4000)
+        splat_parser.add_argument("--registration-profile", choices=("standard", "high-recall"),
+                                  default="standard", help="Optional high-recall CPU PyCOLMAP matching")
         splat_parser.add_argument("--rectified-masks", type=Path,
                                   help="Optional reviewed masks matching existing --reconstruction rectified photos")
     for command in ("plan-splat-video", "render-splat-video"):
@@ -327,8 +333,13 @@ def main(argv: list[str] | None = None) -> int:
                                    metavar=("LEFT", "TOP", "RIGHT", "BOTTOM"))
     photo_mask_parser.add_argument("--max-side", type=int, default=1280)
     photo_mask_parser.add_argument("--iterations", type=int, default=5)
-    photo_mask_parser.add_argument("--segmenter", choices=("grabcut", "rembg"), default="grabcut",
-                                   help="CPU GrabCut (guided, offline) or optional semantic IS-Net model")
+    photo_mask_parser.add_argument("--segmenter", choices=("grabcut", "rembg", "sam2"), default="grabcut",
+                                   help="CPU GrabCut, semantic IS-Net, or offline guided SAM 2.1")
+    photo_mask_parser.add_argument("--sam2-checkpoint", type=Path,
+                                   help="Existing official SAM 2.1 weights (.pt); no automatic download")
+    photo_mask_parser.add_argument("--sam2-size", choices=("tiny", "small", "base_plus", "large"),
+                                   default="small")
+    photo_mask_parser.add_argument("--sam2-device", choices=("auto", "mps", "cpu"), default="auto")
     refine_mask_parser = subcommands.add_parser(
         "refine-dense-masks", help="Remove tiny mask islands/holes or apply camera-specific polygon cleanup")
     refine_mask_parser.add_argument("--reconstruction", type=Path, required=True)
@@ -360,6 +371,15 @@ def main(argv: list[str] | None = None) -> int:
     mask_consistency_parser.add_argument("--rectified-masks", type=Path, required=True)
     mask_consistency_parser.add_argument("--output", type=Path, required=True)
     mask_consistency_parser.add_argument("--max-overlay-points", type=int, default=200)
+    review_mask_parser = subcommands.add_parser(
+        "review-mask-suggestions", help="Accept individual verified COLMAP correction prompts into a new guides revision")
+    review_mask_parser.add_argument("--reconstruction", type=Path, required=True)
+    review_mask_parser.add_argument("--mask-revision", type=Path, required=True)
+    review_mask_parser.add_argument("--audit-revision", type=Path, required=True)
+    review_mask_parser.add_argument("--output", type=Path, required=True)
+    review_mask_parser.add_argument("--accept", nargs="+", required=True,
+                                    metavar="PHOTO:POINT3D_ID",
+                                    help="Human-confirmed non-tied feature suggestions; never applied to masks directly")
     mask_comparison_parser = subcommands.add_parser(
         "compare-dense-masks", help="Compare two registered mask revisions using identical COLMAP tracks")
     mask_comparison_parser.add_argument("--reconstruction", type=Path, required=True)
@@ -609,7 +629,9 @@ def main(argv: list[str] | None = None) -> int:
                 report = generate_rectified_masks(
                     args.reconstruction, args.output, guides=args.guides,
                     center_box=tuple(args.center_box), max_side=args.max_side,
-                    iterations=args.iterations, segmenter=args.segmenter)
+                    iterations=args.iterations, segmenter=args.segmenter,
+                    sam2_checkpoint=args.sam2_checkpoint, sam2_size=args.sam2_size,
+                    sam2_device=args.sam2_device)
             except ReferenceError as error:
                 raise RecipeError(str(error)) from error
             print(json.dumps(report, indent=2))
@@ -650,6 +672,17 @@ def main(argv: list[str] | None = None) -> int:
                 report = audit_multiview_masks(
                     args.reconstruction, args.rectified_masks, args.output,
                     max_overlay_points=args.max_overlay_points)
+            except ReferenceError as error:
+                raise RecipeError(str(error)) from error
+            print(json.dumps(report, indent=2))
+            return 0
+        if args.command == "review-mask-suggestions":
+            from .reconstruction.mask_prompt_review import accept_mask_point_suggestions
+            from .reconstruction.references import ReferenceError
+            try:
+                report = accept_mask_point_suggestions(
+                    args.reconstruction, args.mask_revision, args.audit_revision,
+                    args.output, accept=args.accept)
             except ReferenceError as error:
                 raise RecipeError(str(error)) from error
             print(json.dumps(report, indent=2))
@@ -970,7 +1003,8 @@ def main(argv: list[str] | None = None) -> int:
             try:
                 settings = SplatSettings(iterations=args.iterations,
                                          timeout_seconds=args.timeout_seconds,
-                                         output_format=args.format, opensplat=args.opensplat)
+                                         output_format=args.format, opensplat=args.opensplat,
+                                         downscale_factor=args.downscale)
                 settings.validate()
                 if args.photos and not args.asset_id:
                     raise ReferenceError("--asset-id is required with --photos")
@@ -996,7 +1030,8 @@ def main(argv: list[str] | None = None) -> int:
                         if args.output.is_symlink() or args.output.exists():
                             raise ReferenceError(f"Output revision already exists: {args.output}")
                         report.update(output=str(args.output.resolve()),
-                                      engine=args.engine, output_format=settings.output_format,
+                                      engine=args.engine, registration_profile=args.registration_profile,
+                                      output_format=settings.output_format,
                                       opensplat_available=bool(shutil.which(args.opensplat)),
                                       camera_engine_available=(
                                           importlib.util.find_spec("pycolmap") is not None
@@ -1008,7 +1043,8 @@ def main(argv: list[str] | None = None) -> int:
                             references, args.output, settings,
                             engine=args.engine, colmap=args.colmap,
                             sparse_timeout_seconds=args.sparse_timeout_seconds,
-                            max_image_size=args.max_image_size)
+                            max_image_size=args.max_image_size,
+                            registration_profile=args.registration_profile)
             except ReferenceError as error:
                 raise RecipeError(str(error)) from error
             print(json.dumps(report, indent=2))
@@ -1199,7 +1235,8 @@ def main(argv: list[str] | None = None) -> int:
                                                       engine=args.engine,
                                                       timeout_seconds=args.timeout_seconds,
                                                       undistort=args.undistort,
-                                                      max_image_size=args.max_image_size))
+                                                      max_image_size=args.max_image_size,
+                                                      registration_profile=args.registration_profile))
             except ReferenceError as error:
                 raise RecipeError(str(error)) from error
             print(json.dumps(report, indent=2))

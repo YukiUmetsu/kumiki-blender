@@ -41,6 +41,516 @@ must produce **undistorted images, cameras, and triangulated sparse points** bef
 Gaussian training can start. Camera registration does not guarantee geometry
 or historical accuracy.
 
+### Mixed JPEG, PNG, and WebP photo compatibility
+
+Camera reconstruction stages each image as a **private, standard RGB PNG**
+before passing it to COLMAP or PyCOLMAP. This prevents the FreeImage decoder
+from silently skipping readable WebP or unusual JPEG inputs. EXIF orientation
+is applied to the staged pixels and corresponding masks; transparent pixels
+are composited over white. Original photos remain untouched. The
+`sparse-reconstruction/staged-reference-index.json` records original filenames,
+source SHA-256, staged SHA-256, dimensions and normalization metadata.
+
+After feature extraction, the pipeline checks the actual COLMAP SQLite
+database against the staged photo index. If photos were skipped, it stops with
+`feature_extraction_incomplete` and lists the missing images, rather than
+attempting an unreliable reconstruction.
+
+**If registration still fails**, diagnose the existing revision without
+retraining or modifying its photos:
+
+```bash
+python3 scripts/diagnose_splat_registration.py \
+  .review/mac-splat-smoke/splat-<failed-revision> \
+  --contact-sheet /tmp/splat-registration.jpg
+open /tmp/splat-registration.jpg
+```
+
+The diagnostic shows imported and missing photos, connected matching groups,
+isolated images and the strongest verified pairs. A successful import is
+necessary but not sufficient: diverse online photos may still lack the
+overlap and parallax needed to recover eight consistent camera poses.
+
+### When all photos import but only a few cameras register
+
+The photo decoder is not the remaining bottleneck if
+`feature_import.imported_images == feature_import.staged_images`. For example,
+a 26-photo monument set with only four registered cameras has insufficient
+verified cross-view geometry even if its reprojection error is low.
+
+First inspect the **failed revision without retraining**:
+
+```bash
+bash scripts/mac_splat_test.sh diagnose \
+  .review/mac-splat-smoke/splat-<failed-revision>
+```
+
+Review the contact sheet and the verified-match graph. If the largest connected
+group is still tiny, high-recall SIFT may recover more matches, but cannot invent
+overlap or parallax between unrelated photographs. The optional, slower CPU
+PyCOLMAP profile increases SIFT features, lowers the detection threshold,
+attempts affine/domain-size feature extraction when supported, relaxes the
+descriptor ratio slightly and enables guided geometric matching. It retains
+the same geometric verification and minimum eight-camera / 60% registration
+gate; it does not force weak photos into a reconstruction.
+
+```bash
+REGISTRATION_PROFILE=high-recall MAX_IMAGE_SIZE=3200 \
+  bash scripts/mac_splat_test.sh run ~/Pictures/statue-photos/sphinx sphinx
+```
+
+#### Why seeded recovery can register zero new photos
+
+If `bash scripts/mac_splat_test.sh recover <revision> 0` reports
+`No images with matches` and `no-registration-improvement`, first inspect
+the existing run **without repeating expensive SfM**:
+
+```bash
+bash scripts/mac_splat_test.sh recover-qa \
+  .review/mac-splat-smoke/splat-20261103T052755Z-7115 0
+
+PHOTO_SUBJECT_TYPE=statue \
+  bash scripts/mac_splat_test.sh photo-advice \
+  .review/mac-splat-smoke/splat-20261103T052755Z-7115
+```
+
+`recover-qa` writes a new immutable `recovery-match-qa.json` with
+per-photo seed-match evidence. The second command writes the labeled
+contact sheet, Markdown photo triage, and missing-angle recommendations.
+
+The run
+has **not** improved the camera model. The updated
+`recovery-report.json` now includes `match_evidence`:
+
+- `raw_match_pairs`, `verified_pairs`, and `strong_verified_pairs`
+  distinguish stored feature matches from geometrically verified pairs.
+- `seed_to_missing_pairs` and `strong_seed_to_missing_pairs` identify
+  whether any verified image pairs bridge registered seed cameras to
+  unregistered photographs (threshold: 15 inliers).
+- `unregistered_photo_advice` reports each missing camera's seed match
+  support and the next action: collect an overlapping bridge shot or
+  investigate 2D–3D tracks, parallax, and camera calibration.
+
+A zero `Loading matches` line in COLMAP does **not** prove the entire
+database contains zero matches; it may reflect mapper filtering or
+disconnected matches. A single matched pair is not sufficient proof of
+a registerable PnP camera. Do not rerun recovery unchanged and expect
+new information. On no improvement, the Mac wrapper automatically
+generates the photo-value and missing-angle report from the original
+sparse revision (if it can read the diagnostic inputs).
+
+#### Warren 2019 Sphinx: 26/26 registered, OpenSplat native crash
+
+The independent Warren LeMay 2019 cohort achieved **26/26 registered cameras**,
+**29,844 sparse points**, 271 strong verified pairs in one connected component,
+and **1.262 px median sparse reprojection error**. This is a major SfM
+improvement over the mixed-source 7/26 run, but **not a verified surface scan**.
+OpenSplat exited with native signal 11 (`SIGSEGV`), so there is **no finished
+splat**. Do not rerun COLMAP to debug the native trainer.
+
+Use the existing staged dataset in a fresh, isolated training revision:
+
+```bash
+git pull --ff-only
+REV=.review/mac-splat-smoke/splat-20261103T063944Z-55327
+DOWNSCALE_FACTOR=4 ITERATIONS=300 bash scripts/mac_splat_test.sh train-existing "$REV"
+```
+
+This command validates image and camera SHA-256 hashes, **copies** the COLMAP
+dataset (OpenSplat may create a cache next to its input), and invokes
+`opensplat <new-copy>/dataset -n 300 -d 4 -o <new-output>/splat.ply`.
+It preserves all original photos, registered poses and sparse tracks. On failure,
+inspect the new `logs/opensplat.log` and `retry-report.json` for the native
+exit signal and an optional LLDB stack-trace command.
+
+If the GPU path still crashes, isolate it with a **diagnostic-only CPU run**:
+
+```bash
+TRAIN_CPU=1 DOWNSCALE_FACTOR=8 ITERATIONS=100 \
+  bash scripts/mac_splat_test.sh train-existing "$REV"
+```
+
+CPU may be much slower. A successful CPU run with a failed MPS run would
+implicate the native GPU path, but **would not by itself identify the cause**.
+The OpenSplat binary should also have a matching Metal library
+(`default.metallib`) in its build directory. No fallback is automatically
+claimed to fix SIGSEGV without reviewing the log or native backtrace.
+
+**Warren 2019 follow-up:** Both MPS (`-d 4, -n 300`) and CPU
+(`--cpu -d 8 -n 100`) retries exited with `SIGSEGV (-11)`. A GPU-only
+failure is therefore unlikely; neither result proves a corrupt COLMAP dataset.
+Capture a native stack trace from the failed CPU retry before changing data:
+
+```bash
+git pull --ff-only
+CPU_RETRY=.review/mac-splat-smoke/splat-retry-20261103T125237Z-90435
+bash scripts/mac_splat_test.sh crash-qa "$CPU_RETRY"
+```
+
+The `crash-qa` command validates the retry report, copies and SHA-256 checks
+its staged dataset, probes the binary version and linked libraries, then runs
+LLDB with `-o run -k "thread backtrace all"`. Results are stored in a new
+`opensplat-crash-qa-*/lldb.log` and `crash-qa.json` without modifying
+the original registered photos or COLMAP model. If LLDB cannot launch the
+inferior due to macOS developer-tools permissions, the result reports
+`debugger-launch-failed` and exits nonzero; that is **not** a native
+backtrace. A debugger run without a crash reports `trace-inconclusive`, and a
+crash without stack frames reports `crash-seen / no-backtrace`. Only a run
+that captures both the crash and stack frames reports
+`trace-captured / inspect-log` and exits successfully. Inspect the first
+crashing frame and its caller before changing PyTorch, OpenSplat, or COLMAP.
+
+**M4 Mac crash evidence (2026-11-03):** The CPU retry's LLDB trace showed
+`EXC_BAD_ACCESS` in `libprotobuf.36.2.0.dylib` with an immediate caller in
+`libprotobuf.29.3.0.dylib`, during descriptor initialization. This is strong
+evidence of incompatible native C++ Protobuf runtimes in one process, **not**
+evidence of bad sparse cameras or a Metal-only crash. C++ Protobuf does not
+guarantee ABI compatibility across versions. The full dependency ownership is
+not established by the stack frames alone. Run `otool -L` on the executable
+and its dependencies to find which library requires each Protobuf version;
+rebuild with one coherent library set. Do **not** manually change dylib
+symlinks or overwrite the original OpenSplat binary as a shortcut.
+
+`crash-qa.json` now records `protobuf_libraries_in_trace` and an actionable
+`native_diagnosis` when multiple versions appear. If LLDB times out *after*
+printing a native crash and frames, the result is
+`trace-captured / debugger-timeout` rather than discarding useful evidence.
+This preserves the fact that the debugger had to be killed while recognizing
+that the stack trace was captured.
+
+#### Visual QA after a successful `train-existing` retry
+
+A successful immutable retry is a candidate with `retry-report.json` and
+`dataset/dataset-report.json` (not the usual `splat-report.json`). The same
+calibrated camera/photo comparisons and orbit-video preflight now accept this
+format, checking the recorded dataset-report hash and trained PLY SHA-256.
+For example, after the 26-camera M4 retry completed successfully with the
+separate `build-homebrew/opensplat` executable:
+
+```bash
+RETRY=.review/mac-splat-smoke/splat-retry-20261103T173341Z-77079
+bash scripts/mac_splat_test.sh qa "$RETRY"
+```
+
+Inspect the generated `multi-angle-contact-sheet.jpg` and
+`visual-qa-report.json`. Training at `-n 100 -d 8` is a smoke test, **not** a
+finished or photo-faithful Sphinx. If it renders successfully, repeat training
+with the same working executable, more iterations and a smaller downscale
+factor, using a new immutable retry revision. Mask preparation from the original
+`sparse-reconstruction` is still a separate workflow.
+
+The `photo-advice` report now requests **zero additional photos for
+registration** when all images are registered. This does not prove full surface
+visibility: the collection visibly emphasizes side/rear tourist angles and
+has limited close-up frontal facial detail.
+
+#### Grounded photo-angle and bridge recommendations
+
+The photo advisor now prioritizes **existing photos that might be recovered**
+before requesting additional images. Its Markdown/JSON report identifies each
+recover-first or needs-overlap-bridge image, the best **registered overlap
+partner** (ranked by verified matches touching existing 3D tracks), and
+candidate 2D–3D count/spatial coverage. The contact sheet also displays
+**unverified filename hints** (front, rear, overhead, side) where available;
+these are never treated as camera measurements.
+
+If the reference photo is not a manually verified **registered front view**,
+the advisor does **not** issue numeric target azimuth/elevation instructions.
+An arbitrary COLMAP reference orientation cannot tell someone where to stand
+relative to the actual monument. It instead requests overlapping
+**transitions between named photos** and identifies weakly supported frontal,
+rear or overhead reference shots. The SVG orbit legend states that no
+physical target azimuth is available.
+
+For the current Sphinx photos, `sphinx-face7.jpg` is a recover-first
+candidate and `sphinx-face10.jpg` needs a bridge, based on the user's
+photo-value report. Their 2D–3D candidate counts are **not PnP inliers**.
+Keep the face-front, rear and overhead photos as visual references even
+if they do not currently register. For heterogeneous internet photographs,
+prefer finding coherent, same-source overlapping sequences or an actual
+survey/scan over accumulating isolated viewpoints.
+
+#### Find which photos help and which camera angles are missing
+
+After a reconstruction attempt, run **photo-advice** to get a per-image
+recommendation, a labeled contact sheet, and a prioritized capture plan:
+
+```bash
+bash scripts/mac_splat_test.sh photo-advice \
+  .review/mac-splat-smoke/splat-20261103T053355Z-11041 \
+  .review/mac-splat-smoke/cohorts-20261103T053322Z-10742/cohort-01/source-index.json
+
+# If you know which REGISTERED photo depicts the front of the statue:
+PHOTO_SUBJECT_TYPE=statue PHOTO_FRONT_REFERENCE=photo-0002.png \
+  bash scripts/mac_splat_test.sh photo-advice \
+  .review/mac-splat-smoke/splat-20261103T053355Z-11041
+```
+
+Use `PHOTO_SUBJECT_TYPE=statue|object|building|landscape` (default:
+`object`) to tailor recommended framing and shared landmarks to the
+subject. Statue advice prioritizes head/neck/torso continuity; buildings
+prioritize facades and corners; landscapes prioritize stable ridges and
+terrain features; other objects prioritize distinctive overlapping details.
+
+The new `photo-advice-*/` directory contains:
+
+- **`photo-advice.md`**: table of all original photo names, estimated
+  reconstruction value, keypoint/verified-match/PnP evidence, measured angles
+  where available, and a specific next action. Registered photos also show
+  how many 3D tracks they observe and how many **two-view tracks would lose
+  triangulation if that camera were removed** (a measured fragility proxy,
+  not a leave-one-out SfM rerun).
+- **`photo-advice.json`**: machine-readable statuses and prioritized
+  suggested photo azimuth/elevation, framing and reason.
+- **`photo-advice.jpg`**: contact sheet labeling each original photo
+  with status and its known/unknown angle.
+- **`photo-angle-map.svg`**: top-down relative camera-orbit diagram, with
+  registered camera viewpoints and proposed intermediate shots. Created only
+  when a usable reconstructed point center and camera poses exist.
+
+Statuses distinguish **keep**, **recover-first**, **needs-overlap-bridge**,
+**low-current-value**, **keep-separate-model**, **keep-check-overlap** and
+**cannot-use**. Low current value means the photo does not currently connect
+well to this SfM reconstruction. It is **not** a verdict that the image is
+unnecessary, poorly composed, or can safely be deleted. An unregistered
+image may contain valuable unique surface detail.
+
+**Angles are only computed for registered cameras in the largest sparse
+model**, relative to a registered reference view and the median of its
+reconstructed 3D points. By default that view is *not* assumed to be the
+statue's front. Set `PHOTO_FRONT_REFERENCE` to a known frontal photo
+(staged or original name) to label relative front/three-quarter/profile
+angles. This is an estimated coordinate frame, **not** a verified survey
+orientation. The analyzer does not invent camera angles for unregistered
+photos, combine disconnected models, or infer photo semantics from filenames.
+
+To add known semantic information (or output from a separate vision
+classifier), invoke the Python tool with `--annotations tags.json`, where
+`tags.json` can contain:
+
+```json
+{
+  "photo-0013.png": {"view": "left profile", "framing": "head close-up"},
+  "photo-0026.png": {"view": "elevated rear", "framing": "full statue"}
+}
+```
+
+These tags are user/vision-supplied **annotations**, not automatically
+verified pose estimates.
+
+For automatic *visual* labels of **unregistered** photos, an optional
+vision-capable model installed in local Ollama can classify approximate
+front/three-quarter/profile/rear appearance, elevated/low viewpoint,
+head-closeup vs head-and-torso vs full-monument framing, and obvious
+blur/occlusion. This is a separate, explicitly **unverified** estimate,
+not a calibrated camera pose:
+
+```bash
+# Use the name of a vision-capable model already installed in local Ollama.
+PHOTO_VISION_MODEL=your-local-vision-model \
+  bash scripts/mac_splat_test.sh photo-advice \
+  .review/mac-splat-smoke/splat-20261103T053355Z-11041
+```
+
+Photos are resized and sent **only** to a loopback Ollama endpoint; remote
+HTTP(S) vision endpoints are rejected. No cloud upload is performed by this
+feature. Each photo's model guess is labeled as a vision estimate and may
+be wrong, especially left vs right or when the statue is cropped.
+The report only recommends semantic view-type gaps when most images were
+classified successfully; numeric angle suggestions still come solely from
+estimated COLMAP poses. Without Ollama, geometric photo-value and angle
+recommendations work without AI dependencies.
+
+Suggestions favor 10–15 degree bridging steps,
+60–80% overlapping subject content, medium shots including shared
+head/neck/torso landmarks, and elevated/lower views when accessible. For
+the Sphinx, inaccessible rear geometry should instead be sourced from
+verified scans or surveys. The Mac `run` command now generates this report
+**automatically when registration fails** and text models exist.
+
+#### Try seeded sparse recovery (no new feature extraction)
+
+The Sphinx cohort's model 0 has 4 registered cameras and only 508
+registered-image 3D track observations. The best unregistered original
+photos have 76 (#17), 32 (#25), and 20 (#20) conservative 2D-to-3D
+candidates, with only 31%, 12.5%, and 31% 4×4 image coverage.
+This suggests **limited track support**, not a trivially small
+triangulation baseline. The candidates have **not** passed PnP RANSAC.
+
+A non-destructive recovery experiment can triangulate more points between
+already registered views, then resume the COLMAP mapper from **one**
+existing sparse model, using the existing verified-match database:
+
+```bash
+# Prefer the original 26-photo reconstruction's 7-camera model:
+bash scripts/mac_splat_test.sh recover \
+  .review/mac-splat-smoke/splat-20261103T052755Z-7115 0
+
+# Optional controlled comparison on the 14-photo cohort:
+bash scripts/mac_splat_test.sh recover \
+  .review/mac-splat-smoke/splat-20261103T053355Z-11041 0
+```
+
+Outputs are under a new `.review/mac-splat-smoke/recovery-*/` revision.
+The original COLMAP database is copied and SHA-256 verified; original
+images and sparse models are never modified. The default fixes existing
+seed poses during resumed mapping. The script reports point counts
+before/after retriangulation, newly registered cameras, any lost seed
+cameras, and whether the **same** 8-camera/60% registration gate was met.
+It does not train splats or claim that successful registration means
+photo-faithful geometry. Recovered models also export `text-models/`
+for a follow-up `pnp-qa` run on the new recovery revision:
+
+```bash
+bash scripts/mac_splat_test.sh pnp-qa .review/mac-splat-smoke/recovery-<timestamp>
+```
+
+If registration does not improve, inspect `recovery-report.json`. The
+remaining options are better overlapping source photographs, carefully
+reviewed camera intrinsics, or verified 3D scan/survey geometry. Do not
+merge disconnected sparse models without a measured alignment.
+
+#### Explain why matched photos still fail camera registration
+
+The 14-photo Sphinx cohort showed median reconstructed triangulation angles
+of **20.811° (model 0)** and **39.908° (model 1)**, with 0% of fitted
+point tracks below 2°. This rules out a trivially tiny baseline **among
+successfully reconstructed tracks** but does not validate camera poses or
+explain missing registrations.
+
+A 2D-to-2D verified match does not imply that its registered-image feature
+is part of an existing triangulated 3D track. For a missing camera, the
+incremental mapper needs sufficient **consistent 2D-to-3D correspondences**
+to estimate and refine its pose.
+
+```bash
+bash scripts/mac_splat_test.sh pnp-qa \
+  .review/mac-splat-smoke/splat-20261103T053355Z-11041 \
+  .review/mac-splat-smoke/cohorts-20261103T053322Z-10742/cohort-01/source-index.json
+```
+
+This saves a private `pnp-qa-*.json` and prints, for **each independent
+sparse model** and each missing photo:
+
+- Verified matches to already registered photos
+- How many of those matches touch a 3D track in that model
+- Distinct candidate 3D points, ambiguous 2D keypoints, and conservative
+  one-to-one 2D-to-3D associations
+- 4×4 image-space coverage of the one-to-one candidate correspondences
+  (if image dimensions are present in COLMAP's database)
+- COLMAP verified two-view geometry configuration counts
+
+**Interpretation:** Very few 2D-to-3D candidates despite many 2D-to-2D
+matches indicates that the existing sparse model has too little shared
+triangulated geometry. Many well-distributed candidates but a failed
+camera registration suggest bad associations, camera calibration, pose
+initialization, or PnP verification thresholds. This audit does **not**
+run PnP, establish geometric inliers, or manufacture a mesh.
+
+#### Measure reconstructed camera baselines before changing SfM settings
+
+After reviewing the match lines, run the existing read-only registration diagnosis
+again on the **14-photo cohort**:
+
+```bash
+bash scripts/mac_splat_test.sh diagnose \
+  .review/mac-splat-smoke/splat-20261103T053355Z-11041
+```
+
+The new `estimated_geometry.models[]` section in `registration-*.json` reports:
+
+- Distinct camera IDs, camera models and estimated focal length divided by
+  the largest image dimension (a dimensionless diagnostic)
+- Per-model **median maximum triangulation angle** for reconstructed 3D point
+  tracks, and percentage of tracks with ray angles below 1°, 2° and 5°
+- A separate result for each disconnected COLMAP sparse model; never mix
+  coordinate frames across models
+
+If most reconstructed points have ray angles below ~2°, the fitted
+cameras provide little reliable depth leverage. If angles look reasonable
+but many cameras still fail to register, investigate mapper initialization,
+unregistered-photo pose estimation, image calibration, and possible false
+matches on repetitive stone layers. These angles are **computed from the
+estimated COLMAP poses**: they are not independently measured ground truth,
+and good-looking values do not prove the reconstruction is correct.
+
+#### Inspect actual verified image correspondences (no new SfM run)
+
+When photos all have strong match-graph edges but only a few camera poses
+register, the next step is **not** increasing SIFT or repeatedly removing
+photos. Inspect where the verified feature matches lie in the photos.
+
+```bash
+bash scripts/mac_splat_test.sh match-qa \
+  .review/mac-splat-smoke/splat-20261103T053355Z-11041 \
+  .review/mac-splat-smoke/cohorts-20261103T053322Z-10742/cohort-01/source-index.json
+```
+
+This creates a new `.review/mac-splat-smoke/match-qa-...` folder with:
+
+- `match-contact-sheet.jpg`: actual COLMAP verified 2D inlier
+  correspondences drawn between image pairs; prioritizes
+  registered-to-unregistered photo pairs, plus control examples
+- `match-qa.json`: image-space 4×4 grid coverage, inlier counts,
+  registration status and, with the optional `source-index.json`, the
+  original 26-photo staged IDs
+
+**Cohort photo IDs were renumbered by `--photos` intake.** Do not compare
+`photo-0007.png` in the 14-photo cohort with the same name in the 26-photo
+revision without using the source index.
+
+The visualization may reveal matches on pyramids, ground, tourists, photo
+cutout edges, or other background objects instead of the Sphinx.
+High match counts or broad image coverage do not prove useful parallax.
+If the matches mostly land on the monument but registration still fails,
+investigate camera intrinsics and seed-pair geometry; if they land on the
+background, use carefully reviewed foreground masks at **feature extraction**
+(not only OpenSplat training). Do not claim successful surface reconstruction
+from these diagnostic images.
+
+#### Split disconnected Sphinx photographs into independent registration cohorts
+
+For the 26-photo Sphinx set, the high-recall run registered 7 cameras in one
+sparse model and 5 in another, with 14 photos in the largest verified-match
+graph component. **Do not concatenate the two models**: their camera coordinate
+frames have not been aligned.
+
+Create new, provenance-preserving photo folders from the existing failed
+revision, without downloading or retraining:
+
+```bash
+bash scripts/mac_splat_test.sh cohorts \
+  .review/mac-splat-smoke/splat-20261103T052755Z-7115
+```
+
+The command creates a new `.review/mac-splat-smoke/cohorts-...` revision
+containing a `cohort-plan.json` and `cohort-01/photos`,
+`cohort-02/photos` (if both matching groups still meet the default three-photo
+minimum). All staged photo hashes are verified before copying, and the
+original photo revision is never modified.
+
+For this particular diagnostic, expect **14** photos in the first connected
+component and **5** in the second; five isolated photos and the two-photo component are
+excluded. The first group has 7 registered cameras so far and needs at least
+**9 of its 14** cameras to register to satisfy both the eight-camera and 60%
+gates. The second group is **too small for production splat training**.
+The script prints a reproducible re-run command for each eligible cohort.
+
+A match-graph component is **not** a proof of correct camera poses. Background
+matches, scale differences and low parallax may still prevent registration.
+Inspect the labeled contact sheet before spending time on another run. The
+five-photo group can be examined with the sparse-only
+`scripts/experiment_sphinx_commons_2010.py --photos-dir <cohort-02/photos>`
+command, but it cannot pass the production splat gate without additional
+overlapping views.
+
+This creates a **new immutable revision**. Inspect the new
+`camera_reconstruction.models`, `feature_import`, `registered_images`
+and registration diagnostic. If high-recall still registers only a few images,
+curate a coherent overlapping photo subset or obtain new sequential
+photographs/verified survey geometry. Do not weaken the 8-view gate merely to
+train a misleading splat.
+
 ## Install OpenSplat (external GPU trainer)
 
 OpenSplat is **not** bundled with Kumiki Blender. It is a separately installed
@@ -107,6 +617,154 @@ interchangeable with undistorted images.
 
 ### Remove background artifacts without repeating camera registration (macOS)
 
+#### Foreground-first pipeline (recommended for large statues)
+
+The Mac helper now assembles the existing rectified segmentation, COLMAP
+track-consistency audit, hash/provenance verification, training and calibrated
+visual QA into two explicit stages. Original photographs and camera poses are
+preserved. **Mask generation alone is never approval to train:** removing part
+of a head, ear or weathered stone will teach OpenSplat an incorrect silhouette.
+
+For the Sphinx, prefer locally prompted **SAM 2.1** to whole-image IS-Net:
+the previous IS-Net candidate retained some heads while erasing the body and
+paws. SAM 2.1 supports per-photo head/headdress/neck/torso/paws/tail boxes,
+positive anatomy landmarks and negative scenery points. The independent
+component masks are unioned. It is still a candidate generator, *not* an
+automatic guarantee of a complete statue.
+
+On Apple Silicon M4/24 GB, start with **SAM 2.1 small** (tiny for lower
+memory). The official implementation supports local MPS/CPU inference; MPS
+may be slower or fail on unsupported operations, so use CPU if necessary.
+Install the optional PyTorch dependencies and the official package without
+CUDA, then download **sam2.1_hiera_small.pt** from the
+[Meta SAM 2 checkpoint list](https://github.com/facebookresearch/sam2#download-checkpoints).
+No weights are downloaded implicitly by kumiki-blender; their SHA-256 is
+recorded in every mask revision.
+
+```bash
+python3 -m pip install -e '.[mask-sam2]'
+git clone https://github.com/facebookresearch/sam2.git ../sam2
+SAM2_BUILD_CUDA=0 python3 -m pip install -e ../sam2
+
+# Create a JSON guide with EXACT rectified names from
+# "$SOURCE/sparse-reconstruction/undistorted-reference-index.json".
+# Start from examples/sphinx-sam2-guides.example.json, but replace every
+# example coordinate with coordinates measured on your actual photos.
+SOURCE=.review/mac-splat-smoke/splat-20261103T063944Z-55327
+MASK_GUIDES=/absolute/path/to/sphinx-guides.json \
+SAM2_CHECKPOINT=/absolute/path/to/sam2.1_hiera_small.pt \
+SAM2_SIZE=small SAM2_DEVICE=auto PYTORCH_ENABLE_MPS_FALLBACK=1 \
+  bash scripts/mac_splat_test.sh foreground-prep "$SOURCE" sam2
+```
+
+Each box is `[left,top,right,bottom]` and point `[x,y]`, normalized to
+the rectified image dimensions (0–1). Annotate **all visible** anatomy per
+view, not automatically all six parts: a tightly cropped face shot cannot
+be expected to show paws or tail. Include a box for each visible part and
+one or more `part_points` on its real stone surface. Mark sky, sand,
+pyramids, people and scaffolding with negative points. The example numbers
+are *not* Sphinx annotations.
+
+**SAM 2.1 quality gate:** for **each registered photo** add a complete
+`part_visibility` inventory containing `head`, `headdress`, `neck`, `torso`,
+`paws`, and `tail`. Mark each `visible` or `not_visible` after inspecting the
+actual frame. `uncertain` is allowed while drafting, but blocks training until
+reviewed. A `visible` part must have a matching `component_boxes` entry and
+at least one `part_points` landmark that remains foreground. A part genuinely
+cropped out or fully occluded should be `not_visible`. This catches the common
+failure where a guide labels only the head, so a head-only segmentation might
+otherwise pass. The inventory is a **human visual claim**, not independent proof
+of complete geometry. It survives mask refinement and hybrid selection, so a
+later revision cannot silently drop the requirement.
+
+Use `--sam2-device cpu` through
+`SAM2_DEVICE=cpu` if MPS fails; the default bounded 1280-pixel inference
+controls peak memory and produces full-size binary mask outputs.
+
+For the older baseline, generate masks with rembg (or guided GrabCut) on the
+same **registered, undistorted** photos. Neither stage reruns SfM or starts
+OpenSplat:
+
+```bash
+SOURCE=.review/mac-splat-smoke/splat-20261103T063944Z-55327
+bash scripts/mac_splat_test.sh foreground-prep "$SOURCE" rembg
+```
+
+The command prints immutable `foreground-mask-...`, `foreground-audit-...`,
+and `foreground-quality-...` revisions. The quality report includes per-view
+area, landmark preservation, background seed violations, track outlier
+fractions and actionable corrections. It **blocks** training if any visible
+part landmark is missing, any mask retains less than 5% or more than 90%
+foreground, more than 5% of its foreground lies outside annotated component
+boxes, a camera has over 20% majority outliers, there are fewer than 25
+compared tracks, or more than 15% shared tracks have inconsistent labels.
+SAM 2.1 candidates also fail when the six-part visibility inventory is
+incomplete or contradicts the part boxes/landmarks.
+These are conservative rejection gates, not proof of correctness.
+
+Inspect **every** photo in
+`mask-contact-sheet.jpg`, especially facial edges, headdress, body and tail.
+Also inspect the cross-view `mask-consistency-contact-sheet.jpg`: red markers
+suggest background leakage; cyan markers suggest missing subject, and yellow
+markers indicate ambiguous tracks. These are review cues, not automatic truth.
+The audit now writes `mask-correction-recommendations.json` with tentative
+positive/negative point prompts, never automatically applied: background
+tracks, occluded surfaces and repeated textures may fool feature consensus.
+If a colored marker is **confirmed against the actual photograph**, accept
+only its `point3d_id` in that specific photo into a **new guide revision**:
+
+```bash
+MASKS=.review/mac-splat-smoke/foreground-mask-<timestamp>
+AUDIT=.review/mac-splat-smoke/foreground-audit-<timestamp>
+kumiki-blender review-mask-suggestions \
+  --reconstruction "$SOURCE/sparse-reconstruction" \
+  --mask-revision "$MASKS" --audit-revision "$AUDIT" \
+  --output .review/mac-splat-smoke/accepted-mask-guides-r02 \
+  --accept 'photo-0003.png:12345' 'photo-0011.png:67890'
+
+# Edit the new guide file to add/adjust component boxes and visible-part
+# landmarks, then resegment into fresh masks and rerun cross-view QA.
+MASK_GUIDES=.review/mac-splat-smoke/accepted-mask-guides-r02/mask-guides.json \
+SAM2_CHECKPOINT=/absolute/path/to/sam2.1_hiera_small.pt \
+  bash scripts/mac_splat_test.sh foreground-prep "$SOURCE" sam2
+```
+
+The IDs above are placeholders; select real IDs from that view's audited
+`correction_recommendations`. Cyan prompts become positive points; red prompts
+become negative points. Tied/unknown points cannot be accepted. The command
+checks source mask, photo and camera-model hashes before saving; it neither
+changes prior masks nor trusts suggestions automatically. If a positive point
+lies outside annotated component boxes, expand the correct anatomy box by
+hand before accepting. **The previous audit cannot approve the new masks.**
+
+If segmentation cuts away genuine statue surfaces, improve per-image SAM 2
+boxes/points or use `refine-dense-masks --edits` with include/exclude polygons,
+then
+rerun `kumiki-blender audit-dense-masks` on the corrected revision.
+
+After that human review, opt into training with an explicit acknowledgement:
+
+```bash
+MASKS=.review/mac-splat-smoke/foreground-mask-<timestamp>
+AUDIT=.review/mac-splat-smoke/foreground-audit-<timestamp>
+MASKS_REVIEWED=1 \
+  OPENSPLAT=/absolute/path/to/working/opensplat \
+  DOWNSCALE_FACTOR=4 ITERATIONS=3000 \
+  bash scripts/mac_splat_test.sh foreground-train "$SOURCE" "$MASKS" "$AUDIT"
+```
+
+The Mac training gate checks mask-report hashes, photo provenance, registered
+camera source, binary/full-resolution masks, multi-view audit coverage,
+COLMAP model integrity, **statue landmarks and quantified consistency**.
+It refuses unreviewed or low-quality masks by default. Successful
+training automatically generates a paired multi-angle splat contact sheet
+(unless `FOREGROUND_AUTO_QA=0`). The `--downscale` setting reaches the
+registered-reconstruction OpenSplat path, allowing realistic memory budgets
+on Apple Silicon. This remains a **private splat candidate**, not a validated
+mesh or a photo-faithful likeness.
+
+#### Individual mask tools and manual alternatives
+
 The Mac smoke helper can reuse the successful PyCOLMAP cameras inside an
 existing `splat-...` revision. A first unmasked model often learns floating
 sky, mountains, and city textures:
@@ -148,7 +806,11 @@ segmentation hashes and selected origins are recorded in the hybrid report.
 
 ```bash
 MASKS=".review/mac-splat-smoke/mask-<timestamp>"  # Printed by the mask step
-ITERATIONS=3000 bash scripts/mac_splat_test.sh run-masked "$SOURCE" "$MASKS"
+AUDIT=".review/mac-splat-smoke/foreground-audit-<timestamp>"
+# Generate AUDIT with: kumiki-blender audit-dense-masks --reconstruction ...
+# --rectified-masks "$MASKS/masks" --output "$AUDIT"
+MASKS_REVIEWED=1 ITERATIONS=3000 \
+  bash scripts/mac_splat_test.sh run-masked "$SOURCE" "$MASKS" "$AUDIT"
 # Use the NEW splat revision printed by run-masked for qa and video.
 # Optional: favor a chosen source photograph for the video hero angle:
 VIDEO_HERO_PHOTO=photo-0001.png bash scripts/mac_splat_test.sh video \

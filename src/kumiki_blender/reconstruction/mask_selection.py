@@ -59,6 +59,8 @@ def _mask_source(reconstruction: Path, output: Path, revision: str | Path,
                 or entries[name].get("source_photo_sha256") != photos[name]):
             raise ReferenceError(f"Source mask/photo provenance changed: {name}")
     return {"path": source, "report_sha256": _sha256(report_path),
+            "requires_anatomy_inventory": report.get("requires_anatomy_inventory") is True
+            or report.get("segmenter") == "sam2",
             "entries": entries, "masks": {item["filename"]: item for item in plan["rectified_masks"]}}
 
 
@@ -107,6 +109,8 @@ def compose_rectified_masks(reconstruction: str | Path, primary_mask_revision: s
         "source_mask_reports_sha256": {"primary": primary["report_sha256"],
                                        "alternate": alternate["report_sha256"]},
         "alternate_images": sorted(alternate_images),
+        "requires_anatomy_inventory": (primary["requires_anatomy_inventory"]
+                                       or alternate["requires_anatomy_inventory"]),
         "approved_for_reconstruction": False,
         "status": "incomplete / manual-mask-review-required", "images": [],
     }
@@ -158,6 +162,7 @@ def compose_rectified_masks(reconstruction: str | Path, primary_mask_revision: s
             "mask": str(destination.relative_to(target)), "mask_sha256": original_hash,
             "preview": str(preview_path.relative_to(target)),
             "foreground_fraction": occupancy, "warnings": warnings,
+            "guide": entry.get("guide"),
         })
         checkpoint()
     columns, width, height = 4, 288, 238

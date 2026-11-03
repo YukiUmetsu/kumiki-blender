@@ -322,6 +322,27 @@ print('trained from 8 images')
         self.assertTrue((output / "splat.ply").is_file())
         self.assertTrue((output / "splat-report.json").is_file())
 
+    def test_masked_training_downscales_and_keeps_camera_matched_masks(self):
+        from PIL import Image
+
+        masks = self.root / "reviewed-masks"
+        masks.mkdir()
+        for num in range(8):
+            mask = Image.new("L", (128, 96), 0)
+            mask.paste(255, (20, 20, 100, 75))
+            mask.save(masks / f"photo-{num:04d}.jpg.mask.png")
+        output = self.root / "foreground-splats"
+        report = build_splat_revision(
+            self.source, output,
+            SplatSettings(iterations=1000, downscale_factor=4,
+                          opensplat=str(self._fake_opensplat())),
+            rectified_masks=masks)
+        self.assertEqual(report["status"], "candidate / visual-review-required")
+        self.assertEqual(report["settings"]["downscale_factor"], 4)
+        self.assertEqual(report["command"][-2:], ["-d", "4"])
+        self.assertEqual(report["dataset"]["masks"], 8)
+        self.assertTrue((output / "dataset/masks/photo-0000.png").is_file())
+
     def test_invalid_gaussian_ply_fails_audit(self):
         invalid = self.root / "fake.ply"
         invalid.write_bytes(b"ply\nformat binary_little_endian 1.0\nelement vertex 1\nproperty float x\nend_header\n")
@@ -353,6 +374,11 @@ print('trained from 8 images')
             build_splat_revision(self.source, self.root / "invalid",
                 SplatSettings(iterations=-1, opensplat=str(self._fake_opensplat())))
         self.assertFalse((self.root / "invalid").exists())
+        for downscale in (0, 17, float("nan"), True):
+            with self.assertRaisesRegex(ReferenceError, "downscale"):
+                build_splat_revision(self.source, self.root / "invalid",
+                    SplatSettings(downscale_factor=downscale,
+                                  opensplat=str(self._fake_opensplat())))
 
 
 if __name__ == "__main__":

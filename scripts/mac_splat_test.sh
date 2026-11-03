@@ -7,9 +7,20 @@ Usage:
   bash scripts/mac_splat_test.sh doctor
   bash scripts/mac_splat_test.sh plan /absolute/path/to/photos [asset-slug]
   bash scripts/mac_splat_test.sh run /absolute/path/to/photos [asset-slug]
-  bash scripts/mac_splat_test.sh mask /path/to/splat-revision [rembg|grabcut]
+  bash scripts/mac_splat_test.sh train-existing /path/to/failed-splat-revision
+  bash scripts/mac_splat_test.sh crash-qa /path/to/failed-splat-retry
+  bash scripts/mac_splat_test.sh diagnose /path/to/failed-splat-revision
+  bash scripts/mac_splat_test.sh cohorts /path/to/failed-splat-revision
+  bash scripts/mac_splat_test.sh match-qa /path/to/failed-splat-revision [cohort-source-index.json]
+  bash scripts/mac_splat_test.sh pnp-qa /path/to/failed-splat-revision [cohort-source-index.json]
+  bash scripts/mac_splat_test.sh photo-advice /path/to/failed-splat-revision [cohort-source-index.json] [front-photo]
+  bash scripts/mac_splat_test.sh recover /path/to/failed-splat-revision [model-index]
+  bash scripts/mac_splat_test.sh recover-qa /path/to/failed-splat-revision [model-index]
+  bash scripts/mac_splat_test.sh mask /path/to/splat-revision [rembg|grabcut|sam2]
+  bash scripts/mac_splat_test.sh foreground-prep /path/to/splat-revision [rembg|grabcut|sam2]
+  MASKS_REVIEWED=1 bash scripts/mac_splat_test.sh foreground-train /path/to/splat-revision /path/to/foreground-mask-revision /path/to/foreground-audit-revision
   bash scripts/mac_splat_test.sh hybrid /path/to/splat-revision /path/to/rembg-mask-revision /path/to/grabcut-mask-revision photo-0002.png photo-0015.png
-  bash scripts/mac_splat_test.sh run-masked /path/to/splat-revision /path/to/mask-revision
+  MASKS_REVIEWED=1 bash scripts/mac_splat_test.sh run-masked /path/to/splat-revision /path/to/mask-revision /path/to/audit-revision
   bash scripts/mac_splat_test.sh qa /path/to/splat-revision
   bash scripts/mac_splat_test.sh video /path/to/splat-revision
 
@@ -18,16 +29,26 @@ Optional environment:
   SPLAT_TRANSFORM=/absolute/path/to/splat-transform (default: splat-transform)
   OUTPUT_ROOT=/absolute/path/to/revisions (default: .review/mac-splat-smoke)
   MAX_IMAGE_SIZE=2000 ITERATIONS=3000 MAX_VIEWS=12
+  DOWNSCALE_FACTOR=4 TRAIN_CPU=0 (train-existing/foreground-train/run-masked; CPU=1 for retry diagnostic)
+  CRASH_QA_TIMEOUT=600 (crash-qa: LLDB timeout in seconds)
+  REGISTRATION_PROFILE=standard|high-recall (high-recall: slower, CPU SIFT + guided matching)
+  PHOTO_FRONT_REFERENCE=photo-0001.png (optional known frontal view for angle labels)
+  PHOTO_VISION_MODEL=<installed-ollama-vision-model> (optional, local image view/framing labels)
+  PHOTO_SUBJECT_TYPE=object|statue|building|landscape (default: object)
   VIDEO_SECONDS=3 VIDEO_WIDTH=960 VIDEO_HEIGHT=540
   VIDEO_HERO_PHOTO=photo-0001.png (optional registered view for video)
   MASK_MAX_SIDE=1280 MASK_ITERATIONS=5
+  MASK_GUIDES=/path/to/per-image-guides.json (SAM2 component boxes, landmarks, positive/negative points)
+  SAM2_CHECKPOINT=/path/to/sam2.1_hiera_small.pt SAM2_SIZE=small SAM2_DEVICE=auto|mps|cpu
+  MASKS_REVIEWED=1 (required only after reviewing every foreground mask and audit)
+  FOREGROUND_AUTO_QA=1 (foreground-train: compare views after successful training)
 Outputs are private, revisioned and never overwritten.
 EOF
 }
 die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 require() { command -v "$1" >/dev/null 2>&1 || die "Missing $1. Install it, then rerun doctor."; }
 mode="${1:-}"; [[ -n "$mode" ]] || { usage; exit 2; }
-[[ "$mode" == doctor || "$mode" == plan || "$mode" == run || "$mode" == mask || "$mode" == hybrid || "$mode" == run-masked || "$mode" == qa || "$mode" == video ]] || { usage; exit 2; }
+[[ "$mode" == doctor || "$mode" == plan || "$mode" == run || "$mode" == diagnose || "$mode" == cohorts || "$mode" == match-qa || "$mode" == pnp-qa || "$mode" == photo-advice || "$mode" == recover || "$mode" == recover-qa || "$mode" == train-existing || "$mode" == crash-qa || "$mode" == mask || "$mode" == hybrid || "$mode" == run-masked || "$mode" == foreground-prep || "$mode" == foreground-train || "$mode" == qa || "$mode" == video ]] || { usage; exit 2; }
 if [[ "$mode" != doctor ]]; then [[ $# -ge 2 ]] || { usage; exit 2; }; fi
 [[ "$(uname -s)" == Darwin ]] || printf 'WARNING: Intended for macOS; current OS is %s\n' "$(uname -s)" >&2
 root="${OUTPUT_ROOT:-.review/mac-splat-smoke}"
@@ -44,6 +65,7 @@ if [[ "$mode" == doctor ]]; then
   python3 -c 'import pycolmap; print("OK: pycolmap")' 2>/dev/null || printf 'MISSING: pycolmap (pip install -e ".[photogrammetry]")\n'
   python3 -c 'from PIL import Image; print("OK: Pillow")' 2>/dev/null || printf 'MISSING: Pillow (pip install Pillow)\n'
   python3 -c 'from rembg import new_session; print("OK: rembg (semantic masks)")' 2>/dev/null || printf 'OPTIONAL: rembg (pip install -e ".[mask-ai]")\n'
+  python3 -c 'from sam2.sam2_image_predictor import SAM2ImagePredictor; print("OK: SAM 2.1 (promptable masks)")' 2>/dev/null || printf 'OPTIONAL: SAM 2.1 (install official facebookresearch/sam2 package)\n'
   if command -v "$rasterizer" >/dev/null 2>&1 || [[ -x "$rasterizer" ]]; then "$rasterizer" --list-gpus || printf 'WARNING: GPU discovery failed\n'; fi
   printf 'OpenSplat must be built with Metal/MPS; a detected executable alone does not prove GPU acceleration.\n'
   exit 0
@@ -57,36 +79,230 @@ new_output() {
   [[ ! -e "$candidate" ]] || die "Output already exists: $candidate"
   printf '%s\n' "$candidate"
 }
-if [[ "$mode" == plan || "$mode" == run ]]; then
+prepare_mask_revision() {
+  local reconstruction="$1" output="$2" segmenter="$3"
+  local args=(--reconstruction "$reconstruction" --output "$output" --segmenter "$segmenter"
+              --max-side "${MASK_MAX_SIDE:-1280}" --iterations "${MASK_ITERATIONS:-5}")
+  [[ -z "${MASK_GUIDES:-}" ]] || args+=(--guides "$MASK_GUIDES")
+  if [[ "$segmenter" == sam2 ]]; then
+    [[ -n "${SAM2_CHECKPOINT:-}" && -f "$SAM2_CHECKPOINT" ]] || die 'SAM2_CHECKPOINT must point to existing local SAM 2.1 weights'
+    args+=(--sam2-checkpoint "$SAM2_CHECKPOINT" --sam2-size "${SAM2_SIZE:-small}"
+           --sam2-device "${SAM2_DEVICE:-auto}")
+  fi
+  kumiki-blender prepare-dense-masks "${args[@]}"
+}
+if [[ "$mode" == diagnose ]]; then
+  [[ -d "$2" ]] || die "Splat revision directory not found: $2"
+  python3 -c 'from PIL import Image' || die 'Install Pillow: pip install Pillow'
+  output="$(new_output registration)"
+  python3 scripts/diagnose_splat_registration.py "$2" --contact-sheet "$output.jpg" --json-output "$output.json"
+  printf '\nRegistration contact sheet: %s.jpg\nRegistration report: %s.json\n' "$output" "$output"
+  open "$output.jpg" 2>/dev/null || true
+elif [[ "$mode" == cohorts ]]; then
+  [[ -d "$2" ]] || die "Splat revision directory not found: $2"
+  output="$(new_output cohorts)"
+  python3 scripts/prepare_sfm_cohorts.py "$2" --output "$output"
+  printf '\nPhoto cohorts and provenance: %s/cohort-plan.json\n' "$output"
+elif [[ "$mode" == match-qa ]]; then
+  [[ -d "$2" ]] || die "Splat revision directory not found: $2"
+  python3 -c 'from PIL import Image' || die 'Install Pillow: pip install Pillow'
+  output="$(new_output match-qa)"
+  source_args=()
+  if [[ $# -ge 3 ]]; then
+    [[ -f "$3" ]] || die "Cohort source index not found: $3"
+    source_args+=(--source-index "$3")
+  fi
+  python3 scripts/visualize_sfm_matches.py "$2" --output "$output" "${source_args[@]}"
+  open "$output/match-contact-sheet.jpg" 2>/dev/null || true
+elif [[ "$mode" == pnp-qa ]]; then
+  [[ -d "$2" ]] || die "Splat revision directory not found: $2"
+  output="$(new_output pnp-qa)"
+  source_args=()
+  if [[ $# -ge 3 ]]; then
+    [[ -f "$3" ]] || die "Cohort source index not found: $3"
+    source_args+=(--source-index "$3")
+  fi
+  python3 scripts/diagnose_sfm_pnp_support.py "$2" --json-output "$output.json" "${source_args[@]}"
+elif [[ "$mode" == photo-advice ]]; then
+  [[ -d "$2" ]] || die "Splat revision directory not found: $2"
+  output="$(new_output photo-advice)"
+  advice_args=()
+  if [[ $# -ge 3 ]]; then
+    [[ -f "$3" ]] || die "Cohort source index not found: $3"
+    advice_args+=(--source-index "$3")
+  fi
+  if [[ $# -ge 4 ]]; then
+    advice_args+=(--front-photo "$4")
+  elif [[ -n "${PHOTO_FRONT_REFERENCE:-}" ]]; then
+    advice_args+=(--front-photo "$PHOTO_FRONT_REFERENCE")
+  fi
+  [[ -z "${PHOTO_VISION_MODEL:-}" ]] || advice_args+=(--vision-model "$PHOTO_VISION_MODEL")
+  advice_args+=(--subject-type "${PHOTO_SUBJECT_TYPE:-object}")
+  python3 scripts/audit_photo_coverage.py "$2" --output "$output" "${advice_args[@]}"
+  printf '\nRead: %s/photo-advice.md\nPhoto contact sheet: %s/photo-advice.jpg\n' "$output" "$output"
+  [[ -f "$output/photo-advice.jpg" ]] && open "$output/photo-advice.jpg" 2>/dev/null || true
+elif [[ "$mode" == recover-qa ]]; then
+  [[ -d "$2" ]] || die "Splat revision directory not found: $2"
+  output="$(new_output recovery-match-qa)"
+  python3 scripts/recover_sfm_tracks.py "$2" --model "${3:-0}" --output "$output" --diagnose-only
+elif [[ "$mode" == recover ]]; then
+  [[ -d "$2" ]] || die "Splat revision directory not found: $2"
+  python3 -c 'import pycolmap' || die 'Install photogrammetry dependencies: pip install -e ".[photogrammetry]"'
+  output="$(new_output recovery)"
+  python3 scripts/recover_sfm_tracks.py "$2" --model "${3:-0}" --output "$output"
+  if python3 -c 'import json,sys; sys.exit(0 if json.load(open(sys.argv[1]))["status"] == "no-registration-improvement" else 1)' "$output/recovery-report.json"; then
+    advice="$(new_output photo-advice)"
+    advice_args=(--subject-type "${PHOTO_SUBJECT_TYPE:-object}")
+    [[ -z "${PHOTO_FRONT_REFERENCE:-}" ]] || advice_args+=(--front-photo "$PHOTO_FRONT_REFERENCE")
+    [[ -z "${PHOTO_VISION_MODEL:-}" ]] || advice_args+=(--vision-model "$PHOTO_VISION_MODEL")
+    if python3 scripts/audit_photo_coverage.py "$2" --output "$advice" "${advice_args[@]}"; then
+      printf '\nNo registration improvement. Per-photo and missing-angle report: %s/photo-advice.md\n' "$advice"
+      [[ -f "$advice/photo-advice.jpg" ]] && open "$advice/photo-advice.jpg" 2>/dev/null || true
+    else
+      printf 'WARNING: Could not generate photo advice; recovery report remains available.\n' >&2
+    fi
+  fi
+elif [[ "$mode" == crash-qa ]]; then
+  [[ -f "$2/retry-report.json" ]] || die "Failed OpenSplat retry report not found: $2/retry-report.json"
+  require lldb
+  output="$(new_output opensplat-crash-qa)"
+  python3 scripts/diagnose_opensplat_crash.py "$2" --output "$output" \
+    --timeout "${CRASH_QA_TIMEOUT:-600}"
+elif [[ "$mode" == train-existing ]]; then
+  [[ -d "$2/dataset" ]] || die "Existing staged dataset not found: $2/dataset"
+  check_tool "$trainer"
+  output="$(new_output splat-retry)"
+  revision="$2"
+  # macOS ships Bash 3.2: under set -u, expanding an empty array raises
+  # "unbound variable" even when the array was initialized with ().
+  # Build positional arguments instead; zero optional arguments are safe.
+  set -- "$revision" --output "$output" \
+    --opensplat "$trainer" --iterations "${ITERATIONS:-300}" \
+    --downscale "${DOWNSCALE_FACTOR:-4}"
+  if [[ "${TRAIN_CPU:-0}" == 1 ]]; then
+    set -- "$@" --cpu
+  fi
+  python3 scripts/retry_opensplat_training.py "$@"
+elif [[ "$mode" == plan || "$mode" == run ]]; then
   photos="$2"; [[ -d "$photos" ]] || die "Photo directory not found: $photos"
   slug="${3:-mac-splat-test}"
   [[ "$slug" =~ ^[a-zA-Z0-9][a-zA-Z0-9_-]*$ ]] || die 'Asset slug must contain only letters, numbers, hyphens and underscores.'
   count="$(find "$photos" -maxdepth 1 -type f \( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' -o -iname '*.webp' \) | wc -l | tr -d ' ')"
   (( count >= 8 && count <= 256 )) || die "Need 8–256 photos; found $count."
+  profile="${REGISTRATION_PROFILE:-standard}"
+  [[ "$profile" == standard || "$profile" == high-recall ]] || die "REGISTRATION_PROFILE must be standard or high-recall"
+  max_image_size="${MAX_IMAGE_SIZE:-$( [[ "$profile" == high-recall ]] && echo 3200 || echo 2000 )}"
   output="$(new_output splat)"
-  printf 'Photos: %s | Output: %s\n' "$count" "$output"
-  kumiki-blender plan-splats --photos "$photos" --asset-id "$slug" --output "$output"
+  printf 'Photos: %s | Registration: %s | Max image size: %s | Output: %s\n' "$count" "$profile" "$max_image_size" "$output"
+  kumiki-blender plan-splats --photos "$photos" --asset-id "$slug" --output "$output" --opensplat "$trainer" \
+    --registration-profile "$profile"
   [[ "$mode" == plan ]] && exit 0
   check_tool "$trainer"
   python3 -c 'import pycolmap' || die 'Install photogrammetry dependencies: pip install -e ".[photogrammetry]"'
-  kumiki-blender build-splats --photos "$photos" --asset-id "$slug" --output "$output" \
-    --engine pycolmap --opensplat "$trainer" --max-image-size "${MAX_IMAGE_SIZE:-2000}" --iterations "${ITERATIONS:-3000}"
-  printf '\nTraining output: %s\nRun QA: bash scripts/mac_splat_test.sh qa "%s"\n' "$output" "$output"
+  if kumiki-blender build-splats --photos "$photos" --asset-id "$slug" --output "$output" \
+    --engine pycolmap --opensplat "$trainer" --max-image-size "$max_image_size" \
+    --registration-profile "$profile" --iterations "${ITERATIONS:-3000}" \
+    --downscale "${DOWNSCALE_FACTOR:-1}"; then
+    printf '\nTraining output: %s\nRun QA: bash scripts/mac_splat_test.sh qa "%s"\n' "$output" "$output"
+  else
+    status=$?
+    failed_stage=""
+    if [[ -f "$output/splat-report.json" ]]; then
+      failed_stage="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("failed_stage") or "")' "$output/splat-report.json" 2>/dev/null || true)"
+    fi
+    if [[ "$failed_stage" == opensplat* ]]; then
+      printf '\nCamera registration succeeded; OpenSplat training failed (%s).\n' "$failed_stage" >&2
+      printf 'Native training log: %s/logs/opensplat.log\n' "$output" >&2
+      if [[ -f "$output/logs/opensplat.log" ]]; then
+        printf '\nLast 35 trainer log lines:\n' >&2
+        tail -n 35 "$output/logs/opensplat.log" >&2
+      fi
+      printf '\nRetry training without repeating SfM:\n  DOWNSCALE_FACTOR=4 ITERATIONS=300 bash scripts/mac_splat_test.sh train-existing "%s"\n' "$output" >&2
+      printf 'If MPS still crashes, set TRAIN_CPU=1 to isolate the native GPU path.\n' >&2
+    elif [[ -f "$output/sparse-reconstruction/database.db" ]]; then
+      diagnostic="$(new_output registration)"
+      printf '\nCamera registration incomplete. Generating read-only registration diagnosis...\n' >&2
+      if python3 scripts/diagnose_splat_registration.py "$output" --contact-sheet "$diagnostic.jpg" --json-output "$diagnostic.json"; then
+        printf '\nRegistration contact sheet: %s.jpg\nRegistration report: %s.json\n' "$diagnostic" "$diagnostic" >&2
+        open "$diagnostic.jpg" 2>/dev/null || true
+      else
+        printf 'WARNING: Registration diagnosis failed; original build exit code preserved.\n' >&2
+      fi
+      if [[ -d "$output/sparse-reconstruction/text-models" ]]; then
+        advice="$(new_output photo-advice)"
+        advice_args=()
+        [[ -z "${PHOTO_FRONT_REFERENCE:-}" ]] || advice_args+=(--front-photo "$PHOTO_FRONT_REFERENCE")
+        [[ -z "${PHOTO_VISION_MODEL:-}" ]] || advice_args+=(--vision-model "$PHOTO_VISION_MODEL")
+        advice_args+=(--subject-type "${PHOTO_SUBJECT_TYPE:-object}")
+        if python3 scripts/audit_photo_coverage.py "$output" --output "$advice" "${advice_args[@]}"; then
+          printf '\nPhoto value + missing-angle recommendations: %s/photo-advice.md\n' "$advice" >&2
+        else
+          printf 'WARNING: Photo advice unavailable; original build exit code preserved.\n' >&2
+        fi
+      fi
+    fi
+    printf 'Failed splat revision retained at: %s\n' "$output" >&2
+    exit "$status"
+  fi
+elif [[ "$mode" == foreground-prep || "$mode" == foreground-train ]]; then
+  revision="$2"
+  [[ -f "$revision/splat-report.json" && -d "$revision/sparse-reconstruction" ]] || die "Expected a Sphinx splat revision containing a registered sparse reconstruction: $revision"
+  reconstruction="$revision/sparse-reconstruction"
+  if [[ "$mode" == foreground-prep ]]; then
+    segmenter="${3:-rembg}"
+    [[ "$segmenter" == rembg || "$segmenter" == grabcut || "$segmenter" == sam2 ]] || die "Foreground segmenter must be rembg, grabcut or sam2"
+    [[ "$segmenter" != rembg ]] || python3 -c 'from rembg import new_session' || die 'Install semantic mask support: pip install -e ".[mask-ai]"'
+    [[ "$segmenter" != grabcut ]] || python3 -c 'import cv2' || die 'Install GrabCut support: pip install -e ".[masks]"'
+    masks="$(new_output foreground-mask)"
+    prepare_mask_revision "$reconstruction" "$masks" "$segmenter" >/dev/null
+    audit="$(new_output foreground-audit)"
+    kumiki-blender audit-dense-masks --reconstruction "$reconstruction" \
+      --rectified-masks "$masks/masks" --output "$audit" >/dev/null
+    quality="$(new_output foreground-quality)"
+    mkdir "$quality"
+    python3 scripts/validate_foreground_splat_pipeline.py "$reconstruction" "$masks" "$audit" \
+      --output "$(new_output splat)" --allow-failures \
+      --report-output "$quality/mask-quality-report.json" >/dev/null
+    printf '\nGenerated candidate revisions (retain even if blocked):\n  MASKS=%s\n  AUDIT=%s\n  QUALITY=%s/mask-quality-report.json\n' "$masks" "$audit" "$quality"
+    python3 -c 'import json,sys; r=json.load(open(sys.argv[1])); print("Mask quality:", r["status"]); [print("  -", s) for s in r["quality_failures"][:15]]; print("Review all failures in the JSON report before training.") if r["quality_failures"] else None' "$quality/mask-quality-report.json"
+    printf '\nReview EVERY photo before training:\n  Masks: %s/mask-contact-sheet.jpg\n  Cross-view disagreements: %s/mask-consistency-contact-sheet.jpg\n' "$masks" "$audit"
+    printf '\nAfter reviewing/correcting the masks:\n  MASKS_REVIEWED=1 OPENSPLAT=/absolute/path/to/working/opensplat DOWNSCALE_FACTOR=4 ITERATIONS=3000 bash scripts/mac_splat_test.sh foreground-train "%s" "%s" "%s"\n' "$revision" "$masks" "$audit"
+    open "$masks/mask-contact-sheet.jpg" 2>/dev/null || true
+    open "$audit/mask-consistency-contact-sheet.jpg" 2>/dev/null || true
+  else
+    [[ $# -eq 4 ]] || die "foreground-train needs the splat, mask and cross-view audit revisions"
+    [[ "${MASKS_REVIEWED:-0}" == 1 ]] || die "Review every mask and consistency sheet, then explicitly set MASKS_REVIEWED=1"
+    [[ -n "$3" && -n "$4" ]] || die 'MASKS and AUDIT are empty. Use the actual foreground-mask-* and foreground-audit-* directories printed by foreground-prep.'
+    [[ -f "$3/mask-report.json" && -d "$3/masks" ]] || die "Invalid mask revision: $3 (expected mask-report.json and masks/; check the MASKS variable)"
+    [[ -f "$4/mask-consistency-report.json" ]] || die "Invalid audit revision: $4 (expected mask-consistency-report.json; check the AUDIT variable)"
+    output="$(new_output splat)"
+    python3 scripts/validate_foreground_splat_pipeline.py "$reconstruction" "$3" "$4" \
+      --output "$output" >/dev/null
+    check_tool "$trainer"
+    kumiki-blender build-splats --reconstruction "$reconstruction" \
+      --rectified-masks "$3/masks" --output "$output" --opensplat "$trainer" \
+      --iterations "${ITERATIONS:-3000}" --downscale "${DOWNSCALE_FACTOR:-4}"
+    printf '\nMasked splat: %s\n' "$output"
+    if [[ "${FOREGROUND_AUTO_QA:-1}" == 1 ]]; then
+      bash scripts/mac_splat_test.sh qa "$output"
+    else
+      printf 'Visual QA: bash scripts/mac_splat_test.sh qa "%s"\n' "$output"
+    fi
+  fi
 elif [[ "$mode" == mask || "$mode" == hybrid || "$mode" == run-masked ]]; then
   revision="$2"
   [[ -f "$revision/splat-report.json" && -d "$revision/sparse-reconstruction" ]] || die "Expected a completed multiview splat revision with sparse-reconstruction: $revision"
   reconstruction="$revision/sparse-reconstruction"
   if [[ "$mode" == mask ]]; then
     segmenter="${3:-rembg}"
-    [[ "$segmenter" == rembg || "$segmenter" == grabcut ]] || die "Segmenter must be rembg or grabcut"
+    [[ "$segmenter" == rembg || "$segmenter" == grabcut || "$segmenter" == sam2 ]] || die "Segmenter must be rembg, grabcut or sam2"
     if [[ "$segmenter" == rembg ]]; then
       python3 -c 'from rembg import new_session' || die 'Install semantic mask support: pip install -e ".[mask-ai]"'
-    else
+    elif [[ "$segmenter" == grabcut ]]; then
       python3 -c 'import cv2' || die 'Install GrabCut support: pip install -e ".[masks]"'
     fi
     output="$(new_output mask)"
-    kumiki-blender prepare-dense-masks --reconstruction "$reconstruction" --output "$output" \
-      --segmenter "$segmenter" --max-side "${MASK_MAX_SIDE:-1280}" --iterations "${MASK_ITERATIONS:-5}"
+    prepare_mask_revision "$reconstruction" "$output" "$segmenter"
     printf '\nInspect EVERY subject mask before training: %s/mask-contact-sheet.jpg\n' "$output"
     printf 'To train with reviewed masks: bash scripts/mac_splat_test.sh run-masked "%s" "%s"\n' "$revision" "$output"
     open "$output/mask-contact-sheet.jpg" 2>/dev/null || true
@@ -104,16 +320,20 @@ elif [[ "$mode" == mask || "$mode" == hybrid || "$mode" == run-masked ]]; then
     printf 'Retrain after review: bash scripts/mac_splat_test.sh run-masked "%s" "%s"\n' "$revision" "$output"
     open "$output/mask-contact-sheet.jpg" 2>/dev/null || true
   else
-    [[ $# -eq 3 ]] || die "run-masked requires splat and mask revision paths"
+    [[ $# -eq 4 ]] || die "run-masked requires splat, mask and matching cross-view audit revisions"
+    [[ "${MASKS_REVIEWED:-0}" == 1 ]] || die "Review every mask, then explicitly set MASKS_REVIEWED=1"
     masks="$3"
     [[ -f "$masks/mask-report.json" && -d "$masks/masks" ]] || die "Expected prepare-dense-masks revision: $masks"
     # Match the mask report's immutable reconstruction source, so a mask
     # set cannot be accidentally applied to differently registered photos.
     python3 -c 'import json,pathlib,sys; report=json.loads((pathlib.Path(sys.argv[1])/"mask-report.json").read_text()); source=pathlib.Path(report["source_revision"]).resolve(); expected=pathlib.Path(sys.argv[2]).resolve(); sys.exit(0 if source == expected and report["status"].startswith("candidate") else 3)' "$masks" "$reconstruction" || die "Mask provenance check failed"
-    check_tool "$trainer"
     output="$(new_output splat)"
+    python3 scripts/validate_foreground_splat_pipeline.py "$reconstruction" "$masks" "$4" \
+      --output "$output" >/dev/null
+    check_tool "$trainer"
     kumiki-blender build-splats --reconstruction "$reconstruction" --rectified-masks "$masks/masks" \
-      --output "$output" --opensplat "$trainer" --iterations "${ITERATIONS:-3000}"
+      --output "$output" --opensplat "$trainer" --iterations "${ITERATIONS:-3000}" \
+      --downscale "${DOWNSCALE_FACTOR:-4}"
     printf '\nMasked training output: %s\nRun QA: bash scripts/mac_splat_test.sh qa "%s"\n' "$output" "$output"
   fi
 elif [[ "$mode" == qa ]]; then

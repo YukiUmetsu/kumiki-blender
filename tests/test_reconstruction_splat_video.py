@@ -140,6 +140,16 @@ for index, frame in enumerate(track['frames']):
             hero = plan_splat_video(revision, self.root / "hero-video",
                                     self.settings(hero_photo="photo-0000.png"))
         self.assertEqual(hero["camera"]["anchor_photo"], "photo-0000.png")
+        # A successful immutable train-existing retry has the same registered
+        # camera evidence, but records it in retry-report.json.
+        (revision / "retry-report.json").write_text(
+            (revision / "splat-report.json").read_text())
+        (revision / "splat-report.json").unlink()
+        with patch("kumiki_blender.reconstruction.splat_visual_qa._photo_plan",
+                   return_value=(views, [])):
+            retry_video = plan_splat_video(
+                revision, self.root / "retry-video", self.settings())
+        self.assertEqual(retry_video["camera"]["framing"], "registered-camera-rays")
         with patch("kumiki_blender.reconstruction.splat_visual_qa._photo_plan",
                    return_value=(views, [])):
             with self.assertRaisesRegex(ReferenceError, "Hero photo"):

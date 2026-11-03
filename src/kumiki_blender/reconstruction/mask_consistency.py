@@ -308,6 +308,21 @@ def audit_multiview_masks(reconstruction: str | Path, masks: str | Path,
                 :max_overlay_points-len(selected_outliers)]
             selected_ties = tie_marks[name][:max_overlay_points-len(selected_outliers)]
             image_meta[name]["review_targets"] = selected_outliers + selected_ties
+            # These are prompts for a *person* to inspect, never input to an
+            # automatic label replacement. Occlusions and monument/background
+            # features can make a COLMAP majority confidently wrong.
+            image_meta[name]["correction_recommendations"] = [
+                {"kind": mark["kind"],
+                 "prompt_type": ("foreground_points" if mark["kind"] == "possible_missing_subject"
+                                 else "background_points"),
+                 "normalized_xy": mark["normalized_xy"],
+                 "point3d_id": mark["point3d_id"],
+                 "foreground_votes": mark["foreground_votes"],
+                 "background_votes": mark["background_votes"],
+                 "human_confirmation_required": True,
+                 "note": "Check the original photograph; matched tracks are not ground-truth statue labels"}
+                for mark in selected_outliers[:30]
+            ]
             # Draw ties first so concrete disagreements remain visually prominent.
             for mark in selected_ties + selected_outliers:
                 x, y = mark["x"], mark["y"]
@@ -376,6 +391,7 @@ def audit_multiview_masks(reconstruction: str | Path, masks: str | Path,
                           "ambiguous_tie": "yellow: no multi-view majority"},
         "compared_3d_tracks": compared_tracks,
         "mixed_label_tracks": mixed_tracks,
+        "mixed_label_fraction": round(mixed_tracks / compared_tracks, 5),
         "ambiguous_label_tracks": ambiguous_tracks,
         "contact_sheet": "mask-consistency-contact-sheet.jpg",
         "images": [image_meta[name] for name in names],
@@ -385,4 +401,10 @@ def audit_multiview_masks(reconstruction: str | Path, masks: str | Path,
     }
     (target / "mask-consistency-report.json").write_text(
         json.dumps(report, indent=2) + "\n", encoding="utf-8")
+    (target / "mask-correction-recommendations.json").write_text(
+        json.dumps({"status": "draft / human-confirmation-required",
+                    "source_revision": str(source), "mask_source": str(mask_root),
+                    "warning": "Never auto-paint from sparse 3D track majorities; check occlusions and actual statue surfaces",
+                    "images": {name: image_meta[name]["correction_recommendations"]
+                               for name in names}}, indent=2) + "\n", encoding="utf-8")
     return report

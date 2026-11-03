@@ -16,6 +16,7 @@ from kumiki_blender.cli import main
 from kumiki_blender.reconstruction.mask_comparison import compare_multiview_masks
 from kumiki_blender.reconstruction.mask_consistency import audit_multiview_masks
 from kumiki_blender.reconstruction.references import ReferenceError
+from scripts.validate_foreground_splat_pipeline import validate_foreground_pipeline
 
 
 def _digest(path):
@@ -69,11 +70,196 @@ class MaskConsistencyTests(unittest.TestCase):
                 content.extend(struct.pack("<ddq", x, y, point_id))
         (self.sparse / "undistorted/sparse/images.bin").write_bytes(content)
 
+    def _foreground_pipeline_candidates(self):
+        mask_revision = self.root / "foreground-mask"
+        mask_revision.mkdir()
+        shutil.copytree(self.masks, mask_revision / "masks")
+        images = json.loads((self.sparse / "undistorted-reference-index.json").read_text())["images"]
+        (mask_revision / "mask-report.json").write_text(json.dumps({
+            "status": "candidate / inspect-every-mask-before-dense-reconstruction",
+            "source_revision": str(self.sparse.resolve()),
+            "approved_for_reconstruction": False,
+            "images": [{"filename": item["filename"],
+                        "source_photo_sha256": item["sha256"],
+                        "mask": f'masks/{item["filename"]}.mask.png',
+                        "mask_sha256": _digest(mask_revision / "masks" /
+                                               (item["filename"] + ".mask.png")),
+                        "warnings": []} for item in images],
+        }))
+        audit_revision = self.root / "foreground-audit"
+        audit_multiview_masks(self.sparse, mask_revision / "masks", audit_revision)
+        return mask_revision, audit_revision
+
+    def test_foreground_pipeline_accepts_only_matching_review_candidates(self):
+        masks, audit = self._foreground_pipeline_candidates()
+        target = self.root / "fresh-splat"
+        report = validate_foreground_pipeline(self.sparse, masks, audit, target,
+                                              require_quality=False)
+        self.assertEqual(report["registered_photos"], 3)
+        self.assertTrue(report["high_priority_mask_reviews"])
+        self.assertEqual(report["status"], "blocked / mask-quality-gates-failed")
+        self.assertFalse(report["quality_passed"])
+        self.assertTrue(any("part" in issue.lower() for issue in report["quality_failures"]))
+        self.assertFalse(target.exists())
+        # Replacing a mask after cross-view QA must invalidate the saved audit.
+        mask = masks / "masks/view-00.jpg.mask.png"
+        with Image.open(mask) as image:
+            modified = image.copy()
+        modified.putpixel((50, 50), 0)
+        modified.save(mask)
+        with self.assertRaisesRegex(ReferenceError, "provenance changed|changed since"):
+            validate_foreground_pipeline(self.sparse, masks, audit, target)
+
+    def test_foreground_pipeline_rejects_changed_audit_or_camera_model(self):
+        masks, audit = self._foreground_pipeline_candidates()
+        target = self.root / "fresh-splat"
+        report_path = audit / "mask-consistency-report.json"
+        report = json.loads(report_path.read_text())
+        report["rectified_mask_source"] = str(self.root / "different")
+        report_path.write_text(json.dumps(report))
+        with self.assertRaisesRegex(ReferenceError, "different masks"):
+            validate_foreground_pipeline(self.sparse, masks, audit, target)
+        report["rectified_mask_source"] = str(masks / "masks")
+        report_path.write_text(json.dumps(report))
+        model = self.sparse / "undistorted/sparse/images.bin"
+        model.write_bytes(model.read_bytes() + b"tamper")
+        with self.assertRaisesRegex(ReferenceError, "COLMAP model changed"):
+            validate_foreground_pipeline(self.sparse, masks, audit, target)
+
+    def test_foreground_pipeline_accepts_large_cross_view_audit(self):
+        masks, audit = self._foreground_pipeline_candidates()
+        report_path = audit / "mask-consistency-report.json"
+        report = json.loads(report_path.read_text())
+        # 26-camera runs can legitimately exceed the standard 1 MiB
+        # reconstruction evidence cap with per-feature review markers.
+        report["large_review_metadata"] = "x" * (1024 * 1024)
+        report_path.write_text(json.dumps(report))
+        self.assertGreater(report_path.stat().st_size, 1024 * 1024)
+        result = validate_foreground_pipeline(
+            self.sparse, masks, audit, self.root / "large-audit-splat",
+            require_quality=False)
+        self.assertEqual(result["registered_photos"], 3)
+
+    def test_quality_gate_rejects_incomplete_masks_and_cross_view_conflicts(self):
+        masks, audit = self._foreground_pipeline_candidates()
+        output = self.root / "blocked-training"
+        with self.assertRaisesRegex(ReferenceError, "quality gates"):
+            validate_foreground_pipeline(self.sparse, masks, audit, output)
+        self.assertFalse(output.exists())
+
+    def test_quality_gate_accepts_verified_anatomy_and_consistent_tracks(self):
+        # Add actual supporting pixels for conflicting features so every
+        # tracked 3D observation now agrees across all three views.
+        masks, _ = self._foreground_pipeline_candidates()
+        for name, pixel in (("view-00.jpg", (4, 60)),
+                            ("view-02.jpg", (4, 40))):
+            file = masks / "masks" / (name + ".mask.png")
+            with Image.open(file) as image:
+                copy = image.copy()
+            copy.putpixel(pixel, 255)
+            copy.save(file)
+        report_path = masks / "mask-report.json"
+        report = json.loads(report_path.read_text())
+        for entry in report["images"]:
+            entry["mask_sha256"] = _digest(masks / entry["mask"])
+            entry["guide"] = {"part_points": {"head": [[0.3, 0.375]],
+                                                 "torso": [[0.5, 0.65]]},
+                              "background_points": [[0.1, 0.1]]}
+        report_path.write_text(json.dumps(report))
+        audit = self.root / "consistent-audit"
+        audit_multiview_masks(self.sparse, masks / "masks", audit)
+        validated = validate_foreground_pipeline(
+            self.sparse, masks, audit, self.root / "allowed-training",
+            min_compared_tracks=3)
+        self.assertTrue(validated["quality_passed"])
+        self.assertEqual(validated["quality_failures"], [])
+        self.assertFalse((self.root / "allowed-training").exists())
+        for entry in report["images"]:
+            entry["guide"]["component_boxes"] = {"head": [0.2, 0.1, 0.6, 0.6],
+                                                   "torso": [0.3, 0.5, 0.7, 0.8]}
+        report_path.write_text(json.dumps(report))
+        with self.assertRaisesRegex(ReferenceError, "outside component boxes"):
+            validate_foreground_pipeline(self.sparse, masks, audit,
+                                         self.root / "denied-scenery", min_compared_tracks=3)
+        for entry in report["images"]:
+            del entry["guide"]["component_boxes"]
+        # A positive click is a hard anatomical claim, not just a model hint.
+        report["images"][0]["guide"]["foreground_points"] = [[0.05, 0.05]]
+        report_path.write_text(json.dumps(report))
+        with self.assertRaisesRegex(ReferenceError, "foreground points"):
+            validate_foreground_pipeline(self.sparse, masks, audit,
+                                         self.root / "denied-positive-seed", min_compared_tracks=3)
+
+    def test_sam2_requires_full_view_by_view_anatomy_visibility_inventory(self):
+        masks, _ = self._foreground_pipeline_candidates()
+        for name, pixel in (("view-00.jpg", (4, 60)), ("view-02.jpg", (4, 40))):
+            path = masks / "masks" / (name + ".mask.png")
+            with Image.open(path) as source:
+                adjusted = source.copy()
+            adjusted.putpixel(pixel, 255)
+            adjusted.save(path)
+        report_path = masks / "mask-report.json"
+        document = json.loads(report_path.read_text())
+        document["requires_anatomy_inventory"] = True
+        for item in document["images"]:
+            item["mask_sha256"] = _digest(masks / item["mask"])
+            item["guide"] = {"part_points": {"head": [[0.3, 0.375]]},
+                             "component_boxes": {"head": [0.0, 0.0, 0.99, 0.99]},
+                             "background_points": [[0.1, 0.1]]}
+        report_path.write_text(json.dumps(document))
+        audit = self.root / "anatomy-audit"
+        audit_multiview_masks(self.sparse, masks / "masks", audit)
+
+        target = self.root / "anatomy-training"
+        initial = validate_foreground_pipeline(self.sparse, masks, audit, target,
+                                                min_compared_tracks=3,
+                                                require_quality=False)
+        self.assertFalse(initial["quality_passed"])
+        self.assertTrue(any("visibility inventory" in failure
+                            for failure in initial["quality_failures"]))
+
+        visibility = {part: "not_visible" for part in (
+            "headdress", "neck", "torso", "paws", "tail")}
+        visibility["head"] = "visible"
+        for item in document["images"]:
+            item["guide"]["part_visibility"] = visibility.copy()
+        report_path.write_text(json.dumps(document))
+        verified = validate_foreground_pipeline(self.sparse, masks, audit, target,
+                                                min_compared_tracks=3)
+        self.assertTrue(verified["quality_passed"])
+        self.assertEqual(verified["images"][0]["part_visibility"], visibility)
+
+        for item in document["images"]:
+            item["guide"]["part_visibility"]["paws"] = "visible"
+        report_path.write_text(json.dumps(document))
+        missing_paws = validate_foreground_pipeline(self.sparse, masks, audit, target,
+                                                    min_compared_tracks=3,
+                                                    require_quality=False)
+        self.assertTrue(any("paws" in failure for failure in missing_paws["quality_failures"]))
+
+        for item in document["images"]:
+            item["guide"]["part_visibility"]["paws"] = "uncertain"
+        report_path.write_text(json.dumps(document))
+        uncertain = validate_foreground_pipeline(self.sparse, masks, audit, target,
+                                                 min_compared_tracks=3,
+                                                 require_quality=False)
+        self.assertTrue(any("uncertain" in failure for failure in uncertain["quality_failures"]))
+
+        for item in document["images"]:
+            item["guide"]["part_visibility"]["paws"] = "not_visible"
+            item["guide"]["component_boxes"]["paws"] = [0.1, 0.7, 0.9, 0.99]
+        report_path.write_text(json.dumps(document))
+        contradictory = validate_foreground_pipeline(self.sparse, masks, audit, target,
+                                                    min_compared_tracks=3,
+                                                    require_quality=False)
+        self.assertTrue(any("not_visible" in failure for failure in contradictory["quality_failures"]))
+
     def test_flags_one_majority_outlier_and_ambiguous_two_view_track(self):
         target = self.root / "audit"
         result = audit_multiview_masks(self.sparse, self.masks, target)
         self.assertEqual(result["compared_3d_tracks"], 4)
         self.assertEqual(result["mixed_label_tracks"], 2)
+        self.assertEqual(result["mixed_label_fraction"], 0.5)
         self.assertEqual(result["ambiguous_label_tracks"], 1)
         self.assertFalse(result["approved_for_reconstruction"])
         self.assertFalse(result["distribution_allowed"])
@@ -82,6 +268,11 @@ class MaskConsistencyTests(unittest.TestCase):
         self.assertEqual(result["images"][2]["possible_missing_subject"], 1)
         self.assertEqual(result["images"][2]["possible_background_leaks"], 0)
         self.assertEqual(result["images"][2]["review_priority"], "high")
+        proposal = result["images"][2]["correction_recommendations"][0]
+        self.assertEqual(proposal["kind"], "possible_missing_subject")
+        self.assertEqual(proposal["prompt_type"], "foreground_points")
+        self.assertTrue(proposal["human_confirmation_required"])
+        self.assertTrue((target / "mask-correction-recommendations.json").is_file())
         self.assertEqual(result["images"][0]["review_priority"], "medium")
         self.assertTrue((target / result["contact_sheet"]).is_file())
         self.assertEqual(result["model_sha256"], _digest(self.sparse /

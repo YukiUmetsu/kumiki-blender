@@ -89,9 +89,11 @@ def _find_splat(source: str | Path) -> Path:
     if entry.is_symlink():
         raise ReferenceError("Splat input must not be a symlink")
     if entry.is_dir():
-        report_path = entry / "splat-report.json"
-        if report_path.is_symlink() or not report_path.is_file():
-            raise ReferenceError("Splat revision is missing splat-report.json")
+        reports = [entry / name for name in ("splat-report.json", "retry-report.json")
+                   if (entry / name).exists() or (entry / name).is_symlink()]
+        if len(reports) != 1 or reports[0].is_symlink() or not reports[0].is_file():
+            raise ReferenceError("Splat revision needs exactly one regular training report")
+        report_path = reports[0]
         try:
             report = json.loads(report_path.read_text(encoding="utf-8"))
         except (ValueError, KeyError, TypeError) as error:
@@ -340,11 +342,14 @@ def _video_output_plan(source: str | Path, output: str | Path,
         source_dir = Path(source)
         if (file.suffix == ".ply" and settings.target is None and
                 settings.distance is None and source_dir.is_dir() and
-                (source_dir / "splat-report.json").is_file()):
+                ((source_dir / "splat-report.json").is_file() or
+                 (source_dir / "retry-report.json").is_file())):
             # Import here because splat_visual_qa also uses _find_splat.
             from .splat_visual_qa import SplatViewQASettings, _photo_plan
-            report = json.loads((source_dir / "splat-report.json").read_text(encoding="utf-8"))
-            if "dataset" in report:
+            report_file = (source_dir / "splat-report.json")
+            report = (json.loads(report_file.read_text(encoding="utf-8"))
+                      if report_file.is_file() else None)
+            if report is None or "dataset" in report:
                 views, _ = _photo_plan(source_dir.resolve(),
                                        SplatViewQASettings(max_views=48))
                 registered = _registered_camera_orbit(views, settings.hero_photo)

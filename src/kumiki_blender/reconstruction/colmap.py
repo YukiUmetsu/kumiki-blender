@@ -8,8 +8,10 @@ statue, resolve missing anatomy, or clear source-media redistribution rights.
 from __future__ import annotations
 
 import hashlib
+import io
 import importlib.util
 import json
+import sqlite3
 import math
 import shutil
 import statistics
@@ -127,8 +129,33 @@ def _repair_jpeg_orientation(data: bytes) -> tuple[bytes, bool]:
     return data, False
 
 
-def _prepare_images(references: list[ReferenceImage], output: Path) -> bool:
+def _orient_mask(mask, orientation: int):
+    """Apply the same EXIF pixel transform used on the source photograph."""
     from PIL import Image
+
+    transforms = {
+        2: Image.Transpose.FLIP_LEFT_RIGHT,
+        3: Image.Transpose.ROTATE_180,
+        4: Image.Transpose.FLIP_TOP_BOTTOM,
+        5: Image.Transpose.TRANSPOSE,
+        6: Image.Transpose.ROTATE_270,
+        7: Image.Transpose.TRANSVERSE,
+        8: Image.Transpose.ROTATE_90,
+    }
+    return mask.transpose(transforms[orientation]) if orientation in transforms else mask
+
+
+def _prepare_images(references: list[ReferenceImage], output: Path, *,
+                    normalize_for_colmap: bool = False) -> bool:
+    """Stage immutable photos and masks; optionally normalize to RGB PNG.
+
+    PyCOLMAP's image decoder cannot reliably import WebP or some JPEG variants
+    that Pillow accepts. For real camera reconstruction, transcode all inputs
+    into standard RGB PNG (including unusual JPEGs) without modifying originals.
+    EXIF orientation and alpha are resolved explicitly; the staged hash,
+    dimensions, source hash and original filename remain auditable.
+    """
+    from PIL import Image, ImageOps
 
     image_root = output / "images"
     image_root.mkdir()
@@ -138,34 +165,95 @@ def _prepare_images(references: list[ReferenceImage], output: Path) -> bool:
         mask_root.mkdir()
     index = []
     for image in references:
-        filename = image.image_id + image.path.suffix.lower()
+        filename = image.image_id + (".png" if normalize_for_colmap
+                                     else image.path.suffix.lower())
         staged = image_root / filename
-        shutil.copyfile(image.path, staged)
-        if _sha256(staged) != image.sha256:
-            raise ReferenceError(f"Reference {image.image_id} changed during image staging")
         corrected_exif = False
-        if staged.suffix.lower() in (".jpg", ".jpeg"):
-            clean, corrected_exif = _repair_jpeg_orientation(staged.read_bytes())
-            if corrected_exif:
-                staged.write_bytes(clean)
+        orientation = 1
+        source_format = None
+        source_mode = None
+        alpha_composited = False
+        if normalize_for_colmap:
+            # Decode the same exact bytes that were validated during intake.
+            data = image.path.read_bytes()
+            if hashlib.sha256(data).hexdigest() != image.sha256:
+                raise ReferenceError(f"Reference {image.image_id} changed during image staging")
+            try:
+                with Image.open(io.BytesIO(data)) as source:
+                    source.load()
+                    source_format, source_mode = source.format, source.mode
+                    orientation = source.getexif().get(274, 1)
+                    orientation = orientation if orientation in range(1, 9) else 1
+                    upright = ImageOps.exif_transpose(source)
+                    if "A" in upright.getbands() or "transparency" in upright.info:
+                        rgba = upright.convert("RGBA")
+                        normalized = Image.new("RGB", rgba.size, (255, 255, 255))
+                        normalized.paste(rgba, mask=rgba.getchannel("A"))
+                        alpha_composited = True
+                    else:
+                        normalized = upright.convert("RGB")
+                    dimensions = normalized.size
+                    normalized.save(staged, format="PNG")
+            except (OSError, ValueError, Image.DecompressionBombError) as error:
+                raise ReferenceError(f"Cannot normalize reference {image.image_id} for COLMAP: {error}") from error
+        else:
+            shutil.copyfile(image.path, staged)
+            if _sha256(staged) != image.sha256:
+                raise ReferenceError(f"Reference {image.image_id} changed during image staging")
+            if staged.suffix.lower() in (".jpg", ".jpeg"):
+                clean, corrected_exif = _repair_jpeg_orientation(staged.read_bytes())
+                if corrected_exif:
+                    staged.write_bytes(clean)
+            dimensions = image.dimensions
         if has_masks:
             if image.mask is not None:
+                if _sha256(image.mask) != image.mask_sha256:
+                    raise ReferenceError(f"Reference mask {image.image_id} changed during image staging")
                 with Image.open(image.mask) as original:
                     mask = original.convert("L")
+                if normalize_for_colmap:
+                    mask = _orient_mask(mask, orientation)
             else:
-                mask = Image.new("L", image.dimensions, 255)
+                mask = Image.new("L", dimensions, 255)
+            if mask.size != dimensions:
+                raise ReferenceError(f"Staged mask {image.image_id} dimensions differ from photograph")
             mask.save(mask_root / (filename + ".png"))
         index.append({"image_id": image.image_id, "filename": filename,
+                      "original_filename": image.path.name,
                       "source_url": image.source_url, "view": image.view,
                       "regions": image.regions, "sha256": _sha256(staged),
                       "original_sha256": image.sha256,
+                      "normalized_for_colmap": normalize_for_colmap,
+                      "source_format": source_format, "source_mode": source_mode,
+                      "alpha_composited_on_white": alpha_composited,
+                      "exif_orientation_applied": orientation if normalize_for_colmap else None,
                       "invalid_exif_orientation_normalized": corrected_exif,
                       "staged_mask_sha256": (_sha256(mask_root / (filename + ".png"))
                                              if has_masks else None),
-                      "dimensions": image.dimensions, "usage": "reference-only"})
+                      "original_dimensions": list(image.dimensions),
+                      "dimensions": list(dimensions), "usage": "reference-only"})
     _write_json(output / "staged-reference-index.json", {"images": index,
-        "notes": "Local source references only. Do not bundle photographs into distributable GLB assets."})
+        "notes": "Local source references only. COLMAP-normalized pixels are private, not redistributable."})
     return has_masks
+
+
+def _feature_import_report(database: Path, staged_index: Path) -> dict:
+    """Audit what the COLMAP decoder *actually* imported, not what was staged."""
+    staged = json.loads(staged_index.read_text(encoding="utf-8"))
+    expected = {item["filename"] for item in staged["images"]}
+    try:
+        with sqlite3.connect(database.as_uri() + "?mode=ro", uri=True) as db:
+            imported = {row[0] for row in db.execute("SELECT name FROM images")}
+    except sqlite3.DatabaseError as error:
+        # Some synthetic COLMAP test fixtures do not create SQLite databases.
+        return {"status": "unverified / database-unreadable",
+                "staged_images": len(expected), "error": str(error)[:300]}
+    missing = sorted(expected - imported)
+    unexpected = sorted(imported - expected)
+    return {"status": "complete" if not missing and not unexpected else "incomplete",
+            "staged_images": len(expected), "imported_images": len(imported),
+            "missing_images": missing, "unexpected_images": unexpected}
+
 
 
 def _run(executable: str | list[str], stage: str, arguments: list[str], output: Path,
@@ -257,7 +345,8 @@ def build_sparse_reconstruction(reference_set: ReferenceSet, output: str | Path,
                                 engine: str = "colmap",
                                 timeout_seconds: int = 3600,
                                 undistort: bool = False,
-                                max_image_size: int = 4000) -> dict[str, Any]:
+                                max_image_size: int = 4000,
+                                registration_profile: str = "standard") -> dict[str, Any]:
     """Produce auditable camera/sparse data using a locally installed COLMAP.
 
     External tools may fail on historical or unrelated internet photos. Their
@@ -273,6 +362,10 @@ def build_sparse_reconstruction(reference_set: ReferenceSet, output: str | Path,
         raise ReferenceError("undistort must be bool and max_image_size must be 512–16384")
     if engine not in ("colmap", "pycolmap"):
         raise ReferenceError("Sparse engine must be colmap or pycolmap")
+    if registration_profile not in ("standard", "high-recall"):
+        raise ReferenceError("Registration profile must be standard or high-recall")
+    if registration_profile == "high-recall" and engine != "pycolmap":
+        raise ReferenceError("High-recall registration currently requires --engine pycolmap")
     audit = audit_reference_set(reference_set)
     references = _staged_images(reference_set, audit)
     if len(references) < 3:
@@ -303,6 +396,7 @@ def build_sparse_reconstruction(reference_set: ReferenceSet, output: str | Path,
         "manifest_sha256": reference_set.manifest_sha256,
         "source_images": len(reference_set.images),
         "staged_independent_images": len(references),
+        "registration_profile": registration_profile,
         "registered_images": 0,
         "undistortion_requested": undistort,
         "colmap_info": colmap_info,
@@ -318,7 +412,7 @@ def build_sparse_reconstruction(reference_set: ReferenceSet, output: str | Path,
     checkpoint()
     try:
         _write_json(target / "reference-audit.json", audit)
-        has_masks = _prepare_images(references, target)
+        has_masks = _prepare_images(references, target, normalize_for_colmap=True)
     except (ReferenceError, OSError, ValueError) as error:
         report["failed_stage"], report["exit_code"] = "staging", 2
         report["error"] = str(error)
@@ -327,12 +421,14 @@ def build_sparse_reconstruction(reference_set: ReferenceSet, output: str | Path,
     images = target / "images"
     sparse = target / "sparse"
     sparse.mkdir()
+    profile_args = (["--registration-profile", "high-recall"]
+                    if registration_profile == "high-recall" else [])
     stages = [
         ("feature_extractor", ["--database_path", str(database), "--image_path", str(images)] +
          (["--ImageReader.mask_path", str(target / "masks")] if has_masks else []) +
          [cpu_flags[0], "0"] +
-         (["--max_image_size", str(max_image_size)] if engine == "pycolmap" else [])),
-        ("exhaustive_matcher", ["--database_path", str(database), cpu_flags[1], "0"]),
+         (["--max_image_size", str(max_image_size)] if engine == "pycolmap" else []) + profile_args),
+        ("exhaustive_matcher", ["--database_path", str(database), cpu_flags[1], "0"] + profile_args),
         ("mapper", ["--database_path", str(database), "--image_path", str(images),
                     "--output_path", str(sparse)]),
     ]
@@ -343,6 +439,14 @@ def build_sparse_reconstruction(reference_set: ReferenceSet, output: str | Path,
         if code:
             report["failed_stage"], report["exit_code"] = stage, code
             return checkpoint()
+        if stage == "feature_extractor":
+            report["feature_import"] = _feature_import_report(
+                database, target / "staged-reference-index.json")
+            if report["feature_import"]["status"] == "incomplete":
+                report.update(
+                    failed_stage="feature_extraction_incomplete", exit_code=2,
+                    error="COLMAP could not import every staged photo; inspect feature_import.missing_images")
+                return checkpoint()
         checkpoint()
     models = sorted((directory for directory in sparse.iterdir() if directory.is_dir()),
                     key=lambda entry: entry.name)

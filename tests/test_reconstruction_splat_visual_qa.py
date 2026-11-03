@@ -17,6 +17,7 @@ from kumiki_blender.reconstruction.splat_visual_qa import (
     SplatViewQASettings, _camera_pose, _select_spread, plan_splat_view_qa,
     render_splat_view_qa)
 from kumiki_blender.reconstruction.splats import SplatSettings, build_splat_revision
+from scripts.retry_opensplat_training import train_existing
 from tests import test_reconstruction_splats as splat_fixtures
 
 
@@ -83,6 +84,32 @@ Image.new('RGB', size, (12, 77, 90)).save(args[2], lossless=True)
                              "comparison/registered-render.png").is_file())
         report_saved = json.loads((output / "visual-qa-report.json").read_text())
         self.assertEqual(report_saved["comparison_count"], 3)
+
+    def test_immutable_training_retry_supports_visual_qa(self):
+        retry = self.root / "splat-retry"
+        training = train_existing(self.splat, retry,
+                                  opensplat=str(self.fixture._fake_opensplat()),
+                                  iterations=100, downscale=8)
+        self.assertTrue(training["status"].startswith("candidate"))
+        qa = render_splat_view_qa(retry, self.root / "retry-qa", self.settings())
+        self.assertTrue(qa["status"].startswith("candidate"), qa)
+        self.assertEqual(qa["comparison_count"], 3)
+        self.assertTrue((self.root / "retry-qa/multi-angle-contact-sheet.jpg").is_file())
+
+    def test_retry_visual_qa_rejects_modified_provenance_and_artifact(self):
+        retry = self.root / "splat-retry"
+        train_existing(self.splat, retry,
+                       opensplat=str(self.fixture._fake_opensplat()),
+                       iterations=100, downscale=8)
+        dataset_report = retry / "dataset/dataset-report.json"
+        dataset_report.write_text(dataset_report.read_text() + " ")
+        with self.assertRaisesRegex(ReferenceError, "dataset report changed"):
+            plan_splat_view_qa(retry, self.root / "retry-qa", self.settings())
+        dataset_report.write_bytes((self.splat / "dataset/dataset-report.json").read_bytes())
+        artifact = retry / "splat.ply"
+        artifact.write_bytes(artifact.read_bytes() + b"tamper")
+        with self.assertRaisesRegex(ReferenceError, "artifact has changed"):
+            plan_splat_view_qa(retry, self.root / "retry-qa", self.settings())
 
     def test_handles_off_center_and_non_square_intrinsics_without_false_alignment(self):
         camera = self.fixture.source / "undistorted/text-model/cameras.txt"

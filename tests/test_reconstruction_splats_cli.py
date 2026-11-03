@@ -39,7 +39,8 @@ class SplatCLITests(unittest.TestCase):
     def test_registered_camera_cli_plans_and_trains(self):
         base = ["--reconstruction", str(self.fixture.source),
                 "--output", str(self.root / "splats-r01"),
-                "--opensplat", str(self.trainer), "--iterations", "300"]
+                "--opensplat", str(self.trainer), "--iterations", "300",
+                "--downscale", "4"]
         code, report, _ = self._call(["plan-splats", *base])
         self.assertEqual(code, 0)
         self.assertEqual(report["registered_images"], 8)
@@ -47,6 +48,7 @@ class SplatCLITests(unittest.TestCase):
         code, report, _ = self._call(["build-splats", *base])
         self.assertEqual(code, 0)
         self.assertEqual(report["status"], "candidate / visual-review-required")
+        self.assertEqual(report["command"][-2:], ["-d", "4.0"])
         self.assertTrue((self.root / "splats-r01/splat.ply").is_file())
 
     def test_photo_folder_and_manifest_plan_camera_registration(self):
