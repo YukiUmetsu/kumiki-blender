@@ -7,6 +7,7 @@ Usage:
   bash scripts/mac_splat_test.sh doctor
   bash scripts/mac_splat_test.sh plan /absolute/path/to/photos [asset-slug]
   bash scripts/mac_splat_test.sh run /absolute/path/to/photos [asset-slug]
+  bash scripts/mac_splat_test.sh diagnose /path/to/failed-splat-revision
   bash scripts/mac_splat_test.sh mask /path/to/splat-revision [rembg|grabcut]
   bash scripts/mac_splat_test.sh hybrid /path/to/splat-revision /path/to/rembg-mask-revision /path/to/grabcut-mask-revision photo-0002.png photo-0015.png
   bash scripts/mac_splat_test.sh run-masked /path/to/splat-revision /path/to/mask-revision
@@ -18,6 +19,7 @@ Optional environment:
   SPLAT_TRANSFORM=/absolute/path/to/splat-transform (default: splat-transform)
   OUTPUT_ROOT=/absolute/path/to/revisions (default: .review/mac-splat-smoke)
   MAX_IMAGE_SIZE=2000 ITERATIONS=3000 MAX_VIEWS=12
+  REGISTRATION_PROFILE=standard|high-recall (high-recall: slower, CPU SIFT + guided matching)
   VIDEO_SECONDS=3 VIDEO_WIDTH=960 VIDEO_HEIGHT=540
   VIDEO_HERO_PHOTO=photo-0001.png (optional registered view for video)
   MASK_MAX_SIDE=1280 MASK_ITERATIONS=5
@@ -27,7 +29,7 @@ EOF
 die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 require() { command -v "$1" >/dev/null 2>&1 || die "Missing $1. Install it, then rerun doctor."; }
 mode="${1:-}"; [[ -n "$mode" ]] || { usage; exit 2; }
-[[ "$mode" == doctor || "$mode" == plan || "$mode" == run || "$mode" == mask || "$mode" == hybrid || "$mode" == run-masked || "$mode" == qa || "$mode" == video ]] || { usage; exit 2; }
+[[ "$mode" == doctor || "$mode" == plan || "$mode" == run || "$mode" == diagnose || "$mode" == mask || "$mode" == hybrid || "$mode" == run-masked || "$mode" == qa || "$mode" == video ]] || { usage; exit 2; }
 if [[ "$mode" != doctor ]]; then [[ $# -ge 2 ]] || { usage; exit 2; }; fi
 [[ "$(uname -s)" == Darwin ]] || printf 'WARNING: Intended for macOS; current OS is %s\n' "$(uname -s)" >&2
 root="${OUTPUT_ROOT:-.review/mac-splat-smoke}"
@@ -57,20 +59,32 @@ new_output() {
   [[ ! -e "$candidate" ]] || die "Output already exists: $candidate"
   printf '%s\n' "$candidate"
 }
-if [[ "$mode" == plan || "$mode" == run ]]; then
+if [[ "$mode" == diagnose ]]; then
+  [[ -d "$2" ]] || die "Splat revision directory not found: $2"
+  python3 -c 'from PIL import Image' || die 'Install Pillow: pip install Pillow'
+  output="$(new_output registration)"
+  python3 scripts/diagnose_splat_registration.py "$2" --contact-sheet "$output.jpg"
+  printf '\nRegistration contact sheet: %s.jpg\n' "$output"
+  open "$output.jpg" 2>/dev/null || true
+elif [[ "$mode" == plan || "$mode" == run ]]; then
   photos="$2"; [[ -d "$photos" ]] || die "Photo directory not found: $photos"
   slug="${3:-mac-splat-test}"
   [[ "$slug" =~ ^[a-zA-Z0-9][a-zA-Z0-9_-]*$ ]] || die 'Asset slug must contain only letters, numbers, hyphens and underscores.'
   count="$(find "$photos" -maxdepth 1 -type f \( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' -o -iname '*.webp' \) | wc -l | tr -d ' ')"
   (( count >= 8 && count <= 256 )) || die "Need 8–256 photos; found $count."
+  profile="${REGISTRATION_PROFILE:-standard}"
+  [[ "$profile" == standard || "$profile" == high-recall ]] || die "REGISTRATION_PROFILE must be standard or high-recall"
+  max_image_size="${MAX_IMAGE_SIZE:-$( [[ "$profile" == high-recall ]] && echo 3200 || echo 2000 )}"
   output="$(new_output splat)"
-  printf 'Photos: %s | Output: %s\n' "$count" "$output"
-  kumiki-blender plan-splats --photos "$photos" --asset-id "$slug" --output "$output" --opensplat "$trainer"
+  printf 'Photos: %s | Registration: %s | Max image size: %s | Output: %s\n' "$count" "$profile" "$max_image_size" "$output"
+  kumiki-blender plan-splats --photos "$photos" --asset-id "$slug" --output "$output" --opensplat "$trainer" \
+    --registration-profile "$profile"
   [[ "$mode" == plan ]] && exit 0
   check_tool "$trainer"
   python3 -c 'import pycolmap' || die 'Install photogrammetry dependencies: pip install -e ".[photogrammetry]"'
   kumiki-blender build-splats --photos "$photos" --asset-id "$slug" --output "$output" \
-    --engine pycolmap --opensplat "$trainer" --max-image-size "${MAX_IMAGE_SIZE:-2000}" --iterations "${ITERATIONS:-3000}"
+    --engine pycolmap --opensplat "$trainer" --max-image-size "$max_image_size" \
+    --registration-profile "$profile" --iterations "${ITERATIONS:-3000}"
   printf '\nTraining output: %s\nRun QA: bash scripts/mac_splat_test.sh qa "%s"\n' "$output" "$output"
 elif [[ "$mode" == mask || "$mode" == hybrid || "$mode" == run-masked ]]; then
   revision="$2"
