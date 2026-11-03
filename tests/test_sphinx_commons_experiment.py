@@ -34,7 +34,7 @@ class SphinxCommonsExperimentTests(unittest.TestCase):
             photos = root / "originals"
             photos.mkdir()
             for index, filename in enumerate(experiment.SOURCES):
-                Image.new("RGB", (640, 480), (40 + 30 * index, 80, 100)).save(
+                Image.new("RGB", (960, 720), (40 + 30 * index, 80, 100)).save(
                     photos / filename, format="JPEG"
                 )
             revision = root / "revision"
