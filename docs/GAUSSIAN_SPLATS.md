@@ -99,6 +99,43 @@ REGISTRATION_PROFILE=high-recall MAX_IMAGE_SIZE=3200 \
   bash scripts/mac_splat_test.sh run ~/Pictures/statue-photos/sphinx sphinx
 ```
 
+#### Try seeded sparse recovery (no new feature extraction)
+
+The Sphinx cohort's model 0 has 4 registered cameras and only 508
+registered-image 3D track observations. The best unregistered original
+photos have 76 (#17), 32 (#25), and 20 (#20) conservative 2D-to-3D
+candidates, with only 31%, 12.5%, and 31% 4×4 image coverage.
+This suggests **limited track support**, not a trivially small
+triangulation baseline. The candidates have **not** passed PnP RANSAC.
+
+A non-destructive recovery experiment can triangulate more points between
+already registered views, then resume the COLMAP mapper from **one**
+existing sparse model, using the existing verified-match database:
+
+```bash
+# Prefer the original 26-photo reconstruction's 7-camera model:
+bash scripts/mac_splat_test.sh recover \
+  .review/mac-splat-smoke/splat-20261103T052755Z-7115 0
+
+# Optional controlled comparison on the 14-photo cohort:
+bash scripts/mac_splat_test.sh recover \
+  .review/mac-splat-smoke/splat-20261103T053355Z-11041 0
+```
+
+Outputs are under a new `.review/mac-splat-smoke/recovery-*/` revision.
+The original COLMAP database is copied and SHA-256 verified; original
+images and sparse models are never modified. The default fixes existing
+seed poses during resumed mapping. The script reports point counts
+before/after retriangulation, newly registered cameras, any lost seed
+cameras, and whether the **same** 8-camera/60% registration gate was met.
+It does not train splats or claim that successful registration means
+photo-faithful geometry.
+
+If registration does not improve, inspect `recovery-report.json`. The
+remaining options are better overlapping source photographs, carefully
+reviewed camera intrinsics, or verified 3D scan/survey geometry. Do not
+merge disconnected sparse models without a measured alignment.
+
 #### Explain why matched photos still fail camera registration
 
 The 14-photo Sphinx cohort showed median reconstructed triangulation angles
