@@ -373,6 +373,17 @@ def main(argv: list[str] | None = None) -> int:
         separate_parser.add_argument("--min-evidence-views", type=int, default=2)
         separate_parser.add_argument("--max-side", type=int, default=8192)
         separate_parser.add_argument("--max-mesh-faces", type=int, default=5_000_000)
+    defect_parser = subcommands.add_parser(
+        "detect-photo-texture-defects",
+        help="Detect localized photographic texture inconsistencies as review-only masks")
+    defect_parser.add_argument("--dense-revision", type=Path, required=True)
+    defect_parser.add_argument("--surface-recipe", type=Path, required=True)
+    defect_parser.add_argument("--output", type=Path, required=True)
+    defect_parser.add_argument("--color-difference", type=int, default=45)
+    defect_parser.add_argument("--local-excess", type=int, default=20)
+    defect_parser.add_argument("--spatial-radius", type=int, default=12)
+    defect_parser.add_argument("--max-side", type=int, default=8192)
+    defect_parser.add_argument("--max-mesh-faces", type=int, default=5_000_000)
     projection_parser = subcommands.add_parser(
         "project-registered-uv-views",
         help="Project hash-pinned COLMAP photographs onto OBJ UV atlases with occlusion masks")
@@ -624,6 +635,21 @@ def main(argv: list[str] | None = None) -> int:
             try:
                 report = operation(args.dense_revision, args.seed_recipe, args.output,
                                    options=options)
+            except ReferenceError as error:
+                raise RecipeError(str(error)) from error
+            print(json.dumps(report, indent=2))
+            return 0
+        if args.command == "detect-photo-texture-defects":
+            from .reconstruction.texture_defects import DefectDetectionOptions, detect_texture_defects
+            from .reconstruction.references import ReferenceError
+            try:
+                report = detect_texture_defects(
+                    args.dense_revision, args.surface_recipe, args.output,
+                    options=DefectDetectionOptions(color_difference=args.color_difference,
+                                                   local_excess=args.local_excess,
+                                                   spatial_radius=args.spatial_radius,
+                                                   max_side=args.max_side,
+                                                   max_mesh_faces=args.max_mesh_faces))
             except ReferenceError as error:
                 raise RecipeError(str(error)) from error
             print(json.dumps(report, indent=2))
