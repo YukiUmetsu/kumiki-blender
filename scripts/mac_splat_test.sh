@@ -10,6 +10,7 @@ Usage:
   bash scripts/mac_splat_test.sh diagnose /path/to/failed-splat-revision
   bash scripts/mac_splat_test.sh cohorts /path/to/failed-splat-revision
   bash scripts/mac_splat_test.sh match-qa /path/to/failed-splat-revision [cohort-source-index.json]
+  bash scripts/mac_splat_test.sh pnp-qa /path/to/failed-splat-revision [cohort-source-index.json]
   bash scripts/mac_splat_test.sh mask /path/to/splat-revision [rembg|grabcut]
   bash scripts/mac_splat_test.sh hybrid /path/to/splat-revision /path/to/rembg-mask-revision /path/to/grabcut-mask-revision photo-0002.png photo-0015.png
   bash scripts/mac_splat_test.sh run-masked /path/to/splat-revision /path/to/mask-revision
@@ -31,7 +32,7 @@ EOF
 die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 require() { command -v "$1" >/dev/null 2>&1 || die "Missing $1. Install it, then rerun doctor."; }
 mode="${1:-}"; [[ -n "$mode" ]] || { usage; exit 2; }
-[[ "$mode" == doctor || "$mode" == plan || "$mode" == run || "$mode" == diagnose || "$mode" == cohorts || "$mode" == match-qa || "$mode" == mask || "$mode" == hybrid || "$mode" == run-masked || "$mode" == qa || "$mode" == video ]] || { usage; exit 2; }
+[[ "$mode" == doctor || "$mode" == plan || "$mode" == run || "$mode" == diagnose || "$mode" == cohorts || "$mode" == match-qa || "$mode" == pnp-qa || "$mode" == mask || "$mode" == hybrid || "$mode" == run-masked || "$mode" == qa || "$mode" == video ]] || { usage; exit 2; }
 if [[ "$mode" != doctor ]]; then [[ $# -ge 2 ]] || { usage; exit 2; }; fi
 [[ "$(uname -s)" == Darwin ]] || printf 'WARNING: Intended for macOS; current OS is %s\n' "$(uname -s)" >&2
 root="${OUTPUT_ROOT:-.review/mac-splat-smoke}"
@@ -84,6 +85,15 @@ elif [[ "$mode" == match-qa ]]; then
   fi
   python3 scripts/visualize_sfm_matches.py "$2" --output "$output" "${source_args[@]}"
   open "$output/match-contact-sheet.jpg" 2>/dev/null || true
+elif [[ "$mode" == pnp-qa ]]; then
+  [[ -d "$2" ]] || die "Splat revision directory not found: $2"
+  output="$(new_output pnp-qa)"
+  source_args=()
+  if [[ $# -ge 3 ]]; then
+    [[ -f "$3" ]] || die "Cohort source index not found: $3"
+    source_args+=(--source-index "$3")
+  fi
+  python3 scripts/diagnose_sfm_pnp_support.py "$2" --json-output "$output.json" "${source_args[@]}"
 elif [[ "$mode" == plan || "$mode" == run ]]; then
   photos="$2"; [[ -d "$photos" ]] || die "Photo directory not found: $photos"
   slug="${3:-mac-splat-test}"
