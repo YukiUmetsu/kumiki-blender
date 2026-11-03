@@ -113,19 +113,39 @@ def diagnose(retry_revision: Path, output: Path, *, lldb: str = "lldb",
             process.wait()
             summary["lldb_exit_code"] = 124
             summary["status"] = "debugger-timeout"
-    # Bound the data extracted into JSON; the full trace remains in lldb.log.
+    # Scan the whole log for the first crashing frames. Long backtraces may
+    # push the actual fault out of the last 128 KiB, especially with many
+    # worker threads. Keep only bounded excerpts in JSON.
+    crash_pattern = re.compile(
+        r"EXC_BAD_ACCESS|SIGSEGV|Segmentation fault", re.IGNORECASE)
+    frame_pattern = re.compile(r"frame #\d+|stop reason =", re.IGNORECASE)
+    launch_failure_pattern = re.compile(
+        r"process launch failed|error:.*(?:launch|attach).*failed|"
+        r"not allowed to attach|Operation not permitted", re.IGNORECASE)
+    saw_crash = False
+    launch_failed = False
+    frames = []
+    with log_path.open("r", encoding="utf-8", errors="replace") as stream:
+        for line in stream:
+            saw_crash |= bool(crash_pattern.search(line))
+            launch_failed |= bool(launch_failure_pattern.search(line))
+            if len(frames) < 50 and (frame_pattern.search(line) or
+                                     launch_failure_pattern.search(line)):
+                frames.append(line.strip()[:500])
     with log_path.open("rb") as stream:
         stream.seek(max(0, log_path.stat().st_size - 128 * 1024))
         tail = stream.read().decode("utf-8", "replace")
-    summary["saw_native_crash"] = bool(
-        re.search(r"EXC_BAD_ACCESS|SIGSEGV|stop reason =|Segmentation fault",
-                  tail, re.IGNORECASE))
-    summary["frame_excerpt"] = [
-        line.strip() for line in tail.splitlines()
-        if re.search(r"frame #\d+|stop reason =|error: process launch failed",
-                     line, re.IGNORECASE)
-    ][:50]
+    summary["saw_native_crash"] = saw_crash and not launch_failed
+    summary["frame_excerpt"] = frames
     summary["log_tail"] = tail[-12000:]
+    if summary["status"] != "debugger-timeout":
+        if launch_failed:
+            summary["status"] = "debugger-launch-failed"
+        elif not saw_crash:
+            summary["status"] = "trace-inconclusive"
+        elif not any(re.search(r"frame #\d+", frame, re.IGNORECASE)
+                     for frame in frames):
+            summary["status"] = "crash-seen / no-backtrace"
     return save()
 
 
