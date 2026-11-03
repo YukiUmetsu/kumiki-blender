@@ -14,7 +14,9 @@ from .compare import ViewPair, compare_views, summarize_observations
 from .detectors import propose_landmarks
 from .inputs import (inspect_coverage, load_annotations, load_photo_set,
                      photos_from_reference_set)
+from .registration import load_registration_pairs, propose_registrations
 from .reports import load_evidence_bundle, load_pairs, write_analysis_revision
+from .workbench import build_annotation_workbench
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -27,12 +29,19 @@ def main(argv: Sequence[str] | None = None) -> int:
     input_group.add_argument("--reference-manifest", type=Path)
     inspect.add_argument("--annotations", type=Path)
     inspect.add_argument("--detector", choices=("none", "mediapipe"), default="none")
+    inspect.add_argument("--workbench", action="store_true",
+                         help="Generate an offline local landmark/outline editor with embedded previews")
     inspect.add_argument("--output", required=True, type=Path)
     compare = subcommands.add_parser("compare", help="Compare verified same-view photo and model evidence")
     compare.add_argument("--reference", required=True, type=Path)
     compare.add_argument("--candidate", required=True, type=Path)
     compare.add_argument("--pairs", required=True, type=Path)
     compare.add_argument("--output", required=True, type=Path)
+    register = subcommands.add_parser("register", help="Suggest unverified 2D similarity alignment")
+    register.add_argument("--reference", required=True, type=Path)
+    register.add_argument("--candidate", required=True, type=Path)
+    register.add_argument("--anchors", required=True, type=Path)
+    register.add_argument("--output", required=True, type=Path)
     reproject = subcommands.add_parser("reproject", help="Reuse calibrated 3D-to-2D landmark checks")
     reproject.add_argument("--camera-plan", required=True, type=Path)
     reproject.add_argument("--sculpt-landmarks", required=True, type=Path)
@@ -72,8 +81,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                     {"image_id": photo.image_id, **propose_landmarks(photo, detector=args.detector)}
                     for photo in reviewed_photos],
                     "limitations": "All automatic points are unverified 2D proposals, never sculpt ground truth."}
+            workbench = (build_annotation_workbench(reviewed_photos, annotations)
+                         if args.workbench else None)
             write_analysis_revision(args.output, audit, proposals, None,
-                                    photos=reviewed_photos, annotations=annotations)
+                                    photos=reviewed_photos, annotations=annotations,
+                                    workbench_html=workbench)
         elif args.command == "compare":
             reference = load_evidence_bundle(args.reference)
             candidate = load_evidence_bundle(args.candidate)
@@ -81,6 +93,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             result = compare_views(reference, candidate, pairs)
             result["observations"] = summarize_observations(result)
             write_analysis_revision(args.output, {}, None, result)
+        elif args.command == "register":
+            reference = load_evidence_bundle(args.reference)
+            candidate = load_evidence_bundle(args.candidate)
+            anchors = load_registration_pairs(args.anchors)
+            report = propose_registrations(reference, candidate, anchors)
+            write_analysis_revision(args.output, {}, None, None, registration=report)
         else:
             from ..reconstruction.landmarks import check_landmark_reprojection
             with tempfile.TemporaryDirectory(prefix=".face-reprojection-") as temporary:
