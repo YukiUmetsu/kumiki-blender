@@ -173,6 +173,8 @@ def analyze(revision: Path, source_index: Path | None = None) -> dict:
             neighbors = defaultdict(set)
             pair_count = Counter()
             geometry_types = defaultdict(Counter)
+            neighbor_inliers = defaultdict(Counter)
+            neighbor_track_hits = defaultdict(Counter)
             for first, second, config, matches in pairs:
                 if (first in model_ids) == (second in model_ids):
                     continue
@@ -180,6 +182,7 @@ def analyze(revision: Path, source_index: Path | None = None) -> dict:
                 neighbors[missing].add(reg)
                 pair_count[missing] += 1
                 inlier_totals[missing] += len(matches)
+                neighbor_inliers[missing][reg] += len(matches)
                 geometry_types[missing][str(config)] += 1
                 for idx_first, idx_second in matches:
                     kp_reg, kp_missing = ((idx_first, idx_second) if reg == first
@@ -187,6 +190,7 @@ def analyze(revision: Path, source_index: Path | None = None) -> dict:
                     point_id = tracks.get((reg, kp_reg))
                     if point_id is not None:
                         track_hits[missing] += 1
+                        neighbor_track_hits[missing][reg] += 1
                         support[missing][kp_missing].add(point_id)
             missing_images = []
             for image_id in sorted(set(names) - model_ids, key=lambda i: names[i]):
@@ -204,6 +208,17 @@ def analyze(revision: Path, source_index: Path | None = None) -> dict:
                     "filename": names[image_id],
                     "original_filename": original_names.get(names[image_id], names[image_id]),
                     "registered_neighbors": len(neighbors[image_id]),
+                    "registered_neighbor_details": [
+                        {"filename": names[reg],
+                         "original_filename": original_names.get(names[reg], names[reg]),
+                         "verified_inliers": count,
+                         "inliers_touching_existing_3d_tracks":
+                             neighbor_track_hits[image_id][reg]}
+                        for reg, count in sorted(
+                            neighbor_inliers[image_id].items(),
+                            key=lambda pair: (-neighbor_track_hits[image_id][pair[0]],
+                                              -pair[1], names[pair[0]]))
+                    ],
                     "verified_bridge_pairs": pair_count[image_id],
                     "verified_bridge_inliers": inlier_totals[image_id],
                     "inliers_touching_existing_3d_tracks": track_hits[image_id],
