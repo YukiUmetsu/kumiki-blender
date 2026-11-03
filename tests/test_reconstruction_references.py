@@ -71,6 +71,25 @@ class ReferenceSetTests(unittest.TestCase):
         self.assertEqual(report["status"], "review-required")
         self.assertFalse(report["historical_fidelity_verified"])
 
+    def test_user_uploaded_private_photos_need_no_fabricated_url(self):
+        self.image("front.png")
+        user_photo = self.record("front.png", "front")
+        user_photo.pop("source_url")
+        user_photo["source_kind"] = "user-upload"
+        reference = load_reference_set(self.manifest([user_photo]))
+        self.assertEqual(reference.images[0].source_url, "local-unattributed")
+        result = audit_reference_set(reference)
+        self.assertEqual(result["user_upload_images_without_verified_public_provenance"], 1)
+        self.assertFalse(result["historical_fidelity_verified"])
+        for bad in (
+            {**user_photo, "source_url": "https://example.org/photo"},
+            {**user_photo, "source_kind": "website"},
+            {key: value for key, value in user_photo.items() if key != "source_kind"},
+        ):
+            with self.subTest(bad=bad):
+                with self.assertRaisesRegex(ReferenceError, "HTTPS source_url or source_kind"):
+                    load_reference_set(self.manifest([bad]))
+
     def test_exact_and_resized_duplicates_do_not_inflate_view_coverage(self):
         original = self.image("first.png", style=0)
         (self.root / "photos" / "duplicate.png").write_bytes(original.read_bytes())

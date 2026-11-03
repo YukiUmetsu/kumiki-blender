@@ -32,6 +32,11 @@ image files.
 - `file`: JPEG, PNG or WebP relative to the JSON; no absolute or escaping paths.
 - `source_url`: actual HTTPS reference/photo page; this is provenance, **not**
   an assertion of commercial/republication rights.
+- `source_kind: "user-upload"`: instead of `source_url` for private photos you
+  uploaded or received without a verifiable public source link. Do not invent
+  a URL. Downstream reports mark these as `local-unattributed`, which does **not**
+  grant reuse or distribution rights. Supply exactly one of these provenance
+  fields for each image.
 - `view`: `front`, `front-left`, `left-profile`, `rear-left`, `rear`,
   `rear-right`, `right-profile`, `front-right`, `top`, or `unknown`.
 - `regions`: known visible parts, such as `face`, `chin`, `ear`, `hair`,
