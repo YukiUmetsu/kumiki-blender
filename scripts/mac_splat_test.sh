@@ -13,6 +13,7 @@ Usage:
   bash scripts/mac_splat_test.sh pnp-qa /path/to/failed-splat-revision [cohort-source-index.json]
   bash scripts/mac_splat_test.sh photo-advice /path/to/failed-splat-revision [cohort-source-index.json] [front-photo]
   bash scripts/mac_splat_test.sh recover /path/to/failed-splat-revision [model-index]
+  bash scripts/mac_splat_test.sh recover-qa /path/to/failed-splat-revision [model-index]
   bash scripts/mac_splat_test.sh mask /path/to/splat-revision [rembg|grabcut]
   bash scripts/mac_splat_test.sh hybrid /path/to/splat-revision /path/to/rembg-mask-revision /path/to/grabcut-mask-revision photo-0002.png photo-0015.png
   bash scripts/mac_splat_test.sh run-masked /path/to/splat-revision /path/to/mask-revision
@@ -37,7 +38,7 @@ EOF
 die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 require() { command -v "$1" >/dev/null 2>&1 || die "Missing $1. Install it, then rerun doctor."; }
 mode="${1:-}"; [[ -n "$mode" ]] || { usage; exit 2; }
-[[ "$mode" == doctor || "$mode" == plan || "$mode" == run || "$mode" == diagnose || "$mode" == cohorts || "$mode" == match-qa || "$mode" == pnp-qa || "$mode" == photo-advice || "$mode" == recover || "$mode" == mask || "$mode" == hybrid || "$mode" == run-masked || "$mode" == qa || "$mode" == video ]] || { usage; exit 2; }
+[[ "$mode" == doctor || "$mode" == plan || "$mode" == run || "$mode" == diagnose || "$mode" == cohorts || "$mode" == match-qa || "$mode" == pnp-qa || "$mode" == photo-advice || "$mode" == recover || "$mode" == recover-qa || "$mode" == mask || "$mode" == hybrid || "$mode" == run-masked || "$mode" == qa || "$mode" == video ]] || { usage; exit 2; }
 if [[ "$mode" != doctor ]]; then [[ $# -ge 2 ]] || { usage; exit 2; }; fi
 [[ "$(uname -s)" == Darwin ]] || printf 'WARNING: Intended for macOS; current OS is %s\n' "$(uname -s)" >&2
 root="${OUTPUT_ROOT:-.review/mac-splat-smoke}"
@@ -117,6 +118,10 @@ elif [[ "$mode" == photo-advice ]]; then
   python3 scripts/audit_photo_coverage.py "$2" --output "$output" "${advice_args[@]}"
   printf '\nRead: %s/photo-advice.md\nPhoto contact sheet: %s/photo-advice.jpg\n' "$output" "$output"
   [[ -f "$output/photo-advice.jpg" ]] && open "$output/photo-advice.jpg" 2>/dev/null || true
+elif [[ "$mode" == recover-qa ]]; then
+  [[ -d "$2" ]] || die "Splat revision directory not found: $2"
+  output="$(new_output recovery-match-qa)"
+  python3 scripts/recover_sfm_tracks.py "$2" --model "${3:-0}" --output "$output" --diagnose-only
 elif [[ "$mode" == recover ]]; then
   [[ -d "$2" ]] || die "Splat revision directory not found: $2"
   python3 -c 'import pycolmap' || die 'Install photogrammetry dependencies: pip install -e ".[photogrammetry]"'
