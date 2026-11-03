@@ -82,6 +82,15 @@ class PnpSupportTests(unittest.TestCase):
             missing = {item["filename"]: item for item in model["unregistered_images"]}
             image = missing["photo-0003.png"]
             self.assertEqual(image["registered_neighbors"], 2)
+            self.assertEqual(len(image["registered_neighbor_details"]), 2)
+            self.assertEqual(image["registered_neighbor_details"][0]["filename"],
+                             "photo-0002.png")
+            self.assertEqual(image["registered_neighbor_details"][0]["verified_inliers"], 9)
+            self.assertEqual(image["registered_neighbor_details"][0]
+                             ["inliers_touching_existing_3d_tracks"], 9)
+            self.assertEqual(image["registered_neighbor_details"][1]["filename"],
+                             "photo-0001.png")
+            self.assertEqual(image["registered_neighbor_details"][1]["verified_inliers"], 6)
             self.assertEqual(image["verified_bridge_pairs"], 2)
             self.assertEqual(image["verified_bridge_inliers"], 15)
             self.assertEqual(image["inliers_touching_existing_3d_tracks"], 15)
