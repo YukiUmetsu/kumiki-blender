@@ -52,6 +52,8 @@ class PhotoCoverageAdviceTests(unittest.TestCase):
             self.assertIsNone(images["photo-0003.png"]["estimated_view"])
             self.assertEqual(report["angle_reference"]["kind"], "unavailable")
             self.assertIsNone(report["recommended_photos"][0]["target_azimuth_deg"])
+            self.assertFalse(advice._angle_map(report, root / "unavailable.svg"))
+            self.assertFalse((root / "unavailable.svg").exists())
             self.assertIn("not that the image is bad", advice._markdown(report))
 
     def test_front_anchored_relative_angles_never_assigned_to_missing_camera(self):
@@ -71,6 +73,12 @@ class PhotoCoverageAdviceTests(unittest.TestCase):
                                 for p in report["recommended_photos"]))
             self.assertTrue(all(p["evidence"].startswith("estimated-colmap")
                                 for p in report["recommended_photos"]))
+            orbit = root / "camera-orbit.svg"
+            self.assertTrue(advice._angle_map(report, orbit))
+            svg = orbit.read_text()
+            self.assertIn("Front-relative camera orbit", svg)
+            self.assertIn("orig-2.jpg", svg)
+            self.assertIn("Suggested overlapping shot", svg)
 
     def test_arbitrary_anchor_is_not_falsely_named_front(self):
         with tempfile.TemporaryDirectory() as tmp:
