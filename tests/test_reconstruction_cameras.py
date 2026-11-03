@@ -197,5 +197,54 @@ class CameraPlanTests(unittest.TestCase):
         self.assertTrue(all(item["source_mask_path"] for item in masked["cameras"]))
 
 
+class MapAnythingFocalPlanTests(unittest.TestCase):
+    """Per-axis focals: accepted only for mapanything revisions, capped, and carried by the plan."""
+
+    setUp = CameraPlanTests.setUp
+    write = CameraPlanTests.write
+
+    def _set_engine(self, engine):
+        report_path = self.recon / "reconstruction-report.json"
+        report = json.loads(report_path.read_text())
+        if engine is None:
+            report.pop("engine", None)
+        else:
+            report["engine"] = engine
+        report_path.write_text(json.dumps(report))
+
+    def _set_focals(self, fx, fy):
+        (self.recon / "text-models/0/cameras.txt").write_text(
+            f"# cameras\n1 PINHOLE 120 90 {fx} {fy} 60 45\n")
+
+    def test_asymmetry_rejected_for_colmap_and_accepted_for_mapanything(self):
+        self._set_focals(100, 104)  # 3.8% asymmetry
+        self._set_engine(None)
+        with self.assertRaisesRegex(ReferenceError, "fx/fy"):
+            create_camera_plan(self.recon, self.anchors, self.root / "plan-colmap")
+        self._set_engine("mapanything")
+        report = create_camera_plan(self.recon, self.anchors, self.root / "plan-mapanything")
+        self.assertEqual(report["focal_asymmetry_limit"], 0.05)
+        self.assertEqual(report["cameras"][0]["intrinsics"]["fx_px"], 100)
+        self.assertEqual(report["cameras"][0]["intrinsics"]["fy_px"], 104)
+        load_camera_plan(self.root / "plan-mapanything/camera-plan.json")
+
+    def test_mapanything_asymmetry_above_cap_is_rejected_at_planning(self):
+        self._set_focals(100, 110)  # 9.1% asymmetry
+        self._set_engine("mapanything")
+        with self.assertRaisesRegex(ReferenceError, "limit"):
+            create_camera_plan(self.recon, self.anchors, self.root / "plan-over-cap")
+
+    def test_plan_limit_binds_when_blender_reads_the_plan(self):
+        self._set_focals(100, 104)
+        self._set_engine("mapanything")
+        create_camera_plan(self.recon, self.anchors, self.root / "plan")
+        plan_path = self.root / "plan/camera-plan.json"
+        plan = json.loads(plan_path.read_text())
+        plan["focal_asymmetry_limit"] = 0.005  # a stricter limit than the 3.8% in the file
+        plan_path.write_text(json.dumps(plan))
+        with self.assertRaisesRegex(ReferenceError, "asymmetry"):
+            load_camera_plan(plan_path)
+
+
 if __name__ == "__main__":
     unittest.main()

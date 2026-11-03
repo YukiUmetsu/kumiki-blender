@@ -79,3 +79,65 @@ and left views may not recover the Sphinx's right cheek or back at all.
 The pipeline deliberately **never substitutes an illustrative Sphinx** for
 unrecovered geometry. A measured scan/survey or artist sculpting can still be
 needed when photographs do not contain reconstructible details.
+
+## Alternative camera registration: MapAnything (`--engine mapanything`)
+
+For step-by-step usage, tuning and troubleshooting, see
+[MAPANYTHING_PHOTO_REGISTRATION.md](MAPANYTHING_PHOTO_REGISTRATION.md).
+
+When COLMAP registers too few photos (for example 4 of 14 in a Mac smoke run),
+`--engine mapanything` predicts a camera pose, intrinsics and depth for every
+photo in one feed-forward pass instead of matching features. It is an
+alternative *sparse* stage; the dense OpenMVS stage and Blender export are
+unchanged.
+
+```bash
+pip install -e '.[photogrammetry,mapanything,qa]'   # torch + MapAnything pinned commit
+kumiki-blender build-photo-model \
+  --photos /path/to/sphinx-photos --asset-id great-sphinx \
+  --output .review/great-sphinx/mapanything-r01 \
+  --engine mapanything --mapanything-device auto
+```
+
+- **Devices.** `--mapanything-device auto` picks CUDA, then Apple MPS, then CPU.
+  An explicit device fails if it is unavailable rather than falling back. On
+  Mac, unsupported MPS operators fall back to CPU per operator.
+  For CUDA, install a CUDA build of torch first, as usual for PyTorch.
+- **Model and license.** The default `facebook/map-anything-apache` is
+  Apache-2.0. `facebook/map-anything` is CC-BY-NC-4.0 and is recorded as such in
+  the report. Do not distribute non-commercial-licensed outputs.
+- **First run downloads.** The checkpoint cache is about 9 GB from Hugging Face,
+  and the DINOv2 hub code comes from GitHub through torch hub. The first load
+  took about 2.5 minutes on the test Mac. Pre-cache both for offline machines.
+- **Inputs.** Each photo is scaled so its longest side is 518 px and pasted,
+  without cropping, onto a shared 518×518 canvas. MapAnything resizes and crops
+  a batch to one aspect ratio, so the canvas keeps the whole photo and its
+  pixels and intrinsics stay consistent. Photos with object masks are rejected
+  for this engine.
+- **What is registered.** The largest group of views whose predicted 3D points
+  re-observe another view with agreeing depth: at least 30% of sampled points
+  must land on the other view's predicted depth within
+  `--mapanything-depth-tolerance` (default 0.30, i.e. 30%; allowed 0.01–1.0).
+  Views outside that group are listed in `reconstruction-report.json` as
+  `unregistered_filenames`. A registered view means *mutually consistent
+  prediction*, not a verified camera.
+- **  Choosing the tolerance.** On a 26-photo statue set, 0.05 kept 3 views, none
+  of which COLMAP registered; 0.20 kept 7 (3 shared with COLMAP); 0.30 kept 21
+  (5 of COLMAP's 6). The 0.30 default was picked while looking at these same 26
+  photos and COLMAP's registrations on them, so the 21-of-26 figure is in-sample.
+  Confirm on a second photo set against the COLMAP baseline before trusting extra
+  views.
+- **Outputs.** The same `undistorted/` COLMAP-text revision the dense stage and
+  camera plan already read, plus `mapanything/worker-meta.json` (device, AMP
+  mode, torch version). Status is still `candidate / visual-review-required`.
+  Raw predictions in `mapanything/predictions.npz` are about 4–5 MB per photo;
+  keep them under `.review/`.
+
+The report keys `engine`, `model_id`, `model_license`, `covisibility` and
+`worker` identify the run. Failures use the same `failed_stage` names as the
+COLMAP path, with `mapanything-inference` and `mapanything-output` added.
+
+Known limits: the 518 px canvas caps per-view resolution, so fine relief depends
+on the dense stage and on the photos; the depth-agreement gate can miss
+legitimately sparse views; and nothing here verifies facial likeness, scale or
+photo rights.
