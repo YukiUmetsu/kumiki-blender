@@ -211,6 +211,13 @@ private texture projection to produce a mesh for artistic inspection.
       --balance-uv-seams --max-seam-ev 0.75 --min-seam-anchors 8 \
       --uv-aware-stats
 
+    # Fix narrow black or transparent gutters around a statue's UV islands.
+    # Even a single-atlas scan can have these sampling/mipmap artifacts.
+    kumiki-blender finish-dense-textures \
+      --dense-revision .review/statue/dense-masked-r01 \
+      --output .review/statue/texture-gutters-r01 \
+      --pad-uv-gutters --gutter-pixels 4 --uv-aware-stats
+
     # Blender imports the same verified OBJ/MTL/UVs with the corrected atlases
     # and packs them into the private .blend and GLB.
     kumiki-blender render-dense-blender-review \
@@ -827,6 +834,24 @@ estimators. UV seam balancing does **not** handle in-page chart seams, relight
 strong cast shadows, resolve different materials or infer disconnected/duplicated
 OBJ vertex positions as the same physical vertex. Review the corrected atlas
 previews and Blender model against source photographs before using an output.
+`--pad-uv-gutters` fixes a different source of visible intra-atlas seams:
+texture filtering can sample black or transparent padding immediately outside
+the mapped UV islands. This opt-in operation extends the **existing corrected
+edge color** into at most `--gutter-pixels` nearby unmapped texels (default 4,
+maximum 16). The propagation follows the nearest valid mapped color in small
+overlapping tiles; it avoids blur and color mixing across nearby UV islands.
+The actual photographed texels belonging to OBJ UV faces are never filled,
+overpainted or inferred—even if they are black or transparent. For RGBA PNG
+atlases only the newly padded gutters become opaque; far-away transparent
+background remains transparent. The original atlases, mesh and UVs remain
+unchanged, with all corrected atlas hashes pinned for Blender import.
+`uv_gutter_padding` in the texture-finish report records padded pixel counts,
+the unfilled dark-on-mesh count and warnings. To keep large multi-page statues
+memory-bounded, native-resolution coverage masks are processed one page and
+one 1024px tile at a time; individual atlases over 100 megapixels are rejected
+before output creation. It can be combined with either exposure-balancing
+option and `--uv-aware-stats`.
+
 This can improve dark overall exposure, broad color cast and atlas-page
 exposure mismatch, but **cannot invent missing photographs, paint empty atlas
 patches or fix intra-page UV chart seams and baked lighting**. Use the
