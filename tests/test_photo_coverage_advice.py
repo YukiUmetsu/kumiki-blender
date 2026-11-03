@@ -126,6 +126,18 @@ class PhotoCoverageAdviceTests(unittest.TestCase):
                 with redirect_stdout(StringIO()), self.assertRaises(SystemExit):
                     advice.main()
 
+    def test_subject_specific_framing_and_invalid_type(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            _fixture(root)
+            building = advice.analyze(root, subject_type="building")
+            self.assertEqual(building["subject_type"], "building")
+            self.assertIn("facade", building["recommended_photos"][0]["capture_guidance"])
+            statue = advice.analyze(root, subject_type="statue")
+            self.assertIn("head, neck, torso", statue["recommended_photos"][0]["capture_guidance"])
+            with self.assertRaisesRegex(ValueError, "subject_type"):
+                advice.analyze(root, subject_type="unknown")
+
     def test_near_duplicate_camera_requires_no_critical_tracks(self):
         photo = {"imported": True, "keypoints": 1000, "strong_neighbors": 4}
         contribution = {
