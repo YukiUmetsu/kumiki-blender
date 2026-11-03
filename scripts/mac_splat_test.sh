@@ -145,11 +145,17 @@ elif [[ "$mode" == train-existing ]]; then
   [[ -d "$2/dataset" ]] || die "Existing staged dataset not found: $2/dataset"
   check_tool "$trainer"
   output="$(new_output splat-retry)"
-  retry_args=()
-  [[ "${TRAIN_CPU:-0}" != 1 ]] || retry_args+=(--cpu)
-  python3 scripts/retry_opensplat_training.py "$2" --output "$output" \
+  revision="$2"
+  # macOS ships Bash 3.2: under set -u, expanding an empty array raises
+  # "unbound variable" even when the array was initialized with ().
+  # Build positional arguments instead; zero optional arguments are safe.
+  set -- "$revision" --output "$output" \
     --opensplat "$trainer" --iterations "${ITERATIONS:-300}" \
-    --downscale "${DOWNSCALE_FACTOR:-4}" "${retry_args[@]}"
+    --downscale "${DOWNSCALE_FACTOR:-4}"
+  if [[ "${TRAIN_CPU:-0}" == 1 ]]; then
+    set -- "$@" --cpu
+  fi
+  python3 scripts/retry_opensplat_training.py "$@"
 elif [[ "$mode" == plan || "$mode" == run ]]; then
   photos="$2"; [[ -d "$photos" ]] || die "Photo directory not found: $photos"
   slug="${3:-mac-splat-test}"
