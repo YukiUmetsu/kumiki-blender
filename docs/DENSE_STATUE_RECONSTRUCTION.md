@@ -576,6 +576,31 @@ subdirectories. Files and the recipe are hash-pinned before processing.
   an atlas and `--surface-cleanup-radius` must be 1–16. Do not paint original
   cracks, chips, authentic patina or damaged monument surfaces into this mask;
   it is for camera artifacts, small projection holes and reconstruction faults.
+
+  **Optional photographic defect detection (review only):** compare each
+  original atlas with confidence-weighted fusion of at least **three distinct
+  UV-registered views** within the current material masks:
+
+  ```bash
+  kumiki-blender detect-photo-texture-defects \
+    --dense-revision /private/statue-dense \
+    --surface-recipe /private/material-proposal/surface-recipe.json \
+    --output /private/defect-candidates
+  ```
+
+  Inspect `atlas-01/review-overlay.png`, `defect-severity.png` and
+  `candidate-damage-mask.png`, and the per-atlas QA in
+  `texture-defect-report.json`. The detector compares the atlas against a
+  bounded per-material multiview estimate and flags only **localized** color
+  deviations with three valid camera observations, inside reviewed material
+  islands and away from their borders. It intentionally does **not** inpaint
+  or modify the atlas. Consistent real cracks and patina should remain
+  unmarked, but camera-registration errors, cast-light boundaries and true
+  damage can still create false positives. Inspect each red area, erase genuine
+  surface details from the proposed mask, and only then copy the approved
+  PNG into a future surface recipe as `damage_mask`. The existing cleanup
+  requires the approved mask to remain under 5% of the atlas with each hole
+  small enough for the selected cleanup radius; that rule is not bypassed.
 - **Roughness:** region `roughness` is a deliberate 0.02–1 **prior**, not a
   reflectance measurement. An optional per-region `roughness_map` field accepts
   an externally authored full-resolution grayscale PNG that overrides the prior
