@@ -128,7 +128,7 @@ def classify_images(sparse: Path, filenames: list[str], *, model: str,
         try:
             results[filename] = classify(photo, model=model, endpoint=endpoint,
                                          timeout=timeout)
-        except (OSError, ValueError, RuntimeError) as error:
+        except (OSError, ValueError, RuntimeError, ImportError) as error:
             # One unsupported photo should not discard all geometric evidence.
             results[filename] = {
                 "view": "unknown", "elevation": "unknown", "framing": "unknown",
