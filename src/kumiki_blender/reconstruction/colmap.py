@@ -13,7 +13,6 @@ import importlib.util
 import json
 import sqlite3
 import math
-import re
 import shutil
 import statistics
 import subprocess
@@ -44,10 +43,15 @@ def _validate_matching_preset(preset: str, engine: str) -> None:
 
 
 def _preflight_matching_preset(executable: str, preset: str) -> bool:
-    """Reject unsupported learned models before writing an immutable revision."""
+    """Detect COLMAP's learned-feature CLI switches without guessing enum help text.
+
+    Some packaged COLMAP builds print only option names (not the list of
+    accepted feature/matcher values) and some return a nonzero exit status for
+    --help. Let the real COLMAP stage validate the selected enum: its failure
+    will be captured in the immutable reconstruction report and stage log.
+    """
     if preset == "sift":
         return False
-    extractor, matcher = MATCHING_PRESETS[preset]
     try:
         extraction = subprocess.run([executable, "feature_extractor", "--help"],
                                     capture_output=True, text=True, check=False, timeout=20)
@@ -57,13 +61,10 @@ def _preflight_matching_preset(executable: str, preset: str) -> bool:
         raise ReferenceError(f"Learned COLMAP preflight failed: {error}") from error
     extractor_help = extraction.stdout + extraction.stderr
     matcher_help = matching.stdout + matching.stderr
-    if (extraction.returncode != 0 or matching.returncode != 0 or
-            "--FeatureExtraction.type" not in extractor_help or
-            "--FeatureMatching.type" not in matcher_help or
-            re.search(rf"\b{re.escape(extractor)}\b", extractor_help) is None or
-            re.search(rf"\b{re.escape(matcher)}\b", matcher_help) is None):
+    if ("--FeatureExtraction.type" not in extractor_help or
+            "--FeatureMatching.type" not in matcher_help):
         raise ReferenceError(
-            f"COLMAP does not advertise {preset} ({extractor}/{matcher}); "
+            "COLMAP lacks learned feature-selection CLI flags; "
             "install COLMAP 4.2+ with ONNX enabled, or choose --matching-preset sift")
     return "--FeatureExtraction.max_image_size" in extractor_help
 

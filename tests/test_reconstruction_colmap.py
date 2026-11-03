@@ -34,13 +34,15 @@ if "--help" in params:
     if task == "feature_extractor":
         print("--SiftExtraction.use_gpu" if legacy else "--FeatureExtraction.use_gpu")
         if "FAKE_LEARNED_COLMAP" in os.environ:
-            print("--FeatureExtraction.type SIFT ALIKED_N16ROT LOMA_B LOMA_B128")
+            print("--FeatureExtraction.type" if "FAKE_HELP_FLAGS_ONLY" in os.environ
+                  else "--FeatureExtraction.type SIFT ALIKED_N16ROT LOMA_B LOMA_B128")
             print("--FeatureExtraction.max_image_size")
     elif task == "exhaustive_matcher":
         print("--SiftMatching.use_gpu" if legacy else "--FeatureMatching.use_gpu")
         if "FAKE_LEARNED_COLMAP" in os.environ:
-            print("--FeatureMatching.type SIFT_LIGHTGLUE ALIKED_LIGHTGLUE LOMA_B LOMA_B128")
-    sys.exit(0)
+            print("--FeatureMatching.type" if "FAKE_HELP_FLAGS_ONLY" in os.environ
+                  else "--FeatureMatching.type SIFT_LIGHTGLUE ALIKED_LIGHTGLUE LOMA_B LOMA_B128")
+    sys.exit(1 if "FAKE_HELP_NONZERO" in os.environ else 0)
 def argument(key):
     return Path(params[params.index(key)+1])
 if task == "feature_extractor":
@@ -202,7 +204,7 @@ class ColmapWorkflowTests(unittest.TestCase):
 
     def test_learned_matching_preflight_fails_before_creating_revision(self):
         output = self.root / "unsupported-learned"
-        with self.assertRaisesRegex(ReferenceError, "does not advertise"):
+        with self.assertRaisesRegex(ReferenceError, "lacks learned feature-selection"):
             build_sparse_reconstruction(self.references(), output, colmap=str(self.fake),
                                         matching_preset="aliked-lightglue")
         self.assertFalse(output.exists())
@@ -210,6 +212,15 @@ class ColmapWorkflowTests(unittest.TestCase):
             build_sparse_reconstruction(self.references(), output, engine="pycolmap",
                                         matching_preset="loma")
         self.assertFalse(output.exists())
+
+    def test_colmap_help_without_enum_values_and_nonzero_help_exit_is_supported(self):
+        # Real packages can omit accepted enum names and exit 1 for --help.
+        with patch.dict(os.environ, {"FAKE_LEARNED_COLMAP": "1",
+                                  "FAKE_HELP_FLAGS_ONLY": "1", "FAKE_HELP_NONZERO": "1"}):
+            report = build_sparse_reconstruction(self.references(), self.root / "flags-only",
+                                                 colmap=str(self.fake), matching_preset="sift-lightglue")
+        self.assertEqual(report["status"], "candidate / visual-review-required")
+        self.assertEqual(report["matching_preset"], "sift-lightglue")
 
     def test_registration_names_use_normalized_staged_filenames_not_original_jpeg_extensions(self):
         self.references()

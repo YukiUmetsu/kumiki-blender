@@ -34,7 +34,10 @@ colmap exhaustive_matcher --help | rg 'FeatureMatching.type|LOMA_B|SIFT_LIGHTGLU
 
 If the learned options are missing, use a newer [COLMAP build with ONNX enabled](https://colmap.github.io/install.html)
 (`-DONNX_ENABLED=ON`) or continue using `sift`/the high-recall PyCOLMAP path.
-Our preflight checks the advertised extractor/matcher before creating output.
+Our preflight checks the extractor/matcher **selection flags**, not the
+enumerated model names: some COLMAP builds omit enum choices from `--help`.
+An unsupported matcher will be reported by the actual matching stage with
+its diagnostic log preserved.
 
 ## Great Sphinx: compare actual registered views
 
