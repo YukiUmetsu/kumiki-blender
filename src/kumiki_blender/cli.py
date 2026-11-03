@@ -403,6 +403,17 @@ def main(argv: list[str] | None = None) -> int:
     illumination_parser.add_argument("--max-illumination-ev", type=float, default=1.5)
     illumination_parser.add_argument("--max-side", type=int, default=8192)
     illumination_parser.add_argument("--max-mesh-faces", type=int, default=5_000_000)
+    polarized_parser = subcommands.add_parser(
+        "inspect-polarized-uv",
+        help="Inspect controlled parallel/cross polarization pairs; contrast is NOT measured roughness")
+    polarized_parser.add_argument("--dense-revision", type=Path, required=True)
+    polarized_parser.add_argument("--surface-recipe", type=Path, required=True)
+    polarized_parser.add_argument("--captures", type=Path, required=True,
+                                  help="JSON with 3–8 UV-aligned parallel/cross photo pairs per atlas")
+    polarized_parser.add_argument("--output", type=Path, required=True)
+    polarized_parser.add_argument("--max-side", type=int, default=8192)
+    polarized_parser.add_argument("--min-views", type=int, default=3)
+    polarized_parser.add_argument("--max-mesh-faces", type=int, default=5_000_000)
     projection_parser = subcommands.add_parser(
         "project-registered-uv-views",
         help="Project hash-pinned COLMAP photographs onto OBJ UV atlases with occlusion masks")
@@ -684,6 +695,19 @@ def main(argv: list[str] | None = None) -> int:
                         smoothing_radius=args.smoothing_radius,
                         max_illumination_ev=args.max_illumination_ev,
                         max_side=args.max_side, max_mesh_faces=args.max_mesh_faces))
+            except ReferenceError as error:
+                raise RecipeError(str(error)) from error
+            print(json.dumps(report, indent=2))
+            return 0
+        if args.command == "inspect-polarized-uv":
+            from .reconstruction.polarized_qa import PolarizedQAOptions, inspect_polarized_uv
+            from .reconstruction.references import ReferenceError
+            try:
+                report = inspect_polarized_uv(
+                    args.dense_revision, args.surface_recipe, args.captures, args.output,
+                    options=PolarizedQAOptions(max_side=args.max_side,
+                                               min_views=args.min_views,
+                                               max_mesh_faces=args.max_mesh_faces))
             except ReferenceError as error:
                 raise RecipeError(str(error)) from error
             print(json.dumps(report, indent=2))
