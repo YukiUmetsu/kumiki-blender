@@ -4,6 +4,10 @@ from __future__ import annotations
 import importlib.util
 import json
 import sqlite3
+import sys
+from contextlib import redirect_stdout
+from io import StringIO
+from unittest.mock import patch
 import tempfile
 import unittest
 from pathlib import Path
@@ -63,6 +67,28 @@ class SplatRegistrationDiagnosticTests(unittest.TestCase):
             self.assertEqual([image["filename"] for image in result["weak_or_isolated"]],
                              ["photo-0003.jpg"])
             self.assertEqual(result["strongest_pairs"][0]["inliers"], 42)
+            other = sparse / "text-models" / "1"
+            other.mkdir()
+            (other / "images.txt").write_text(
+                "3 1 0 0 0 0 0 0 1 photo-0003.jpg\\n0 0 -1\\n"
+            )
+            with_second = diagnostic.analyze(Path(tmp), 15)
+            self.assertEqual(with_second["registered"], 2)
+            self.assertEqual([item["registered"] for item in with_second["sparse_models"]], [2, 1])
+            self.assertEqual(with_second["registered_filenames"],
+                             ["photo-0001.jpg", "photo-0002.jpg"])
+            json_file = Path(tmp) / "registration-report.json"
+            with patch.object(sys, "argv", ["diagnose", str(Path(tmp)),
+                                             "--json-output", str(json_file)]):
+                with redirect_stdout(StringIO()):
+                    self.assertEqual(diagnostic.main(), 0)
+            saved = json.loads(json_file.read_text())
+            self.assertEqual(saved["sparse_models"], with_second["sparse_models"])
+            with patch.object(sys, "argv", ["diagnose", str(Path(tmp)),
+                                             "--json-output", str(json_file)]):
+                with redirect_stdout(StringIO()), self.assertRaises(SystemExit):
+                    diagnostic.main()
+
             try:
                 from PIL import Image
             except ImportError:
