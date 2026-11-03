@@ -46,8 +46,8 @@ written for CUDA, but it has not been run on NVIDIA hardware yet. See
 - **No object masks.** Masks are rejected by this engine. Use `--engine pycolmap`
   if you need them.
 - Keep the photos in their own folder. The output folder must be outside it.
-- Check photo rights. The report sets `missing_photo_rights` when a photo has
-  no source URL.
+- Check photo rights. The preflight sets `missing_photo_rights` when any photo
+  is recorded with the source `local-unattributed` (no attributed source).
 
 ## 3. Preflight (read-only)
 
@@ -125,7 +125,10 @@ against COLMAP:
    (`registered_filenames`).
 
 On the 26-photo test set: 0.05 kept 3 views (none of COLMAP's 6), 0.20 kept 7
-(3 of COLMAP's 6), and 0.30 kept 21 (5 of COLMAP's 6). Higher tolerances keep
+(3 of COLMAP's 6), and 0.30 kept 21 (5 of COLMAP's 6).
+The 0.30 default was picked while looking at these same 26 photos and COLMAP's
+registrations on them, so the 21-of-26 figure is in-sample. Confirm on a second
+photo set before relying on it. Higher tolerances keep
 more views but agree less with COLMAP. A view outside COLMAP's set is not wrong,
 but it has not been confirmed either.
 
@@ -161,7 +164,7 @@ The most useful fields in `reconstruction-report.json`:
 | `covisibility` | `graph_edges` and `largest_component` show how connected the views are. `views_with_valid_pose` counts views whose predicted pose was usable at all. |
 | `depth_tolerance` | The tolerance this revision used. |
 | `worker` | Device and torch version, so you can tell which accelerator ran the model. |
-| `max_focal_asymmetry` | Largest difference between predicted fx and fy. The stored camera uses the mean, so this is the approximation size. |
+| `max_focal_asymmetry` | Largest relative difference between predicted fx and fy. Each camera keeps both focals in `cameras.txt`; the camera plan and Blender accept up to 5% for this engine only. |
 | `model_license` | `Apache-2.0`, `CC-BY-NC-4.0`, or `unknown-review-required`. |
 
 Even a successful candidate needs visual review. Check the renders the full build
@@ -215,6 +218,12 @@ Run it with the same environment as the CLI. The output folder must not exist ye
 
 ## 10. Limits
 
+- **Focal lengths.** `cameras.txt` keeps fx and fy separately. Photos are
+  square-pixel, so the asymmetry is model error, and it was up to 2.7% on the
+  test set. The COLMAP camera plan keeps its 0.5% limit; the mapanything plan
+  accepts up to 5%, and the plan records the limit it used. Blender has one lens
+  per camera, so previews use the mean focal and their vertical scale error is
+  at most half the asymmetry. Blender previews were not run on this Mac.
 - **Resolution.** Each photo is scaled so its longest side is 518 px. Fine
   surface detail therefore comes from the photos only as far as 518 px allows.
 - **Gate is a heuristic.** Consistency between predicted depths is evidence that

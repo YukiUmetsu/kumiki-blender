@@ -12,6 +12,7 @@ import math
 from pathlib import Path
 from typing import Any
 
+from .cameras import SQUARE_PIXEL_TOLERANCE
 from .references import ReferenceError
 
 
@@ -27,6 +28,9 @@ def load_camera_plan(path: str | Path) -> dict[str, Any]:
                 or not isinstance(plan.get("cameras"), list)
                 or not 3 <= len(plan["cameras"]) <= 256):
             raise ValueError("invalid camera plan header")
+        limit = plan.get("focal_asymmetry_limit", SQUARE_PIXEL_TOLERANCE)
+        if type(limit) not in (int, float) or not 0 < limit <= 0.05:
+            raise ValueError("invalid focal asymmetry limit")
         seen = set()
         for camera in plan["cameras"]:
             image_id = camera["image_id"]
@@ -44,8 +48,9 @@ def load_camera_plan(path: str | Path) -> dict[str, Any]:
                 if type(value) not in (float, int) or not math.isfinite(value):
                     raise ValueError("bad camera intrinsics")
             if (intrinsics["fx_px"] <= 0 or intrinsics["fy_px"] <= 0
-                    or abs(intrinsics["fx_px"]-intrinsics["fy_px"])/intrinsics["fx_px"] > 0.005):
-                raise ValueError("non-square pixel focal lengths")
+                    or abs(intrinsics["fx_px"]-intrinsics["fy_px"])
+                    / max(intrinsics["fx_px"], intrinsics["fy_px"]) > limit):
+                raise ValueError("focal asymmetry exceeds the plan limit")
             position = camera["translation_m"]
             rotation = camera["rotation_3x3"]
             if len(position) != 3 or len(rotation) != 3 or any(len(row) != 3 for row in rotation):
@@ -151,7 +156,8 @@ def build_reference_scene(plan_file: str | Path, source_glb: str | Path,
         cam_data.type = "PERSP"
         cam_data.sensor_fit = "HORIZONTAL"
         cam_data.sensor_width = 36.0
-        cam_data.lens = intr["fx_px"] * 36.0 / intr["width"]
+        # Blender has one lens per camera; the mean focal halves the worst vertical error.
+        cam_data.lens = 0.5 * (intr["fx_px"] + intr["fy_px"]) * 36.0 / intr["width"]
         cam_data.shift_x = (intr["width"] / 2 - intr["cx_px"]) / intr["width"]
         cam_data.shift_y = (intr["cy_px"] - intr["height"] / 2) / intr["width"]
         cam_data.show_background_images = True

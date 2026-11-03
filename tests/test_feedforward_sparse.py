@@ -7,7 +7,10 @@ plus one view whose depth is wrong).
 
 import dataclasses
 import json
+import subprocess
+import sys
 import tempfile
+import types
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -21,7 +24,7 @@ from kumiki_blender.reconstruction.feedforward_sparse import (
     colmap_pose_from_cam2world, covisibility_matrices, largest_component,
     pose_is_valid, quaternion_from_rotation,
 )
-from kumiki_blender.reconstruction.mapanything_worker import choose_device
+from kumiki_blender.reconstruction.mapanything_worker import _run, choose_device
 from kumiki_blender.reconstruction.photo_model import PhotoModelSettings, build_photo_model
 from kumiki_blender.reconstruction.references import ReferenceError
 from kumiki_blender.reconstruction.splat_input import load_photo_folder
@@ -178,13 +181,18 @@ def _write_photos(root):
     photos.mkdir()
     rng = np.random.default_rng(11)
     for index in range(PHOTO_COUNT):  # load_photo_folder requires at least 8 photos
-        pixels = rng.integers(0, 255, size=(64, 64, 3), dtype=np.uint8)
+        # One landscape photo exercises the canvas offset (x0 = 0, y0 = 86).
+        size = (96, 64) if index == 0 else (64, 64)
+        pixels = rng.integers(0, 255, size=(size[1], size[0], 3), dtype=np.uint8)
         Image.fromarray(pixels).save(photos / f"photo-{index:02}.png")
     return photos
 
 
-def _fake_worker(bogus_index=None, failing=False):
-    """Return a runner that writes exact predictions for the request it is given."""
+def _fake_worker(bogus_index=None, failing=False, asymmetric=None):
+    """Return a runner that writes exact predictions for the request it is given.
+
+    ``asymmetric`` maps a view index to a fy multiplier, to test per-axis focals.
+    """
 
     def runner(command, log, timeout):
         input_path = Path(command[command.index("--input") + 1])
@@ -198,6 +206,8 @@ def _fake_worker(bogus_index=None, failing=False):
             center = CENTERS[index]
             bogus = index == (len(request["images"]) - 1 if bogus_index is None else bogus_index)
             points, depth, intrinsics = _plane_view(center, 3.0 if bogus else PLANE_DEPTH)
+            intrinsics = intrinsics.copy()
+            intrinsics[1, 1] *= (asymmetric or {}).get(index, 1.0)
             w, h, x0, y0 = entry["width"], entry["height"], entry["x0"], entry["y0"]
             mask = np.zeros((CANVAS, CANVAS), dtype=bool)
             mask[y0:y0 + h, x0:x0 + w] = True
@@ -235,7 +245,7 @@ class FeedForwardBuilderTests(unittest.TestCase):
         self.assertEqual(sorted(entry["filename"] for entry in index), sorted(report["registered_filenames"]))
         for entry in index:
             self.assertTrue((target / "undistorted/images" / entry["filename"]).is_file())
-            self.assertEqual(entry["dimensions"], [CANVAS, CANVAS])
+            self.assertEqual(max(entry["dimensions"]), CANVAS)
 
     def test_cameras_round_trip_through_existing_colmap_readers(self):
         target = self.root / "sparse-r02"
@@ -245,7 +255,7 @@ class FeedForwardBuilderTests(unittest.TestCase):
         self.assertEqual(len(poses), PHOTO_COUNT - 1)
         for camera_id, data in intrinsics.items():
             self.assertAlmostEqual(data["fx_px"], FOCAL, places=3)
-            self.assertEqual((data["width"], data["height"]), (CANVAS, CANVAS))
+            self.assertEqual(max(data["width"], data["height"]), CANVAS)
 
     def test_pycolmap_can_load_the_text_revision_when_installed(self):
         pycolmap = _pycolmap_or_skip(self)
@@ -303,13 +313,208 @@ class FeedForwardBuilderTests(unittest.TestCase):
             build_feedforward_sparse_reconstruction(self.references, existing, runner=_fake_worker())
 
 
+class FocalAndCanvasTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.references = load_photo_folder(_write_photos(self.root), "plane-test")
+
+    def _cameras(self, target):
+        lines = [line.split() for line in (target / "undistorted/sparse/cameras.txt").read_text().splitlines()
+                 if line and not line.startswith("#")]
+        return {int(line[0]): line for line in lines}
+
+    def test_per_axis_focals_are_written_and_only_mapanything_plan_readers_accept_them(self):
+        target = self.root / "asym"
+        report = build_feedforward_sparse_reconstruction(
+            self.references, target, runner=_fake_worker(asymmetric={1: 1.02}))
+        self.assertEqual(report["status"], "candidate / visual-review-required")
+        camera_file = target / "undistorted/text-model/cameras.txt"
+        # The camera for view 1 keeps fx and fy separately.
+        fx_fy = [(float(line[4]), float(line[5])) for line in self._cameras(target).values()]
+        self.assertTrue(any(abs(fx - fy) / max(fx, fy) > 0.015 for fx, fy in fx_fy))
+        with self.assertRaisesRegex(ReferenceError, "fx/fy"):
+            cameras._read_intrinsics(camera_file)  # default square-pixel COLMAP rule
+        loaded = cameras._read_intrinsics(camera_file, require_square_pixels=False,
+                                          max_focal_asymmetry=0.05)
+        self.assertEqual(len(loaded), PHOTO_COUNT - 1)
+
+    def test_views_over_the_asymmetry_cap_are_not_registered(self):
+        target = self.root / "cap"
+        report = build_feedforward_sparse_reconstruction(
+            self.references, target, runner=_fake_worker(asymmetric={2: 1.08}))
+        # The bogus last view is excluded by depth; view 2 is excluded by its focals.
+        self.assertEqual(report["registered_images"], PHOTO_COUNT - 2)
+        self.assertEqual(len(report["unregistered_filenames"]), 2)
+        loaded = cameras._read_intrinsics(target / "undistorted/text-model/cameras.txt",
+                                          require_square_pixels=False, max_focal_asymmetry=0.05)
+        self.assertTrue(all(abs(c["fx_px"] - c["fy_px"]) / max(c["fx_px"], c["fy_px"]) < 0.05
+                            for c in loaded.values()))
+
+    def test_offset_camera_has_principal_point_shifted_into_photo_coordinates(self):
+        target = self.root / "offset"
+        build_feedforward_sparse_reconstruction(self.references, target, runner=_fake_worker())
+        # Landscape 96x64 -> 518x345 on the canvas, so y0 = (518 - 345) // 2 = 86.
+        landscape = [line for line in self._cameras(target).values()
+                     if (int(line[2]), int(line[3])) == (CANVAS, 345)]
+        self.assertEqual(len(landscape), 1)
+        self.assertAlmostEqual(float(landscape[0][7]), CANVAS / 2 - 86, places=6)  # cy
+        self.assertAlmostEqual(float(landscape[0][6]), CANVAS / 2, places=6)  # cx, no x offset
+
+    def test_points_take_colour_from_the_photo_they_were_sampled_from(self):
+        target = self.root / "colour"
+        build_feedforward_sparse_reconstruction(self.references, target, runner=_fake_worker())
+        text_model = target / "undistorted/text-model"
+        poses = cameras._read_poses(text_model / "images.txt")
+        intrinsics = cameras._read_intrinsics(text_model / "cameras.txt")
+        images = {name: np.asarray(Image.open(target / "undistorted/images" / name).convert("RGB"))
+                  for _, _, name, _, _ in poses}
+        points = [line.split() for line in (text_model / "points3D.txt").read_text().splitlines()
+                  if line and not line.startswith("#")]
+        for line in points[:40]:
+            xyz = np.array([float(v) for v in line[1:4]])
+            rgb = np.array([int(v) for v in line[4:7]])
+            matched = False
+            for _, camera_id, name, quaternion, tvec in poses:
+                k = intrinsics[camera_id]
+                cam = _matrix_from_quaternion(quaternion) @ xyz + np.array(tvec)
+                if cam[2] <= 0:
+                    continue
+                u = round(k["fx_px"] * cam[0] / cam[2] + k["cx_px"])
+                v = round(k["fy_px"] * cam[1] / cam[2] + k["cy_px"])
+                image = images[name]
+                if 0 <= v < image.shape[0] and 0 <= u < image.shape[1] and (image[v, u] == rgb).all():
+                    matched = True
+                    break
+            self.assertTrue(matched, f"point {line[0]} colour matches no source photo pixel")
+
+
+class MapAnythingWorkerCanvasTests(unittest.TestCase):
+    """Runs the real worker _run() with stub torch/MapAnything modules (no weights)."""
+
+    class _Tensor:
+        def __init__(self, array):
+            self.array = np.asarray(array)
+
+        def __getitem__(self, key):
+            return MapAnythingWorkerCanvasTests._Tensor(self.array[key])
+
+        def detach(self):
+            return self
+
+        def float(self):
+            return self
+
+        def cpu(self):
+            return self
+
+        def numpy(self):
+            return self.array
+
+    def _stub_modules(self, seen):
+        torch = types.ModuleType("torch")
+        torch.__version__ = "stub"
+        torch.cuda = types.SimpleNamespace(is_available=lambda: False)
+        torch.backends = types.SimpleNamespace(mps=types.SimpleNamespace(is_available=lambda: False))
+        torch.device = lambda name: types.SimpleNamespace(type=name)
+        torch.from_numpy = lambda array: MapAnythingWorkerCanvasTests._Tensor(array)
+
+        class _Scope:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+        torch.inference_mode = lambda: _Scope()
+
+        class _Model:
+            def to(self, device):
+                return self
+
+            def eval(self):
+                return self
+
+            def infer(self, processed, **kwargs):
+                seen.extend(view["img"].array.copy() for view in processed)
+                size = CANVAS
+                return [{
+                    "camera_poses": self._t(np.eye(4)[None]),
+                    "intrinsics": self._t(np.array([[[FOCAL, 0, size / 2], [0, FOCAL, size / 2], [0, 0, 1.0]]])),
+                    "pts3d": self._t(np.zeros((1, size, size, 3))),
+                    "depth_z": self._t(np.ones((1, size, size, 1))),
+                    "mask": self._t(np.ones((1, size, size, 1))),
+                } for _ in processed]
+
+            @staticmethod
+            def _t(array):
+                return MapAnythingWorkerCanvasTests._Tensor(array)
+
+        class MapAnything:
+            @staticmethod
+            def from_pretrained(model_id):
+                return _Model()
+
+        mapanything_models = types.ModuleType("mapanything.models")
+        mapanything_models.MapAnything = MapAnything
+        mapanything_image = types.ModuleType("mapanything.utils.image")
+        mapanything_image.preprocess_inputs = lambda views: views
+        mapanything = types.ModuleType("mapanything")
+        return {"torch": torch, "mapanything": mapanything,
+                "mapanything.models": mapanything_models,
+                "mapanything.utils": types.ModuleType("mapanything.utils"),
+                "mapanything.utils.image": mapanything_image}
+
+    def test_worker_pastes_each_photo_at_its_canvas_offset_and_writes_contract(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        photo = root / "landscape.png"
+        pixels = np.random.default_rng(3).integers(0, 255, size=(64, 96, 3), dtype=np.uint8)
+        Image.fromarray(pixels).save(photo)
+        w, h, x0, y0 = canvas_placement(96, 64)
+        request = {"schema_version": 1, "model_id": "facebook/map-anything-apache", "device": "cpu",
+                   "canvas": CANVAS,
+                   "images": [{"path": str(photo), "width": w, "height": h, "x0": x0, "y0": y0}]}
+        (root / "in.json").write_text(json.dumps(request))
+        seen = []
+        with patch.dict(sys.modules, self._stub_modules(seen)):
+            code = _run(root / "in.json", root / "pred.npz", root / "meta.json")
+        self.assertEqual(code, 0)
+        canvas = seen[0]
+        self.assertEqual(canvas.shape, (CANVAS, CANVAS, 3))
+        resized = np.asarray(Image.open(photo).convert("RGB").resize((w, h), Image.Resampling.LANCZOS))
+        np.testing.assert_array_equal(canvas[y0:y0 + h, x0:x0 + w], resized)
+        self.assertEqual(int(canvas[:y0].sum()) + int(canvas[y0 + h:].sum()), 0)  # padding is black
+        meta = json.loads((root / "meta.json").read_text())
+        self.assertEqual((meta["device"], meta["canvas"], meta["views"]), ("cpu", CANVAS, 1))
+        with np.load(root / "pred.npz") as data:
+            self.assertEqual(sorted(data.files), ["K_0", "depth_0", "mask_0", "pose_0", "pts_0"])
+            self.assertEqual(data["pts_0"].shape, (CANVAS, CANVAS, 3))
+
+
+class WorkerFailureTests(unittest.TestCase):
+    def test_missing_mapanything_is_a_clean_worker_failure(self):
+        code = (
+            "import sys, runpy; sys.modules['mapanything'] = None; "
+            "runpy.run_module('kumiki_blender.reconstruction.mapanything_worker', run_name='__main__')"
+        )
+        completed = subprocess.run(
+            [sys.executable, "-c", code, "--input", "/nonexistent.json",
+             "--output", "/tmp/unused.npz", "--meta", "/tmp/unused-meta.json"],
+            capture_output=True, text=True, timeout=120, check=False)
+        self.assertEqual(completed.returncode, 2)
+        self.assertIn("MapAnything worker failed", completed.stderr)
+
+
 class PhotoModelEngineTests(unittest.TestCase):
     def test_mapanything_engine_settings_validate(self):
         PhotoModelSettings(engine="mapanything").validate()
         with self.assertRaisesRegex(ReferenceError, "mapanything_device"):
             PhotoModelSettings(engine="mapanything", mapanything_device="tpu").validate()
-        with self.assertRaisesRegex(ReferenceError, "mapanything_model"):
-            PhotoModelSettings(engine="mapanything", mapanything_model=" ").validate()
+        for bad in (" ", "../../etc/passwd", "/abs/path", "no-slash"):
+            with self.assertRaisesRegex(ReferenceError, "Hugging Face repo id"):
+                PhotoModelSettings(engine="mapanything", mapanything_model=bad).validate()
 
     def test_build_dispatches_to_mapanything_builder(self):
         temporary = tempfile.TemporaryDirectory()

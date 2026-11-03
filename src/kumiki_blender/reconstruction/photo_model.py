@@ -19,7 +19,7 @@ from typing import Any, Callable
 from ..glb_audit import AuditError, audit_glb
 from .dense import DenseSettings, build_dense_reconstruction
 from .feedforward_sparse import (DEPTH_TOLERANCE, DEVICE_CHOICES, MAPANYTHING_DEFAULT_MODEL,
-                                 build_feedforward_sparse_reconstruction)
+                                 build_feedforward_sparse_reconstruction, is_valid_model_id)
 from .references import ReferenceError, ReferenceSet, audit_reference_set
 
 
@@ -43,8 +43,8 @@ class PhotoModelSettings:
     def validate(self) -> None:
         if self.engine not in ("pycolmap", "colmap", "mapanything"):
             raise ReferenceError("Sparse engine must be pycolmap, colmap or mapanything")
-        if not isinstance(self.mapanything_model, str) or not self.mapanything_model.strip():
-            raise ReferenceError("mapanything_model must be a nonempty Hugging Face repo id")
+        if not is_valid_model_id(self.mapanything_model):
+            raise ReferenceError("mapanything_model must be a Hugging Face repo id such as facebook/map-anything-apache")
         if self.mapanything_device not in DEVICE_CHOICES:
             raise ReferenceError(f"mapanything_device must be one of {', '.join(DEVICE_CHOICES)}")
         if (type(self.mapanything_depth_tolerance) not in (int, float)

@@ -21,6 +21,12 @@ _ID = re.compile(r"[a-z][a-z0-9]*(?:-[a-z0-9]+)*\Z")
 _MODEL = re.compile(r"[0-9]+\Z")
 
 
+# COLMAP-side square-pixel tolerance for camera plans and Blender matching.
+SQUARE_PIXEL_TOLERANCE = 0.005
+# MapAnything predicts fx and fy separately; real Sphinx runs showed up to ~2.7%.
+MAPANYTHING_MAX_FOCAL_ASYMMETRY = 0.05
+
+
 def _vector(values: Any, label: str, *, size: int = 3) -> tuple[float, ...]:
     if not isinstance(values, (list, tuple)) or len(values) != size:
         raise ReferenceError(f"{label} must contain {size} finite numbers")
@@ -165,7 +171,8 @@ def _read_anchors(path: Path, asset_id: str) -> list[tuple[tuple[float, ...], tu
     return anchors
 
 
-def _read_intrinsics(path: Path, *, require_square_pixels: bool = True) -> dict[int, dict[str, Any]]:
+def _read_intrinsics(path: Path, *, require_square_pixels: bool = True,
+                     max_focal_asymmetry: float | None = None) -> dict[int, dict[str, Any]]:
     cameras = {}
     for line in path.read_text(encoding="utf-8").splitlines():
         if not line.strip() or line.lstrip().startswith("#"):
@@ -190,8 +197,10 @@ def _read_intrinsics(path: Path, *, require_square_pixels: bool = True) -> dict[
             if (not all(math.isfinite(v) for v in params) or fx <= 0 or fy <= 0
                     or not 0 <= cx <= width or not 0 <= cy <= height):
                 raise ValueError("invalid intrinsics")
-            if require_square_pixels and abs(fx-fy) / max(fx, fy) > 0.005:
+            if require_square_pixels and abs(fx-fy) / max(fx, fy) > SQUARE_PIXEL_TOLERANCE:
                 raise ReferenceError("Different fx/fy focal lengths need pixel-aspect handling; undistort to square-pixel PINHOLE")
+            if max_focal_asymmetry is not None and abs(fx-fy) / max(fx, fy) > max_focal_asymmetry:
+                raise ReferenceError(f"Focal asymmetry exceeds the {max_focal_asymmetry:.3f} limit for this engine")
             if camera_id in cameras:
                 raise ValueError("duplicate camera ID")
             cameras[camera_id] = {"fx_px": fx, "fy_px": fy, "cx_px": cx, "cy_px": cy,
@@ -276,7 +285,11 @@ def create_camera_plan(reconstruction: str | Path, alignment: str | Path,
         if len(staged) != len(index["images"]):
             raise ValueError("duplicate staged filenames")
         poses = _read_poses(model / "images.txt")
-        intrinsics = _read_intrinsics(model / "cameras.txt")
+        mapanything = report.get("engine") == "mapanything"
+        focal_limit = MAPANYTHING_MAX_FOCAL_ASYMMETRY if mapanything else SQUARE_PIXEL_TOLERANCE
+        intrinsics = _read_intrinsics(
+            model / "cameras.txt", require_square_pixels=not mapanything,
+            max_focal_asymmetry=MAPANYTHING_MAX_FOCAL_ASYMMETRY if mapanything else None)
         if len(poses) < 3 or len(poses) != selected["registered_images"]:
             raise ValueError("registered camera count differs from sparse report")
         for _, camera_id, filename, _, _ in poses:
@@ -345,6 +358,7 @@ def create_camera_plan(reconstruction: str | Path, alignment: str | Path,
         "schema_version": 1, "asset_id": asset_id,
         "reconstruction_path": str(root), "sparse_model": model_name,
         "rectified_cameras": corrected,
+        "focal_asymmetry_limit": focal_limit,
         "status": "alignment-candidate / artistic-review-required",
         "registered_cameras": len(cameras), "anchor_count": len(anchors),
         "anchor_rms_m": rms, "max_anchor_rms_m": max_anchor_rms_m,

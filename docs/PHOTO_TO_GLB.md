@@ -121,10 +121,12 @@ kumiki-blender build-photo-model \
   Views outside that group are listed in `reconstruction-report.json` as
   `unregistered_filenames`. A registered view means *mutually consistent
   prediction*, not a verified camera.
-- **Choosing the tolerance.** On a 26-photo statue set, 0.05 kept 3 views, none
+- **  Choosing the tolerance.** On a 26-photo statue set, 0.05 kept 3 views, none
   of which COLMAP registered; 0.20 kept 7 (3 shared with COLMAP); 0.30 kept 21
-  (5 of COLMAP's 6). Re-check any new photo set against the COLMAP baseline before
-  trusting extra views.
+  (5 of COLMAP's 6). The 0.30 default was picked while looking at these same 26
+  photos and COLMAP's registrations on them, so the 21-of-26 figure is in-sample.
+  Confirm on a second photo set against the COLMAP baseline before trusting extra
+  views.
 - **Outputs.** The same `undistorted/` COLMAP-text revision the dense stage and
   camera plan already read, plus `mapanything/worker-meta.json` (device, AMP
   mode, torch version). Status is still `candidate / visual-review-required`.

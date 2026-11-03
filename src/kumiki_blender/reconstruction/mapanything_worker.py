@@ -116,6 +116,6 @@ def main(argv: list[str] | None = None) -> int:
 if __name__ == "__main__":
     try:
         raise SystemExit(main())
-    except (OSError, RuntimeError, ValueError, KeyError) as error:
+    except (ImportError, OSError, RuntimeError, ValueError, KeyError) as error:
         print(f"MapAnything worker failed: {error}", file=sys.stderr)
         raise SystemExit(2) from error

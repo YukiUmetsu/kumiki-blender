@@ -30,6 +30,7 @@ from typing import Any, Callable
 
 import numpy as np
 
+from .cameras import MAPANYTHING_MAX_FOCAL_ASYMMETRY
 from .colmap import _prepare_images, _sha256, _staged_images, _write_json
 from .references import ReferenceError, ReferenceSet, audit_reference_set
 
@@ -52,6 +53,21 @@ MAX_SPARSE_POINTS = 50_000
 DEVICE_CHOICES = ("auto", "cuda", "mps", "cpu")
 _MODEL_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9][A-Za-z0-9_.-]*\Z")
 _ORTHONORMAL_TOLERANCE = 1e-3
+
+
+def is_valid_model_id(model_id: object) -> bool:
+    """A Hugging Face repo id such as facebook/map-anything-apache (no local paths)."""
+    return isinstance(model_id, str) and _MODEL_ID.fullmatch(model_id) is not None
+
+
+def intrinsics_are_usable(k: np.ndarray) -> bool:
+    """Finite, positive focals within the per-axis asymmetry cap."""
+    if k.shape != (3, 3) or not np.isfinite(k).all():
+        return False
+    fx, fy = float(k[0, 0]), float(k[1, 1])
+    if fx <= 0 or fy <= 0:
+        return False
+    return abs(fx - fy) / max(fx, fy) <= MAPANYTHING_MAX_FOCAL_ASYMMETRY
 
 
 def canvas_placement(width: int, height: int, canvas: int = CANVAS) -> tuple[int, int, int, int]:
@@ -213,7 +229,7 @@ def build_feedforward_sparse_reconstruction(
     target = Path(output).resolve()
     if Path(output).is_symlink() or target.exists():
         raise ReferenceError(f"Output already exists: {target}. Choose an unused revision directory")
-    if not isinstance(model_id, str) or not _MODEL_ID.fullmatch(model_id):
+    if not is_valid_model_id(model_id):
         raise ReferenceError("MapAnything model must be a Hugging Face repo id such as facebook/map-anything-apache")
     if device not in DEVICE_CHOICES:
         raise ReferenceError(f"MapAnything device must be one of {', '.join(DEVICE_CHOICES)}")
@@ -293,10 +309,11 @@ def build_feedforward_sparse_reconstruction(
         with np.load(predictions_path, allow_pickle=False) as data:
             predictions = []
             for index in range(len(staged)):
+                # float32 halves the memory of 256-photo runs; poses stay float64.
                 pose = np.asarray(data[f"pose_{index}"], dtype=np.float64)
                 k = np.asarray(data[f"K_{index}"], dtype=np.float64)
-                points = np.asarray(data[f"pts_{index}"], dtype=np.float64)
-                depth = np.asarray(data[f"depth_{index}"], dtype=np.float64)
+                points = np.asarray(data[f"pts_{index}"], dtype=np.float32)
+                depth = np.asarray(data[f"depth_{index}"], dtype=np.float32)
                 mask = np.asarray(data[f"mask_{index}"], dtype=bool)
                 if (k.shape != (3, 3) or points.shape != (CANVAS, CANVAS, 3)
                         or depth.shape != (CANVAS, CANVAS) or mask.shape != (CANVAS, CANVAS)):
@@ -308,7 +325,8 @@ def build_feedforward_sparse_reconstruction(
         return fail("mapanything-output", f"Cannot read predictions: {error}")
 
     # Restrict every prediction to the photo rectangle; padding is never evidence.
-    usable = [index for index, item in enumerate(predictions) if pose_is_valid(item["pose"])]
+    usable = [index for index, item in enumerate(predictions)
+              if pose_is_valid(item["pose"]) and intrinsics_are_usable(item["K"])]
     rng = np.random.default_rng(0)
     views: list[dict[str, Any]] = []
     for index in usable:
@@ -366,12 +384,11 @@ def build_feedforward_sparse_reconstruction(
             k = item["K"]
             focal_x, focal_y = float(k[0, 0]), float(k[1, 1])
             asymmetry = max(asymmetry, abs(focal_x - focal_y) / max(focal_x, focal_y))
-            # COLMAP PINHOLE allows fx != fy; the stored camera uses one shared focal
-            # because the photos are square-pixel. The asymmetry is recorded above.
-            focal = 0.5 * (focal_x + focal_y)
             # Shift the principal point from canvas to photo coordinates.
             cx, cy = float(k[0, 2]) - x0, float(k[1, 2]) - y0
-            cameras.append(f"{camera_id} PINHOLE {w} {h} {focal:.9g} {focal:.9g} "
+            # PINHOLE stores fx and fy separately; the plan and Blender readers accept
+            # the asymmetry only for mapanything revisions, up to the stated cap.
+            cameras.append(f"{camera_id} PINHOLE {w} {h} {focal_x:.9g} {focal_y:.9g} "
                            f"{cx:.9g} {cy:.9g}")
             quaternion, translation = colmap_pose_from_cam2world(item["pose"])
             images.append(f"{camera_id} " + " ".join(f"{value:.12g}" for value in quaternion)
