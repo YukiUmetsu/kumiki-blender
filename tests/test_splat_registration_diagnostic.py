@@ -63,6 +63,21 @@ class SplatRegistrationDiagnosticTests(unittest.TestCase):
             self.assertEqual([image["filename"] for image in result["weak_or_isolated"]],
                              ["photo-0003.jpg"])
             self.assertEqual(result["strongest_pairs"][0]["inliers"], 42)
+            try:
+                from PIL import Image
+            except ImportError:
+                return
+            for index in range(1, 5):
+                Image.new("RGB", (24, 16), (80, 100, 120)).save(
+                    sparse / "images" / f"photo-{index:04d}.jpg"
+                )
+            sheet = Path(tmp) / "registration-sheet.jpg"
+            diagnostic.make_contact_sheet(Path(tmp), result, sheet)
+            self.assertTrue(sheet.is_file())
+            with Image.open(sheet) as image:
+                self.assertEqual(image.size, (1200, 248))
+            with self.assertRaises(ValueError):
+                diagnostic.make_contact_sheet(Path(tmp), result, sheet)
 
     def test_missing_database_is_not_created(self):
         with tempfile.TemporaryDirectory() as tmp:
