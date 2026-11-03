@@ -11,6 +11,7 @@ Usage:
   bash scripts/mac_splat_test.sh cohorts /path/to/failed-splat-revision
   bash scripts/mac_splat_test.sh match-qa /path/to/failed-splat-revision [cohort-source-index.json]
   bash scripts/mac_splat_test.sh pnp-qa /path/to/failed-splat-revision [cohort-source-index.json]
+  bash scripts/mac_splat_test.sh photo-advice /path/to/failed-splat-revision [cohort-source-index.json] [front-photo]
   bash scripts/mac_splat_test.sh recover /path/to/failed-splat-revision [model-index]
   bash scripts/mac_splat_test.sh mask /path/to/splat-revision [rembg|grabcut]
   bash scripts/mac_splat_test.sh hybrid /path/to/splat-revision /path/to/rembg-mask-revision /path/to/grabcut-mask-revision photo-0002.png photo-0015.png
@@ -24,6 +25,7 @@ Optional environment:
   OUTPUT_ROOT=/absolute/path/to/revisions (default: .review/mac-splat-smoke)
   MAX_IMAGE_SIZE=2000 ITERATIONS=3000 MAX_VIEWS=12
   REGISTRATION_PROFILE=standard|high-recall (high-recall: slower, CPU SIFT + guided matching)
+  PHOTO_FRONT_REFERENCE=photo-0001.png (optional known frontal view for angle labels)
   VIDEO_SECONDS=3 VIDEO_WIDTH=960 VIDEO_HEIGHT=540
   VIDEO_HERO_PHOTO=photo-0001.png (optional registered view for video)
   MASK_MAX_SIDE=1280 MASK_ITERATIONS=5
@@ -33,7 +35,7 @@ EOF
 die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 require() { command -v "$1" >/dev/null 2>&1 || die "Missing $1. Install it, then rerun doctor."; }
 mode="${1:-}"; [[ -n "$mode" ]] || { usage; exit 2; }
-[[ "$mode" == doctor || "$mode" == plan || "$mode" == run || "$mode" == diagnose || "$mode" == cohorts || "$mode" == match-qa || "$mode" == pnp-qa || "$mode" == recover || "$mode" == mask || "$mode" == hybrid || "$mode" == run-masked || "$mode" == qa || "$mode" == video ]] || { usage; exit 2; }
+[[ "$mode" == doctor || "$mode" == plan || "$mode" == run || "$mode" == diagnose || "$mode" == cohorts || "$mode" == match-qa || "$mode" == pnp-qa || "$mode" == photo-advice || "$mode" == recover || "$mode" == mask || "$mode" == hybrid || "$mode" == run-masked || "$mode" == qa || "$mode" == video ]] || { usage; exit 2; }
 if [[ "$mode" != doctor ]]; then [[ $# -ge 2 ]] || { usage; exit 2; }; fi
 [[ "$(uname -s)" == Darwin ]] || printf 'WARNING: Intended for macOS; current OS is %s\n' "$(uname -s)" >&2
 root="${OUTPUT_ROOT:-.review/mac-splat-smoke}"
@@ -95,6 +97,22 @@ elif [[ "$mode" == pnp-qa ]]; then
     source_args+=(--source-index "$3")
   fi
   python3 scripts/diagnose_sfm_pnp_support.py "$2" --json-output "$output.json" "${source_args[@]}"
+elif [[ "$mode" == photo-advice ]]; then
+  [[ -d "$2" ]] || die "Splat revision directory not found: $2"
+  output="$(new_output photo-advice)"
+  advice_args=()
+  if [[ $# -ge 3 ]]; then
+    [[ -f "$3" ]] || die "Cohort source index not found: $3"
+    advice_args+=(--source-index "$3")
+  fi
+  if [[ $# -ge 4 ]]; then
+    advice_args+=(--front-photo "$4")
+  elif [[ -n "${PHOTO_FRONT_REFERENCE:-}" ]]; then
+    advice_args+=(--front-photo "$PHOTO_FRONT_REFERENCE")
+  fi
+  python3 scripts/audit_photo_coverage.py "$2" --output "$output" "${advice_args[@]}"
+  printf '\\nRead: %s/photo-advice.md\\nPhoto contact sheet: %s/photo-advice.jpg\\n' "$output" "$output"
+  [[ -f "$output/photo-advice.jpg" ]] && open "$output/photo-advice.jpg" 2>/dev/null || true
 elif [[ "$mode" == recover ]]; then
   [[ -d "$2" ]] || die "Splat revision directory not found: $2"
   python3 -c 'import pycolmap' || die 'Install photogrammetry dependencies: pip install -e ".[photogrammetry]"'
@@ -130,6 +148,16 @@ elif [[ "$mode" == plan || "$mode" == run ]]; then
         open "$diagnostic.jpg" 2>/dev/null || true
       else
         printf 'WARNING: Registration diagnosis failed; original build exit code preserved.\n' >&2
+      fi
+      if [[ -d "$output/sparse-reconstruction/text-models" ]]; then
+        advice="$(new_output photo-advice)"
+        advice_args=()
+        [[ -z "${PHOTO_FRONT_REFERENCE:-}" ]] || advice_args+=(--front-photo "$PHOTO_FRONT_REFERENCE")
+        if python3 scripts/audit_photo_coverage.py "$output" --output "$advice" "${advice_args[@]}"; then
+          printf '\nPhoto value + missing-angle recommendations: %s/photo-advice.md\n' "$advice" >&2
+        else
+          printf 'WARNING: Photo advice unavailable; original build exit code preserved.\n' >&2
+        fi
       fi
     fi
     printf 'Failed splat revision retained at: %s\n' "$output" >&2
