@@ -27,6 +27,7 @@ Optional environment:
   REGISTRATION_PROFILE=standard|high-recall (high-recall: slower, CPU SIFT + guided matching)
   PHOTO_FRONT_REFERENCE=photo-0001.png (optional known frontal view for angle labels)
   PHOTO_VISION_MODEL=<installed-ollama-vision-model> (optional, local image view/framing labels)
+  PHOTO_SUBJECT_TYPE=object|statue|building|landscape (default: object)
   VIDEO_SECONDS=3 VIDEO_WIDTH=960 VIDEO_HEIGHT=540
   VIDEO_HERO_PHOTO=photo-0001.png (optional registered view for video)
   MASK_MAX_SIDE=1280 MASK_ITERATIONS=5
@@ -112,6 +113,7 @@ elif [[ "$mode" == photo-advice ]]; then
     advice_args+=(--front-photo "$PHOTO_FRONT_REFERENCE")
   fi
   [[ -z "${PHOTO_VISION_MODEL:-}" ]] || advice_args+=(--vision-model "$PHOTO_VISION_MODEL")
+  advice_args+=(--subject-type "${PHOTO_SUBJECT_TYPE:-object}")
   python3 scripts/audit_photo_coverage.py "$2" --output "$output" "${advice_args[@]}"
   printf '\nRead: %s/photo-advice.md\nPhoto contact sheet: %s/photo-advice.jpg\n' "$output" "$output"
   [[ -f "$output/photo-advice.jpg" ]] && open "$output/photo-advice.jpg" 2>/dev/null || true
@@ -156,6 +158,7 @@ elif [[ "$mode" == plan || "$mode" == run ]]; then
         advice_args=()
         [[ -z "${PHOTO_FRONT_REFERENCE:-}" ]] || advice_args+=(--front-photo "$PHOTO_FRONT_REFERENCE")
         [[ -z "${PHOTO_VISION_MODEL:-}" ]] || advice_args+=(--vision-model "$PHOTO_VISION_MODEL")
+        advice_args+=(--subject-type "${PHOTO_SUBJECT_TYPE:-object}")
         if python3 scripts/audit_photo_coverage.py "$output" --output "$advice" "${advice_args[@]}"; then
           printf '\nPhoto value + missing-angle recommendations: %s/photo-advice.md\n' "$advice" >&2
         else
