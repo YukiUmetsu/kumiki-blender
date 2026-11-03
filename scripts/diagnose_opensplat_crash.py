@@ -54,6 +54,19 @@ def _debug_command(source: Path, target: Path, report: dict, lldb: str) -> list[
             "--", *training]
 
 
+def _classify_trace(*, timed_out: bool, launch_failed: bool,
+                    saw_crash: bool, has_frames: bool) -> str:
+    if launch_failed:
+        return "debugger-launch-failed"
+    if timed_out:
+        # LLDB sometimes remains alive after printing the crash backtrace.
+        # A timed-out debugger does not invalidate an already captured trace.
+        return "trace-captured / debugger-timeout" if saw_crash and has_frames else "debugger-timeout"
+    if not saw_crash:
+        return "trace-inconclusive"
+    return "trace-captured / inspect-log" if has_frames else "crash-seen / no-backtrace"
+
+
 def diagnose(retry_revision: Path, output: Path, *, lldb: str = "lldb",
              timeout: int = 600) -> dict:
     source = retry_revision.resolve(strict=True)
@@ -122,13 +135,17 @@ def diagnose(retry_revision: Path, output: Path, *, lldb: str = "lldb",
     launch_failure_pattern = re.compile(
         r"process launch failed|error:.*(?:launch|attach).*failed|"
         r"not allowed to attach|Operation not permitted", re.IGNORECASE)
+    protobuf_pattern = re.compile(r"\blibprotobuf\.\d+(?:\.\d+)+\.dylib\b",
+                                  re.IGNORECASE)
     saw_crash = False
     launch_failed = False
     frames = []
+    protobuf_libraries = set()
     with log_path.open("r", encoding="utf-8", errors="replace") as stream:
         for line in stream:
             saw_crash |= bool(crash_pattern.search(line))
             launch_failed |= bool(launch_failure_pattern.search(line))
+            protobuf_libraries.update(match.group(0) for match in protobuf_pattern.finditer(line))
             if len(frames) < 50 and (frame_pattern.search(line) or
                                      launch_failure_pattern.search(line)):
                 frames.append(line.strip()[:500])
@@ -138,14 +155,24 @@ def diagnose(retry_revision: Path, output: Path, *, lldb: str = "lldb",
     summary["saw_native_crash"] = saw_crash and not launch_failed
     summary["frame_excerpt"] = frames
     summary["log_tail"] = tail[-12000:]
-    if summary["status"] != "debugger-timeout":
-        if launch_failed:
-            summary["status"] = "debugger-launch-failed"
-        elif not saw_crash:
-            summary["status"] = "trace-inconclusive"
-        elif not any(re.search(r"frame #\d+", frame, re.IGNORECASE)
-                     for frame in frames):
-            summary["status"] = "crash-seen / no-backtrace"
+    summary["protobuf_libraries_in_trace"] = sorted(protobuf_libraries)
+    if len(protobuf_libraries) > 1:
+        summary["native_diagnosis"] = {
+            "kind": "mixed-protobuf-cpp-runtimes",
+            "evidence": "Multiple libprotobuf versions occur in a single native crash log.",
+            "next_action": (
+                "Trace the transitive OpenSplat dependencies with otool -L to "
+                "identify which libraries load each Protobuf version. Rebuild "
+                "against one compatible native dependency stack; do not relink "
+                "dylib names blindly."
+            ),
+            "limitation": "The debugger frames do not identify which parent dependencies loaded the dylibs.",
+        }
+    summary["status"] = _classify_trace(
+        timed_out=summary["status"] == "debugger-timeout",
+        launch_failed=launch_failed, saw_crash=summary["saw_native_crash"],
+        has_frames=any(re.search(r"frame #\d+", frame, re.IGNORECASE)
+                       for frame in frames))
     return save()
 
 
@@ -165,6 +192,9 @@ def main(argv: list[str] | None = None) -> int:
     print(f"Original mode: {report['original_mode']}; "
           f"registered cameras: {report['registered_images']}")
     print(f"Native crash observed in trace: {report['saw_native_crash']}")
+    if report.get("native_diagnosis"):
+        print(f"Native diagnosis: {report['native_diagnosis']['kind']}")
+        print(report["native_diagnosis"]["next_action"])
     print(f"Report: {args.output / 'crash-qa.json'}")
     print(f"Trace: {args.output / 'lldb.log'}")
     for line in report["frame_excerpt"][:12]:
