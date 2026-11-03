@@ -124,11 +124,11 @@ def classify_images(sparse: Path, filenames: list[str], *, model: str,
                     endpoint: str = "http://127.0.0.1:11434/api/generate",
                     timeout: float = 60., max_images: int = 64) -> dict[str, dict]:
     _endpoint(endpoint)
-    if len(filenames) > max_images or not 1 <= max_images <= 256:
-        raise ValueError(f"Vision image count exceeds configured limit ({max_images})")
+    if not 1 <= max_images <= 256:
+        raise ValueError("Vision max_images must be 1–256")
     results = {}
     image_root = (sparse / "images").resolve()
-    for filename in filenames:
+    for filename in filenames[:max_images]:
         photo = (image_root / filename).resolve()
         if not photo.is_relative_to(image_root):
             raise ValueError(f"Unsafe staged filename: {filename}")
@@ -143,4 +143,11 @@ def classify_images(sparse: Path, filenames: list[str], *, model: str,
                 "notes": f"Local vision analysis unavailable: {str(error)[:120]}",
                 "source": "local-vision-model / failed",
             }
+    for filename in filenames[max_images:]:
+        results[filename] = {
+            "view": "unknown", "elevation": "unknown", "framing": "unknown",
+            "quality": "unknown", "confidence": "low",
+            "notes": "Skipped: local vision image limit reached",
+            "source": "local-vision-model / not-run",
+        }
     return results
