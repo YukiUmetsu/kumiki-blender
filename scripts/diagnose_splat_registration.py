@@ -115,6 +115,7 @@ def analyze(root: Path, min_inliers: int) -> dict:
     return {
         "photos": len(names), "registered": len(registered),
         "staged_photos": len(staged) if staged else None,
+        "staged_filenames": sorted(staged) if staged else sorted(imported),
         "missing_from_database": omitted,
         "feature_extraction_warnings": warnings[-30:],
         "min_inliers_for_diagnostic_edge": min_inliers,
@@ -132,11 +133,56 @@ def analyze(root: Path, min_inliers: int) -> dict:
     }
 
 
+def make_contact_sheet(root: Path, result: dict, destination: Path) -> None:
+    """Create a private visual triage sheet from the staged photographs."""
+    try:
+        from PIL import Image, ImageDraw, ImageOps
+    except ImportError as error:
+        raise ValueError("Contact sheet needs Pillow: pip install Pillow") from error
+    sparse = root / "sparse-reconstruction" if (root / "sparse-reconstruction").is_dir() else root
+    if destination.is_symlink() or destination.exists():
+        raise ValueError(f"Contact sheet already exists: {destination}")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    groups = {
+        filename: index + 1
+        for index, group in enumerate(result["connected_components"])
+        for filename in group
+    }
+    imported = {item["filename"] for item in result["images"]}
+    registered = set(result["registered_filenames"])
+    filenames = result["staged_filenames"]
+    columns, width, height = 4, 300, 248
+    rows = (len(filenames) + columns - 1) // columns
+    sheet = Image.new("RGB", (columns * width, rows * height), (26, 29, 34))
+    draw = ImageDraw.Draw(sheet)
+    for index, filename in enumerate(filenames):
+        left = (index % columns) * width
+        top = (index // columns) * height
+        if filename not in imported:
+            status, color = "NOT IMPORTED", (225, 85, 85)
+        elif filename in registered:
+            status, color = "REGISTERED", (87, 207, 135)
+        else:
+            status, color = "UNREGISTERED", (232, 181, 75)
+        photo = sparse / "images" / filename
+        try:
+            with Image.open(photo) as source:
+                preview = ImageOps.contain(ImageOps.exif_transpose(source).convert("RGB"), (280, 198))
+                sheet.paste(preview, (left + (width - preview.width) // 2, top + 4 + (198 - preview.height) // 2))
+        except (OSError, ValueError):
+            draw.text((left + 12, top + 90), "Image cannot be decoded", fill=(225, 85, 85))
+        draw.rectangle((left + 4, top + 205, left + width - 4, top + height - 4), fill=(38, 42, 48))
+        draw.text((left + 10, top + 209), filename[:37], fill=(245, 245, 245))
+        draw.text((left + 10, top + 228), f"{status} | group {groups.get(filename, '-')}", fill=color)
+    sheet.save(destination, quality=88)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("revision", type=Path, help="Failed splat revision or sparse-reconstruction directory")
     parser.add_argument("--min-inliers", type=int, default=15, help="Diagnostic connectivity threshold (default 15)")
     parser.add_argument("--json", action="store_true", help="Print complete JSON diagnostics")
+    parser.add_argument("--contact-sheet", type=Path, help="Save private labeled photo montage (requires Pillow)")
     args = parser.parse_args()
     if args.min_inliers < 1:
         parser.error("--min-inliers must be positive")
@@ -144,6 +190,12 @@ def main() -> int:
         result = analyze(args.revision.resolve(), args.min_inliers)
     except (OSError, ValueError, sqlite3.DatabaseError) as error:
         parser.exit(2, f"ERROR: {error}\n")
+    if args.contact_sheet is not None:
+        try:
+            make_contact_sheet(args.revision.resolve(), result, args.contact_sheet.resolve())
+        except (OSError, ValueError) as error:
+            parser.exit(2, f"ERROR: {error}\\n")
+        print(f"Contact sheet: {args.contact_sheet}", file=__import__("sys").stderr)
     if args.json:
         print(json.dumps(result, indent=2))
         return 0
