@@ -95,12 +95,24 @@ def _select_spread(views: list[dict], limit: int) -> list[dict]:
 
 def _photo_plan(source: Path, settings: SplatViewQASettings) -> tuple[list[dict], list[str]]:
     report_file = source / "splat-report.json"
+    is_retry = not report_file.exists() and not report_file.is_symlink()
+    if is_retry:
+        report_file = source / "retry-report.json"
     _check_regular(report_file, source)
     try:
         report = json.loads(report_file.read_text(encoding="utf-8"))
-        dataset = report["dataset"]
+        if is_retry:
+            dataset_file = source / "dataset/dataset-report.json"
+            _check_regular(dataset_file, source)
+            if _sha256(dataset_file) != report["source_dataset_report_sha256"]:
+                raise ReferenceError("Retry dataset report changed since training")
+            dataset = json.loads(dataset_file.read_text(encoding="utf-8"))
+        else:
+            dataset = report["dataset"]
         photo_hashes = {item["name"]: item["sha256"] for item in dataset["photo_hashes"]}
         camera_hashes = dataset["viewpoint_qa"]["text_model_hashes"]
+    except ReferenceError:
+        raise
     except (OSError, ValueError, KeyError, TypeError) as error:
         raise ReferenceError("Splat revision lacks pinned training photos and cameras") from error
     if not photo_hashes or len(photo_hashes) != len(dataset["photo_hashes"]):
