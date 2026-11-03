@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import sqlite3
 import tempfile
 import unittest
@@ -25,6 +26,15 @@ class SplatRegistrationDiagnosticTests(unittest.TestCase):
                 "1 1 0 0 0 0 0 0 1 photo-0001.jpg\n0 0 -1\n"
                 "2 1 0 0 0 0 0 0 1 photo-0002.jpg\n0 0 -1\n"
             )
+            (sparse / "staged-reference-index.json").write_text(json.dumps({
+                "images": [{"filename": f"photo-{index:04d}.jpg"} for index in range(1, 5)]
+            }))
+            (sparse / "images").mkdir()
+            (sparse / "images" / "photo-0004.jpg").write_bytes(b"staged")
+            (sparse / "logs").mkdir()
+            (sparse / "logs" / "01-feature_extractor.log").write_text(
+                "WARNING: failed to read photo-0004.jpg\\n"
+            )
             with sqlite3.connect(sparse / "database.db") as db:
                 db.executescript(
                     "CREATE TABLE images (image_id INTEGER, name TEXT);"
@@ -41,6 +51,13 @@ class SplatRegistrationDiagnosticTests(unittest.TestCase):
             result = diagnostic.analyze(Path(tmp), 15)
             self.assertEqual(result["photos"], 3)
             self.assertEqual(result["registered"], 2)
+            self.assertEqual(result["staged_photos"], 4)
+            self.assertEqual(len(result["missing_from_database"]), 1)
+            self.assertEqual(result["missing_from_database"][0]["filename"], "photo-0004.jpg")
+            self.assertTrue(result["missing_from_database"][0]["staged_file_exists"])
+            self.assertEqual(result["missing_from_database"][0]["staged_bytes"], 6)
+            self.assertIn("photo-0004.jpg", result["feature_extraction_warnings"][0])
+            self.assertEqual(result["connected_components"][0], ["photo-0001.jpg", "photo-0002.jpg"])
             self.assertEqual(result["connected_component_sizes"], [2, 1])
             self.assertEqual(result["strong_pair_count"], 1)
             self.assertEqual([image["filename"] for image in result["weak_or_isolated"]],
