@@ -110,10 +110,16 @@ bash scripts/mac_splat_test.sh photo-advice \
   .review/mac-splat-smoke/cohorts-20261103T053322Z-10742/cohort-01/source-index.json
 
 # If you know which REGISTERED photo depicts the front of the statue:
-PHOTO_FRONT_REFERENCE=photo-0002.png \
+PHOTO_SUBJECT_TYPE=statue PHOTO_FRONT_REFERENCE=photo-0002.png \
   bash scripts/mac_splat_test.sh photo-advice \
   .review/mac-splat-smoke/splat-20261103T053355Z-11041
 ```
+
+Use `PHOTO_SUBJECT_TYPE=statue|object|building|landscape` (default:
+`object`) to tailor recommended framing and shared landmarks to the
+subject. Statue advice prioritizes head/neck/torso continuity; buildings
+prioritize facades and corners; landscapes prioritize stable ridges and
+terrain features; other objects prioritize distinctive overlapping details.
 
 The new `photo-advice-*/` directory contains:
 
