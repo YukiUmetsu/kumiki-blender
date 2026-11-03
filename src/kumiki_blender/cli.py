@@ -370,6 +370,19 @@ def main(argv: list[str] | None = None) -> int:
     projection_parser.add_argument("--atlas-side", type=int, default=2048)
     projection_parser.add_argument("--camera-side", type=int, default=1536)
     projection_parser.add_argument("--max-triangles", type=int, default=500_000)
+    for command in ("plan-scan-displacement", "bake-scan-displacement"):
+        scan_bake_parser = subcommands.add_parser(
+            command, help="Bake real dense PLY relief into signed 16-bit UV displacement")
+        scan_bake_parser.add_argument("--dense-revision", type=Path, required=True)
+        scan_bake_parser.add_argument("--output", type=Path, required=True)
+        scan_bake_parser.add_argument("--meters-per-unit", type=float, required=True,
+                                     help="Measured physical metres per COLMAP world unit")
+        scan_bake_parser.add_argument("--max-offset-m", type=float, default=.05)
+        scan_bake_parser.add_argument("--max-side", type=int, default=2048)
+        scan_bake_parser.add_argument("--max-mesh-faces", type=int, default=5_000_000)
+        scan_bake_parser.add_argument("--max-uv-triangles", type=int, default=500_000)
+        if command == "bake-scan-displacement":
+            scan_bake_parser.add_argument("--blender", default="blender")
     udim_parser = subcommands.add_parser(
         "package-finished-udim", help="Copy a verified finished multi-atlas OBJ to numbered UDIM tiles")
     udim_parser.add_argument("--texture-finish", type=Path, required=True)
@@ -592,6 +605,45 @@ def main(argv: list[str] | None = None) -> int:
                     args.dense_revision, args.output, views=args.views,
                     atlas_side=args.atlas_side, camera_side=args.camera_side,
                     max_triangles=args.max_triangles)
+            except ReferenceError as error:
+                raise RecipeError(str(error)) from error
+            print(json.dumps(report, indent=2))
+            return 0
+        if args.command in ("plan-scan-displacement", "bake-scan-displacement"):
+            from .reconstruction.references import ReferenceError
+            from .reconstruction.scan_displacement import (bake_scanned_displacement,
+                                                           plan_scan_displacement)
+            options = dict(meters_per_unit=args.meters_per_unit,
+                           max_offset_m=args.max_offset_m, max_side=args.max_side,
+                           max_mesh_faces=args.max_mesh_faces,
+                           max_uv_triangles=args.max_uv_triangles)
+            try:
+                plan = plan_scan_displacement(args.dense_revision, args.output, **options)
+            except ReferenceError as error:
+                raise RecipeError(str(error)) from error
+            if args.command == "plan-scan-displacement":
+                print(json.dumps(plan, indent=2))
+                return 0
+            try:
+                import bpy  # type: ignore[import-not-found]
+            except ImportError:
+                executable = shutil.which(args.blender)
+                if not executable:
+                    raise RuntimeError(f"Blender executable not found: {args.blender}")
+                entry = Path(__file__).resolve().parents[2] / "scripts/blender_entry.py"
+                command = [executable, "--background", "--factory-startup", "--python-exit-code", "1",
+                           "--python", str(entry), "--", "bake-scan-displacement",
+                           "--dense-revision", str(args.dense_revision.resolve()),
+                           "--output", str(args.output.resolve()),
+                           "--meters-per-unit", str(args.meters_per_unit),
+                           "--max-offset-m", str(args.max_offset_m),
+                           "--max-side", str(args.max_side),
+                           "--max-mesh-faces", str(args.max_mesh_faces),
+                           "--max-uv-triangles", str(args.max_uv_triangles)]
+                return subprocess.run(command, check=False).returncode
+            try:
+                report = bake_scanned_displacement(bpy, args.dense_revision,
+                                                   args.output, **options)
             except ReferenceError as error:
                 raise RecipeError(str(error)) from error
             print(json.dumps(report, indent=2))
