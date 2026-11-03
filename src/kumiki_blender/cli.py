@@ -23,6 +23,7 @@ from .geography.fuji import load_dem
 from .glb_audit import AuditError, audit_glb
 from .glb_motion import MotionExportError, write_glb_motion
 from .physics_plan import PhysicsPlanError, load_physics_plan
+from .deformation_plan import DeformationPlanError, load_deformation_plan
 from .lattice import make_lattice_tower
 from .landmark_scan import prepare_sphinx_scan
 from .material_overrides import load_material_overrides, verify_material_overrides
@@ -149,6 +150,12 @@ def main(argv: list[str] | None = None) -> int:
         if command == "build-physics":
             physics_parser.add_argument("--output", type=Path, required=True,
                                         help="New, immutable motion bundle (requires Blender background with a loaded .blend)")
+    for command in ("plan-deformation", "build-deformation"):
+        deform_parser = subcommands.add_parser(command, help="Validate or bake one topology-stable deforming Blender mesh into glTF morph animation")
+        deform_parser.add_argument("--spec", type=Path, required=True)
+        if command == "build-deformation":
+            deform_parser.add_argument("--output", type=Path, required=True,
+                                      help="New GLB/manifest bundle (requires Blender background with a saved .blend)")
     revision_parser = subcommands.add_parser("audit-revision")
     revision_parser.add_argument("--root", type=Path, required=True)
     visual_parser = subcommands.add_parser("visual-qa", help="Contact sheet and optional render regression")
@@ -455,6 +462,21 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     try:
+        if args.command in ("plan-deformation", "build-deformation"):
+            shot = load_deformation_plan(args.spec)
+            if args.command == "plan-deformation":
+                print(json.dumps({"asset_id": shot.asset_id, "action_id": shot.action_id,
+                                  "target": shot.target, "frames": list(shot.frames),
+                                  "morph_targets": len(shot.frames) - 1,
+                                  "max_vertices": shot.max_vertices}, indent=2))
+                return 0
+            try:
+                import bpy  # type: ignore[import-not-found]
+            except ImportError as error:
+                raise DeformationPlanError("build-deformation needs Blender: blender -b source.blend --python scripts/blender_entry.py -- build-deformation --spec plan.json --output new-revision") from error
+            from .blender_deformation import build_deformation_shot
+            print(json.dumps(build_deformation_shot(bpy, shot, args.output), indent=2))
+            return 0
         if args.command in ("plan-physics", "build-physics"):
             shot = load_physics_plan(args.spec)
             if args.command == "plan-physics":
@@ -1351,7 +1373,7 @@ def main(argv: list[str] | None = None) -> int:
         manifest = build_scene(recipe, plan, output, bpy_module=bpy)
         print(json.dumps(manifest, indent=2))
         return 0
-    except (CatalogError, RecipeError, PorticoError, FacadeError, MonumentError, GeometryError, AssetImportError, HeadFitError, MakeHumanSourceError, RenderProfileError, RevisionAuditError, AuditError, ExportAuditError, MotionExportError, PhysicsPlanError,
+    except (CatalogError, RecipeError, PorticoError, FacadeError, MonumentError, GeometryError, AssetImportError, HeadFitError, MakeHumanSourceError, RenderProfileError, RevisionAuditError, AuditError, ExportAuditError, MotionExportError, PhysicsPlanError, DeformationPlanError,
             SurfaceError, RuntimeError, OSError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 2

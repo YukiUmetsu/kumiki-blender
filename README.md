@@ -2,6 +2,8 @@
 
 **New: Blender physics → Kumiki motion:** [export baked GLB rigid-body clips to portable PM2 actions](docs/KUMIKI_MOTION_BRIDGE.md) with `kumiki-blender export-motion --model model.glb --output baked-actions.json`. No extra Python dependencies, manual coordinate conversion or per-model browser animation code.
 
+**Deforming meshes → Kumiki:** [bake Blender Cloth/Soft Body or topology-stable modifier motion into a native animated glTF morph GLB](docs/KUMIKI_DEFORMATION_BRIDGE.md) using `plan-deformation` and `build-deformation`. One JSON plan; no custom browser vertex-cache player or runtime solver.
+
 For fully automated rigid-body shots, use `kumiki-blender plan-physics --spec examples/desk-lamp-physics-shot.json`, then `build-physics` under Blender with a saved `.blend` loaded. A declarative plan generates a new editable physics scene, GLB, and PM2 animation sidecar; it never overwrites source geometry.
 
 The same plan now supports native `hinge`, `slider` and `fixed` joints (see `examples/mechanical-constraints-physics-shot.json`) and conservative, measured ground-impact cues for SFX. Every constraint/impact is backed by a real Blender simulation; no per-model animation code is required.

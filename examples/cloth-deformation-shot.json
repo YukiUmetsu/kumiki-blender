@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "asset_id": "cloth-deformation-smoke",
+  "action_id": "cloth-sag",
+  "target": "role:cloth-panel",
+  "duration_frames": 24,
+  "sample_stride": 2,
+  "max_vertices": 128
+}
