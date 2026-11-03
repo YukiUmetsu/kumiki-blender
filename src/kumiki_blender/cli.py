@@ -322,6 +322,14 @@ def main(argv: list[str] | None = None) -> int:
                                     help="Conservative color cleanup: remove suspected background, never add foreground")
     refine_mask_parser.add_argument("--color-max-side", type=int, default=1280)
     refine_mask_parser.add_argument("--color-iterations", type=int, default=3)
+    hybrid_mask_parser = subcommands.add_parser(
+        "compose-dense-masks", help="Select the best registered masks photo by photo across two candidate revisions")
+    hybrid_mask_parser.add_argument("--reconstruction", type=Path, required=True)
+    hybrid_mask_parser.add_argument("--primary-mask-revision", type=Path, required=True)
+    hybrid_mask_parser.add_argument("--alternate-mask-revision", type=Path, required=True)
+    hybrid_mask_parser.add_argument("--output", type=Path, required=True)
+    hybrid_mask_parser.add_argument("--use-alternate", nargs="+", required=True,
+                                    metavar="PHOTO", help="Exact filenames selected from the alternate revision")
     mask_consistency_parser = subcommands.add_parser(
         "audit-dense-masks", help="Inspect multi-view COLMAP feature-track disagreements in rectified masks")
     mask_consistency_parser.add_argument("--reconstruction", type=Path, required=True)
@@ -591,6 +599,18 @@ def main(argv: list[str] | None = None) -> int:
                     color_max_side=args.color_max_side,
                     color_iterations=args.color_iterations,
                     color_trim_only=args.color_trim_only)
+            except ReferenceError as error:
+                raise RecipeError(str(error)) from error
+            print(json.dumps(report, indent=2))
+            return 0
+        if args.command == "compose-dense-masks":
+            from .reconstruction.mask_selection import compose_rectified_masks
+            from .reconstruction.references import ReferenceError
+            try:
+                report = compose_rectified_masks(
+                    args.reconstruction, args.primary_mask_revision,
+                    args.alternate_mask_revision, args.output,
+                    alternate_images=args.use_alternate)
             except ReferenceError as error:
                 raise RecipeError(str(error)) from error
             print(json.dumps(report, indent=2))

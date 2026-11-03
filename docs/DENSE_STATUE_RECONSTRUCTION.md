@@ -81,6 +81,15 @@ private texture projection to produce a mesh for artistic inspection.
       --reconstruction .review/statue/sparse-r01 \
       --output .review/statue/masks-semantic-r01 --segmenter rembg
 
+    # Preserve the best method per registered photo. Every image in both
+    # revisions must match the same immutable rectified camera/photo set.
+    kumiki-blender compose-dense-masks \
+      --reconstruction .review/statue/sparse-r01 \
+      --primary-mask-revision .review/statue/masks-semantic-r01 \
+      --alternate-mask-revision .review/statue/masks-grabcut-r01 \
+      --use-alternate photo-0002.png photo-0015.png \
+      --output .review/statue/masks-hybrid-r01
+
     # Correct unwanted ground or a missing thin feature on selected views.
     # Edit normalized polygons in a private JSON file; never modify r01.
     kumiki-blender refine-dense-masks \
