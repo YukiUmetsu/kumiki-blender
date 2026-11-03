@@ -245,6 +245,7 @@ elif [[ "$mode" == foreground-prep || "$mode" == foreground-train ]]; then
     audit="$(new_output foreground-audit)"
     kumiki-blender audit-dense-masks --reconstruction "$reconstruction" \
       --rectified-masks "$masks/masks" --output "$audit" >/dev/null
+    printf '\nGenerated candidate revisions (keep these even if validation fails):\n  MASKS=%s\n  AUDIT=%s\n' "$masks" "$audit"
     python3 scripts/validate_foreground_splat_pipeline.py "$reconstruction" "$masks" "$audit" \
       --output "$(new_output splat)"
     printf '\nReview EVERY photo before training:\n  Masks: %s/mask-contact-sheet.jpg\n  Cross-view disagreements: %s/mask-consistency-contact-sheet.jpg\n' "$masks" "$audit"
@@ -254,6 +255,9 @@ elif [[ "$mode" == foreground-prep || "$mode" == foreground-train ]]; then
   else
     [[ $# -eq 4 ]] || die "foreground-train needs the splat, mask and cross-view audit revisions"
     [[ "${MASKS_REVIEWED:-0}" == 1 ]] || die "Review every mask and consistency sheet, then explicitly set MASKS_REVIEWED=1"
+    [[ -n "$3" && -n "$4" ]] || die 'MASKS and AUDIT are empty. Use the actual foreground-mask-* and foreground-audit-* directories printed by foreground-prep.'
+    [[ -f "$3/mask-report.json" && -d "$3/masks" ]] || die "Invalid mask revision: $3 (expected mask-report.json and masks/; check the MASKS variable)"
+    [[ -f "$4/mask-consistency-report.json" ]] || die "Invalid audit revision: $4 (expected mask-consistency-report.json; check the AUDIT variable)"
     check_tool "$trainer"
     output="$(new_output splat)"
     python3 scripts/validate_foreground_splat_pipeline.py "$reconstruction" "$3" "$4" \
