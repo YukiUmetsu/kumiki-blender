@@ -593,11 +593,15 @@ def analyze(revision: Path, *, source_index: Path | None = None,
     required_registered = max(8, math.ceil(0.6 * len(images)))
     weak_tracks = sum(item["assessment"] in ("low-current-value", "needs-overlap-bridge")
                       for item in images)
-    shots = _bridge_shots(images, subject_type=subject_type) + _shot_plan(
-        angles, front_known=front_known, anchor=anchor,
-        weak_track_count=weak_tracks,
-        missing_count=len(images) - len(best_files),
-        subject_type=subject_type)
+    # Registration completeness is independent of downstream OpenSplat failure.
+    # Never request additional registration bridges when every image registered.
+    all_registered = bool(images) and len(best_files) == len(images)
+    shots = [] if all_registered else (
+        _bridge_shots(images, subject_type=subject_type) + _shot_plan(
+            angles, front_known=front_known, anchor=anchor,
+            weak_track_count=weak_tracks,
+            missing_count=len(images) - len(best_files),
+            subject_type=subject_type))
     for index, shot in enumerate(shots, 1):
         shot["priority"] = index
     visual_counts = {}
@@ -632,7 +636,8 @@ def analyze(revision: Path, *, source_index: Path | None = None,
              "elevated" not in elevation_counts),
         ]
         for view, framing, reason, needed in semantic_gaps:
-            if needed and successful_labels >= max(2, math.ceil(0.7 * len(vision))):
+            if not all_registered and needed and successful_labels >= max(
+                    2, math.ceil(0.7 * len(vision))):
                 shots.append({
                     "priority": len(shots) + 1,
                     "kind": "vision-estimated-coverage-gap",
@@ -651,6 +656,12 @@ def analyze(revision: Path, *, source_index: Path | None = None,
         "photos": len(images),
         "registered_in_best_model": len(best_files),
         "camera_gate_met": len(best_files) >= required_registered,
+        "registration_complete": all_registered,
+        "registration_photo_recommendation": (
+            "No additional photographs needed for camera registration. "
+            "Assess surface visibility, image detail and downstream training separately."
+            if all_registered else
+            "Additional overlapping viewpoints may improve camera registration."),
         "required_registered_at_current_photo_count": required_registered,
         "additional_registrations_needed_at_current_photo_count":
             max(0, required_registered - len(best_files)),
@@ -703,6 +714,8 @@ def _markdown(report: dict) -> str:
         f"more registrations (target "
         f"{report['required_registered_at_current_photo_count']}).",
         "",
+        f"**Registration recommendation:** {report['registration_photo_recommendation']}",
+        "",
         "**Caution:** Low current value means weak evidence for this SfM run, "
         "not that the image is bad or its viewpoint is unnecessary. "
         "Unregistered image angles cannot be measured.",
@@ -739,6 +752,8 @@ def _markdown(report: dict) -> str:
     if not report.get("existing_photo_priorities"):
         lines.append("- No high-confidence existing photo recovery candidates.")
     lines.extend(["", "## Priority new photos", ""])
+    if not report["recommended_photos"]:
+        lines.append("- None required for camera registration; inspect surface coverage separately.")
     for shot in report["recommended_photos"]:
         angle = (f"azimuth {shot['target_azimuth_deg']:+.1f}°, "
                  f"elevation {shot['target_elevation_deg']:+.1f}°"
@@ -943,6 +958,8 @@ def main() -> int:
         print(f"  {item['filename']}: {item['kind']}"
               + (f" (registered bridge: {reference})" if reference else ""))
     print("Priority new photos:")
+    if not report["recommended_photos"]:
+        print("  None required for camera registration.")
     for shot in report["recommended_photos"]:
         print(f"  {shot['priority']}. {shot['view']}: "
               f"az={shot['target_azimuth_deg']}°, el={shot['target_elevation_deg']}°; "
