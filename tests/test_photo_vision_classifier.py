@@ -73,8 +73,15 @@ class PhotoVisionClassifierTests(unittest.TestCase):
                     "elevation": "level", "quality": "usable",
                     "confidence": "low", "notes": "visible ear"
                 })}).encode())
-            with patch.object(vision.urllib.request, "urlopen", fake_urlopen):
+            with patch.object(vision.urllib.request, "build_opener",
+                              return_value=SimpleNamespace(open=fake_urlopen)) as build:
                 label = vision.classify(image_path, model="local-vision", timeout=5)
+            self.assertEqual(len(build.call_args.args), 2)
+            self.assertIsInstance(build.call_args.args[0], vision.urllib.request.ProxyHandler)
+            self.assertEqual(build.call_args.args[0].proxies, {})
+            redirect = build.call_args.args[1]
+            with self.assertRaisesRegex(ValueError, "redirect rejected"):
+                redirect.redirect_request(None, None, 302, "redirect", {}, "https://evil.invalid")
             self.assertEqual(label["view"], "left-profile")
             self.assertEqual(len(received), 1)
 
