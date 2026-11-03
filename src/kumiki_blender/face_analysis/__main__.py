@@ -16,6 +16,7 @@ from .inputs import (inspect_coverage, load_annotations, load_photo_set,
                      photos_from_reference_set)
 from .registration import load_registration_pairs, propose_registrations
 from .reports import load_evidence_bundle, load_pairs, write_analysis_revision
+from .workbench import build_annotation_workbench
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -28,6 +29,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     input_group.add_argument("--reference-manifest", type=Path)
     inspect.add_argument("--annotations", type=Path)
     inspect.add_argument("--detector", choices=("none", "mediapipe"), default="none")
+    inspect.add_argument("--workbench", action="store_true",
+                         help="Generate an offline local landmark/outline editor with embedded previews")
     inspect.add_argument("--output", required=True, type=Path)
     compare = subcommands.add_parser("compare", help="Compare verified same-view photo and model evidence")
     compare.add_argument("--reference", required=True, type=Path)
@@ -78,8 +81,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                     {"image_id": photo.image_id, **propose_landmarks(photo, detector=args.detector)}
                     for photo in reviewed_photos],
                     "limitations": "All automatic points are unverified 2D proposals, never sculpt ground truth."}
+            workbench = (build_annotation_workbench(reviewed_photos, annotations)
+                         if args.workbench else None)
             write_analysis_revision(args.output, audit, proposals, None,
-                                    photos=reviewed_photos, annotations=annotations)
+                                    photos=reviewed_photos, annotations=annotations,
+                                    workbench_html=workbench)
         elif args.command == "compare":
             reference = load_evidence_bundle(args.reference)
             candidate = load_evidence_bundle(args.candidate)

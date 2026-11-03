@@ -209,7 +209,8 @@ def write_analysis_revision(output: Path, audit: dict[str, Any],
                             photos: Sequence[Photo] = (),
                             annotations: AnnotationSet | None = None,
                             reprojection: dict[str, Any] | None = None,
-                            registration: dict[str, Any] | None = None) -> Path:
+                            registration: dict[str, Any] | None = None,
+                            workbench_html: str | None = None) -> Path:
     """Create one new immutable revision; never overwrite existing user results."""
     output = Path(output)
     if output.exists() or output.is_symlink():
@@ -229,6 +230,9 @@ def write_analysis_revision(output: Path, audit: dict[str, Any],
             files.append("face-evidence.json")
             _render_contact_sheet(photos, annotations, staged / "contact-sheet.png")
             files.append("contact-sheet.png")
+        if workbench_html is not None:
+            (staged / "annotation-workbench.html").write_text(workbench_html, encoding="utf-8")
+            files.append("annotation-workbench.html")
         if proposals is not None:
             _write_json(staged / "landmark-proposals.json", proposals)
             files.append("landmark-proposals.json")
@@ -276,6 +280,7 @@ def write_analysis_revision(output: Path, audit: dict[str, Any],
         _write_json(staged / "manifest.json", {"schema_version": 1,
                                                 "likeness_status": status,
                                                 "three_d_fidelity_verified": False,
+                                                "contains_private_photo_previews": workbench_html is not None,
                                                 "files": sorted(files)})
         if output.exists() or output.is_symlink():
             raise ValueError(f"Output revision already exists: {output}")

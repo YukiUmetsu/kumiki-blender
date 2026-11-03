@@ -16,6 +16,30 @@ python -m kumiki_blender.face_analysis inspect \
 
 `--annotations` is optional; without it, directly supplied images have `unknown` view labels. `--detector mediapipe` can be added for optional machine-generated landmarks. MediaPipe must be installed separately, and its points remain **unverified proposals**. The CLI reports missing or incompatible MediaPipe instead of silently switching algorithms. Back-of-head photos should not receive facial points.
 
+### Offline photo annotation workbench
+
+To annotate the real reference photos without hand-writing JSON, add `--workbench`:
+
+```bash
+python -m kumiki_blender.face_analysis inspect \
+  --images-dir /private/christ-face-photos \
+  --workbench \
+  --output /private/christ-face-editor-r01
+```
+
+Open `/private/christ-face-editor-r01/annotation-workbench.html` locally in a browser. The standalone page contains resized previews of up to 64 photos (not links to a server); it requires no internet connection, account, or browser extensions. Select a photo and a view, choose a facial feature, click the image to place its landmark, and optionally trace a silhouette with **Outline**. The interface translates preview clicks back to **original-image pixel coordinates**. Use the status selector for uncertain, occluded, or not-visible features; back-of-head photos should usually have an outline but no visible facial landmarks. Use **Undo** to correct mistakes and **Export JSON** to save your reviewed work. Browser autosave is best-effort, so export the JSON file before closing the page. **Import annotation JSON** can resume or correct an earlier export.
+
+To turn those annotations into a new evidence revision:
+
+```bash
+python -m kumiki_blender.face_analysis inspect \
+  --images-dir /private/christ-face-photos \
+  --annotations /private/statue-face-annotations.json \
+  --output /private/christ-face-review-r02
+```
+
+The HTML embeds **private photographic pixels** and must **never be committed** to Git, uploaded, or shared publicly without permission. By contrast, the reusable Python/HTML template contains no photographs. You can annotate candidate Blender renders the same way, then run the registration and comparison steps below. Human annotations are still 2D evidence, not calibrated 3D measurements.
+
 If photographs are already registered in a validated Kumiki reconstruction reference manifest, you can use `--reference-manifest /private/references.json` **instead of** `--images-dir`; the existing loader checks the dossier and the adapter preserves its image IDs. Its detailed camera/view labels are mapped to general front, three-quarter, profile, and rear categories. A dossier's `top` view maps to `unknown`; a manifest is not camera calibration or proof of licensing.
 
 Each output is a new, immutable local directory containing:
@@ -25,9 +49,10 @@ Each output is a new, immutable local directory containing:
 | `photo-audit.json` | Per-image size/hash/view, counts, human-annotation coverage, unknown camera independence |
 | `face-evidence.json` | Validated 2D annotations for downstream comparison, without source photo bytes |
 | `contact-sheet.png` | Private thumbnail index in numeric filename order (e.g. `face2` before `face10`) |
+| `annotation-workbench.html` | Optional private offline editor containing embedded photo previews (`--workbench`) |
 | `overlays/*.png` | Private markup only for views with observed outlines, points, or proposals |
 | `landmark-proposals.json` | Only if a detector is requested; never evidence of photo-faithful sculpt geometry |
-| `manifest.json` | Report status and explicit `three_d_fidelity_verified: false` |
+| `manifest.json` | Report status, `contains_private_photo_previews`, and explicit `three_d_fidelity_verified: false` |
 
 Source photos and contact sheets may be subject to third-party rights; keep them and generated reports outside the Git repository. The tool does not publish or download images. Images are checked for file format, size, dimensions, and duplicate identifiers.
 
