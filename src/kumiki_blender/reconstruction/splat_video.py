@@ -37,6 +37,7 @@ class SplatVideoSettings:
     elevation_degrees: float = 12.0
     target: tuple[float, float, float] | None = None
     distance: float | None = None
+    hero_photo: str | None = None
     shutter: float = 0.0
     splat_transform: str = "splat-transform"
     ffmpeg: str = "ffmpeg"
@@ -68,6 +69,13 @@ class SplatVideoSettings:
         if self.target is not None and (len(self.target) != 3 or
                any(not math.isfinite(c) for c in self.target)):
             raise ReferenceError("Camera target must contain three finite coordinates")
+        if self.hero_photo is not None and (
+                not isinstance(self.hero_photo, str) or
+                not self.hero_photo or len(self.hero_photo) > 255 or
+                self.hero_photo in (".", "..") or
+                "/" in self.hero_photo or "\\" in self.hero_photo or
+                "\0" in self.hero_photo):
+            raise ReferenceError("Hero photo must be a registered image filename")
         if type(self.timeout_seconds) is not int or not 30 <= self.timeout_seconds <= 86_400:
             raise ReferenceError("Video timeout must be 30–86,400 seconds")
         for binary in (self.splat_transform, self.ffmpeg, self.ffprobe):
@@ -165,6 +173,102 @@ def _position_bounds(ply: Path) -> tuple[tuple[float, float, float], float]:
     return (tuple(centers), extent)
 
 
+def _registered_camera_orbit(views: list[dict], hero_photo: str | None = None) -> dict | None:
+    """Frame a subject using actual registered viewing rays, not background splats.
+
+    The least-squares intersection of the image-centre rays is a *candidate*
+    focal point. It is meaningful for object-centred photo sets, but not a
+    promise of correct framing for arbitrary scene photographs. Keep the orbit
+    within a small, actually observed angular interval.
+    """
+    if len(views) < 3:
+        return None
+    matrix = [[0.0] * 3 for _ in range(3)]
+    rhs = [0.0] * 3
+    rays = []
+    for view in views:
+        position = view["camera_position"]
+        look = [t - p for p, t in zip(position, view["camera_target"])]
+        length = math.sqrt(sum(component * component for component in look))
+        if length < 1e-8:
+            return None
+        direction = [component / length for component in look]
+        rays.append((position, direction))
+        for row in range(3):
+            for col in range(3):
+                coefficient = (1.0 if row == col else 0.0) - direction[row] * direction[col]
+                matrix[row][col] += coefficient
+                rhs[row] += coefficient * position[col]
+    # Gaussian elimination with scaled pivot checks. Avoid unstable guesses
+    # when the photo set offers essentially parallel camera rays.
+    scale = max(abs(x) for row in matrix for x in row)
+    if scale < 1e-10:
+        return None
+    system = [row[:] + [rhs[i]] for i, row in enumerate(matrix)]
+    for col in range(3):
+        pivot = max(range(col, 3), key=lambda row: abs(system[row][col]))
+        if abs(system[pivot][col]) < scale * 1e-5:
+            return None
+        system[col], system[pivot] = system[pivot], system[col]
+        divisor = system[col][col]
+        for j in range(col, 4):
+            system[col][j] /= divisor
+        for row in range(3):
+            if row != col:
+                factor = system[row][col]
+                for j in range(col, 4):
+                    system[row][j] -= factor * system[col][j]
+    center = tuple(system[row][3] for row in range(3))
+    distances = [math.dist(position, center) for position, _ in rays]
+    if min(distances) < 1e-5:
+        return None
+    # The object must lie in front of the cameras, not at the intersection
+    # of the backward extensions of their optical axes.
+    facing = [sum((center[i] - position[i]) * direction[i] for i in range(3))
+              for position, direction in rays]
+    if sum(value > 0 for value in facing) < math.ceil(len(rays) * 0.8):
+        return None
+    # Choose an anchor surrounded by other photographed viewing directions.
+    azimuths = [math.degrees(math.atan2(position[0] - center[0],
+                                       position[2] - center[2]))
+                for position, _ in rays]
+
+    def signed_delta(a: float, b: float) -> float:
+        return (b - a + 180) % 360 - 180
+
+    neighbors = [
+        sorted((abs(signed_delta(a, b)), signed_delta(a, b), j)
+               for j, b in enumerate(azimuths) if j != i)
+        for i, a in enumerate(azimuths)
+    ]
+    if hero_photo is not None:
+        matches = [index for index, view in enumerate(views)
+                   if view["photo_name"] == hero_photo]
+        if len(matches) != 1:
+            raise ReferenceError(f"Hero photo is not a unique registered view: {hero_photo}")
+        anchor = matches[0]
+    else:
+        anchor = max(range(len(views)),
+                     key=lambda i: (sum(delta <= 35 for delta, _, _ in neighbors[i]),
+                                    -neighbors[i][0][0], -i))
+    closest_angle, signed_angle, _ = neighbors[anchor][0]
+    # A large automatic 115-degree turn is often unsupported by sparse
+    # object photos. Never invent most of the orbit from missing views.
+    arc = max(-20.0, min(20.0, signed_angle)) if closest_angle <= 40 else 0.0
+    eye = rays[anchor][0]
+    height = eye[1] - center[1]
+    horizontal = math.hypot(eye[0] - center[0], eye[2] - center[2])
+    return {
+        "target": center,
+        "distance": distances[anchor],
+        "start_degrees": azimuths[anchor],
+        "orbit_degrees": arc,
+        "elevation_degrees": math.degrees(math.atan2(height, horizontal)),
+        "anchor_photo": views[anchor]["photo_name"],
+        "nearest_registered_angular_gap_degrees": round(closest_angle, 3),
+    }
+
+
 def _ease(t: float) -> float:
     """Soft start, purposeful orbit, and a steady ending hero view."""
     x = min(1.0, max(0.0, (t - 0.10) / 0.78))
@@ -232,12 +336,32 @@ def _video_output_plan(source: str | Path, output: str | Path,
     else:
         if file.suffix == ".spz" and (settings.target is None or settings.distance is None):
             raise ReferenceError("SPZ orbit needs --target X Y Z and --distance, or use --camera-track")
+        registered = None
+        source_dir = Path(source)
+        if (file.suffix == ".ply" and settings.target is None and
+                settings.distance is None and source_dir.is_dir() and
+                (source_dir / "splat-report.json").is_file()):
+            # Import here because splat_visual_qa also uses _find_splat.
+            from .splat_visual_qa import SplatViewQASettings, _photo_plan
+            report = json.loads((source_dir / "splat-report.json").read_text(encoding="utf-8"))
+            if "dataset" in report:
+                views, _ = _photo_plan(source_dir.resolve(),
+                                       SplatViewQASettings(max_views=48))
+                registered = _registered_camera_orbit(views, settings.hero_photo)
+                if registered is None:
+                    raise ReferenceError("Registered cameras cannot determine a stable object center; supply --target and --distance")
+        if settings.hero_photo is not None and registered is None:
+            raise ReferenceError("--hero-photo requires a registered photo revision without manual framing")
         center, extent = _position_bounds(file) if file.suffix == ".ply" else (settings.target, None)
-        center = settings.target or center
-        distance = settings.distance or max(0.1, extent * 1.45)
+        center = settings.target or (registered["target"] if registered else center)
+        distance = settings.distance or (registered["distance"] if registered else max(0.1, extent * 1.45))
         camera = {"target": center, "distance": distance, "kind": "orbit",
-                  "start_degrees": settings.start_degrees, "arc_degrees": settings.orbit_degrees,
-                  "elevation_degrees": settings.elevation_degrees, "fov": settings.fov}
+                  "start_degrees": registered["start_degrees"] if registered else settings.start_degrees,
+                  "arc_degrees": registered["orbit_degrees"] if registered else settings.orbit_degrees,
+                  "elevation_degrees": registered["elevation_degrees"] if registered else settings.elevation_degrees,
+                  "fov": settings.fov,
+                  "framing": "registered-camera-rays" if registered else "gaussian-bounds",
+                  "anchor_photo": registered["anchor_photo"] if registered else None}
     return {"schema_version": 1, "source": str(file), "source_artifact": artifact,
             "output": str(target), "fps": settings.fps, "seconds": settings.seconds,
             "resolution": [settings.width, settings.height], "camera": camera,
@@ -293,6 +417,31 @@ def _probe_mp4(path: Path, ffprobe: str, expected_frames: int,
         raise ReferenceError("MP4 metadata is invalid or incomplete") from error
 
 
+def _frame_visibility_audit(frames: Path, total: int) -> dict | None:
+    """Detect a camera tour that fades into empty space despite valid MP4 data.
+
+    This is an advisory image-content heuristic, not a semantic statue detector.
+    Image decoding is optional so video export still works without Pillow.
+    """
+    try:
+        from PIL import Image
+    except ImportError:
+        return None
+    indices = sorted({round(i * (total - 1) / 8) for i in range(9)})
+    fractions: list[float] = []
+    for index in indices:
+        with Image.open(frames / f"frame.{index:04d}.webp") as frame:
+            sample = frame.convert("L").resize((64, 36), Image.Resampling.BILINEAR)
+        histogram = sample.histogram()
+        fractions.append(round(sum(histogram[32:]) / (64 * 36), 5))
+    almost_empty = [fraction < 0.01 for fraction in fractions]
+    contiguous_empty = any(a and b for a, b in zip(almost_empty, almost_empty[1:]))
+    return {"samples": [{"frame": index, "visible_fraction": fraction}
+                         for index, fraction in zip(indices, fractions)],
+            "possible_blank_orbit": max(fractions) >= 0.05 and contiguous_empty,
+            "limitation": "Brightness is not segmentation: legitimate dark scenes need human review."}
+
+
 def render_splat_video(source: str | Path, output: str | Path,
                        settings: SplatVideoSettings, *,
                        camera_track: str | Path | None = None) -> dict:
@@ -318,8 +467,12 @@ def render_splat_video(source: str | Path, output: str | Path,
     if track is None:
         camera = plan["camera"]
         track_file = target / "camera-track.json"
+        effective_settings = SplatVideoSettings(**{
+            **vars(settings), "start_degrees": camera["start_degrees"],
+            "orbit_degrees": camera["arc_degrees"],
+            "elevation_degrees": camera["elevation_degrees"]})
         track_file.write_text(json.dumps(make_orbit_track(tuple(camera["target"]),
-                            camera["distance"], settings), indent=2) + "\n",
+                            camera["distance"], effective_settings), indent=2) + "\n",
                               encoding="utf-8")
         track = str(track_file)
     else:
@@ -415,6 +568,17 @@ def render_splat_video(source: str | Path, output: str | Path,
     if settings.viewer and _sha256(Path(plan["source"])) != plan["source_artifact"]["sha256"]:
         report.update(status="failed / review-required", failed_stage="source-changed-during-viewer-export",
                       exit_code=3)
+        return checkpoint()
+    try:
+        report["frame_visibility"] = _frame_visibility_audit(frames_dir, total)
+    except (OSError, ValueError) as error:
+        report.update(status="failed / review-required", failed_stage="frame-visibility-audit",
+                      exit_code=3, error=str(error))
+        return checkpoint()
+    if report["frame_visibility"] and report["frame_visibility"]["possible_blank_orbit"]:
+        report.update(status="failed / visual-review-required",
+                      failed_stage="camera-orbit-coverage", exit_code=3,
+                      error="Consecutive near-black frames; the camera may have left the reconstructed subject.")
         return checkpoint()
     report.update(status="candidate / visual-and-licensing-review-required",
                   exit_code=0, files={"video": "video.mp4", "frames": "frames",

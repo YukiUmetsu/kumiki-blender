@@ -270,6 +270,8 @@ def main(argv: list[str] | None = None) -> int:
         video_parser.add_argument("--elevation-degrees", type=float, default=12.0)
         video_parser.add_argument("--target", type=float, nargs=3, metavar=("X", "Y", "Z"))
         video_parser.add_argument("--distance", type=float)
+        video_parser.add_argument("--hero-photo",
+                                  help="Registered photo filename to anchor an observed-angle orbit (e.g. photo-0001.png)")
         video_parser.add_argument("--shutter", type=float, default=0.0,
                                   help="Motion blur shutter fraction 0–1 (0 disables)")
         video_parser.add_argument("--viewer", action="store_true",
@@ -895,7 +897,8 @@ def main(argv: list[str] | None = None) -> int:
                     start_degrees=args.start_degrees,
                     elevation_degrees=args.elevation_degrees,
                     target=tuple(args.target) if args.target is not None else None,
-                    distance=args.distance, shutter=args.shutter, viewer=args.viewer,
+                    distance=args.distance, hero_photo=args.hero_photo,
+                    shutter=args.shutter, viewer=args.viewer,
                     splat_transform=args.splat_transform, ffmpeg=args.ffmpeg,
                     ffprobe=args.ffprobe, timeout_seconds=args.timeout_seconds)
                 report = (plan_splat_video(args.splat, args.output, settings,

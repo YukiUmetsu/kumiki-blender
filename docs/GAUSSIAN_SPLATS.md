@@ -105,6 +105,38 @@ folder. It is staged as `dataset/masks/photo-0001.png` for OpenSplat, where
 white means keep and black means ignore. Original unrectified masks are not
 interchangeable with undistorted images.
 
+### Remove background artifacts without repeating camera registration (macOS)
+
+The Mac smoke helper can reuse the successful PyCOLMAP cameras inside an
+existing `splat-...` revision. A first unmasked model often learns floating
+sky, mountains, and city textures:
+
+```bash
+SOURCE=".review/mac-splat-smoke/splat-20261103T010954Z-91205"  # Your revision
+pip install -e '.[mask-ai]'  # Once: semantic foreground segmentation
+bash scripts/mac_splat_test.sh mask "$SOURCE" rembg
+```
+
+Open `mask-.../mask-contact-sheet.jpg` and review **every** foreground mask
+(front, rear, profile, arms). Repair missing stone parts, holes or background
+leakage with `refine-dense-masks` and its polygon edits before retraining.
+Candidate masks are not automatically approved. For offline guided GrabCut,
+install `.[masks]` and use `mask "$SOURCE" grabcut`. See
+[Reference Reconstruction](REFERENCE_RECONSTRUCTION.md) for corrections.
+
+```bash
+MASKS=".review/mac-splat-smoke/mask-<timestamp>"  # Printed by the mask step
+ITERATIONS=3000 bash scripts/mac_splat_test.sh run-masked "$SOURCE" "$MASKS"
+# Use the NEW splat revision printed by run-masked for qa and video.
+# Optional: favor a chosen source photograph for the video hero angle:
+VIDEO_HERO_PHOTO=photo-0001.png bash scripts/mac_splat_test.sh video \
+  ".review/mac-splat-smoke/splat-<new-timestamp>"
+```
+
+This reuses pinned registered cameras and rectified photographs. Masks reach
+OpenSplat as `dataset/masks/<photo-stem>.png`. Older revisions are untouched;
+poor masks can remove valid statue geometry, so inspect them before training.
+
 ## Revision output and verification
 
 ```
@@ -233,10 +265,12 @@ splat-transform --list-gpus
 kumiki-blender plan-splat-video --splat .review/my-statue/splats-r01 \
   --output .review/my-statue/video-r01
 
-# Auto-frame a trimmed sample of the PLY, add an eased 115° orbit,
-# render 6 seconds at 1080p/30fps, and generate an optional local HTML viewer.
+# Registered photo revisions infer a subject-centric target from COLMAP camera
+# rays and limit the auto orbit to observed viewing angles. Standalone PLYs
+# still use trimmed Gaussian bounds and the configured 115° arc.
+# Render 6 seconds at 1080p/30fps and generate a local HTML viewer.
 kumiki-blender render-splat-video --splat .review/my-statue/splats-r01 \
-  --output .review/my-statue/video-r01 --viewer
+  --output .review/my-statue/video-r01 --hero-photo photo-0001.png --viewer
 
 # Manual framing for a statue or for SPZ (automatic SPZ bounds unavailable).
 kumiki-blender render-splat-video --splat /path/to/splat.spz \
@@ -266,6 +300,14 @@ viewer settings with animation tracks; those must render exactly the specified
 frame count. Prefer the generated `camera-track.json` as a reusable starting
 point. For recorded or hand-authored camera paths, preview a short section to
 avoid camera/object intersections, blank frames and inverted orientations.
+
+When registered photo cameras are available, `--hero-photo` selects the
+starting view, while automatic object centering uses the intersection of
+actual camera rays. If the rays are near-parallel or inconsistent, automatic
+framing fails safely and requires manual `--target` and `--distance`. On
+standalone PLY input, automatic framing still uses Gaussian bounds. Completed
+videos are sampled for consecutive near-black frames; a valid but empty MP4 is
+flagged for camera-orbit review and kept for inspection.
 
 ```
 video-r01/

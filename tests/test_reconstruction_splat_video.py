@@ -13,11 +13,13 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from kumiki_blender.cli import main
 from kumiki_blender.reconstruction.references import ReferenceError
 from kumiki_blender.reconstruction.splat_video import (
-    SplatVideoSettings, _position_bounds, make_orbit_track, plan_splat_video,
+    SplatVideoSettings, _position_bounds, _registered_camera_orbit,
+    make_orbit_track, plan_splat_video,
     render_splat_video)
 
 
@@ -60,7 +62,8 @@ width, height = map(int, sys.argv[sys.argv.index('--resolution')+1].split('x'))
 for index, frame in enumerate(track['frames']):
     if 'incomplete' in input_file and index == 4:
         continue
-    Image.new('RGB', (width, height), (index % 256, 40, 80)).save(
+    color = (0, 0, 0) if 'blank-turn' in input_file and index >= len(track['frames']) // 2 else (index % 256, 40, 80)
+    Image.new('RGB', (width, height), color).save(
         output.with_name('frame.%04d.webp' % index), lossless=True)
 ''')
         self.rasterizer.chmod(0o755)
@@ -100,6 +103,65 @@ for index, frame in enumerate(track['frames']):
         for frame in track["frames"]:
             self.assertEqual(frame["target"], [0, 1, 0])
             self.assertAlmostEqual(math.dist(frame["position"], [0, 1, 0]), 3, places=5)
+
+    def test_registered_camera_rays_recover_subject_despite_background_splats(self):
+        center = (2.0, 1.2, 4.0)
+        views = []
+        for index, degrees in enumerate((-30, -20, -10, 0, 10, 22, 35)):
+            angle = math.radians(degrees)
+            eye = [center[0] + 4 * math.sin(angle),
+                   center[1] + 0.3, center[2] + 4 * math.cos(angle)]
+            distance = math.dist(eye, center)
+            views.append({"camera_position": eye,
+                          "camera_target": [eye[i] + (center[i] - eye[i]) / distance
+                                            for i in range(3)],
+                          "photo_name": f"photo-{index:04d}.png"})
+        orbit = _registered_camera_orbit(views)
+        self.assertIsNotNone(orbit)
+        for actual, expected in zip(orbit["target"], center):
+            self.assertAlmostEqual(actual, expected, places=5)
+        self.assertLessEqual(abs(orbit["orbit_degrees"]), 20)
+        self.assertAlmostEqual(orbit["distance"], math.sqrt(16.09), places=4)
+
+        revision = self.root / "registered-revision"
+        revision.mkdir()
+        (revision / "splat.ply").write_bytes(self.ply.read_bytes())
+        (revision / "splat-report.json").write_text(json.dumps({
+            "status": "candidate / visual-review-required",
+            "artifact": {"sha256": hashlib.sha256(self.ply.read_bytes()).hexdigest()},
+            "dataset": {"registered_images": len(views)}}))
+        with patch("kumiki_blender.reconstruction.splat_visual_qa._photo_plan",
+                   return_value=(views, [])):
+            plan = plan_splat_video(revision, self.root / "registered-video", self.settings())
+        self.assertEqual(plan["camera"]["framing"], "registered-camera-rays")
+        self.assertLess(math.dist(plan["camera"]["target"], center), 1e-5)
+        self.assertLessEqual(abs(plan["camera"]["arc_degrees"]), 20)
+        with patch("kumiki_blender.reconstruction.splat_visual_qa._photo_plan",
+                   return_value=(views, [])):
+            hero = plan_splat_video(revision, self.root / "hero-video",
+                                    self.settings(hero_photo="photo-0000.png"))
+        self.assertEqual(hero["camera"]["anchor_photo"], "photo-0000.png")
+        with patch("kumiki_blender.reconstruction.splat_visual_qa._photo_plan",
+                   return_value=(views, [])):
+            with self.assertRaisesRegex(ReferenceError, "Hero photo"):
+                plan_splat_video(revision, self.root / "unknown-hero",
+                                 self.settings(hero_photo="missing.png"))
+        # An authored camera overrides automatic object-centric framing.
+        explicit = plan_splat_video(revision, self.root / "manual-video",
+                                    self.settings(target=(1, 2, 3), distance=3))
+        self.assertEqual(explicit["camera"]["target"], (1, 2, 3))
+        self.assertEqual(explicit["camera"]["arc_degrees"], 115)
+
+    def test_parallel_registered_rays_do_not_invent_a_subject_center(self):
+        views = [{"camera_position": [float(i), 0.0, 0.0],
+                  "camera_target": [float(i), 0.0, 1.0],
+                  "photo_name": str(i)} for i in range(4)]
+        self.assertIsNone(_registered_camera_orbit(views))
+
+    def test_hero_photo_cannot_escape_to_a_path(self):
+        with self.assertRaisesRegex(ReferenceError, "Hero photo"):
+            plan_splat_video(self.ply, self.root / "out",
+                             self.settings(hero_photo="../private.jpg"))
 
     def test_preflight_does_not_create_files_and_rejects_existing_revision(self):
         output = self.root / "video-r01"
@@ -190,6 +252,18 @@ for index, frame in enumerate(track['frames']):
         self.assertEqual(report["actual_frames"], 47)
         self.assertFalse((output / "video.mp4").exists())
         self.assertTrue((output / "video-report.json").exists())
+
+    @unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "FFmpeg unavailable")
+    def test_nearly_blank_orbit_is_flagged_even_if_mp4_decodes(self):
+        blank = self.root / "blank-turn.ply"
+        blank.write_bytes(self.ply.read_bytes())
+        output = self.root / "blackout-video"
+        report = render_splat_video(blank, output, self.settings())
+        self.assertEqual(report["failed_stage"], "camera-orbit-coverage")
+        self.assertTrue(report["frame_visibility"]["possible_blank_orbit"])
+        self.assertEqual(report["exit_code"], 3)
+        self.assertTrue((output / "video.mp4").is_file())
+        self.assertTrue((output / "contact-sheet.jpg").is_file())
 
     @unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "FFmpeg unavailable")
     def test_cli_plan_then_render(self):
