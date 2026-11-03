@@ -6,12 +6,28 @@ Requires Python standard library only. No image data or model files are modified
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import sqlite3
 from collections import defaultdict, deque
 from pathlib import Path
 
 MAX_IMAGE_ID = 2_147_483_647
+
+
+def _geometry_evidence(sparse: Path) -> dict:
+    """Compute scale-invariant parallax evidence from *estimated* sparse poses."""
+    path = Path(__file__).with_name("analyze_sfm_geometry.py")
+    spec = importlib.util.spec_from_file_location("analyze_sfm_geometry", path)
+    if spec is None or spec.loader is None:
+        return {"status": "geometry-analyzer-unavailable", "models": []}
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    try:
+        return module.analyze(sparse)
+    except (OSError, ValueError) as error:
+        # Keep match graph diagnostics available even for damaged sparse files.
+        return {"status": "geometry-analyzer-failed", "error": str(error)[:240], "models": []}
 
 
 def registered_models(sparse: Path) -> dict[str, set[str]]:
@@ -130,6 +146,7 @@ def analyze(root: Path, min_inliers: int) -> dict:
         "connected_component_sizes": [len(group) for group in components],
         "connected_components": components,
         "registered_filenames": sorted(registered),
+        "estimated_geometry": _geometry_evidence(sparse),
         "weak_or_isolated": [image for image in images if image["strong_neighbors"] == 0],
         "images": images,
         "strongest_pairs": [
@@ -232,6 +249,13 @@ def main() -> int:
     print("Connected component sizes:", result["connected_component_sizes"])
     print("Largest connected component:", ", ".join(result["connected_components"][0]))
     print("Registered:", ", ".join(result["registered_filenames"]) or "(none)")
+    for model in result["estimated_geometry"]["models"]:
+        tri = model["triangulation"]
+        print(f"  Model {model['model']} intrinsics: "
+              f"{model['intrinsics']['camera_count']} camera IDs; "
+              f"triangulation: {tri['status']}; "
+              f"median max ray angle: {tri.get('median_max_triangulation_angle_deg', 'n/a')} degrees; "
+              f"below 2 degrees: {tri.get('percent_points_below_2_deg', 'n/a')}%")
     print("\nImages with no strong verified neighbor:")
     for item in result["weak_or_isolated"][:30]:
         print(f"  {item['filename']} (keypoints={item['keypoints']}, total-inliers={item['verified_inliers_across_pairs']})")
