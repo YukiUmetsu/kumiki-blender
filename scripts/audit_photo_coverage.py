@@ -267,7 +267,9 @@ def _status(photo: dict, *, registered: bool, alternate: bool,
 
 
 def analyze(revision: Path, *, source_index: Path | None = None,
-            front_photo: str | None = None, annotations: Path | None = None) -> dict:
+            front_photo: str | None = None, annotations: Path | None = None,
+            vision_model: str | None = None,
+            vision_endpoint: str = "http://127.0.0.1:11434/api/generate") -> dict:
     registration = _load_script("diagnose_splat_registration")
     pnp = _load_script("diagnose_sfm_pnp_support")
     geometry = _load_script("analyze_sfm_geometry")
@@ -311,6 +313,12 @@ def analyze(revision: Path, *, source_index: Path | None = None,
                 # fabricated cardinal direction.
                 anchor = sorted(poses)[0]
             angles = _relative_angles(poses, centroid, anchor)
+    vision = {}
+    if vision_model:
+        classifier = _load_script("classify_photo_views")
+        vision = classifier.classify_images(
+            sparse, [photo["filename"] for photo in graph["images"]],
+            model=vision_model, endpoint=vision_endpoint)
     images = []
     for photo in graph["images"]:
         name = photo["filename"]
@@ -345,6 +353,7 @@ def analyze(revision: Path, *, source_index: Path | None = None,
                 "reference": "annotated-front" if front_known else "arbitrary-reference-camera",
             } if measured else None),
             "annotations": annotation,
+            "vision_estimate": vision.get(name),
             "reasons": reasons,
             "next_action": (
                 "Keep for this model; inspect for true duplicate views before removing."
@@ -363,6 +372,7 @@ def analyze(revision: Path, *, source_index: Path | None = None,
             "keypoints": 0, "strong_neighbors": 0, "verified_inliers_across_pairs": 0,
             "pnp_support": None, "estimated_view": None,
             "annotations": tags.get(name, tags.get(original.get(name, name))),
+            "vision_estimate": None,
             "reasons": ["Staged image was not imported by COLMAP."],
             "next_action": "Repair staging/import and rerun feature extraction.",
         })
@@ -373,6 +383,46 @@ def analyze(revision: Path, *, source_index: Path | None = None,
     shots = _shot_plan(angles, front_known=front_known, anchor=anchor,
                        weak_track_count=weak_tracks,
                        missing_count=len(images) - len(best_files))
+    visual_counts = {
+        field: dict(sorted(Counter(
+            item[field] for item in vision.values()
+            if item["source"] == "local-vision-model / not verified"
+        ).items())) if False else {}
+        for field in ()
+    }
+    if vision:
+        visual_counts = {
+            field: dict(sorted(Counter(
+                item[field] for item in vision.values()
+                if item["source"] == "local-vision-model / not verified"
+            ).items()))
+            for field in ("view", "framing", "elevation", "quality")
+        }
+        view_counts = visual_counts["view"]
+        framing_counts = visual_counts["framing"]
+        elevation_counts = visual_counts["elevation"]
+        semantic_gaps = [
+            ("head-and-torso", "medium-distance head, neck and torso",
+             "Vision labels found no head-and-torso context shot bridging detail and body",
+             "head-and-torso" not in framing_counts),
+            ("side profiles", "head-and-shoulders side profile with shared landmarks",
+             "Vision labels found no clear side profile",
+             not any(name in view_counts for name in ("left-profile", "right-profile"))),
+            ("elevated oblique", "medium-distance elevated oblique",
+             "Vision labels found no elevated view; capture only where accessible",
+             "elevated" not in elevation_counts),
+        ]
+        for view, framing, reason, needed in semantic_gaps:
+            if needed:
+                shots.append({
+                    "priority": len(shots) + 1,
+                    "kind": "vision-estimated-coverage-gap",
+                    "target_azimuth_deg": None, "target_elevation_deg": None,
+                    "view": view, "framing": framing, "reason": reason,
+                    "capture_guidance": "Overlap existing registered views by 60–80%; "
+                                        "the visual model has NOT measured camera angles.",
+                    "evidence": "local-vision-model / unverified semantic estimate",
+                })
     return {
         "schema_version": 1,
         "source_revision": str(revision),
@@ -393,6 +443,12 @@ def analyze(revision: Path, *, source_index: Path | None = None,
                            "Unregistered photos have no measured angle.",
         },
         "images": images,
+        "visual_coverage": {
+            "status": "local-model-unverified" if vision else "not-run",
+            "model": vision_model, "counts": visual_counts,
+            "limitations": "Visual labels are guesses from a local vision model. "
+                           "They do not measure angles or prove photo quality.",
+        },
         "recommended_photos": shots,
         "capture_notes": [
             "Collect 10–15 degree neighboring views with 60–80% subject overlap; "
@@ -424,8 +480,8 @@ def _markdown(report: dict) -> str:
         "",
         "## Photo-by-photo",
         "",
-        "| Original photo | Assessment | Evidence | Angle | Action |",
-        "| --- | --- | --- | --- | --- |",
+        "| Original photo | Assessment | Evidence | Angle | View/framing | Action |",
+        "| --- | --- | --- | --- | --- | --- |",
     ]
     for photo in report["images"]:
         name = photo["original_filename"].replace("|", "/")
@@ -436,8 +492,15 @@ def _markdown(report: dict) -> str:
         view = photo["estimated_view"]
         angle = (f"{view['relative_azimuth_deg']:+.1f}° az, "
                  f"{view['relative_elevation_deg']:+.1f}° el" if view else "unmeasured")
+        annotation = photo["annotations"] or {}
+        visual = photo["vision_estimate"] or {}
+        view_type = annotation.get("view") or visual.get("view") or "unknown"
+        framing = annotation.get("framing") or visual.get("framing") or "unknown"
+        kind = f"{view_type} / {framing}".replace("|", "/")
+        if visual and not annotation:
+            kind += " (vision estimate)"
         action = photo["next_action"].replace("|", "/")
-        lines.append(f"| {name} | {photo['assessment']} | {evidence} | {angle} | {action} |")
+        lines.append(f"| {name} | {photo['assessment']} | {evidence} | {angle} | {kind} | {action} |")
     lines.extend(["", "## Photos to capture next", ""])
     for shot in report["recommended_photos"]:
         angle = (f"azimuth {shot['target_azimuth_deg']:+.1f}°, "
@@ -485,7 +548,10 @@ def _contact_sheet(revision: Path, report: dict, path: Path) -> None:
                   if view else "angle unknown")
         pnp = item["pnp_support"]
         detail += f" | {pnp['conservative_one_to_one_2d3d']} 3D candidates" if pnp else ""
-        draw.text((x+10, y+228), detail, fill=(213, 213, 213))
+        visual = item["vision_estimate"]
+        if visual and visual["view"] != "unknown":
+            detail = f"{visual['view'][:24]} | " + detail
+        draw.text((x+10, y+228), detail[:55], fill=(213, 213, 213))
     path.parent.mkdir(parents=True, exist_ok=True)
     canvas.save(path, quality=90)
 
@@ -499,10 +565,15 @@ def main() -> int:
     parser.add_argument("--front-photo", help="Known frontal staged or original filename (must be registered)")
     parser.add_argument("--annotations", type=Path,
                         help="Optional JSON keyed by filename: view/framing/notes tags; never guessed")
+    parser.add_argument("--vision-model",
+                        help="Optional installed local Ollama vision model tag; photos stay on this Mac")
+    parser.add_argument("--vision-endpoint", default="http://127.0.0.1:11434/api/generate",
+                        help="Loopback Ollama /api/generate endpoint only")
     args = parser.parse_args()
     try:
         report = analyze(args.revision, source_index=args.source_index,
-                         front_photo=args.front_photo, annotations=args.annotations)
+                         front_photo=args.front_photo, annotations=args.annotations,
+                         vision_model=args.vision_model, vision_endpoint=args.vision_endpoint)
         if args.output.exists() or args.output.is_symlink():
             raise FileExistsError(f"Output already exists: {args.output}")
         args.output.mkdir(parents=True, exist_ok=False)
