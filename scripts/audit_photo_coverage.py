@@ -168,6 +168,26 @@ def _shot_plan(angles: dict[str, dict], *, front_known: bool,
             f"photos; consistent light, focus, distance and focal length. "
             f"Include {landmarks[subject_type]} where visible.")
     result = []
+    if angles and not front_known:
+        return [
+            {"priority": 1, "kind": "overlap-bridge",
+             "target_azimuth_deg": None, "target_elevation_deg": None,
+             "view": "adjacent to an already registered view; direction unmeasured",
+             "framing": medium,
+             "reason": ("The available camera frame is arbitrary, not aligned to the "
+                        "statue's true front. Numeric target azimuths would be misleading. "
+                        "Seek photos between the registered cluster and the missing views."),
+             "capture_guidance": base,
+             "evidence": "estimated-COLMAP-poses / no-semantic-orientation"},
+            {"priority": 2, "kind": "detail-to-context-bridge",
+             "target_azimuth_deg": None, "target_elevation_deg": None,
+             "view": "head close-up to wider body transition",
+             "framing": medium,
+             "reason": ("The registration graph is incomplete; connect detailed "
+                        "face images to the torso and base with shared features."),
+             "capture_guidance": base,
+             "evidence": "registered-camera-cluster / missing 2D-to-3D support"},
+        ]
     if not angles:
         return [
             {"priority": 1, "kind": "overlap-bridge", "target_azimuth_deg": None,
@@ -309,6 +329,148 @@ def _status(photo: dict, *, registered: bool, alternate: bool,
     return "low-current-value", "medium", reasons
 
 
+def _filename_view_hint(filename: str) -> dict | None:
+    """Unverified filename metadata; never treat this as visual classification."""
+    import re
+    words = set(re.findall(r"[a-z]+", filename.lower()))
+    if not words:
+        return None
+    if {"top", "overhead", "aerial", "birdseye"} & words:
+        view = "overhead"
+    elif {"back", "rear", "behind"} & words:
+        view = "rear"
+        if "left" in words or "right" in words:
+            view = ("left" if "left" in words else "right") + " rear three-quarter"
+    elif "front" in words:
+        view = "front"
+        if "left" in words or "right" in words:
+            view = ("left" if "left" in words else "right") + " front three-quarter"
+    elif {"left", "right"} & words:
+        view = ("left" if "left" in words else "right") + " profile"
+    elif "side" in words or "profile" in words:
+        view = "side, direction unknown"
+    else:
+        view = "unknown"
+    framing = ("face detail" if {"face", "head", "closeup", "portrait"} & words
+               else "unknown")
+    if view == "unknown" and framing == "unknown":
+        return None
+    return {"view": view, "framing": framing,
+            "source": "filename-only / unverified; not a measured angle"}
+
+
+def _photo_priorities(images: list[dict]) -> list[dict]:
+    """Prioritize useful existing photos without implying successful PnP."""
+    recover = [p for p in images if p["assessment"] == "recover-first"]
+    bridge = [p for p in images if p["assessment"] == "needs-overlap-bridge"]
+    separate = [p for p in images if p["assessment"] == "keep-separate-model"]
+    priorities = []
+    for photo in recover + bridge:
+        support = photo.get("pnp_support") or {}
+        neighbors = support.get("registered_neighbor_details") or []
+        closest = neighbors[0] if neighbors else None
+        count = support.get("conservative_one_to_one_2d3d", 0)
+        coverage = support.get("one_to_one_4x4_image_coverage")
+        kind = ("try-registration-first" if photo["assessment"] == "recover-first"
+                else "bridge-and-retry")
+        priorities.append({
+            "filename": photo["original_filename"],
+            "kind": kind,
+            "existing_2d3d_candidates": count,
+            "image_grid_coverage": coverage,
+            "best_registered_bridge_photo": (
+                closest["original_filename"] if closest else None),
+            "bridge_3d_track_hits": (
+                closest["inliers_touching_existing_3d_tracks"] if closest else 0),
+            "recommendation": (
+                "Test camera PnP/track consistency and intrinsics before adding photos."
+                if kind == "try-registration-first" else
+                "Find intermediate views with shared head, neck and torso features "
+                "between this photo and the registered bridge photo; retry registration."),
+            "evidence": "verified 2D matches touching estimated 3D tracks; not PnP inliers",
+        })
+    if separate:
+        priorities.append({
+            "filename": ", ".join(p["original_filename"] for p in separate[:5]),
+            "kind": "connect-separate-sparse-model",
+            "existing_2d3d_candidates": 0,
+            "image_grid_coverage": None,
+            "best_registered_bridge_photo": None,
+            "bridge_3d_track_hits": 0,
+            "recommendation": (
+                "Preserve these registered views in their own model. Find intermediate "
+                "overlapping photos connecting them to the primary reconstruction; "
+                "do not concatenate unaligned camera poses."),
+            "evidence": "independent COLMAP sparse model",
+        })
+    return priorities
+
+
+def _bridge_shots(images: list[dict], *, subject_type: str) -> list[dict]:
+    """Actionable photo requests grounded in missing-view evidence and filenames."""
+    shots = []
+    for photo in images:
+        if photo["assessment"] != "needs-overlap-bridge":
+            continue
+        support = photo.get("pnp_support") or {}
+        neighbors = support.get("registered_neighbor_details") or []
+        reference = neighbors[0]["original_filename"] if neighbors else None
+        count = support.get("conservative_one_to_one_2d3d", 0)
+        shot = {
+            "kind": "bridge-to-existing-photo",
+            "target_azimuth_deg": None, "target_elevation_deg": None,
+            "view": "intermediate overlapping view",
+            "framing": ("medium view with head, neck and upper torso together"
+                        if subject_type == "statue" else
+                        "medium context connecting shared subject features"),
+            "reason": (
+                f"Bridge unregistered {photo['original_filename']} "
+                + (f"to registered {reference}" if reference else
+                   "to a registered camera")
+                + f"; {count} candidate 2D–3D matches but insufficient support "
+                  "for registration under current settings"),
+            "target_existing_photo": photo["original_filename"],
+            "registered_reference_photo": reference,
+            "capture_guidance": (
+                "Find a short sequence of sharp photos with 60–80% overlapping "
+                "subject detail and small viewpoint changes; avoid isolated close-ups."),
+            "evidence": "COLMAP 2D-to-3D support and verified bridge neighbors",
+        }
+        shots.append(shot)
+    # Distinctive front/rear/overhead photos are reference assets even when they
+    # currently cannot be registered. Prioritize a bridge rather than discarding.
+    seen_views = set()
+    for photo in images:
+        if photo["assessment"] not in ("low-current-value", "keep-separate-model"):
+            continue
+        hint = photo.get("filename_view_hint") or {}
+        view = hint.get("view", "unknown")
+        category = ("overhead" if view == "overhead" else
+                    "rear" if "rear" in view else
+                    "front" if "front" in view else None)
+        if category is None or category in seen_views:
+            continue
+        seen_views.add(category)
+        shots.append({
+            "kind": "bridge-to-undersupported-view",
+            "target_azimuth_deg": None, "target_elevation_deg": None,
+            "view": f"{category} transition (filename hint; unverified)",
+            "framing": ("medium shot with the face, neck and upper body" if category == "front"
+                        else "medium oblique showing continuous head/body landmarks"),
+            "reason": (f"{photo['original_filename']} appears to be a {category} "
+                       "reference from its filename but has no registered pose in "
+                       "the primary model. Find intermediate views connecting it "
+                       "to the registered side."),
+            "target_existing_photo": photo["original_filename"],
+            "registered_reference_photo": None,
+            "capture_guidance": (
+                "Acquire a continuous sequence of intermediate overlapping photographs; "
+                "verify the view visually and prefer original uncropped images."),
+            "evidence": "unregistered status + filename hint; not visually verified",
+        })
+    return shots[:6]
+
+
 def analyze(revision: Path, *, source_index: Path | None = None,
             front_photo: str | None = None, annotations: Path | None = None,
             vision_model: str | None = None, subject_type: str = "object",
@@ -402,6 +564,7 @@ def analyze(revision: Path, *, source_index: Path | None = None,
             } if measured else None),
             "annotations": annotation,
             "vision_estimate": vision.get(name),
+            "filename_view_hint": _filename_view_hint(original_name),
             "reasons": reasons,
             "next_action": (
                 "Keep for this model; inspect for true duplicate views before removing."
@@ -421,6 +584,7 @@ def analyze(revision: Path, *, source_index: Path | None = None,
             "pnp_support": None, "track_contribution": None, "estimated_view": None,
             "annotations": tags.get(name, tags.get(original.get(name, name))),
             "vision_estimate": None,
+            "filename_view_hint": _filename_view_hint(original.get(name, name)),
             "reasons": ["Staged image was not imported by COLMAP."],
             "next_action": "Repair staging/import and rerun feature extraction.",
         })
@@ -429,10 +593,13 @@ def analyze(revision: Path, *, source_index: Path | None = None,
     required_registered = max(8, math.ceil(0.6 * len(images)))
     weak_tracks = sum(item["assessment"] in ("low-current-value", "needs-overlap-bridge")
                       for item in images)
-    shots = _shot_plan(angles, front_known=front_known, anchor=anchor,
-                       weak_track_count=weak_tracks,
-                       missing_count=len(images) - len(best_files),
-                       subject_type=subject_type)
+    shots = _bridge_shots(images, subject_type=subject_type) + _shot_plan(
+        angles, front_known=front_known, anchor=anchor,
+        weak_track_count=weak_tracks,
+        missing_count=len(images) - len(best_files),
+        subject_type=subject_type)
+    for index, shot in enumerate(shots, 1):
+        shot["priority"] = index
     visual_counts = {}
     if vision:
         visual_counts = {
@@ -488,6 +655,7 @@ def analyze(revision: Path, *, source_index: Path | None = None,
         "additional_registrations_needed_at_current_photo_count":
             max(0, required_registered - len(best_files)),
         "assessments": counts,
+        "existing_photo_priorities": _photo_priorities(images),
         "angle_reference": {
             "filename": anchor, "original_filename": original.get(anchor, anchor) if anchor else None,
             "kind": "annotated-front" if front_known else
@@ -562,6 +730,14 @@ def _markdown(report: dict) -> str:
     if overlap:
         lines.append("- **Possible duplicate angles (keep until verified):** " +
                      ", ".join(overlap))
+    lines.extend(["", "## Existing photos to recover or bridge first", ""])
+    for item in report.get("existing_photo_priorities", []):
+        reference = (f" (best registered bridge: {item['best_registered_bridge_photo']})"
+                     if item.get("best_registered_bridge_photo") else "")
+        lines.append(f"- **{item['filename']}** [{item['kind']}]{reference}: "
+                     f"{item['recommendation']}")
+    if not report.get("existing_photo_priorities"):
+        lines.append("- No high-confidence existing photo recovery candidates.")
     lines.extend(["", "## Priority new photos", ""])
     for shot in report["recommended_photos"]:
         angle = (f"azimuth {shot['target_azimuth_deg']:+.1f}°, "
@@ -591,11 +767,14 @@ def _markdown(report: dict) -> str:
                  f"{view['relative_elevation_deg']:+.1f}° el" if view else "unmeasured")
         annotation = photo["annotations"] or {}
         visual = photo["vision_estimate"] or {}
-        view_type = annotation.get("view") or visual.get("view") or "unknown"
-        framing = annotation.get("framing") or visual.get("framing") or "unknown"
+        hint = photo.get("filename_view_hint") or {}
+        view_type = annotation.get("view") or visual.get("view") or hint.get("view") or "unknown"
+        framing = annotation.get("framing") or visual.get("framing") or hint.get("framing") or "unknown"
         kind = f"{view_type} / {framing}".replace("|", "/")
         if visual and not annotation:
             kind += " (vision estimate)"
+        elif hint and not annotation:
+            kind += " (filename hint, unverified)"
         action = photo["next_action"].replace("|", "/")
         lines.append(f"| {name} | {photo['assessment']} | {evidence} | {angle} | {kind} | {action} |")
     lines.extend(["", "## Limits", "", report["angle_reference"]["limitations"], "",
@@ -639,8 +818,11 @@ def _contact_sheet(revision: Path, report: dict, path: Path) -> None:
         pnp = item["pnp_support"]
         detail += f" | {pnp['conservative_one_to_one_2d3d']} 3D candidates" if pnp else ""
         visual = item["vision_estimate"]
+        hint = item.get("filename_view_hint") or {}
         if visual and visual["view"] != "unknown":
             detail = f"{visual['view'][:24]} | " + detail
+        elif hint.get("view") not in (None, "unknown"):
+            detail = f"{hint['view'][:22]}? | " + detail
         draw.text((x+10, y+228), detail[:55], fill=(213, 213, 213))
     path.parent.mkdir(parents=True, exist_ok=True)
     canvas.save(path, quality=90)
@@ -748,6 +930,11 @@ def main() -> int:
     print("Photo assessment counts:", report["assessments"])
     print(f"Angle reference: {report['angle_reference']['kind']} "
           f"({report['angle_reference']['original_filename']})")
+    print("Existing photos to recover/bridge first:")
+    for item in report["existing_photo_priorities"]:
+        reference = item.get("best_registered_bridge_photo")
+        print(f"  {item['filename']}: {item['kind']}"
+              + (f" (registered bridge: {reference})" if reference else ""))
     print("Priority new photos:")
     for shot in report["recommended_photos"]:
         print(f"  {shot['priority']}. {shot['view']}: "
