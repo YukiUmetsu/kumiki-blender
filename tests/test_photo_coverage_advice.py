@@ -138,6 +138,24 @@ class PhotoCoverageAdviceTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "subject_type"):
                 advice.analyze(root, subject_type="unknown")
 
+    def test_fully_registered_cohort_never_requests_registration_bridge_photos(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sparse = _fixture(root)
+            model = sparse / "text-models" / "0" / "images.txt"
+            with model.open("a", encoding="utf-8") as stream:
+                stream.write(
+                    "3 1 0 0 0 -2 0 0 3 photo-0003.png\n0 0 -1\n"
+                    "4 1 0 0 0 -3 0 0 4 photo-0004.png\n0 0 -1\n")
+            report = advice.analyze(root, subject_type="statue")
+            self.assertEqual(report["registered_in_best_model"], 4)
+            self.assertEqual(report["photos"], 4)
+            self.assertTrue(report["registration_complete"])
+            self.assertTrue(report["camera_gate_met"] is False)  # Small synthetic fixture.
+            self.assertEqual(report["recommended_photos"], [])
+            self.assertIn("No additional photographs", report["registration_photo_recommendation"])
+            self.assertIn("None required for camera registration", advice._markdown(report))
+
     def test_filename_hints_are_unverified_and_not_physical_camera_angles(self):
         self.assertEqual(advice._filename_view_hint("sphinx-face-front.webp")["view"], "front")
         self.assertEqual(advice._filename_view_hint("sphinx-face-front.webp")["framing"],
