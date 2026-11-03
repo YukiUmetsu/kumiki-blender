@@ -383,13 +383,7 @@ def analyze(revision: Path, *, source_index: Path | None = None,
     shots = _shot_plan(angles, front_known=front_known, anchor=anchor,
                        weak_track_count=weak_tracks,
                        missing_count=len(images) - len(best_files))
-    visual_counts = {
-        field: dict(sorted(Counter(
-            item[field] for item in vision.values()
-            if item["source"] == "local-vision-model / not verified"
-        ).items())) if False else {}
-        for field in ()
-    }
+    visual_counts = {}
     if vision:
         visual_counts = {
             field: dict(sorted(Counter(
