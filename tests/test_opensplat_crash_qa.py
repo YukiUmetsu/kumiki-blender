@@ -148,6 +148,34 @@ class OpenSplatCrashQATests(unittest.TestCase):
         self.assertTrue(any("frame #0" in frame for frame in report["frame_excerpt"]))
         self.assertLessEqual(len(report["log_tail"]), 12000)
 
+    def test_mixed_protobuf_dylibs_are_identified_from_crashing_frames(self):
+        self.debugger.write_text(
+            "#!/usr/bin/env python3\n"
+            "print('stop reason = EXC_BAD_ACCESS (code=1, address=0x10)')\n"
+            "print('frame #0: libprotobuf.36.2.0.dylib`FileDescriptorProto::MergeImpl')\n"
+            "print('frame #1: libprotobuf.29.3.0.dylib`MergeFromImpl')\n"
+            "print('frame #2: libprotobuf.36.2.0.dylib`ParseFromArray')\n"
+        )
+        self.debugger.chmod(0o755)
+        report = crash.diagnose(self.retry, self.root / "protobuf-crash",
+                                lldb=str(self.debugger))
+        self.assertEqual(report["protobuf_libraries_in_trace"], [
+            "libprotobuf.29.3.0.dylib", "libprotobuf.36.2.0.dylib"])
+        self.assertEqual(report["native_diagnosis"]["kind"],
+                         "mixed-protobuf-cpp-runtimes")
+        self.assertEqual(report["status"], "trace-captured / inspect-log")
+
+    def test_timeout_after_captured_backtrace_is_not_lost(self):
+        self.assertEqual(crash._classify_trace(
+            timed_out=True, launch_failed=False, saw_crash=True,
+            has_frames=True), "trace-captured / debugger-timeout")
+        self.assertEqual(crash._classify_trace(
+            timed_out=True, launch_failed=False, saw_crash=False,
+            has_frames=False), "debugger-timeout")
+        self.assertEqual(crash._classify_trace(
+            timed_out=True, launch_failed=True, saw_crash=False,
+            has_frames=False), "debugger-launch-failed")
+
     def test_wrapper_crash_qa_mode(self):
         bindir = self.root / "bin"
         bindir.mkdir()
