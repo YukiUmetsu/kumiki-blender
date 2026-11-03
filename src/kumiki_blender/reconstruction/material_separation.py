@@ -35,7 +35,7 @@ class SeparationOptions:
     max_distance: float = 3.5
     min_evidence_views: int = 2
     max_side: int = 8192
-    max_mesh_faces: int = 1_000_000
+    max_mesh_faces: int = 5_000_000
 
     def validate(self) -> "SeparationOptions":
         for name, minimum, maximum in (("min_margin", .05, .8),
@@ -47,8 +47,8 @@ class SeparationOptions:
             raise ReferenceError("min_evidence_views must be an integer in [2, 8]")
         if type(self.max_side) is not int or not 64 <= self.max_side <= 8192:
             raise ReferenceError("max_side must be an integer in [64, 8192]")
-        if type(self.max_mesh_faces) is not int or not 1 <= self.max_mesh_faces <= 1_000_000:
-            raise ReferenceError("max_mesh_faces must be an integer in [1, 1000000]")
+        if type(self.max_mesh_faces) is not int or not 1 <= self.max_mesh_faces <= 5_000_000:
+            raise ReferenceError("max_mesh_faces must be an integer in [1, 5000000]")
         return self
 
 

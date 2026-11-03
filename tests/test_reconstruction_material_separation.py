@@ -137,6 +137,10 @@ class MaterialSeparationTests(unittest.TestCase):
         self.assertEqual(blue.mask.open_verified().getpixel((80, 6)), 255)
         self.assertEqual(red.mask.open_verified().getpixel((0, 40)), 0)
         self.assertEqual(blue.mask.open_verified().getpixel((0, 40)), 0)
+        # A valid textured pixel with only one visible registered camera is
+        # unknown even though its atlas RGB happens to match a seed class.
+        self.assertEqual(blue.mask.open_verified().getpixel((55, 30)), 0)
+        self.assertEqual(Image.open(output / "atlas-01/unassigned.png").getpixel((55, 30)), 255)
 
     def test_two_disagreeing_illuminations_remain_unassigned(self):
         confidence_path = self.guidance / "visibility-2.png"

@@ -372,7 +372,7 @@ def main(argv: list[str] | None = None) -> int:
         separate_parser.add_argument("--max-distance", type=float, default=3.5)
         separate_parser.add_argument("--min-evidence-views", type=int, default=2)
         separate_parser.add_argument("--max-side", type=int, default=8192)
-        separate_parser.add_argument("--max-mesh-faces", type=int, default=1_000_000)
+        separate_parser.add_argument("--max-mesh-faces", type=int, default=5_000_000)
     projection_parser = subcommands.add_parser(
         "project-registered-uv-views",
         help="Project hash-pinned COLMAP photographs onto OBJ UV atlases with occlusion masks")
