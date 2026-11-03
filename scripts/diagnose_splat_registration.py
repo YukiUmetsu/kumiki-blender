@@ -14,13 +14,13 @@ from pathlib import Path
 MAX_IMAGE_ID = 2_147_483_647
 
 
-def registered_images(sparse: Path) -> set[str]:
-    """Read COLMAP image poses, skipping their following 2D observations rows."""
+def registered_models(sparse: Path) -> dict[str, set[str]]:
+    """Read image names for every independent COLMAP sparse model."""
     models = sparse / "text-models"
     if not models.is_dir():
-        return set()
-    best: set[str] = set()
-    for model in models.iterdir():
+        return {}
+    found_models: dict[str, set[str]] = {}
+    for model in sorted(models.iterdir()):
         path = model / "images.txt"
         if not path.is_file():
             continue
@@ -33,10 +33,14 @@ def registered_images(sparse: Path) -> set[str]:
             if len(fields) >= 10 and fields[0].isdigit() and fields[8].isdigit():
                 found.add(fields[9])
                 next(lines, None)
-        if len(found) > len(best):
-            best = found
-    return best
+        found_models[model.name] = found
+    return found_models
 
+
+def registered_images(sparse: Path) -> set[str]:
+    """Return the largest registered model, not a misleading union of poses."""
+    models = registered_models(sparse)
+    return max(models.values(), key=len, default=set())
 
 def _has_table(db: sqlite3.Connection, table: str) -> bool:
     return db.execute(
@@ -49,7 +53,8 @@ def analyze(root: Path, min_inliers: int) -> dict:
     db_path = sparse / "database.db"
     if not db_path.is_file():
         raise FileNotFoundError(f"COLMAP database not found: {db_path}")
-    registered = registered_images(sparse)
+    models = registered_models(sparse)
+    registered = max(models.values(), key=len, default=set())
     staged_index = sparse / "staged-reference-index.json"
     staged = {}
     if staged_index.is_file():
@@ -114,6 +119,8 @@ def analyze(root: Path, min_inliers: int) -> dict:
     ]
     return {
         "photos": len(names), "registered": len(registered),
+        "sparse_models": [{"model": name, "registered": len(images), "filenames": sorted(images)}
+                          for name, images in sorted(models.items())],
         "staged_photos": len(staged) if staged else None,
         "staged_filenames": sorted(staged) if staged else sorted(imported),
         "missing_from_database": omitted,
@@ -182,6 +189,7 @@ def main() -> int:
     parser.add_argument("revision", type=Path, help="Failed splat revision or sparse-reconstruction directory")
     parser.add_argument("--min-inliers", type=int, default=15, help="Diagnostic connectivity threshold (default 15)")
     parser.add_argument("--json", action="store_true", help="Print complete JSON diagnostics")
+    parser.add_argument("--json-output", type=Path, help="Save diagnostics to a new JSON file")
     parser.add_argument("--contact-sheet", type=Path, help="Save private labeled photo montage (requires Pillow)")
     args = parser.parse_args()
     if args.min_inliers < 1:
@@ -196,10 +204,22 @@ def main() -> int:
         except (OSError, ValueError) as error:
             parser.exit(2, f"ERROR: {error}\\n")
         print(f"Contact sheet: {args.contact_sheet}", file=__import__("sys").stderr)
+    if args.json_output is not None:
+        destination = args.json_output
+        try:
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            with destination.open("x", encoding="utf-8") as stream:
+                json.dump(result, stream, indent=2)
+                stream.write("\\n")
+        except OSError as error:
+            parser.exit(2, f"ERROR: Cannot save diagnostics: {error}\\n")
+        print(f"Registration JSON: {destination}", file=__import__("sys").stderr)
     if args.json:
         print(json.dumps(result, indent=2))
         return 0
     print(f"Registered: {result['registered']}/{result['photos']} database images")
+    for model in result["sparse_models"]:
+        print(f"  Sparse model {model['model']}: {model['registered']} cameras: {', '.join(model['filenames'])}")
     if result["staged_photos"] is not None:
         print(f"Staged photos: {result['staged_photos']}; missing from COLMAP database: {len(result['missing_from_database'])}")
         for item in result["missing_from_database"]:
