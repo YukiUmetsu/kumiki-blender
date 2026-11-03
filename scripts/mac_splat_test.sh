@@ -8,6 +8,7 @@ Usage:
   bash scripts/mac_splat_test.sh plan /absolute/path/to/photos [asset-slug]
   bash scripts/mac_splat_test.sh run /absolute/path/to/photos [asset-slug]
   bash scripts/mac_splat_test.sh train-existing /path/to/failed-splat-revision
+  bash scripts/mac_splat_test.sh crash-qa /path/to/failed-splat-retry
   bash scripts/mac_splat_test.sh diagnose /path/to/failed-splat-revision
   bash scripts/mac_splat_test.sh cohorts /path/to/failed-splat-revision
   bash scripts/mac_splat_test.sh match-qa /path/to/failed-splat-revision [cohort-source-index.json]
@@ -27,6 +28,7 @@ Optional environment:
   OUTPUT_ROOT=/absolute/path/to/revisions (default: .review/mac-splat-smoke)
   MAX_IMAGE_SIZE=2000 ITERATIONS=3000 MAX_VIEWS=12
   DOWNSCALE_FACTOR=4 TRAIN_CPU=0 (train-existing: reuse registered dataset; CPU=1 diagnostic)
+  CRASH_QA_TIMEOUT=600 (crash-qa: LLDB timeout in seconds)
   REGISTRATION_PROFILE=standard|high-recall (high-recall: slower, CPU SIFT + guided matching)
   PHOTO_FRONT_REFERENCE=photo-0001.png (optional known frontal view for angle labels)
   PHOTO_VISION_MODEL=<installed-ollama-vision-model> (optional, local image view/framing labels)
@@ -40,7 +42,7 @@ EOF
 die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 require() { command -v "$1" >/dev/null 2>&1 || die "Missing $1. Install it, then rerun doctor."; }
 mode="${1:-}"; [[ -n "$mode" ]] || { usage; exit 2; }
-[[ "$mode" == doctor || "$mode" == plan || "$mode" == run || "$mode" == diagnose || "$mode" == cohorts || "$mode" == match-qa || "$mode" == pnp-qa || "$mode" == photo-advice || "$mode" == recover || "$mode" == recover-qa || "$mode" == train-existing || "$mode" == mask || "$mode" == hybrid || "$mode" == run-masked || "$mode" == qa || "$mode" == video ]] || { usage; exit 2; }
+[[ "$mode" == doctor || "$mode" == plan || "$mode" == run || "$mode" == diagnose || "$mode" == cohorts || "$mode" == match-qa || "$mode" == pnp-qa || "$mode" == photo-advice || "$mode" == recover || "$mode" == recover-qa || "$mode" == train-existing || "$mode" == crash-qa || "$mode" == mask || "$mode" == hybrid || "$mode" == run-masked || "$mode" == qa || "$mode" == video ]] || { usage; exit 2; }
 if [[ "$mode" != doctor ]]; then [[ $# -ge 2 ]] || { usage; exit 2; }; fi
 [[ "$(uname -s)" == Darwin ]] || printf 'WARNING: Intended for macOS; current OS is %s\n' "$(uname -s)" >&2
 root="${OUTPUT_ROOT:-.review/mac-splat-smoke}"
@@ -141,6 +143,12 @@ elif [[ "$mode" == recover ]]; then
       printf 'WARNING: Could not generate photo advice; recovery report remains available.\n' >&2
     fi
   fi
+elif [[ "$mode" == crash-qa ]]; then
+  [[ -f "$2/retry-report.json" ]] || die "Failed OpenSplat retry report not found: $2/retry-report.json"
+  require lldb
+  output="$(new_output opensplat-crash-qa)"
+  python3 scripts/diagnose_opensplat_crash.py "$2" --output "$output" \
+    --timeout "${CRASH_QA_TIMEOUT:-600}"
 elif [[ "$mode" == train-existing ]]; then
   [[ -d "$2/dataset" ]] || die "Existing staged dataset not found: $2/dataset"
   check_tool "$trainer"
