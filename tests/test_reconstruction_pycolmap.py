@@ -55,6 +55,57 @@ class PycolmapBackendTests(unittest.TestCase):
                 self.assertEqual(kwargs["extraction_options"].max_image_size, 1280)
                 self.assertEqual(kwargs["reader_options"].mask_path, str(root / "masks"))
 
+    def test_high_recall_worker_tunes_features_and_guided_matching(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            fake = types.SimpleNamespace(
+                Device=types.SimpleNamespace(cpu="cpu"),
+                ImageReaderOptions=lambda: types.SimpleNamespace(mask_path=""),
+                FeatureExtractionOptions=lambda: types.SimpleNamespace(
+                    max_image_size=0, max_num_features=8192, peak_threshold=0.006,
+                    estimate_affine_shape=False, domain_size_pooling=False),
+                FeatureMatchingOptions=lambda: types.SimpleNamespace(
+                    max_ratio=0.8, guided_matching=False),
+                extract_features=Mock(), match_exhaustive=Mock(),
+            )
+            with patch.dict("sys.modules", {"pycolmap": fake}):
+                self.assertEqual(main(["feature_extractor", "--database_path", str(root / "db"),
+                                       "--image_path", str(root / "images"),
+                                       "--FeatureExtraction.use_gpu", "0",
+                                       "--max_image_size", "3200",
+                                       "--registration-profile", "high-recall"]), 0)
+                opts = fake.extract_features.call_args.kwargs["extraction_options"]
+                self.assertEqual(opts.max_num_features, 12_000)
+                self.assertEqual(opts.peak_threshold, 0.003)
+                self.assertTrue(opts.estimate_affine_shape)
+                self.assertTrue(opts.domain_size_pooling)
+                self.assertEqual(opts.max_image_size, 3200)
+                self.assertEqual(main(["exhaustive_matcher", "--database_path", str(root / "db"),
+                                       "--FeatureMatching.use_gpu", "0",
+                                       "--registration-profile", "high-recall"]), 0)
+                match = fake.match_exhaustive.call_args.kwargs
+                self.assertEqual(match["device"], "cpu")
+                self.assertEqual(match["matching_options"].max_ratio, 0.85)
+                self.assertTrue(match["matching_options"].guided_matching)
+
+    def test_high_recall_rejects_missing_option_instead_of_silent_noop(self):
+        fake = types.SimpleNamespace(
+            Device=types.SimpleNamespace(cpu="cpu"),
+            ImageReaderOptions=lambda: types.SimpleNamespace(mask_path=""),
+            FeatureExtractionOptions=lambda: types.SimpleNamespace(max_image_size=0),
+            extract_features=Mock(),
+        )
+        with patch.dict("sys.modules", {"pycolmap": fake}):
+            with self.assertRaisesRegex(ValueError, "max_num_features"):
+                main(["feature_extractor", "--database_path", "db", "--image_path", "images",
+                      "--FeatureExtraction.use_gpu", "0",
+                      "--registration-profile", "high-recall"])
+            fake.FeatureMatchingOptions = lambda: types.SimpleNamespace(max_ratio=0.8)
+            with self.assertRaisesRegex(ValueError, "guided_matching"):
+                main(["exhaustive_matcher", "--database_path", "db",
+                      "--FeatureMatching.use_gpu", "0",
+                      "--registration-profile", "high-recall"])
+
     def test_worker_rejects_accidental_gpu_or_wrong_output_format(self):
         fake = types.SimpleNamespace(Device=types.SimpleNamespace(cpu="cpu"))
         with patch.dict("sys.modules", {"pycolmap": fake}):
