@@ -153,7 +153,32 @@ classifier), invoke the Python tool with `--annotations tags.json`, where
 ```
 
 These tags are user/vision-supplied **annotations**, not automatically
-verified pose estimates. Suggestions favor 10–15 degree bridging steps,
+verified pose estimates.
+
+For automatic *visual* labels of **unregistered** photos, an optional
+vision-capable model installed in local Ollama can classify approximate
+front/three-quarter/profile/rear appearance, elevated/low viewpoint,
+head-closeup vs head-and-torso vs full-monument framing, and obvious
+blur/occlusion. This is a separate, explicitly **unverified** estimate,
+not a calibrated camera pose:
+
+```bash
+# Use the name of a vision-capable model already installed in local Ollama.
+PHOTO_VISION_MODEL=your-local-vision-model \
+  bash scripts/mac_splat_test.sh photo-advice \
+  .review/mac-splat-smoke/splat-20261103T053355Z-11041
+```
+
+Photos are resized and sent **only** to a loopback Ollama endpoint; remote
+HTTP(S) vision endpoints are rejected. No cloud upload is performed by this
+feature. Each photo's model guess is labeled as a vision estimate and may
+be wrong, especially left vs right or when the statue is cropped.
+The report only recommends semantic view-type gaps when most images were
+classified successfully; numeric angle suggestions still come solely from
+estimated COLMAP poses. Without Ollama, geometric photo-value and angle
+recommendations work without AI dependencies.
+
+Suggestions favor 10–15 degree bridging steps,
 60–80% overlapping subject content, medium shots including shared
 head/neck/torso landmarks, and elevated/lower views when accessible. For
 the Sphinx, inaccessible rear geometry should instead be sourced from
