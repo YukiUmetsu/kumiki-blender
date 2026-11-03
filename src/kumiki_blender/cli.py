@@ -391,6 +391,16 @@ def main(argv: list[str] | None = None) -> int:
     defect_parser.add_argument("--spatial-radius", type=int, default=12)
     defect_parser.add_argument("--max-side", type=int, default=8192)
     defect_parser.add_argument("--max-mesh-faces", type=int, default=5_000_000)
+    illumination_parser = subcommands.add_parser(
+        "estimate-uv-illumination",
+        help="Build bounded per-material illumination guides from 3+ registered UV photos")
+    illumination_parser.add_argument("--dense-revision", type=Path, required=True)
+    illumination_parser.add_argument("--surface-recipe", type=Path, required=True)
+    illumination_parser.add_argument("--output", type=Path, required=True)
+    illumination_parser.add_argument("--smoothing-radius", type=int, default=32)
+    illumination_parser.add_argument("--max-illumination-ev", type=float, default=1.5)
+    illumination_parser.add_argument("--max-side", type=int, default=8192)
+    illumination_parser.add_argument("--max-mesh-faces", type=int, default=5_000_000)
     projection_parser = subcommands.add_parser(
         "project-registered-uv-views",
         help="Project hash-pinned COLMAP photographs onto OBJ UV atlases with occlusion masks")
@@ -657,6 +667,21 @@ def main(argv: list[str] | None = None) -> int:
                                                    spatial_radius=args.spatial_radius,
                                                    max_side=args.max_side,
                                                    max_mesh_faces=args.max_mesh_faces))
+            except ReferenceError as error:
+                raise RecipeError(str(error)) from error
+            print(json.dumps(report, indent=2))
+            return 0
+        if args.command == "estimate-uv-illumination":
+            from .reconstruction.illumination_guides import (
+                IlluminationGuideOptions, estimate_uv_illumination)
+            from .reconstruction.references import ReferenceError
+            try:
+                report = estimate_uv_illumination(
+                    args.dense_revision, args.surface_recipe, args.output,
+                    options=IlluminationGuideOptions(
+                        smoothing_radius=args.smoothing_radius,
+                        max_illumination_ev=args.max_illumination_ev,
+                        max_side=args.max_side, max_mesh_faces=args.max_mesh_faces))
             except ReferenceError as error:
                 raise RecipeError(str(error)) from error
             print(json.dumps(report, indent=2))

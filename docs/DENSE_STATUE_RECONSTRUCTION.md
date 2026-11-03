@@ -522,6 +522,42 @@ subdirectories. Files and the recipe are hash-pinned before processing.
   The fallback can remove real low-frequency pigment/weathering: inspect every
   original/finished atlas comparison. This is NOT a solved intrinsic-image
   decomposition problem.
+
+  **Estimate a candidate guide from registered camera views:** once the
+  `surface-recipe.json` has reviewed material regions and three or more
+  independently visible UV-projected photos, generate a separate,
+  non-destructive relative illumination revision:
+
+  ```bash
+  kumiki-blender estimate-uv-illumination \
+    --dense-revision /private/statue-dense \
+    --surface-recipe /private/material-proposal/surface-recipe.json \
+    --output /private/illumination-guide \
+    --smoothing-radius 32 --max-illumination-ev 1.5
+
+  # Inspect each before-fused-corrected.png before using the generated guide.
+  kumiki-blender finish-dense-textures \
+    --dense-revision /private/statue-dense \
+    --surface-recipe /private/illumination-guide/surface-recipe.json \
+    --surface-delight-strength 0.8 --surface-max-delight-ev 1.5 \
+    --output /private/illumination-review
+  ```
+
+  The estimator uses the existing per-material, independently masked
+  multiview median to compare original and recovered **linear-light**
+  luminance. It normalizes each material separately and smooths the relative
+  field only through observed UV texels within the same material region.
+  Unknown regions and texels with fewer than three visible camera views remain
+  neutral (128), not imagined. It emits a standalone hash-pinned recipe,
+  `illumination-map.png`, `guided-coverage.png`, and a side-by-side preview
+  showing original, registered-fusion candidate and guided correction.
+  Existing roughness, height, damage and photo evidence are preserved.
+  The neutral-128 8-bit format has a smaller **positive** representable EV
+  range than negative EV; `positive_ev_clip_fraction` reports saturation.
+  Review skin, painted inscriptions, patina, hard shadows and UV seams; if a
+  shadow exists in every photo, it cannot be reliably separated from pigment.
+  Do not also enable multiview color fusion for the same finishing pass unless
+  comparing a deliberately different, separately reviewed variant.
 - **Multiple photographic views (opt-in):** supply 3–8 *distinct UV-reprojected*
   RGB PNGs of the **same object in the same UV coordinates**, with one
   grayscale visibility/confidence mask for each. These are **not raw camera
