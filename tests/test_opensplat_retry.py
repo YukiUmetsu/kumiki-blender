@@ -64,6 +64,8 @@ class OpenSplatRetryTests(unittest.TestCase):
         self.assertEqual(report["signal_name"], "SIGSEGV")
         self.assertIn("--cpu", report["command"])
         self.assertIn("lldb", report["debug_command"])
+        self.assertIn(" -k ", report["debug_command"])
+        self.assertIn("crash-qa", report["next_action"])
         self.assertTrue((self.source / "dataset/sparse/0/points3D.bin").is_file())
         self.assertTrue((output / "retry-report.json").is_file())
 
