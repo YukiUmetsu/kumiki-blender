@@ -17,7 +17,8 @@ from pathlib import Path
 from typing import Any, Callable
 
 from ..glb_audit import AuditError, audit_glb
-from .dense import DenseSettings, build_dense_reconstruction
+from .dense import (DenseSettings, _check_regular, _sha256,
+                    build_dense_reconstruction, plan_dense_reconstruction)
 from .references import ReferenceError, ReferenceSet, audit_reference_set
 
 
@@ -67,11 +68,13 @@ class PhotoModelSettings:
                       texture=self.texture).validate()
 
 
-def _dependencies(settings: PhotoModelSettings) -> tuple[dict[str, str], list[str]]:
+def _dependencies(settings: PhotoModelSettings, *, reuse_cameras: bool = False) -> tuple[dict[str, str], list[str]]:
     found: dict[str, str] = {}
     missing: list[str] = []
     names = []
-    if settings.engine == "pycolmap":
+    if reuse_cameras:
+        pass  # Existing registered/undistorted cameras need no SfM dependency.
+    elif settings.engine == "pycolmap":
         if importlib.util.find_spec("pycolmap") is None:
             missing.append("pycolmap (pip install pycolmap)")
         else:
@@ -93,6 +96,66 @@ def _dependencies(settings: PhotoModelSettings) -> tuple[dict[str, str], list[st
         else:
             missing.append(name)
     return found, missing
+
+
+def _registered_evidence(source: Path) -> dict[str, str]:
+    """Pin camera files and source metadata without copying or altering them."""
+    paths = [source / "reconstruction-report.json",
+             source / "undistorted-reference-index.json"]
+    sparse = source / "undistorted/sparse"
+    for stem in ("cameras", "images", "points3D"):
+        candidates = [sparse / f"{stem}.{ext}" for ext in ("bin", "txt")]
+        paths.append(next((path for path in candidates if path.is_file()), candidates[0]))
+    hashes = {}
+    for path in paths:
+        _check_regular(path, source)
+        hashes[str(path.relative_to(source))] = _sha256(path)
+    return hashes
+
+
+def plan_registered_photo_model(
+    reconstruction: str | Path, output: str | Path, settings: PhotoModelSettings, *,
+    rectified_masks: str | Path | None = None,
+    dependencies: tuple[dict[str, str], list[str]] | None = None,
+) -> dict[str, Any]:
+    """Use an existing immutable camera revision; never repeat COLMAP."""
+    settings.validate()
+    source = Path(reconstruction).resolve()
+    target = Path(output).resolve()
+    if (Path(reconstruction).is_symlink() or Path(output).is_symlink()
+            or target.exists() or target == source or target.is_relative_to(source)):
+        raise ReferenceError("Registered photo-model output must be new and outside its source revision")
+    dense_settings = DenseSettings(backend=settings.dense_backend,
+                                   min_registered_images=settings.min_registered_images,
+                                   min_registered_fraction=settings.min_registered_fraction,
+                                   timeout_seconds=settings.dense_timeout_seconds,
+                                   texture=settings.texture)
+    sparse = plan_dense_reconstruction(source, target / "dense", dense_settings,
+                                       rectified_masks=rectified_masks, executables={})
+    found, missing = (dependencies if dependencies is not None
+                      else _dependencies(settings, reuse_cameras=True))
+    return {
+        "schema_version": 1, "asset_id": sparse["asset_id"],
+        "output": str(target), "source_mode": "reuse-registered-cameras",
+        "source_revision": str(source),
+        "source_evidence_sha256": _registered_evidence(source),
+        "registered_images": sparse["registered_images"],
+        "independent_images": sparse["independent_images"],
+        "source_manifest_sha256": sparse["manifest_sha256"],
+        "rectified_mask_source": sparse["rectified_mask_source"],
+        "rectified_masks": sparse["rectified_masks"],
+        "missing_photo_rights": True,
+        "sparse_engine": "existing-registered-cameras",
+        "dense_backend": settings.dense_backend,
+        "min_registered_images": settings.min_registered_images,
+        "min_registered_fraction": settings.min_registered_fraction,
+        "texture_requested": settings.texture,
+        "render_previews": settings.render_previews,
+        "detected_dependencies": found, "missing_dependencies": missing,
+        "status": "blocked-missing-dependencies" if missing else "ready-to-reconstruct",
+        "distribution_allowed": False, "historical_fidelity_verified": False,
+        "limitations": "Original registered camera revision must remain available and unchanged. Reuse cannot recover missing statue angles, prove likeness, or clear photo rights.",
+    }
 
 
 def plan_photo_model(references: ReferenceSet, output: str | Path,
@@ -141,14 +204,25 @@ def _default_blender_runner(command: list[str], log: Path, timeout: int) -> int:
 
 
 def build_photo_model(
-    references: ReferenceSet, output: str | Path, settings: PhotoModelSettings,
+    references: ReferenceSet | None, output: str | Path, settings: PhotoModelSettings,
     *, dependencies: tuple[dict[str, str], list[str]] | None = None,
+    registered_reconstruction: str | Path | None = None,
+    rectified_masks: str | Path | None = None,
     sparse_builder: Callable[..., dict[str, Any]] | None = None,
     dense_builder: Callable[..., dict[str, Any]] | None = None,
     blender_runner: Callable[[list[str], Path, int], int] | None = None,
 ) -> dict[str, Any]:
     """Build an immutable private GLB revision, checkpointing every stage."""
-    plan = plan_photo_model(references, output, settings, dependencies=dependencies)
+    if (references is None) == (registered_reconstruction is None):
+        raise ReferenceError("Provide either photo references or an existing sparse reconstruction")
+    if registered_reconstruction is None:
+        if rectified_masks is not None:
+            raise ReferenceError("Rectified masks require existing registered/undistorted cameras")
+        plan = plan_photo_model(references, output, settings, dependencies=dependencies)
+    else:
+        plan = plan_registered_photo_model(
+            registered_reconstruction, output, settings, rectified_masks=rectified_masks,
+            dependencies=dependencies)
     if plan["missing_dependencies"]:
         raise ReferenceError("Cannot build photo model; missing: " + ", ".join(plan["missing_dependencies"]))
     entry = Path(__file__).resolve().parents[3] / "scripts/blender_entry.py"
@@ -170,14 +244,23 @@ def build_photo_model(
         return checkpoint()
 
     checkpoint()
-    from .colmap import build_sparse_reconstruction
-
-    sparse_fn = sparse_builder or build_sparse_reconstruction
     dense_fn = dense_builder or build_dense_reconstruction
     try:
-        sparse = sparse_fn(references, target / "sparse", colmap=settings.colmap,
-                           engine=settings.engine, timeout_seconds=settings.sparse_timeout_seconds,
-                           undistort=True, max_image_size=settings.max_image_size)
+        if registered_reconstruction is None:
+            from .colmap import build_sparse_reconstruction
+            sparse_fn = sparse_builder or build_sparse_reconstruction
+            sparse = sparse_fn(references, target / "sparse", colmap=settings.colmap,
+                               engine=settings.engine, timeout_seconds=settings.sparse_timeout_seconds,
+                               undistort=True, max_image_size=settings.max_image_size)
+            sparse_source = target / "sparse"
+        else:
+            sparse_source = Path(plan["source_revision"])
+            if _registered_evidence(sparse_source) != plan["source_evidence_sha256"]:
+                return fail("sparse-registration", "Registered camera source changed after preflight")
+            sparse = {"status": "candidate / reused-registered-cameras",
+                      "registered_images": plan["registered_images"],
+                      "staged_independent_images": plan["independent_images"],
+                      "undistorted_images": plan["registered_images"]}
         report["sparse"] = {key: sparse.get(key) for key in
                             ("status", "registered_images", "staged_independent_images",
                              "failed_stage", "error")}
@@ -198,7 +281,16 @@ def build_photo_model(
                                        min_registered_fraction=settings.min_registered_fraction,
                                        timeout_seconds=settings.dense_timeout_seconds,
                                        texture=settings.texture)
-        dense = dense_fn(target / "sparse", target / "dense", dense_settings)
+        if registered_reconstruction is not None:
+            # The source stays immutable and is referenced by SHA; neither
+            # COLMAP nor PyCOLMAP is invoked for this existing-camera mode.
+            if _registered_evidence(sparse_source) != plan["source_evidence_sha256"]:
+                return fail("sparse-registration", "Registered camera source changed before meshing")
+        if rectified_masks is None:
+            dense = dense_fn(sparse_source, target / "dense", dense_settings)
+        else:
+            dense = dense_fn(sparse_source, target / "dense", dense_settings,
+                             rectified_masks=rectified_masks)
         report["dense"] = {key: dense.get(key) for key in
                            ("status", "failed_stage", "error", "mesh")}
         checkpoint()

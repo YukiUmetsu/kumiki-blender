@@ -31,6 +31,34 @@ replace `--photos DIR --asset-id NAME` with `--manifest PATH`. Run `plan` and
 Each `build` run consumes that destination; for retries use a new revision,
 such as `photo-r02`, to preserve diagnostic evidence.
 
+### Reuse cameras already registered by the Sphinx splat pipeline
+
+If a previous `mac_splat_test.sh run` successfully registered the photographs,
+**do not rerun COLMAP**. Point `--reconstruction` at its existing
+`sparse-reconstruction/` directory, not at the `splat-retry-*` output:
+
+```bash
+SOURCE=.review/mac-splat-smoke/splat-20261103T063944Z-55327/sparse-reconstruction
+OUTPUT=.review/great-sphinx/mesh-from-registered-01
+kumiki-blender plan-photo-model --reconstruction "$SOURCE" --output "$OUTPUT"
+
+# Only when the plan reports ready-to-reconstruct, and OUTPUT does not exist:
+kumiki-blender build-photo-model --reconstruction "$SOURCE" --output "$OUTPUT"
+```
+
+This skips PyCOLMAP and feature matching entirely, requires only the OpenMVS
+and Blender runtime dependencies on macOS, and verifies the existing registered
+images, camera files and provenance before meshing. The original source stays
+untouched. The output records its absolute source path and file hashes; keep
+that private source revision available if you need to reproduce the mesh.
+
+Only after checking **every** mask against the full statue silhouette, you can
+optionally add `--rectified-masks /path/to/reviewed-mask-revision/masks` to both
+commands. The masks must match all registered **undistorted** images in name,
+resolution and binary values. Merely passing mask validation does **not**
+establish that the head, body, paws and tail were retained correctly. Do not
+use the failed general-purpose `rembg` Sphinx masks.
+
 For a CUDA-enabled computer, select `--engine colmap --backend colmap`, after
 installing COLMAP with GPU support. This path does not presently create a
 photographic texture atlas: the GLB receives the dense mesh's material.
@@ -47,7 +75,7 @@ On success, the private output folder contains:
 | `model.glb` | Blender-exported mesh, re-audited as glTF 2.0 with geometry |
 | `review/private-*.blend` | Editable Blender file with imported reconstructed geometry |
 | `review/renders/` | Axis QA renders and up to eight real registered-camera views (unless `--no-renders`) |
-| `sparse/` | Registered cameras, undistorted photos, COLMAP logs and evidence |
+| `sparse/` | New camera registration when building from photos; when reusing cameras, the unchanged source remains in its original revision |
 | `dense/` | Reconstructed geometry, textures when available, meshing reports |
 | `photo-model-report.json` | Stage status, actual registered counts, final GLB SHA-256, blockers |
 

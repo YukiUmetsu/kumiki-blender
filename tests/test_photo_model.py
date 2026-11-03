@@ -14,7 +14,7 @@ from PIL import Image
 
 from kumiki_blender.cli import main
 from kumiki_blender.reconstruction.photo_model import (
-    PhotoModelSettings, build_photo_model, plan_photo_model,
+    PhotoModelSettings, build_photo_model, plan_photo_model, plan_registered_photo_model,
 )
 from kumiki_blender.reconstruction.references import ReferenceError
 from kumiki_blender.reconstruction.splat_input import load_photo_folder
@@ -203,6 +203,121 @@ class PhotoModelTests(unittest.TestCase):
                                    dependencies=self.dependencies, sparse_builder=sparse)
         self.assertEqual(report["failed_stage"], "sparse-registration")
         self.assertFalse((output / "model.glb").exists())
+
+    def _registered_fixture(self):
+        from tests.test_reconstruction_splats import SplatDatasetTests
+
+        fixture = SplatDatasetTests()
+        fixture.setUp()
+        self.addCleanup(fixture.temp.cleanup)
+        return fixture.source
+
+    def test_existing_registered_cameras_skip_sfm_and_produce_glb(self):
+        source = self._registered_fixture()
+        output = self.root / "reuse-existing"
+        self.assertEqual(plan_registered_photo_model(
+            source, output, self.settings, dependencies=self.dependencies)["registered_images"], 8)
+        calls = []
+
+        def should_not_register(*args, **kwargs):
+            self.fail("COLMAP reran despite an existing registered camera revision")
+
+        def dense(reconstruction, directory, settings):
+            calls.append("dense")
+            self.assertEqual(reconstruction, source.resolve())
+            directory.mkdir()
+            return {"status": "dense-mesh-candidate / visual-review-required"}
+
+        def blender(command, log, timeout):
+            calls.append("blender")
+            review = output / "review"
+            review.mkdir()
+            (review / "private-textured-review.glb").write_bytes(self._minimal_glb())
+            (review / "blender-review-report.json").write_text(json.dumps({
+                "status": "private-Blender-mesh-candidate / artistic-review-required",
+                "review_glb": "private-textured-review.glb",
+                "review_blend": "private-textured-review.blend"}))
+            return 0
+
+        report = build_photo_model(
+            None, output, self.settings, registered_reconstruction=source,
+            dependencies=self.dependencies, sparse_builder=should_not_register,
+            dense_builder=dense, blender_runner=blender)
+        self.assertEqual(calls, ["dense", "blender"])
+        self.assertEqual(report["source_mode"], "reuse-registered-cameras")
+        self.assertEqual(report["source_revision"], str(source.resolve()))
+        self.assertTrue(report["status"].startswith("private-GLB-candidate"))
+        self.assertTrue((output / "model.glb").is_file())
+        self.assertFalse((output / "sparse").exists())
+        self.assertTrue((source / "reconstruction-report.json").exists())
+
+    def test_existing_camera_masks_are_validated_and_passed_to_mesher(self):
+        source = self._registered_fixture()
+        masks = self.root / "reviewed-masks"
+        masks.mkdir()
+        for i in range(8):
+            mask = Image.new("L", (128, 96), 0)
+            mask.paste(255, (20, 20, 100, 75))
+            mask.save(masks / f"photo-{i:04}.jpg.mask.png")
+        target = self.root / "masked"
+        plan = plan_registered_photo_model(
+            source, target, self.settings, rectified_masks=masks,
+            dependencies=self.dependencies)
+        self.assertEqual(len(plan["rectified_masks"]), 8)
+        self.assertEqual(plan["rectified_mask_source"], str(masks.resolve()))
+
+        def dense(reconstruction, directory, settings, *, rectified_masks):
+            self.assertEqual(reconstruction, source.resolve())
+            self.assertEqual(Path(rectified_masks), masks)
+            directory.mkdir()
+            return {"status": "review-required"}  # No fabricated mesh.
+
+        result = build_photo_model(
+            None, target, self.settings, registered_reconstruction=source,
+            rectified_masks=masks, dependencies=self.dependencies, dense_builder=dense)
+        self.assertEqual(result["failed_stage"], "dense-mesh")
+        self.assertFalse((target / "model.glb").exists())
+        mask = masks / "photo-0001.jpg.mask.png"
+        Image.new("L", (32, 32), 255).save(mask)
+        with self.assertRaisesRegex(ReferenceError, "dimensions"):
+            plan_registered_photo_model(source, self.root / "masked-next", self.settings,
+                                        rectified_masks=masks, dependencies=self.dependencies)
+        self.assertTrue(target.exists())  # Failed revisions remain inspectable.
+
+    def test_registered_photo_plan_detects_source_changes_and_avoids_pycolmap(self):
+        source = self._registered_fixture()
+        target = self.root / "registered-plan"
+        no_sparse_dependency = ({k: v for k, v in self.dependencies[0].items()
+                                 if k != "pycolmap"}, [])
+        plan = plan_registered_photo_model(
+            source, target, self.settings, dependencies=no_sparse_dependency)
+        self.assertEqual(plan["status"], "ready-to-reconstruct")
+        self.assertFalse(target.exists())
+        self.assertIn("undistorted/sparse/images.bin", plan["source_evidence_sha256"])
+        with self.assertRaisesRegex(ReferenceError, "outside"):
+            plan_registered_photo_model(source, source / "nested", self.settings,
+                                        dependencies=no_sparse_dependency)
+        photo = source / "undistorted/images/photo-0000.jpg"
+        photo.write_bytes(photo.read_bytes() + b"tampered")
+        with self.assertRaisesRegex(ReferenceError, "changed"):
+            plan_registered_photo_model(source, target, self.settings,
+                                        dependencies=no_sparse_dependency)
+
+    def test_cli_plan_registered_cameras_without_asset_id(self):
+        source = self._registered_fixture()
+        target = self.root / "cli-existing"
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            self.assertEqual(main(["plan-photo-model", "--reconstruction", str(source),
+                                   "--output", str(target)]), 0)
+        self.assertEqual(json.loads(output.getvalue())["source_mode"],
+                         "reuse-registered-cameras")
+        self.assertFalse(target.exists())
+        error = io.StringIO()
+        with contextlib.redirect_stderr(error):
+            self.assertEqual(main(["plan-photo-model", "--reconstruction", str(source),
+                                   "--asset-id", "not-applicable", "--output", str(target)]), 2)
+        self.assertIn("--asset-id", error.getvalue())
 
 
 if __name__ == "__main__":
