@@ -188,6 +188,30 @@ def main(argv: list[str] | None = None) -> int:
             photo_parser.add_argument("--undistort", action="store_true",
                                       help="Rectify camera intrinsics and image pixels for accurate Blender projection")
             photo_parser.add_argument("--max-image-size", type=int, default=4000)
+    for command in ("plan-photo-model", "build-photo-model"):
+        photo_model_parser = subcommands.add_parser(
+            command, help="From one folder of overlapping object photographs to a private mesh GLB")
+        photo_model_input = photo_model_parser.add_mutually_exclusive_group(required=True)
+        photo_model_input.add_argument("--photos", type=Path,
+                                       help="Folder of 8–256 photos of the same object")
+        photo_model_input.add_argument("--manifest", type=Path,
+                                       help="Curated multi-view ReferenceSet JSON manifest")
+        photo_model_parser.add_argument("--asset-id", help="Required with --photos")
+        photo_model_parser.add_argument("--output", type=Path, required=True,
+                                        help="New private, immutable output revision")
+        photo_model_parser.add_argument("--engine", choices=("pycolmap", "colmap"),
+                                        default="pycolmap", help="Sparse registration engine")
+        photo_model_parser.add_argument("--backend", choices=("openmvs", "colmap"),
+                                        default="openmvs", help="Dense meshing backend")
+        photo_model_parser.add_argument("--colmap", default="colmap")
+        photo_model_parser.add_argument("--blender", default="blender")
+        photo_model_parser.add_argument("--min-registered-images", type=int, default=8)
+        photo_model_parser.add_argument("--min-registered-fraction", type=float, default=0.25)
+        photo_model_parser.add_argument("--sparse-timeout-seconds", type=int, default=3600)
+        photo_model_parser.add_argument("--dense-timeout-seconds", type=int, default=7200)
+        photo_model_parser.add_argument("--max-image-size", type=int, default=3200)
+        photo_model_parser.add_argument("--no-texture", action="store_true")
+        photo_model_parser.add_argument("--no-renders", action="store_true")
     for command in ("plan-dense-photos", "build-dense-photos"):
         dense_parser = subcommands.add_parser(
             command, help="Review or reconstruct a private dense statue mesh from registered cameras")
@@ -903,6 +927,34 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(report, indent=2))
             return (0 if args.command == "plan-dense-photos" or
                     report["status"].startswith("dense-mesh-candidate") else 3)
+        if args.command in ("plan-photo-model", "build-photo-model"):
+            from .reconstruction.photo_model import (PhotoModelSettings, build_photo_model,
+                                                     plan_photo_model)
+            from .reconstruction.references import ReferenceError, load_reference_set
+            from .reconstruction.splat_input import load_photo_folder
+            try:
+                if args.photos and not args.asset_id:
+                    raise ReferenceError("--asset-id is required with --photos")
+                if args.asset_id and not args.photos:
+                    raise ReferenceError("--asset-id is only used with --photos")
+                references = (load_photo_folder(args.photos, args.asset_id)
+                              if args.photos else load_reference_set(args.manifest))
+                settings = PhotoModelSettings(
+                    engine=args.engine, dense_backend=args.backend, colmap=args.colmap,
+                    blender=args.blender, min_registered_images=args.min_registered_images,
+                    min_registered_fraction=args.min_registered_fraction,
+                    sparse_timeout_seconds=args.sparse_timeout_seconds,
+                    dense_timeout_seconds=args.dense_timeout_seconds,
+                    max_image_size=args.max_image_size,
+                    texture=not args.no_texture, render_previews=not args.no_renders)
+                report = (plan_photo_model(references, args.output, settings)
+                          if args.command == "plan-photo-model" else
+                          build_photo_model(references, args.output, settings))
+            except ReferenceError as error:
+                raise RecipeError(str(error)) from error
+            print(json.dumps(report, indent=2))
+            return (0 if args.command == "plan-photo-model" or
+                    report["status"].startswith("private-GLB-candidate") else 3)
         if args.command in ("plan-splats", "build-splats"):
             from .reconstruction.references import ReferenceError, load_reference_set
             from .reconstruction.splat_input import load_photo_folder, plan_splat_input
