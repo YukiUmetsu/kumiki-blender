@@ -102,7 +102,23 @@ REGISTRATION_PROFILE=high-recall MAX_IMAGE_SIZE=3200 \
 #### Why seeded recovery can register zero new photos
 
 If `bash scripts/mac_splat_test.sh recover <revision> 0` reports
-`No images with matches` and `no-registration-improvement`, the run
+`No images with matches` and `no-registration-improvement`, first inspect
+the existing run **without repeating expensive SfM**:
+
+```bash
+bash scripts/mac_splat_test.sh recover-qa \
+  .review/mac-splat-smoke/splat-20261103T052755Z-7115 0
+
+PHOTO_SUBJECT_TYPE=statue \
+  bash scripts/mac_splat_test.sh photo-advice \
+  .review/mac-splat-smoke/splat-20261103T052755Z-7115
+```
+
+`recover-qa` writes a new immutable `recovery-match-qa.json` with
+per-photo seed-match evidence. The second command writes the labeled
+contact sheet, Markdown photo triage, and missing-angle recommendations.
+
+The run
 has **not** improved the camera model. The updated
 `recovery-report.json` now includes `match_evidence`:
 
