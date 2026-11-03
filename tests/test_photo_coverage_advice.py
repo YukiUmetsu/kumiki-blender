@@ -46,6 +46,8 @@ class PhotoCoverageAdviceTests(unittest.TestCase):
             self.assertEqual(report["additional_registrations_needed_at_current_photo_count"], 6)
             images = {p["filename"]: p for p in report["images"]}
             self.assertEqual(images["photo-0001.png"]["assessment"], "keep")
+            self.assertEqual(images["photo-0001.png"]["track_contribution"]["observed_3d_tracks"], 6)
+            self.assertEqual(images["photo-0001.png"]["track_contribution"]["two_view_tracks_lost_if_camera_removed"], 6)
             self.assertEqual(images["photo-0003.png"]["pnp_support"]["conservative_one_to_one_2d3d"], 5)
             self.assertEqual(images["photo-0003.png"]["assessment"], "low-current-value")
             self.assertEqual(images["photo-0003.png"]["original_filename"], "orig-3.jpg")
@@ -123,6 +125,23 @@ class PhotoCoverageAdviceTests(unittest.TestCase):
             with patch.object(sys, "argv", ["audit", str(root), "--output", str(output)]):
                 with redirect_stdout(StringIO()), self.assertRaises(SystemExit):
                     advice.main()
+
+    def test_near_duplicate_camera_requires_no_critical_tracks(self):
+        photo = {"imported": True, "keypoints": 1000, "strong_neighbors": 4}
+        contribution = {
+            "observed_3d_tracks": 100,
+            "two_view_tracks_lost_if_camera_removed": 0,
+        }
+        status, _, _ = advice._status(
+            photo, registered=True, alternate=False, candidate=None,
+            near_angle=2.0, contribution=contribution)
+        self.assertEqual(status, "keep-check-overlap")
+        contribution["two_view_tracks_lost_if_camera_removed"] = 12
+        status, _, reasons = advice._status(
+            photo, registered=True, alternate=False, candidate=None,
+            near_angle=2.0, contribution=contribution)
+        self.assertEqual(status, "keep")
+        self.assertTrue(any("12 two-view tracks" in reason for reason in reasons))
 
     def test_missing_import_and_invalid_annotation(self):
         with tempfile.TemporaryDirectory() as tmp:
