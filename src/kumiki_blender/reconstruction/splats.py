@@ -224,7 +224,8 @@ def build_multiview_splat_revision(references: ReferenceSet, output: str | Path,
                                    settings: SplatSettings, *,
                                    engine: str = "pycolmap", colmap: str = "colmap",
                                    sparse_timeout_seconds: int = 3600,
-                                   max_image_size: int = 4000) -> dict:
+                                   max_image_size: int = 4000,
+                                   registration_profile: str = "standard") -> dict:
     """Register photo cameras then train splats in one self-contained revision.
 
     Sparse camera evidence stays inside the result; it never lives in a temp
@@ -233,6 +234,10 @@ def build_multiview_splat_revision(references: ReferenceSet, output: str | Path,
     """
     settings.validate()
     validate_camera_settings(engine, sparse_timeout_seconds, max_image_size)
+    if registration_profile not in ("standard", "high-recall"):
+        raise ReferenceError("Registration profile must be standard or high-recall")
+    if registration_profile == "high-recall" and engine != "pycolmap":
+        raise ReferenceError("High-recall registration requires PyCOLMAP")
     intake = plan_splat_input(references)
     target = Path(output).resolve()
     if Path(output).is_symlink() or target.exists():
@@ -265,7 +270,8 @@ def build_multiview_splat_revision(references: ReferenceSet, output: str | Path,
         camera_report = build_sparse_reconstruction(
             references, sparse, colmap=colmap, engine=engine,
             timeout_seconds=sparse_timeout_seconds, undistort=True,
-            max_image_size=max_image_size)
+            max_image_size=max_image_size, registration_profile=registration_profile)
+        report["registration_profile"] = registration_profile
         report["camera_reconstruction"] = camera_report
         if (not camera_report["status"].startswith("candidate") or
                 not camera_report.get("undistorted_images")):
