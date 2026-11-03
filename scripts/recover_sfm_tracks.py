@@ -92,6 +92,9 @@ def recover(revision: Path, output: Path, *, model: int = 0,
         # A private database copy avoids any modification to the original run.
         working_db = output / "database.db"
         shutil.copy2(database, working_db)
+        staged_index = sparse / "staged-reference-index.json"
+        if staged_index.is_file() and not staged_index.is_symlink():
+            shutil.copy2(staged_index, output / staged_index.name)
         if _sha256(working_db) != report["source_database_sha256"]:
             raise RuntimeError("COLMAP database copy checksum mismatch")
         if retriangulate:
@@ -113,6 +116,9 @@ def recover(revision: Path, output: Path, *, model: int = 0,
             target = output / "sparse" / str(index)
             target.mkdir(parents=True, exist_ok=True)
             reconstruction.write(target)
+            text_target = output / "text-models" / str(index)
+            text_target.mkdir(parents=True, exist_ok=False)
+            reconstruction.write_text(text_target)
             results.append({
                 "model": str(index),
                 "registered_images": len(registered),
