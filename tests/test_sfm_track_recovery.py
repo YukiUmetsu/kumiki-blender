@@ -169,6 +169,33 @@ class SfmTrackRecoveryTests(unittest.TestCase):
             self.assertEqual(report["status"], "no-registration-improvement")
             self.assertEqual(report["match_evidence"]["strong_seed_to_missing_pairs"], 2)
 
+    def test_read_only_recovery_match_audit_without_pycolmap(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            revision = _fixture(root)
+            sparse = revision / "sparse-reconstruction"
+            model = sparse / "text-models" / "0"
+            model.mkdir(parents=True)
+            (model / "images.txt").write_text(
+                "".join(f"{i} 1 0 0 0 0 0 0 1 {chr(96+i)}.png\n0 0 -1\n"
+                        for i in range(1, 5)))
+            with sqlite3.connect(sparse / "database.db") as db:
+                db.execute("CREATE TABLE two_view_geometries "
+                           "(pair_id INTEGER, rows INTEGER, config INTEGER)")
+                db.execute("INSERT INTO two_view_geometries VALUES (?,?,?)",
+                           (1 * recovery.MAX_IMAGE_ID + 5, 42, 2))
+            output = root / "audit"
+            original_sha = recovery._sha256(sparse / "database.db")
+            report = recovery.diagnose_only(revision, output)
+            self.assertEqual(report["registered_seed_photos"], 4)
+            self.assertEqual(report["match_evidence"]["strong_seed_to_missing_pairs"], 1)
+            self.assertEqual(report["status"], "read-only-match-audit")
+            self.assertEqual(json.loads((output / "recovery-match-qa.json").read_text()),
+                             report)
+            self.assertEqual(recovery._sha256(sparse / "database.db"), original_sha)
+            with self.assertRaises(FileExistsError):
+                recovery.diagnose_only(revision, output)
+
     def test_zero_verified_pairs_is_not_confused_with_zero_raw_matches(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
