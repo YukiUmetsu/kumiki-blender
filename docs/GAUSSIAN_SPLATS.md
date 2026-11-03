@@ -192,9 +192,13 @@ its staged dataset, probes the binary version and linked libraries, then runs
 LLDB with `-o run -k "thread backtrace all"`. Results are stored in a new
 `opensplat-crash-qa-*/lldb.log` and `crash-qa.json` without modifying
 the original registered photos or COLMAP model. If LLDB cannot launch the
-inferior due to macOS developer-tools permissions, the log records the
-launch error; that is **not** a native backtrace. Inspect the first crashing
-frame and its caller before changing PyTorch, OpenSplat, or COLMAP.
+inferior due to macOS developer-tools permissions, the result reports
+`debugger-launch-failed` and exits nonzero; that is **not** a native
+backtrace. A debugger run without a crash reports `trace-inconclusive`, and a
+crash without stack frames reports `crash-seen / no-backtrace`. Only a run
+that captures both the crash and stack frames reports
+`trace-captured / inspect-log` and exits successfully. Inspect the first
+crashing frame and its caller before changing PyTorch, OpenSplat, or COLMAP.
 
 The `photo-advice` report now requests **zero additional photos for
 registration** when all images are registered. This does not prove full surface
