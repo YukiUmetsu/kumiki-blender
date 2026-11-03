@@ -231,8 +231,34 @@ def _shot_plan(angles: dict[str, dict], *, front_known: bool,
     return result
 
 
+def _track_contributions(model: Path, pnp) -> dict[str, dict]:
+    """Count observations and fragile two-view tracks per registered camera.
+
+    A two-view track would cease to be triangulated if either of its two
+    supporting cameras were removed. This is a lower-bound proxy for marginal
+    reconstruction value, not a leave-one-out re-optimization.
+    """
+    registered, tracks = pnp._model_tracks(model)
+    lengths = Counter(tracks.values())
+    observations = Counter()
+    fragile = Counter()
+    for (image_id, _), point_id in tracks.items():
+        observations[image_id] += 1
+        if lengths[point_id] == 2:
+            fragile[image_id] += 1
+    return {
+        name: {
+            "observed_3d_tracks": observations[image_id],
+            "two_view_tracks_lost_if_camera_removed": fragile[image_id],
+            "measurement": "existing COLMAP tracks; not a leave-one-out SfM rerun",
+        }
+        for image_id, name in registered.items()
+    }
+
+
 def _status(photo: dict, *, registered: bool, alternate: bool,
-            candidate: dict | None, near_angle: float | None) -> tuple[str, str, list[str]]:
+            candidate: dict | None, near_angle: float | None,
+            contribution: dict | None) -> tuple[str, str, list[str]]:
     reasons = []
     if not photo["imported"]:
         return "cannot-use", "high", ["Not imported by COLMAP; fix decoding/staging before judging viewpoint."]
@@ -240,7 +266,12 @@ def _status(photo: dict, *, registered: bool, alternate: bool,
         reasons.append(f"Only {photo['keypoints']} SIFT keypoints; inspect sharpness, crop, texture and masking.")
     if registered:
         reasons.append("Registered in the largest single sparse model; currently contributes a camera pose.")
-        if near_angle is not None and near_angle < 4:
+        if contribution:
+            reasons.append(f"Observes {contribution['observed_3d_tracks']} existing 3D tracks; "
+                           f"{contribution['two_view_tracks_lost_if_camera_removed']} "
+                           "two-view tracks would lose triangulation if this camera were removed.")
+        if near_angle is not None and near_angle < 4 and contribution and (
+                contribution["two_view_tracks_lost_if_camera_removed"] == 0):
             reasons.append(f"Another registered view is only {near_angle:.1f} degrees away: "
                            "possible viewpoint redundancy, but texture/track value is not measured by angle alone.")
             return "keep-check-overlap", "medium", reasons
@@ -293,6 +324,8 @@ def analyze(revision: Path, *, source_index: Path | None = None,
                  for name in model["filenames"]}
     pnp_model = next((m for m in support["models"] if m["model"] == best_name), None)
     candidates = {item["filename"]: item for item in pnp_model["unregistered_images"]} if pnp_model else {}
+    contributions = (_track_contributions(sparse / "text-models" / best_name, pnp)
+                     if best_name is not None else {})
     poses = {}
     centroid = None
     angles = {}
@@ -331,7 +364,7 @@ def analyze(revision: Path, *, source_index: Path | None = None,
         status, confidence, reasons = _status(
             {**photo, "imported": True}, registered=name in best_files,
             alternate=name in alternate, candidate=candidates.get(name),
-            near_angle=closest)
+            near_angle=closest, contribution=contributions.get(name))
         annotation = tags.get(name, tags.get(original_name))
         if annotation is not None and (not isinstance(annotation, dict) or
                                        any(not isinstance(value, str) or len(value) > 120
@@ -348,6 +381,7 @@ def analyze(revision: Path, *, source_index: Path | None = None,
             "strong_neighbors": photo["strong_neighbors"],
             "verified_inliers_across_pairs": photo["verified_inliers_across_pairs"],
             "pnp_support": candidates.get(name),
+            "track_contribution": contributions.get(name),
             "estimated_view": ({
                 **measured, "label": _view_label(measured["relative_azimuth_deg"], front_known),
                 "reference": "annotated-front" if front_known else "arbitrary-reference-camera",
@@ -370,7 +404,7 @@ def analyze(revision: Path, *, source_index: Path | None = None,
             "assessment": "cannot-use", "confidence": "high",
             "registered_in_best_model": False, "registered_in_other_model": False,
             "keypoints": 0, "strong_neighbors": 0, "verified_inliers_across_pairs": 0,
-            "pnp_support": None, "estimated_view": None,
+            "pnp_support": None, "track_contribution": None, "estimated_view": None,
             "annotations": tags.get(name, tags.get(original.get(name, name))),
             "vision_estimate": None,
             "reasons": ["Staged image was not imported by COLMAP."],
@@ -528,6 +562,10 @@ def _markdown(report: dict) -> str:
                     f"{photo['keypoints']} keypoints")
         if photo["pnp_support"] is not None:
             evidence += f"; {photo['pnp_support']['conservative_one_to_one_2d3d']} 2D–3D candidates"
+        if photo["track_contribution"]:
+            contribution = photo["track_contribution"]
+            evidence += (f"; {contribution['observed_3d_tracks']} observed 3D tracks, "
+                         f"{contribution['two_view_tracks_lost_if_camera_removed']} critical two-view")
         view = photo["estimated_view"]
         angle = (f"{view['relative_azimuth_deg']:+.1f}° az, "
                  f"{view['relative_elevation_deg']:+.1f}° el" if view else "unmeasured")
