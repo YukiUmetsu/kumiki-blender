@@ -10,6 +10,8 @@ The same plan now supports native `hinge`, `slider` and `fixed` joints (see `exa
 
 For a real **body-on-body collision**, add explicit `contact_pairs` as in [`examples/pair-impact-physics-shot.json`](examples/pair-impact-physics-shot.json). The worker cross-checks Bullet trajectories against mesh-surface proximity and post-impact slowdown before emitting semantic SFX cues; these are conservative geometric estimates, not native Bullet impulses.
 
+To check whether a real Blender shot projects onto the same pixels in Kumiki Storybook, use the [offline Blender ↔ WebGL silhouette parity workflow](docs/BRIDGE_SILHOUETTE_PARITY.md). Its paired SHA-verified frame receipts, IoU overlays and report test camera/pose/geometry agreement only; browser capture stays outside CI.
+
 **New to Blender, 3D modeling, and this repository?** Start with the
 [beginner's step-by-step Wiki](https://github.com/YukiUmetsu/kumiki-blender/wiki): install the tools, generate your
 first tower, open it in Blender, change its color and dimensions, and learn how

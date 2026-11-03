@@ -166,6 +166,13 @@ def main(argv: list[str] | None = None) -> int:
     visual_parser.add_argument("--max-changed", type=float, default=0.05)
     visual_parser.add_argument("--pixel-threshold", type=int, default=16)
     visual_parser.add_argument("--idiff", action="store_true", help="Also run optional OpenImageIO idiff")
+    parity_parser = subcommands.add_parser("bridge-parity", help="Compare native Blender/WebGL silhouette capture receipts")
+    parity_parser.add_argument("--plan", type=Path, required=True, help="Byte-identical capture plan used by both renderers")
+    parity_parser.add_argument("--blender-dir", type=Path, required=True, help="Native Blender frame/receipt directory")
+    parity_parser.add_argument("--web-dir", type=Path, required=True, help="WebGL frame/receipt directory")
+    parity_parser.add_argument("--output", type=Path, required=True, help="New review report/contact-sheet directory")
+    parity_parser.add_argument("--min-iou", type=float, default=.90)
+    parity_parser.add_argument("--max-center-delta", type=float, default=.035)
     for command in ("reference-audit", "reconstruct-photos"):
         photo_parser = subcommands.add_parser(
             command, help="Audit statue photo evidence or build a sparse COLMAP camera reconstruction")
@@ -1042,6 +1049,15 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(report, indent=2))
             return (3 if args.command == "reconstruct-photos" and
                     report["status"] == "review-required" else 0)
+        if args.command == "bridge-parity":
+            from .bridge_parity import BridgeParityError, compare_captures
+            try:
+                report = compare_captures(args.plan, args.blender_dir, args.web_dir, args.output,
+                                          min_iou=args.min_iou, max_center_delta=args.max_center_delta)
+            except BridgeParityError as error:
+                raise RecipeError(str(error)) from error
+            print(json.dumps(report, indent=2))
+            return 3 if report["status"] == "review-required" else 0
         if args.command == "visual-qa":
             from .visual_qa import VisualQAError, inspect_visual_revision
             try:
