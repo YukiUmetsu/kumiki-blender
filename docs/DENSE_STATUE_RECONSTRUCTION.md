@@ -558,6 +558,53 @@ subdirectories. Files and the recipe are hash-pinned before processing.
   shadow exists in every photo, it cannot be reliably separated from pigment.
   Do not also enable multiview color fusion for the same finishing pass unless
   comparing a deliberately different, separately reviewed variant.
+- **Controlled polarization capture QA (optional):** when a photographer has
+  real, **UV-reprojected** parallel and cross-polarized pairs from the same
+  viewpoint, exposure and light position, inspect relative specular contrast
+  before considering additional material authoring. This is *not* possible
+  with unrelated online photographs. For each of 3–8 independent capture
+  pairs per atlas, supply RGB PNGs and a grayscale UV-visibility mask:
+
+  ```json
+  {
+    "schema_version": 1,
+    "atlases": {
+      "stone.png": [
+        {"id": "light-01", "parallel": "parallel-01.png", "cross": "cross-01.png",
+         "confidence": "visible-01.png", "same_exposure": true,
+         "unchanged_lighting": true, "analyzer_rotation_degrees": 90},
+        {"id": "light-02", "parallel": "parallel-02.png", "cross": "cross-02.png",
+         "confidence": "visible-02.png", "same_exposure": true,
+         "unchanged_lighting": true, "analyzer_rotation_degrees": 90},
+        {"id": "light-03", "parallel": "parallel-03.png", "cross": "cross-03.png",
+         "confidence": "visible-03.png", "same_exposure": true,
+         "unchanged_lighting": true, "analyzer_rotation_degrees": 90}
+      ]
+    }
+  }
+  ```
+
+  Paths are relative to the capture JSON. All atlas pages must be present.
+  The declared capture conditions cannot be independently verified by the
+  CLI. Use fixed white balance, identical exposure/tone response, an actual
+  analyzer rotation of roughly 90°, and calibrated UV projections. Saturated,
+  underexposed and negative-difference texels are excluded.
+
+  ```bash
+  kumiki-blender inspect-polarized-uv \
+    --dense-revision /private/statue-dense \
+    --surface-recipe /private/material-proposal/surface-recipe.json \
+    --captures /private/polarization/pairs.json \
+    --output /private/polarization-review
+  ```
+
+  Inspect `atlas-*/source-contrast-coverage.png` and
+  `polarized-qa-report.json`. The 8-bit `specular-contrast.png` is a
+  **relative, view/light-dependent diagnostic**, not a roughness map and not
+  suitable for a PBR roughness input. Physical roughness still requires
+  calibrated normal/view/light geometry, camera response, and a measured
+  BRDF or reliable roughness standards. No original atlas or region prior is
+  modified.
 - **Multiple photographic views (opt-in):** supply 3–8 *distinct UV-reprojected*
   RGB PNGs of the **same object in the same UV coordinates**, with one
   grayscale visibility/confidence mask for each. These are **not raw camera
