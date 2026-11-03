@@ -127,9 +127,13 @@ def _draw_pair(
         draw.ellipse((x2 - 2, y2 - 2, x2 + 2, y2 + 2), fill=(255, 210, 72, 220))
     canvas = Image.alpha_composite(canvas.convert("RGBA"), overlay).convert("RGB")
     draw = ImageDraw.Draw(canvas)
-    draw.text((20, 12), pair["a"] + (" [R]" if pair["registered_a"] else " [unregistered]"),
+    label_a = pair["a"] + (f" (orig {pair['original_a']})"
+                            if pair.get("original_a", pair["a"]) != pair["a"] else "")
+    label_b = pair["b"] + (f" (orig {pair['original_b']})"
+                            if pair.get("original_b", pair["b"]) != pair["b"] else "")
+    draw.text((20, 12), label_a[:65] + (" [R]" if pair["registered_a"] else " [unregistered]"),
               fill=(236, 236, 236))
-    draw.text((530, 12), pair["b"] + (" [R]" if pair["registered_b"] else " [unregistered]"),
+    draw.text((530, 12), label_b[:65] + (" [R]" if pair["registered_b"] else " [unregistered]"),
               fill=(236, 236, 236))
     cover_a = _grid_coverage(inlier_points_a, dims_a)
     cover_b = _grid_coverage(inlier_points_b, dims_b)
@@ -225,6 +229,9 @@ def audit(revision: Path, output: Path, *, max_pairs: int = 8,
         thumbnails, records = [], []
         keypoints = {}
         for pair in selected:
+            pair = {**pair,
+                    "original_a": original_names.get(pair["a"], pair["a"]),
+                    "original_b": original_names.get(pair["b"], pair["b"])}
             try:
                 for image_id in (pair["a_id"], pair["b_id"]):
                     if image_id not in keypoints:
@@ -241,9 +248,7 @@ def audit(revision: Path, output: Path, *, max_pairs: int = 8,
             except (OSError, ValueError, struct.error) as error:
                 records.append({**pair, "status": "unrenderable", "error": str(error)[:240]})
                 continue
-            record = {**pair, **coverage, "status": "rendered",
-                      "original_a": original_names.get(pair["a"], pair["a"]),
-                      "original_b": original_names.get(pair["b"], pair["b"])}
+            record = {**pair, **coverage, "status": "rendered"}
             records.append(record)
             thumbnails.append(thumb)
         if not thumbnails:
