@@ -242,6 +242,8 @@ def main(argv: list[str] | None = None) -> int:
         splat_parser.add_argument("--opensplat", default="opensplat",
                                   help="OpenSplat executable, built with Metal/MPS or CUDA")
         splat_parser.add_argument("--iterations", type=int, default=7000)
+        splat_parser.add_argument("--downscale", type=float, default=1.0,
+                                  help="OpenSplat image downscale factor (1–16), useful for limited GPU memory")
         splat_parser.add_argument("--format", choices=("ply", "spz"), default="ply")
         splat_parser.add_argument("--timeout-seconds", type=int, default=14_400,
                                   help="Maximum OpenSplat training seconds")
@@ -916,7 +918,8 @@ def main(argv: list[str] | None = None) -> int:
             try:
                 settings = SplatSettings(iterations=args.iterations,
                                          timeout_seconds=args.timeout_seconds,
-                                         output_format=args.format, opensplat=args.opensplat)
+                                         output_format=args.format, opensplat=args.opensplat,
+                                         downscale_factor=args.downscale)
                 settings.validate()
                 if args.photos and not args.asset_id:
                     raise ReferenceError("--asset-id is required with --photos")
