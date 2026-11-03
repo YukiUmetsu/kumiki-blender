@@ -137,6 +137,15 @@ class OpenSplatRetryTests(unittest.TestCase):
         self.assertIn("MASKS_REVIEWED=1", result.stderr)
         self.assertFalse((self.root / "foreground-output").exists())
 
+        env["MASKS_REVIEWED"] = "1"
+        result = subprocess.run(
+            ["bash", str(repo_root / "scripts/mac_splat_test.sh"),
+             "foreground-train", str(self.source), "", ""],
+            cwd=repo_root, env=env, text=True, capture_output=True, timeout=15)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("MASKS and AUDIT are empty", result.stderr)
+        self.assertFalse((self.root / "foreground-output").exists())
+
     def test_invalid_downscale_and_nested_output_refused(self):
         trainer = str(self.fixture._fake_opensplat())
         with self.assertRaisesRegex(ValueError, "Downscale"):
