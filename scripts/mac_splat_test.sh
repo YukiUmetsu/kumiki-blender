@@ -63,8 +63,8 @@ if [[ "$mode" == diagnose ]]; then
   [[ -d "$2" ]] || die "Splat revision directory not found: $2"
   python3 -c 'from PIL import Image' || die 'Install Pillow: pip install Pillow'
   output="$(new_output registration)"
-  python3 scripts/diagnose_splat_registration.py "$2" --contact-sheet "$output.jpg"
-  printf '\nRegistration contact sheet: %s.jpg\n' "$output"
+  python3 scripts/diagnose_splat_registration.py "$2" --contact-sheet "$output.jpg" --json-output "$output.json"
+  printf '\nRegistration contact sheet: %s.jpg\nRegistration report: %s.json\n' "$output" "$output"
   open "$output.jpg" 2>/dev/null || true
 elif [[ "$mode" == plan || "$mode" == run ]]; then
   photos="$2"; [[ -d "$photos" ]] || die "Photo directory not found: $photos"
@@ -91,8 +91,8 @@ elif [[ "$mode" == plan || "$mode" == run ]]; then
     if [[ -f "$output/sparse-reconstruction/database.db" ]]; then
       diagnostic="$(new_output registration)"
       printf '\nCamera reconstruction failed. Generating read-only registration diagnosis...\n' >&2
-      if python3 scripts/diagnose_splat_registration.py "$output" --contact-sheet "$diagnostic.jpg"; then
-        printf '\nRegistration contact sheet: %s.jpg\n' "$diagnostic" >&2
+      if python3 scripts/diagnose_splat_registration.py "$output" --contact-sheet "$diagnostic.jpg" --json-output "$diagnostic.json"; then
+        printf '\nRegistration contact sheet: %s.jpg\nRegistration report: %s.json\n' "$diagnostic" "$diagnostic" >&2
         open "$diagnostic.jpg" 2>/dev/null || true
       else
         printf 'WARNING: Registration diagnosis failed; original build exit code preserved.\n' >&2
