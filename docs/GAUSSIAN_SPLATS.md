@@ -218,6 +218,27 @@ printing a native crash and frames, the result is
 This preserves the fact that the debugger had to be killed while recognizing
 that the stack trace was captured.
 
+#### Visual QA after a successful `train-existing` retry
+
+A successful immutable retry is a candidate with `retry-report.json` and
+`dataset/dataset-report.json` (not the usual `splat-report.json`). The same
+calibrated camera/photo comparisons and orbit-video preflight now accept this
+format, checking the recorded dataset-report hash and trained PLY SHA-256.
+For example, after the 26-camera M4 retry completed successfully with the
+separate `build-homebrew/opensplat` executable:
+
+```bash
+RETRY=.review/mac-splat-smoke/splat-retry-20261103T173341Z-77079
+bash scripts/mac_splat_test.sh qa "$RETRY"
+```
+
+Inspect the generated `multi-angle-contact-sheet.jpg` and
+`visual-qa-report.json`. Training at `-n 100 -d 8` is a smoke test, **not** a
+finished or photo-faithful Sphinx. If it renders successfully, repeat training
+with the same working executable, more iterations and a smaller downscale
+factor, using a new immutable retry revision. Mask preparation from the original
+`sparse-reconstruction` is still a separate workflow.
+
 The `photo-advice` report now requests **zero additional photos for
 registration** when all images are registered. This does not prove full surface
 visibility: the collection visibly emphasizes side/rear tourist angles and
