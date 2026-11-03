@@ -143,6 +143,7 @@ def _draw_pair(
 
 def _source_names(sparse: Path, source_index: Path | None) -> dict[str, str]:
     names = {}
+    entries = []
     staged = sparse / "staged-reference-index.json"
     if staged.is_file():
         entries = json.loads(staged.read_text(encoding="utf-8"))["images"]
@@ -203,7 +204,8 @@ def audit(revision: Path, output: Path, *, max_pairs: int = 8,
             (pair for pair in pairs if pair["category"] == category),
             key=lambda pair: (-pair["inliers"], pair["a"], pair["b"])
         ) for category in ("bridge", "registered", "unregistered")}
-        quotas = {"bridge": max_pairs, "registered": max(1, max_pairs // 4),
+        quotas = {"bridge": max(1, max_pairs - 2 * max(1, max_pairs // 4)),
+                  "registered": max(1, max_pairs // 4),
                   "unregistered": max(1, max_pairs // 4)}
         selected, seen = [], set()
         for category in ("bridge", "registered", "unregistered"):
