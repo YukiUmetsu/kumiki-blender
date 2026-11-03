@@ -154,7 +154,11 @@ def main(argv: list[str] | None = None) -> int:
             print(f"    Needs {cohort['required_cameras_for_splat']} registered cameras; "
                   "success is not guaranteed.")
         else:
-            print("    Too few input photos for production splat; use sparse SfM only.")
+            print("    Too few input photos for production splat; sparse SfM only:")
+            print("    python3 scripts/experiment_sphinx_commons_2010.py "
+                  f"--photos-dir '{cohort['photos_dir']}' "
+                  f"--output '.review/sphinx-{cohort['id']}-$(date -u +%Y%m%dT%H%M%SZ)' "
+                  "--profile high-recall --max-image-size 3200")
     print(f"Plan: {args.output / 'cohort-plan.json'}")
     return 0
 
