@@ -13,10 +13,12 @@ import importlib.util
 import json
 import sqlite3
 import math
+import os
 import shutil
 import statistics
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -303,15 +305,59 @@ def _feature_import_report(database: Path, staged_index: Path) -> dict:
 
 
 def _run(executable: str | list[str], stage: str, arguments: list[str], output: Path,
-         number: int, timeout_seconds: int) -> tuple[int, list[str]]:
+         number: int, timeout_seconds: int, *,
+         max_rss_mb: int | None = None) -> tuple[int, list[str]]:
     prefix = [executable] if isinstance(executable, str) else executable
     command = [*prefix, stage, *arguments]
     log = output / "logs" / f"{number:02d}-{stage}.log"
     try:
         with log.open("w", encoding="utf-8") as stream:
-            result = subprocess.run(command, stdout=stream, stderr=subprocess.STDOUT,
-                                    check=False, timeout=timeout_seconds)
-        return result.returncode, [stage, *arguments]
+            if max_rss_mb is None:
+                result = subprocess.run(command, stdout=stream, stderr=subprocess.STDOUT,
+                                        check=False, timeout=timeout_seconds)
+                return result.returncode, [stage, *arguments]
+            with subprocess.Popen(command, stdout=stream, stderr=subprocess.STDOUT) as process:
+                deadline = time.monotonic() + timeout_seconds
+                peak_rss_kib = 0
+                while True:
+                    try:
+                        remaining = deadline - time.monotonic()
+                        if remaining <= 0:
+                            raise subprocess.TimeoutExpired(command, timeout_seconds)
+                        code = process.wait(timeout=min(0.25, remaining))
+                        stream.write(f"\nMemory guard sampled peak RSS: {peak_rss_kib // 1024} MiB\n")
+                        return code, [stage, *arguments]
+                    except subprocess.TimeoutExpired:
+                        pass
+                    if time.monotonic() >= deadline:
+                        process.terminate()
+                        try:
+                            process.wait(timeout=5)
+                        except subprocess.TimeoutExpired:
+                            process.kill()
+                            process.wait()
+                        stream.write(f"\nCOLMAP stage timed out after {timeout_seconds} seconds\n")
+                        return 124, [stage, *arguments]
+                    # On macOS/Linux ps reports resident memory in KiB. A
+                    # runaway native worker must never silently disable the
+                    # guard when memory measurement fails.
+                    rss_kib = _process_rss_kib(process.pid)
+                    if rss_kib is not None:
+                        peak_rss_kib = max(peak_rss_kib, rss_kib)
+                    if rss_kib is None or rss_kib >= max_rss_mb * 1024:
+                        code = process.poll()
+                        if code is not None:
+                            return code, [stage, *arguments]
+                        process.terminate()
+                        try:
+                            process.wait(timeout=5)
+                        except subprocess.TimeoutExpired:
+                            process.kill()
+                            process.wait()
+                        detail = (f"RSS {rss_kib / 1024:.0f} MiB >= {max_rss_mb} MiB"
+                                  if rss_kib is not None else "RSS monitoring unavailable")
+                        stream.write(f"\nMemory guard stopped COLMAP: {detail}\n")
+                        return 125, [stage, *arguments]
     except subprocess.TimeoutExpired:
         with log.open("a", encoding="utf-8") as stream:
             stream.write(f"\nCOLMAP stage timed out after {timeout_seconds} seconds\n")
@@ -320,6 +366,18 @@ def _run(executable: str | list[str], stage: str, arguments: list[str], output: 
         with log.open("a", encoding="utf-8") as stream:
             stream.write(f"\nFailed to start COLMAP stage: {error}\n")
         return 127, [stage, *arguments]
+
+
+def _process_rss_kib(pid: int) -> int | None:
+    """Return process RSS in KiB using the platform ps utility, or None."""
+    try:
+        result = subprocess.run(["ps", "-o", "rss=", "-p", str(pid)],
+                                capture_output=True, text=True, timeout=3, check=False)
+        if result.returncode != 0:
+            return None
+        return int(result.stdout.strip())
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        return None
 
 
 def _registered_image_count(text_model: Path) -> int:
@@ -411,7 +469,11 @@ def build_sparse_reconstruction(reference_set: ReferenceSet, output: str | Path,
                                 undistort: bool = False,
                                 max_image_size: int = 4000,
                                 registration_profile: str = "standard",
-                                matching_preset: str = "sift") -> dict[str, Any]:
+                                matching_preset: str = "sift",
+                                feature_threads: int | None = None,
+                                matching_threads: int | None = None,
+                                sift_first_octave: int | None = None,
+                                max_colmap_rss_mb: int | None = None) -> dict[str, Any]:
     """Produce auditable camera/sparse data using a locally installed COLMAP.
 
     External tools may fail on historical or unrelated internet photos. Their
@@ -432,6 +494,32 @@ def build_sparse_reconstruction(reference_set: ReferenceSet, output: str | Path,
     if registration_profile == "high-recall" and engine != "pycolmap":
         raise ReferenceError("High-recall registration currently requires --engine pycolmap")
     _validate_matching_preset(matching_preset, engine)
+    for name, count in (("feature_threads", feature_threads),
+                        ("matching_threads", matching_threads)):
+        if count is not None and (type(count) is not int or not 1 <= count <= 64):
+            raise ReferenceError(f"{name} must be 1–64")
+    if sift_first_octave not in (None, -1, 0):
+        raise ReferenceError("sift_first_octave must be -1 or 0")
+    if (max_colmap_rss_mb is not None and
+            (type(max_colmap_rss_mb) is not int or
+             (max_colmap_rss_mb != 0 and not 1024 <= max_colmap_rss_mb <= 131072))):
+        raise ReferenceError("max_colmap_rss_mb must be 0 (disabled) or 1024–131072")
+    if engine != "colmap" and any(value is not None for value in
+                                  (feature_threads, matching_threads, sift_first_octave,
+                                   max_colmap_rss_mb)):
+        raise ReferenceError("COLMAP memory controls require --engine colmap")
+    if sift_first_octave is not None and matching_preset not in ("sift", "sift-lightglue"):
+        raise ReferenceError("SIFT first octave applies only to SIFT-based matching")
+    learned = matching_preset != "sift"
+    effective_feature_threads = feature_threads if feature_threads is not None else (1 if learned else None)
+    effective_matching_threads = matching_threads if matching_threads is not None else (1 if learned else None)
+    effective_sift_octave = (sift_first_octave if sift_first_octave is not None else
+                             0 if matching_preset == "sift-lightglue" else None)
+    effective_rss_mb = (max_colmap_rss_mb if max_colmap_rss_mb is not None else
+                        12288 if learned else 0)
+    if effective_rss_mb:
+        if not shutil.which("ps") or _process_rss_kib(os.getpid()) is None:
+            raise ReferenceError("Memory guard needs a working ps command; refusing unmonitored COLMAP execution")
     audit = audit_reference_set(reference_set)
     references = _staged_images(reference_set, audit)
     if len(references) < 3:
@@ -466,6 +554,10 @@ def build_sparse_reconstruction(reference_set: ReferenceSet, output: str | Path,
         "staged_independent_images": len(references),
         "registration_profile": registration_profile,
         "matching_preset": matching_preset,
+        "memory_controls": {"feature_threads": effective_feature_threads,
+                            "matching_threads": effective_matching_threads,
+                            "sift_first_octave": effective_sift_octave,
+                            "max_colmap_rss_mb": effective_rss_mb},
         "registered_images": 0,
         "undistortion_requested": undistort,
         "colmap_info": colmap_info,
@@ -493,6 +585,12 @@ def build_sparse_reconstruction(reference_set: ReferenceSet, output: str | Path,
     profile_args = (["--registration-profile", "high-recall"]
                     if registration_profile == "high-recall" else [])
     extractor, matcher = MATCHING_PRESETS[matching_preset]
+    extract_resource_args = (["--FeatureExtraction.num_threads", str(effective_feature_threads)]
+                             if effective_feature_threads is not None else [])
+    if effective_sift_octave is not None:
+        extract_resource_args += ["--SiftExtraction.first_octave", str(effective_sift_octave)]
+    match_resource_args = (["--FeatureMatching.num_threads", str(effective_matching_threads)]
+                           if effective_matching_threads is not None else [])
     extract_args = (["--FeatureExtraction.type", extractor]
                     if matching_preset != "sift" else [])
     if supports_extraction_size:
@@ -504,18 +602,24 @@ def build_sparse_reconstruction(reference_set: ReferenceSet, output: str | Path,
          (["--ImageReader.mask_path", str(target / "masks")] if has_masks else []) +
          [cpu_flags[0], "0"] +
          (["--max_image_size", str(max_image_size)] if engine == "pycolmap" else []) +
-         profile_args + extract_args),
+         profile_args + extract_resource_args + extract_args),
         ("exhaustive_matcher", ["--database_path", str(database), cpu_flags[1], "0"] +
-         profile_args + match_args),
+         profile_args + match_resource_args + match_args),
         ("mapper", ["--database_path", str(database), "--image_path", str(images),
                     "--output_path", str(sparse)]),
     ]
 
     for number, (stage, args) in enumerate(stages, start=1):
-        code, command = _run(executable, stage, args, target, number, timeout_seconds)
+        code, command = _run(executable, stage, args, target, number, timeout_seconds,
+                             max_rss_mb=effective_rss_mb or None)
         report["commands"].append(command)
         if code:
             report["failed_stage"], report["exit_code"] = stage, code
+            if code == 125:
+                report["error"] = ("COLMAP exceeded its resident-memory budget or monitoring failed; "
+                                   f"see logs/{number:02d}-{stage}.log")
+            elif code == -9:
+                report["error"] = "COLMAP received SIGKILL; inspect macOS memory pressure and the stage log"
             return checkpoint()
         if stage == "feature_extractor":
             report["feature_import"] = _feature_import_report(
@@ -540,7 +644,7 @@ def build_sparse_reconstruction(reference_set: ReferenceSet, output: str | Path,
         args = ["--input_path", str(model), "--output_path", str(text_model),
                 "--output_type", "TXT"]
         code, command = _run(executable, "model_converter", args, target, index + 4,
-                             timeout_seconds)
+                             timeout_seconds, max_rss_mb=effective_rss_mb or None)
         report["commands"].append(command)
         if code:
             report["failed_stage"], report["exit_code"] = "model_converter", code
@@ -576,7 +680,8 @@ def build_sparse_reconstruction(reference_set: ReferenceSet, output: str | Path,
                 "--output_path", str(rectified), "--output_type", "COLMAP",
                 "--max_image_size", str(max_image_size)]
         code, command = _run(executable, "image_undistorter", args, target,
-                             len(report["commands"]) + 1, timeout_seconds)
+                             len(report["commands"]) + 1, timeout_seconds,
+                             max_rss_mb=effective_rss_mb or None)
         report["commands"].append(command)
         if code:
             report["status"] = "review-required"
@@ -587,7 +692,8 @@ def build_sparse_reconstruction(reference_set: ReferenceSet, output: str | Path,
         args = ["--input_path", str(rectified / "sparse"), "--output_path", str(text_model),
                 "--output_type", "TXT"]
         code, command = _run(executable, "model_converter", args, target,
-                             len(report["commands"]) + 1, timeout_seconds)
+                             len(report["commands"]) + 1, timeout_seconds,
+                             max_rss_mb=effective_rss_mb or None)
         report["commands"].append(command)
         if code:
             report["status"] = "review-required"

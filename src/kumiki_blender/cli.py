@@ -191,6 +191,14 @@ def main(argv: list[str] | None = None) -> int:
             photo_parser.add_argument("--matching-preset",
                                       choices=("sift", "sift-lightglue", "aliked-lightglue", "loma", "loma128"),
                                       default="sift", help="Learned matching requires ONNX-enabled COLMAP 4.2+")
+            photo_parser.add_argument("--feature-threads", type=int,
+                                      help="CPU feature workers (learned default: 1)")
+            photo_parser.add_argument("--matching-threads", type=int,
+                                      help="CPU matching workers (learned default: 1)")
+            photo_parser.add_argument("--sift-first-octave", type=int, choices=(-1, 0),
+                                      help="SIFT pyramid start (learned SIFT default: 0, keeps input pixels)")
+            photo_parser.add_argument("--max-colmap-rss-mb", type=int,
+                                      help="Abort native COLMAP over RSS budget; 0 disables (learned default: 12288 MiB)")
             photo_parser.add_argument("--timeout-seconds", type=int, default=3600)
             photo_parser.add_argument("--undistort", action="store_true",
                                       help="Rectify camera intrinsics and image pixels for accurate Blender projection")
@@ -213,6 +221,14 @@ def main(argv: list[str] | None = None) -> int:
         photo_model_parser.add_argument("--matching-preset",
                                         choices=("sift", "sift-lightglue", "aliked-lightglue", "loma", "loma128"),
                                         default="sift", help="Learned matching requires --engine colmap and COLMAP 4.2+")
+        photo_model_parser.add_argument("--feature-threads", type=int,
+                                        help="CPU feature workers (learned default: 1)")
+        photo_model_parser.add_argument("--matching-threads", type=int,
+                                        help="CPU matching workers (learned default: 1)")
+        photo_model_parser.add_argument("--sift-first-octave", type=int, choices=(-1, 0),
+                                        help="SIFT pyramid start (learned SIFT default: 0)")
+        photo_model_parser.add_argument("--max-colmap-rss-mb", type=int,
+                                        help="Native COLMAP RSS limit, 0 disables (learned default: 12288 MiB)")
         photo_model_parser.add_argument("--backend", choices=("openmvs", "colmap"),
                                         default="openmvs", help="Dense meshing backend")
         photo_model_parser.add_argument("--colmap", default="colmap")
@@ -1004,6 +1020,9 @@ def main(argv: list[str] | None = None) -> int:
                               if args.photos else load_reference_set(args.manifest))
                 settings = PhotoModelSettings(
                     engine=args.engine, matching_preset=args.matching_preset,
+                    feature_threads=args.feature_threads, matching_threads=args.matching_threads,
+                    sift_first_octave=args.sift_first_octave,
+                    max_colmap_rss_mb=args.max_colmap_rss_mb,
                     dense_backend=args.backend, colmap=args.colmap,
                     blender=args.blender, min_registered_images=args.min_registered_images,
                     min_registered_fraction=args.min_registered_fraction,
@@ -1270,7 +1289,11 @@ def main(argv: list[str] | None = None) -> int:
                                                       undistort=args.undistort,
                                                       max_image_size=args.max_image_size,
                                                       registration_profile=args.registration_profile,
-                                                      matching_preset=args.matching_preset))
+                                                      matching_preset=args.matching_preset,
+                                                      feature_threads=args.feature_threads,
+                                                      matching_threads=args.matching_threads,
+                                                      sift_first_octave=args.sift_first_octave,
+                                                      max_colmap_rss_mb=args.max_colmap_rss_mb))
             except ReferenceError as error:
                 raise RecipeError(str(error)) from error
             print(json.dumps(report, indent=2))

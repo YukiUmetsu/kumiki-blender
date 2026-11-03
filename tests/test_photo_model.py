@@ -205,11 +205,16 @@ class PhotoModelTests(unittest.TestCase):
             with contextlib.redirect_stdout(output):
                 result = main(["reconstruct-photos", "--photos", str(self.photos),
                                "--asset-id", "sphinx-cameras", "--output", str(target),
-                               "--engine", "colmap", "--matching-preset", "loma", "--undistort"])
+                               "--engine", "colmap", "--matching-preset", "loma", "--undistort",
+                               "--feature-threads", "1", "--matching-threads", "2",
+                               "--max-colmap-rss-mb", "10240"])
         self.assertEqual(result, 0)
         self.assertEqual(captured["count"], 8)
         self.assertEqual(captured["kwargs"]["matching_preset"], "loma")
         self.assertTrue(captured["kwargs"]["undistort"])
+        self.assertEqual(captured["kwargs"]["feature_threads"], 1)
+        self.assertEqual(captured["kwargs"]["matching_threads"], 2)
+        self.assertEqual(captured["kwargs"]["max_colmap_rss_mb"], 10240)
         self.assertEqual(captured["output"], target)
         self.assertEqual(json.loads(output.getvalue())["registered_images"], 8)
 

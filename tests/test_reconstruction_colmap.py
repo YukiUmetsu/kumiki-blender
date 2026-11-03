@@ -46,6 +46,9 @@ if "--help" in params:
 def argument(key):
     return Path(params[params.index(key)+1])
 if task == "feature_extractor":
+    if "FAKE_SLOW_FEATURE_EXTRACTOR" in os.environ:
+        import time
+        time.sleep(3)
     if ("--SiftExtraction.use_gpu" if legacy else "--FeatureExtraction.use_gpu") not in params:
         sys.exit(42)
     images = argument("--image_path")
@@ -88,6 +91,11 @@ class ColmapWorkflowTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
+        # The sandbox process namespace may hide the Python test process from
+        # ps. Keep native RSS sampling deterministic in worker fixture tests.
+        rss_probe = patch("kumiki_blender.reconstruction.colmap._process_rss_kib", return_value=0)
+        rss_probe.start()
+        self.addCleanup(rss_probe.stop)
         self.root = Path(self.temp.name)
         self.images = self.root / "photos"
         self.images.mkdir()
@@ -199,6 +207,12 @@ class ColmapWorkflowTests(unittest.TestCase):
                                    for index in range(len(report["commands"][0]) - 1)])
                     self.assertEqual(report["commands"][0][-2:],
                                      ["--FeatureExtraction.max_image_size", "4000"])
+                    self.assertIn("--FeatureExtraction.num_threads", report["commands"][0])
+                    self.assertIn("--FeatureMatching.num_threads", report["commands"][1])
+                    self.assertEqual(report["memory_controls"]["feature_threads"], 1)
+                    self.assertEqual(report["memory_controls"]["max_colmap_rss_mb"], 12288)
+                    if preset == "sift-lightglue":
+                        self.assertIn("--SiftExtraction.first_octave", report["commands"][0])
                     self.assertEqual(report["commands"][1][-2:],
                                      ["--FeatureMatching.type", matcher])
 
@@ -221,6 +235,30 @@ class ColmapWorkflowTests(unittest.TestCase):
                                                  colmap=str(self.fake), matching_preset="sift-lightglue")
         self.assertEqual(report["status"], "candidate / visual-review-required")
         self.assertEqual(report["matching_preset"], "sift-lightglue")
+
+    def test_memory_guard_stops_native_extraction_and_keeps_diagnostic_log(self):
+        output = self.root / "guarded"
+        with patch.dict(os.environ, {"FAKE_LEARNED_COLMAP": "1", "FAKE_SLOW_FEATURE_EXTRACTOR": "1"}):
+            with patch("kumiki_blender.reconstruction.colmap._process_rss_kib",
+                       return_value=13 * 1024 * 1024):
+                report = build_sparse_reconstruction(self.references(), output,
+                                                     colmap=str(self.fake),
+                                                     matching_preset="sift-lightglue",
+                                                     max_image_size=4000)
+        self.assertEqual(report["failed_stage"], "feature_extractor")
+        self.assertEqual(report["exit_code"], 125)
+        self.assertIn("resident-memory budget", report["error"])
+        self.assertIn("Memory guard stopped COLMAP", (output / "logs/01-feature_extractor.log").read_text())
+
+    def test_memory_controls_reject_invalid_limits_before_creating_output(self):
+        output = self.root / "invalid-controls"
+        for controls in ({"feature_threads": 0}, {"matching_threads": 65},
+                         {"max_colmap_rss_mb": 100}, {"sift_first_octave": -2}):
+            with self.subTest(controls=controls):
+                with self.assertRaises(ReferenceError):
+                    build_sparse_reconstruction(self.references(), output, colmap=str(self.fake),
+                                                **controls)
+                self.assertFalse(output.exists())
 
     def test_registration_names_use_normalized_staged_filenames_not_original_jpeg_extensions(self):
         self.references()

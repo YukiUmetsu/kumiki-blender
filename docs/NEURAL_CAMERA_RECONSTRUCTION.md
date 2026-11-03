@@ -39,6 +39,37 @@ enumerated model names: some COLMAP builds omit enum choices from `--help`.
 An unsupported matcher will be reported by the actual matching stage with
 its diagnostic log preserved.
 
+### Full-resolution memory controls (Apple Silicon)
+
+At 4,000-pixel input size, CPU SIFT may be killed by macOS when many feature
+workers run simultaneously. Learned presets now default to **one feature
+worker**, **one matching worker**, and a **12,288 MiB COLMAP-process RSS
+watchdog**, while retaining the requested `--max-image-size` (default 4,000
+in `reconstruct-photos`). SIFT+LightGlue also defaults to
+`--SiftExtraction.first_octave 0`, avoiding SIFT's memory-heavy upsampled
+pyramid octave. Source pixels and later undistorted image resolution are
+unchanged, though the set of extracted keypoints can differ.
+
+```bash
+kumiki-blender reconstruct-photos \
+  --photos "$PHOTOS" --asset-id great-sphinx-multiview \
+  --output "$LEARNED" --engine colmap \
+  --matching-preset sift-lightglue \
+  --feature-threads 1 --matching-threads 1 \
+  --sift-first-octave 0 --max-colmap-rss-mb 12288 \
+  --max-image-size 4000 --undistort --timeout-seconds 7200
+```
+
+The four resource options are optional for learned presets, as shown by their
+defaults above. The RSS watchdog samples the native COLMAP process and stops
+it before it consumes the configured budget; the report records exit code
+`125` with an explanation in the corresponding stage log. It requires the
+standard `ps` utility. Set `--max-colmap-rss-mb 0` only to deliberately
+disable this protection. A watchdog is **not a system-wide hard RAM limit**:
+very rapid allocations, other applications, child processes, or OS memory
+pressure can still trigger SIGKILL. Keep additional free RAM and inspect
+the report if the guard stops the job.
+
 ## Great Sphinx: compare actual registered views
 
 Use the same original 36-photo folder for the baseline and each experiment.
