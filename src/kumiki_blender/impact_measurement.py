@@ -72,6 +72,36 @@ def pair_impact_frames(samples: Sequence[PairRelativeSample], near_surface: Call
     return cues
 
 
+def surface_impact_speed(positions: Sequence[tuple[float, float, float]],
+                         normal: tuple[float, float, float], *, fps: int = 30,
+                         minimum_speed_mps: float = .25) -> float | None:
+    """Validate a solver contact using velocity at its *surface witness*.
+
+    Four positions represent a single, fixed material-point pair in relative
+    world coordinates at past/previous/contact/upcoming frames. In contrast to
+    center motion, these capture rigid-body rotation about a stationary origin.
+    A near contact without pre-impact approach and post-impact slowing is NOT
+    enough evidence for a sound. This is still not a Bullet impulse estimate.
+    """
+    if len(positions) != 4 or not 1 <= fps <= 240:
+        return None
+    values = (*normal, *(axis for point in positions for axis in point))
+    if not all(math.isfinite(value) for value in values):
+        return None
+    length = math.sqrt(sum(axis*axis for axis in normal))
+    if not .99 <= length <= 1.01:
+        return None
+    before = tuple(positions[1][axis] - positions[0][axis] for axis in range(3))
+    after = tuple(positions[3][axis] - positions[2][axis] for axis in range(3))
+    pre_speed = -fps * sum(before[axis]*normal[axis] for axis in range(3))
+    if pre_speed < minimum_speed_mps:
+        return None
+    post_speed = fps * sum(after[axis]*normal[axis] for axis in range(3))
+    if post_speed < -max(.3, .5*pre_speed):
+        return None
+    return round(pre_speed, 4)
+
+
 def ground_impact_frames(samples: Sequence[GroundSample], *, height_m: float,
                          half_extent_m: float, fps: int = 30,
                          minimum_speed_mps: float = .25) -> list[tuple[float, float]]:

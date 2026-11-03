@@ -337,6 +337,8 @@ def build_physics_shot(bpy: Any, shot: PhysicsShot, output: str | Path) -> dict[
                     "constraints": len(shot.constraints),
                     "contact_evidence": ("evaluated-motion-and-mesh-pair-proximity" if shot.contact_pairs and cues
                                          else "evaluated-geometry-ground-proximity" if cues else "none"),
+                    **({"pair_velocity_method": "center-and-closest-surface-rigid-motion"}
+                       if shot.contact_pairs else {}),
                     "requested_contact_pairs": len(shot.contact_pairs),
                     "animated_tracks": motion["tracks"], "contact_cues": motion["contacts"]},
     }

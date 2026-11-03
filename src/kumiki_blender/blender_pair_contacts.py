@@ -8,9 +8,10 @@ substituting a bounding sphere and fabricating an impact cue.
 
 from __future__ import annotations
 
+from collections import OrderedDict
 from typing import Any
 
-from .impact_measurement import PairRelativeSample, pair_impact_frames
+from .impact_measurement import PairRelativeSample, pair_impact_frames, surface_impact_speed
 from .physics_plan import PhysicsPlanError, PhysicsShot
 
 
@@ -54,8 +55,9 @@ def measure_pair_contacts(shot: PhysicsShot, assignments: list[tuple[Any, Any]],
                              [tuple(poly.vertices) for poly in data.polygons])
         return geometry[obj]
 
-    # Each (body, frame) tree is shared among explicit pairs where possible.
-    tree_cache: dict[tuple[Any, int], tuple[Any, list[Any], tuple[Any, Any]]] = {}
+    # Cap retained geometry for long videos: at most 32 evaluated meshes,
+    # regardless of clip duration and the number of explicitly named pairs.
+    tree_cache: OrderedDict[tuple[Any, int], tuple[Any, list[Any], tuple[Any, Any]]] = OrderedDict()
 
     def tree(obj: Any, index: int) -> tuple[Any, list[Any], tuple[Any, Any]]:
         key = (obj, index)
@@ -66,7 +68,23 @@ def measure_pair_contacts(shot: PhysicsShot, assignments: list[tuple[Any, Any]],
             bounds = (tuple(min(vertex[axis] for vertex in world) for axis in range(3)),
                       tuple(max(vertex[axis] for vertex in world) for axis in range(3)))
             tree_cache[key] = (BVHTree.FromPolygons(world, polygons), world, bounds)
+            if len(tree_cache) > 32:
+                tree_cache.popitem(last=False)
+        else:
+            tree_cache.move_to_end(key)
         return tree_cache[key]
+
+    def may_touch(a: Any, b: Any, index: int, tolerance: float) -> bool:
+        """Cheap world AABBs from eight bound corners before expensive BVHs."""
+        bounds = []
+        for obj in (a, b):
+            matrix = samples[obj][index][1]
+            corners = [matrix @ Vector(corner) for corner in obj.bound_box]
+            bounds.append((tuple(min(p[axis] for p in corners) for axis in range(3)),
+                           tuple(max(p[axis] for p in corners) for axis in range(3))))
+        (min_a, max_a), (min_b, max_b) = bounds
+        return all(min_a[axis] - max_b[axis] <= tolerance and
+                   min_b[axis] - max_a[axis] <= tolerance for axis in range(3))
 
     measured: dict[Any, list[dict[str, Any]]] = {}
     resolved_pairs: set[frozenset[Any]] = set()
@@ -101,26 +119,84 @@ def measure_pair_contacts(shot: PhysicsShot, assignments: list[tuple[Any, Any]],
             delta = (matrix_a @ local_center(a)) - (matrix_b @ local_center(b))
             relative.append(PairRelativeSample(frame, delta.x, delta.y, delta.z))
 
-        def near_surface(index: int) -> bool:
+        # The narrowphase also returns an actual witness on each rigid mesh.
+        # Retaining this contact point in *local* coordinates lets us measure
+        # angular motion even when both mesh origins stay perfectly still.
+        contact_cache: dict[int, tuple[bool, tuple[Any, Any, Any] | None]] = {}
+
+        def contact(index: int) -> tuple[bool, tuple[Any, Any, Any] | None]:
+            if index in contact_cache:
+                return contact_cache[index]
+            tolerance = pair.tolerance_m
+            if not may_touch(a, b, index, tolerance):
+                contact_cache[index] = (False, None)
+                return contact_cache[index]
             bvh_a, vertices_a, (min_a, max_a) = tree(a, index)
             bvh_b, vertices_b, (min_b, max_b) = tree(b, index)
             gap_sq = sum(max(min_a[axis]-max_b[axis], min_b[axis]-max_a[axis], 0)**2
                          for axis in range(3))
-            tolerance = pair.tolerance_m
             if gap_sq > tolerance*tolerance:
-                return False
-            if bvh_a.overlap(bvh_b):
-                return True
-            # Bidirectional vertex→surface distances avoid falsely triggering
-            # from overlapping AABBs of distant, rotated or hollow geometry.
-            for vertices, target in ((vertices_a, bvh_b), (vertices_b, bvh_a)):
+                contact_cache[index] = (False, None)
+                return contact_cache[index]
+            overlapping = bool(bvh_a.overlap(bvh_b))
+            nearest: tuple[Any, Any, Any] | None = None
+            best = float("inf")
+            # Bidirectional vertex→surface distances reject AABB-only false
+            # positives. The closest witnessed faces also yield local-space
+            # contact points and an oriented surface normal for angular hits.
+            for source_a, vertices, target in ((True, vertices_a, bvh_b),
+                                               (False, vertices_b, bvh_a)):
                 for vertex in vertices:
-                    _, _, _, distance = target.find_nearest(vertex, tolerance)
-                    if distance is not None and distance <= tolerance:
-                        return True
-            return False
+                    point, face_normal, _, distance = target.find_nearest(vertex, tolerance)
+                    if distance is None or distance > tolerance or distance >= best or point is None:
+                        continue
+                    point_a, point_b = (vertex, point) if source_a else (point, vertex)
+                    # The other mesh's face normal is reversed when it is A.
+                    normal = face_normal.copy() if source_a else -face_normal
+                    direction = (samples[a][index][1] @ local_center(a)
+                                 - samples[b][index][1] @ local_center(b))
+                    if normal.dot(direction) < 0:
+                        normal.negate()
+                    if normal.length > 1e-8:
+                        normal.normalize()
+                        best = distance
+                        nearest = (point_a.copy(), point_b.copy(), normal)
+            contact_cache[index] = (overlapping or nearest is not None, nearest)
+            return contact_cache[index]
+
+        def near_surface(index: int) -> bool:
+            return contact(index)[0]
 
         hits = pair_impact_frames(relative, near_surface)
+        for index in range(2, len(relative) - 1):
+            past, previous, current, upcoming = relative[index-2:index+2]
+            if (current.frame - previous.frame != 1 or previous.frame - past.frame != 1
+                    or upcoming.frame - current.frame != 1 or
+                    any(abs(current.frame - frame) < 5 for frame, _ in hits)):
+                continue
+            _, witness = contact(index)
+            if witness is None:
+                continue
+            point_a, point_b, normal = witness
+            # World-space witness converted once into the source meshes' local
+            # frames. These same material points are followed across Bullet's
+            # evaluated matrices, not approximated using mesh-origin velocity.
+            matrix_a, matrix_b = samples[a][index][1], samples[b][index][1]
+            try:
+                local_a = matrix_a.inverted_safe() @ point_a
+                local_b = matrix_b.inverted_safe() @ point_b
+            except (ValueError, ZeroDivisionError):
+                continue
+            positions = []
+            for at in range(index - 2, index + 2):
+                world_a = samples[a][at][1] @ local_a
+                world_b = samples[b][at][1] @ local_b
+                delta = world_a - world_b
+                positions.append((delta.x, delta.y, delta.z))
+            speed = surface_impact_speed(positions, (normal.x, normal.y, normal.z))
+            if speed is not None:
+                hits.append((current.frame, speed))
+        hits.sort(key=lambda item: item[0])
         target = a if bodies[a].kind == "active" else b
         measured.setdefault(target, []).extend(
             {"frame": frame, "speedMps": speed, "material": pair.material} for frame, speed in hits)

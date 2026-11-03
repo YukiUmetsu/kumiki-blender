@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import unittest
 
-from kumiki_blender.impact_measurement import GroundSample, PairRelativeSample, ground_impact_frames, pair_impact_frames
+from kumiki_blender.impact_measurement import (GroundSample, PairRelativeSample, ground_impact_frames,
+                                               pair_impact_frames, surface_impact_speed)
 
 
 def sample(frame: int, z: float, x: float = 0) -> GroundSample:
@@ -12,6 +13,24 @@ def sample(frame: int, z: float, x: float = 0) -> GroundSample:
 
 
 class ImpactMeasurementTests(unittest.TestCase):
+    def test_surface_witness_detects_rotating_contact_with_stationary_body_origins(self):
+        # A long, rotating bar's tip moves toward a wall and rebounds. Both
+        # centers remain fixed, so pair_impact_frames must miss this event.
+        centers = [PairRelativeSample(i, 0, 0, 1) for i in range(4)]
+        self.assertEqual(pair_impact_frames(centers, lambda _: True), [])
+        tip_relative = [(0, 0, gap) for gap in (.23, .09, .012, .10)]
+        self.assertEqual(surface_impact_speed(tip_relative, (0, 0, 1)), 4.2)
+
+    def test_surface_witness_does_not_invent_rubbing_or_pass_through_impacts(self):
+        for points, normal in (
+            ([(i*.1, 0, .005) for i in range(4)], (0, 0, 1)),
+            ([(0, 0, z) for z in (.3, .2, .1, 0)], (0, 0, 1)),
+            ([(0, 0, z) for z in (.3, .2, .1, .11)], (0, 0, -1)),
+            ([(0, 0, z) for z in (.3, .2, .1, .11)], (0, 0, float("nan"))),
+        ):
+            with self.subTest(points=points, normal=normal):
+                self.assertIsNone(surface_impact_speed(points, normal))
+
     def test_pair_impacts_require_convergence_surface_proximity_and_rebound(self):
         samples = [PairRelativeSample(i, 0, 0, z) for i, z in enumerate(
             [1, .9, .75, .55, .38, .31, .33, .5])]
