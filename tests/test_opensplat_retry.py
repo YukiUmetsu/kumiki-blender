@@ -75,7 +75,7 @@ class OpenSplatRetryTests(unittest.TestCase):
         bin_dir = self.root / "bin"
         bin_dir.mkdir()
         cli = bin_dir / "kumiki-blender"
-        cli.write_text("#!/bin/sh\\nexit 0\\n")
+        cli.write_text("#!/bin/sh\nexit 0\n")
         cli.chmod(0o755)
         trainer = self.fixture._fake_opensplat()
         for cpu in ("0", "1"):
