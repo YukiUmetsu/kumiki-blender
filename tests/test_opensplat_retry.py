@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
+import subprocess
 import signal
 import sys
 import tempfile
@@ -64,6 +66,42 @@ class OpenSplatRetryTests(unittest.TestCase):
         self.assertIn("lldb", report["debug_command"])
         self.assertTrue((self.source / "dataset/sparse/0/points3D.bin").is_file())
         self.assertTrue((output / "retry-report.json").is_file())
+
+    def test_mac_shell_wrapper_runs_without_empty_array_on_bash_nounset(self):
+        # Regression: macOS Bash 3.2 rejects "${empty_array[@]}" with set -u.
+        # Exercise the actual wrapper, not just its syntax.
+        repo_root = Path(__file__).resolve().parents[1]
+        script = repo_root / "scripts/mac_splat_test.sh"
+        bin_dir = self.root / "bin"
+        bin_dir.mkdir()
+        cli = bin_dir / "kumiki-blender"
+        cli.write_text("#!/bin/sh\\nexit 0\\n")
+        cli.chmod(0o755)
+        trainer = self.fixture._fake_opensplat()
+        for cpu in ("0", "1"):
+            output_root = self.root / ("retries-cpu-" + cpu)
+            env = os.environ.copy()
+            env.update({
+                "PATH": str(bin_dir) + os.pathsep + env.get("PATH", ""),
+                "OPENSPLAT": str(trainer),
+                "OUTPUT_ROOT": str(output_root),
+                "ITERATIONS": "300",
+                "DOWNSCALE_FACTOR": "4",
+                "TRAIN_CPU": cpu,
+                "PYTHONPATH": str(repo_root / "src") +
+                    os.pathsep + env.get("PYTHONPATH", ""),
+            })
+            completed = subprocess.run(
+                ["bash", str(script), "train-existing", str(self.source)],
+                cwd=repo_root, env=env, text=True, capture_output=True,
+                timeout=30, check=False)
+            self.assertEqual(completed.returncode, 0, completed.stdout +
+                             completed.stderr)
+            revisions = list(output_root.glob("splat-retry-*"))
+            self.assertEqual(len(revisions), 1)
+            report = json.loads((revisions[0] / "retry-report.json").read_text())
+            self.assertEqual("--cpu" in report["command"], cpu == "1")
+            self.assertEqual(report["status"], "candidate / visual-review-required")
 
     def test_tampered_source_refused_before_creating_output(self):
         photo = self.source / "dataset/images/photo-0000.jpg"
