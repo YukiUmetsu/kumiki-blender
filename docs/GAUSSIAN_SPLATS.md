@@ -121,7 +121,7 @@ minimum). All staged photo hashes are verified before copying, and the
 original photo revision is never modified.
 
 For this particular diagnostic, expect **14** photos in the first connected
-component and **5** in the second; five photos with no strong neighbor are
+component and **5** in the second; five isolated photos and the two-photo component are
 excluded. The first group has 7 registered cameras so far and needs at least
 **9 of its 14** cameras to register to satisfy both the eight-camera and 60%
 gates. The second group is **too small for production splat training**.
