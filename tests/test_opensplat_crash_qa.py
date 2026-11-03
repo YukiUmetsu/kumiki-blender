@@ -70,7 +70,8 @@ class OpenSplatCrashQATests(unittest.TestCase):
         self.assertTrue(report["saw_native_crash"])
         self.assertTrue(any("frame #0" in frame for frame in report["frame_excerpt"]))
         self.assertIn("--cpu", report["lldb_command"])
-        self.assertEqual(report["lldb_command"][-2], str(output / "splat.ply"))
+        self.assertEqual(Path(report["lldb_command"][-2]).resolve(),
+                         (output / "splat.ply").resolve())
         self.assertTrue((output / "dataset/sparse/0/points3D.bin").is_file())
         self.assertEqual(hashlib.sha256(original_image.read_bytes()).hexdigest(), digest)
         self.assertTrue((output / "lldb.log").is_file())
