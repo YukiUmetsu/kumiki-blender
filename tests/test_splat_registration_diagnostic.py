@@ -37,7 +37,7 @@ class SplatRegistrationDiagnosticTests(unittest.TestCase):
             (sparse / "images" / "photo-0004.jpg").write_bytes(b"staged")
             (sparse / "logs").mkdir()
             (sparse / "logs" / "01-feature_extractor.log").write_text(
-                "WARNING: failed to read photo-0004.jpg\\n"
+                "WARNING: failed to read photo-0004.jpg\n"
             )
             with sqlite3.connect(sparse / "database.db") as db:
                 db.executescript(
@@ -70,7 +70,7 @@ class SplatRegistrationDiagnosticTests(unittest.TestCase):
             other = sparse / "text-models" / "1"
             other.mkdir()
             (other / "images.txt").write_text(
-                "3 1 0 0 0 0 0 0 1 photo-0003.jpg\\n0 0 -1\\n"
+                "3 1 0 0 0 0 0 0 1 photo-0003.jpg\n0 0 -1\n"
             )
             with_second = diagnostic.analyze(Path(tmp), 15)
             self.assertEqual(with_second["registered"], 2)
