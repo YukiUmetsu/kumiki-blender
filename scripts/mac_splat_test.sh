@@ -11,6 +11,7 @@ Usage:
   bash scripts/mac_splat_test.sh cohorts /path/to/failed-splat-revision
   bash scripts/mac_splat_test.sh match-qa /path/to/failed-splat-revision [cohort-source-index.json]
   bash scripts/mac_splat_test.sh pnp-qa /path/to/failed-splat-revision [cohort-source-index.json]
+  bash scripts/mac_splat_test.sh recover /path/to/failed-splat-revision [model-index]
   bash scripts/mac_splat_test.sh mask /path/to/splat-revision [rembg|grabcut]
   bash scripts/mac_splat_test.sh hybrid /path/to/splat-revision /path/to/rembg-mask-revision /path/to/grabcut-mask-revision photo-0002.png photo-0015.png
   bash scripts/mac_splat_test.sh run-masked /path/to/splat-revision /path/to/mask-revision
@@ -32,7 +33,7 @@ EOF
 die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 require() { command -v "$1" >/dev/null 2>&1 || die "Missing $1. Install it, then rerun doctor."; }
 mode="${1:-}"; [[ -n "$mode" ]] || { usage; exit 2; }
-[[ "$mode" == doctor || "$mode" == plan || "$mode" == run || "$mode" == diagnose || "$mode" == cohorts || "$mode" == match-qa || "$mode" == pnp-qa || "$mode" == mask || "$mode" == hybrid || "$mode" == run-masked || "$mode" == qa || "$mode" == video ]] || { usage; exit 2; }
+[[ "$mode" == doctor || "$mode" == plan || "$mode" == run || "$mode" == diagnose || "$mode" == cohorts || "$mode" == match-qa || "$mode" == pnp-qa || "$mode" == recover || "$mode" == mask || "$mode" == hybrid || "$mode" == run-masked || "$mode" == qa || "$mode" == video ]] || { usage; exit 2; }
 if [[ "$mode" != doctor ]]; then [[ $# -ge 2 ]] || { usage; exit 2; }; fi
 [[ "$(uname -s)" == Darwin ]] || printf 'WARNING: Intended for macOS; current OS is %s\n' "$(uname -s)" >&2
 root="${OUTPUT_ROOT:-.review/mac-splat-smoke}"
@@ -94,6 +95,11 @@ elif [[ "$mode" == pnp-qa ]]; then
     source_args+=(--source-index "$3")
   fi
   python3 scripts/diagnose_sfm_pnp_support.py "$2" --json-output "$output.json" "${source_args[@]}"
+elif [[ "$mode" == recover ]]; then
+  [[ -d "$2" ]] || die "Splat revision directory not found: $2"
+  python3 -c 'import pycolmap' || die 'Install photogrammetry dependencies: pip install -e ".[photogrammetry]"'
+  output="$(new_output recovery)"
+  python3 scripts/recover_sfm_tracks.py "$2" --model "${3:-0}" --output "$output"
 elif [[ "$mode" == plan || "$mode" == run ]]; then
   photos="$2"; [[ -d "$photos" ]] || die "Photo directory not found: $photos"
   slug="${3:-mac-splat-test}"
