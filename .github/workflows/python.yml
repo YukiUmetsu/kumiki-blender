@@ -132,6 +132,14 @@ jobs:
             --python scripts/blender_physics_pair_contacts_smoke.py -- .review/ci/physics-pair-contacts
           python -m kumiki_blender audit --model .review/ci/physics-pair-contacts/physics-r01/model.glb
           test -s .review/ci/physics-pair-contacts/physics-r01/baked-actions.json
+      - name: Verify real Bullet angular surface impacts beyond center-only motion
+        env:
+          PYTHONPATH: src
+        run: |
+          blender --background --factory-startup --threads 2 --python-exit-code 1 \
+            --python scripts/blender_physics_rotational_contacts_smoke.py -- .review/ci/physics-rotational-contacts
+          python -m kumiki_blender audit --model .review/ci/physics-rotational-contacts/physics-r01/model.glb
+          test -s .review/ci/physics-rotational-contacts/physics-r01/baked-actions.json
       - name: Verify real Blender cloth simulation becomes animated glTF morphs
         env:
           PYTHONPATH: src
