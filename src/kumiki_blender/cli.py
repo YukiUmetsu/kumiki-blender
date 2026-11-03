@@ -361,6 +361,18 @@ def main(argv: list[str] | None = None) -> int:
                                        help="0–1 confidence-masked fusion of 3–8 UV-reprojected photos")
     texture_finish_parser.add_argument("--surface-multiview-max-ev", type=float, default=1.5,
                                        help="Maximum per-pixel and per-material relative correction (0–2 EV)")
+    for command in ("plan-material-separation", "propose-material-separation"):
+        separate_parser = subcommands.add_parser(
+            command, help="Propose reviewable UV material masks from labeled seeds and registered photo views")
+        separate_parser.add_argument("--dense-revision", type=Path, required=True)
+        separate_parser.add_argument("--seed-recipe", type=Path, required=True,
+                                     help="Normal surface recipe whose region masks are sparse seed strokes")
+        separate_parser.add_argument("--output", type=Path, required=True)
+        separate_parser.add_argument("--min-margin", type=float, default=.25)
+        separate_parser.add_argument("--max-distance", type=float, default=3.5)
+        separate_parser.add_argument("--min-evidence-views", type=int, default=2)
+        separate_parser.add_argument("--max-side", type=int, default=8192)
+        separate_parser.add_argument("--max-mesh-faces", type=int, default=1_000_000)
     projection_parser = subcommands.add_parser(
         "project-registered-uv-views",
         help="Project hash-pinned COLMAP photographs onto OBJ UV atlases with occlusion masks")
@@ -593,6 +605,25 @@ def main(argv: list[str] | None = None) -> int:
                                                     surface_cleanup_radius=args.surface_cleanup_radius,
                                                     surface_multiview_strength=args.surface_multiview_strength,
                                                     surface_multiview_max_ev=args.surface_multiview_max_ev))
+            except ReferenceError as error:
+                raise RecipeError(str(error)) from error
+            print(json.dumps(report, indent=2))
+            return 0
+        if args.command in ("plan-material-separation", "propose-material-separation"):
+            from .reconstruction.material_separation import (
+                SeparationOptions, plan_material_separation, propose_material_regions,
+            )
+            from .reconstruction.references import ReferenceError
+            options = SeparationOptions(min_margin=args.min_margin,
+                                        max_distance=args.max_distance,
+                                        min_evidence_views=args.min_evidence_views,
+                                        max_side=args.max_side,
+                                        max_mesh_faces=args.max_mesh_faces)
+            operation = (plan_material_separation if args.command == "plan-material-separation"
+                         else propose_material_regions)
+            try:
+                report = operation(args.dense_revision, args.seed_recipe, args.output,
+                                   options=options)
             except ReferenceError as error:
                 raise RecipeError(str(error)) from error
             print(json.dumps(report, indent=2))

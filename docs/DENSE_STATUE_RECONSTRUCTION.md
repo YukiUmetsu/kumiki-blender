@@ -465,6 +465,52 @@ subdirectories. Files and the recipe are hash-pinned before processing.
   roughness priors and de-lighting, but do not split mesh faces into new
   material slots. Unlabeled texels use a matte fallback; black/transparent
   gutters are protected. Manually inspect halos where regions meet.
+
+  **Automatic reviewable material proposals from a few seed strokes:**
+  take `projected-views/surface-recipe.example.json` from the projection
+  step below. Replace its all-white region with 2–8 differently named
+  `regions`, each pointing to a small, *binary* white-on-black PNG seed mask
+  painted over known parts of its material. Every seed mask must match the
+  original UV atlas dimensions and contain at least 16 white pixels. Each
+  label has an artist-chosen `roughness` prior. Keep the existing 3–8
+  UV-reprojected `observations` and their occlusion/confidence masks. For
+  example, draw one stroke on bare stone and another on painted lettering.
+  **Do not use raw camera photographs as UV observations.**
+
+  ```bash
+  kumiki-blender plan-material-separation \
+    --dense-revision /private/statue-dense \
+    --seed-recipe /private/projected-views/seed-recipe.json \
+    --output /private/material-proposal
+
+  kumiki-blender propose-material-separation \
+    --dense-revision /private/statue-dense \
+    --seed-recipe /private/projected-views/seed-recipe.json \
+    --output /private/material-proposal
+
+  kumiki-blender finish-dense-textures \
+    --dense-revision /private/statue-dense \
+    --surface-recipe /private/material-proposal/surface-recipe.json \
+    --surface-multiview-strength 0.8 \
+    --output /private/reviewed-material-finish
+  ```
+
+  `material-proposal` contains separate binary masks for each seed material,
+  `labels-preview.png`, `confidence.png`, and `unassigned.png` per atlas, plus
+  a hash-pinned report and an immediately loadable surface recipe. Registered
+  observations, displacement, illumination, damage and roughness maps are
+  verified and copied into the proposal so the recipe remains self-contained.
+  The method takes the **visibility-weighted median of registered views**,
+  compares normalized linear RGB chromaticity and downweighted lightness to
+  labeled examples, and assigns only pixels that clear both a distance bound
+  and a separation margin. Weakly supported, occluded or ambiguous texels are
+  left unassigned instead of hallucinating a material. Seed regions are never
+  changed. All source photographs, OBJ, atlas and seed strokes remain intact.
+  Check every boundary and manually refine masks, particularly if materials
+  differ mostly by brightness, patina or specular behavior. The automatic
+  labels are **not verified physical material identities** and this is not
+  automatic roughness estimation. Work is capped at 8K per atlas and 512M
+  total atlas-view texels for workstation memory safety.
 - **De-lighting:** guided illumination maps should be prepared from calibrated
   reference evidence or artist review, not an unexamined raw photograph.
   128 represents neutral light; brighter means stronger recorded illumination,
