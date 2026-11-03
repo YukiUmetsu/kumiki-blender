@@ -188,6 +188,8 @@ def main(argv: list[str] | None = None) -> int:
             photo_parser.add_argument("--undistort", action="store_true",
                                       help="Rectify camera intrinsics and image pixels for accurate Blender projection")
             photo_parser.add_argument("--max-image-size", type=int, default=4000)
+            photo_parser.add_argument("--registration-profile", choices=("standard", "high-recall"),
+                                      default="standard", help="Optional high-recall CPU PyCOLMAP matching")
     for command in ("plan-dense-photos", "build-dense-photos"):
         dense_parser = subcommands.add_parser(
             command, help="Review or reconstruct a private dense statue mesh from registered cameras")
@@ -249,6 +251,8 @@ def main(argv: list[str] | None = None) -> int:
                                   help="COLMAP binary when --engine colmap")
         splat_parser.add_argument("--sparse-timeout-seconds", type=int, default=3600)
         splat_parser.add_argument("--max-image-size", type=int, default=4000)
+        splat_parser.add_argument("--registration-profile", choices=("standard", "high-recall"),
+                                  default="standard", help="Optional high-recall CPU PyCOLMAP matching")
         splat_parser.add_argument("--rectified-masks", type=Path,
                                   help="Optional reviewed masks matching existing --reconstruction rectified photos")
     for command in ("plan-splat-video", "render-splat-video"):
@@ -938,7 +942,8 @@ def main(argv: list[str] | None = None) -> int:
                         if args.output.is_symlink() or args.output.exists():
                             raise ReferenceError(f"Output revision already exists: {args.output}")
                         report.update(output=str(args.output.resolve()),
-                                      engine=args.engine, output_format=settings.output_format,
+                                      engine=args.engine, registration_profile=args.registration_profile,
+                                      output_format=settings.output_format,
                                       opensplat_available=bool(shutil.which(args.opensplat)),
                                       camera_engine_available=(
                                           importlib.util.find_spec("pycolmap") is not None
@@ -950,7 +955,8 @@ def main(argv: list[str] | None = None) -> int:
                             references, args.output, settings,
                             engine=args.engine, colmap=args.colmap,
                             sparse_timeout_seconds=args.sparse_timeout_seconds,
-                            max_image_size=args.max_image_size)
+                            max_image_size=args.max_image_size,
+                            registration_profile=args.registration_profile)
             except ReferenceError as error:
                 raise RecipeError(str(error)) from error
             print(json.dumps(report, indent=2))
@@ -1141,7 +1147,8 @@ def main(argv: list[str] | None = None) -> int:
                                                       engine=args.engine,
                                                       timeout_seconds=args.timeout_seconds,
                                                       undistort=args.undistort,
-                                                      max_image_size=args.max_image_size))
+                                                      max_image_size=args.max_image_size,
+                                                      registration_profile=args.registration_profile))
             except ReferenceError as error:
                 raise RecipeError(str(error)) from error
             print(json.dumps(report, indent=2))
