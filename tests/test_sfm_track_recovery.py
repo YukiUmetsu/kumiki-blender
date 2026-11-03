@@ -129,6 +129,67 @@ class SfmTrackRecoveryTests(unittest.TestCase):
             self.assertEqual(report["seed_after_triangulation_points3D"], 100)
             self.assertEqual(engine.calls, [("resume", False, True)])
 
+    def test_match_graph_explains_seeded_recovery_failure_per_photo(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            revision = _fixture(root)
+            database = revision / "sparse-reconstruction" / "database.db"
+            def pair(a, b):
+                return min(a, b) * recovery.MAX_IMAGE_ID + max(a, b)
+            with sqlite3.connect(database) as db:
+                db.execute("CREATE TABLE two_view_geometries "
+                           "(pair_id INTEGER, rows INTEGER, config INTEGER)")
+                db.execute("CREATE TABLE matches (pair_id INTEGER)")
+                db.executemany("INSERT INTO two_view_geometries VALUES (?,?,?)", [
+                    (pair(1, 5), 35, 2), (pair(2, 5), 25, 2),
+                    (pair(1, 6), 7, 2), (pair(5, 6), 60, 2),
+                    (pair(3, 4), 100, 2), (pair(5, 7), 0, 1),
+                ])
+                db.executemany("INSERT INTO matches VALUES (?)", [
+                    (pair(1, 5),), (pair(2, 5),), (pair(1, 6),)
+                ])
+            evidence = recovery._database_match_evidence(
+                database, {"a.png", "b.png", "c.png", "d.png"})
+            self.assertEqual(evidence["status"], "some-verified-seed-to-missing-bridges")
+            self.assertEqual(evidence["raw_match_pairs"], 3)
+            self.assertEqual(evidence["verified_pairs"], 5)
+            self.assertEqual(evidence["strong_verified_pairs"], 4)
+            self.assertEqual(evidence["seed_to_missing_pairs"], 3)
+            self.assertEqual(evidence["strong_seed_to_missing_pairs"], 2)
+            self.assertEqual(evidence["seed_to_seed_pairs"], 1)
+            self.assertEqual(evidence["missing_to_missing_pairs"], 1)
+            photos = {p["filename"]: p for p in evidence["unregistered_photo_advice"]}
+            self.assertEqual(photos["e.png"]["strong_pairs_to_seed"], 2)
+            self.assertEqual(photos["e.png"]["assessment"], "matching-but-unregistered")
+            self.assertEqual(photos["f.png"]["assessment"], "no-strong-seed-overlap")
+            self.assertEqual(photos["f.png"]["strong_pairs_to_other_missing"], 1)
+            self.assertEqual(photos["g.png"]["assessment"], "no-strong-seed-overlap")
+            engine = FakePyCOLMAP(recovered=["a.png", "b.png", "c.png", "d.png"])
+            report = recovery.recover(revision, root / "no-gain", pycolmap_module=engine)
+            self.assertEqual(report["status"], "no-registration-improvement")
+            self.assertEqual(report["match_evidence"]["strong_seed_to_missing_pairs"], 2)
+
+    def test_zero_verified_pairs_is_not_confused_with_zero_raw_matches(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            revision = _fixture(root)
+            database = revision / "sparse-reconstruction" / "database.db"
+            without_geometry = recovery._database_match_evidence(
+                database, {"a.png", "b.png", "c.png", "d.png"})
+            self.assertEqual(without_geometry["status"], "no-two-view-geometry-table")
+            with sqlite3.connect(database) as db:
+                db.execute("CREATE TABLE two_view_geometries "
+                           "(pair_id INTEGER, rows INTEGER, config INTEGER)")
+                db.execute("CREATE TABLE matches (pair_id INTEGER)")
+                db.execute("INSERT INTO matches VALUES (123)")
+                db.execute("INSERT INTO two_view_geometries VALUES (123,0,1)")
+            evidence = recovery._database_match_evidence(
+                database, {"a.png", "b.png", "c.png", "d.png"})
+            self.assertEqual(evidence["status"], "no-verified-pair-correspondences")
+            self.assertEqual(evidence["raw_match_pairs"], 1)
+            self.assertEqual(evidence["verified_pairs"], 0)
+            self.assertEqual(evidence["strong_seed_to_missing_pairs"], 0)
+
     def test_unsafe_source_and_model_mismatch_are_rejected(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
