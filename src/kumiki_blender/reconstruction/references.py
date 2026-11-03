@@ -175,10 +175,20 @@ def load_reference_set(path: str | Path) -> ReferenceSet:
     for index, entry in enumerate(entries):
         if not isinstance(entry, dict):
             raise ReferenceError(f"images[{index}] must be an object")
-        required = {"id", "file", "source_url", "view", "regions"}
-        optional = {"mask", "expected_sha256"}
+        required = {"id", "file", "view", "regions"}
+        optional = {"source_url", "source_kind", "mask", "expected_sha256"}
         if not required.issubset(entry) or set(entry) - (required | optional):
             raise ReferenceError(f"images[{index}] has missing or unexpected fields")
+        # Local user uploads have no discoverable publication URL. Never
+        # fabricate one: the explicit provenance marker keeps these sources
+        # private and downstream distribution checks conservative.
+        if entry.get("source_kind") == "user-upload" and "source_url" not in entry:
+            source_url = "local-unattributed"
+        elif "source_kind" not in entry and "source_url" in entry:
+            source_url = _url(entry["source_url"])
+        else:
+            raise ReferenceError(
+                f"images[{index}] requires an HTTPS source_url or source_kind=user-upload, not both")
         image_id = _slug(entry["id"], f"images[{index}].id")
         if image_id in seen:
             raise ReferenceError(f"images has duplicate id: {image_id}")
@@ -202,7 +212,7 @@ def load_reference_set(path: str | Path) -> ReferenceSet:
         if expected is not None and (not isinstance(expected, str) or not _SHA.fullmatch(expected)
                                      or expected != digest):
             raise ReferenceError(f"images[{index}].expected_sha256 differs from actual SHA-256")
-        images.append(ReferenceImage(image_id, file, _url(entry["source_url"]), view,
+        images.append(ReferenceImage(image_id, file, source_url, view,
                                      regions, mask, mask_digest, digest, dimensions, dhash))
     return ReferenceSet(asset_id, subject, required_views, required_regions,
                         tuple(images), hashlib.sha256(contents).hexdigest())
@@ -246,6 +256,8 @@ def audit_reference_set(reference_set: ReferenceSet) -> dict[str, Any]:
         "manifest_sha256": reference_set.manifest_sha256,
         "source_images": len(images),
         "independent_images": len(independent),
+        "user_upload_images_without_verified_public_provenance": sum(
+            image.source_url == "local-unattributed" for image in images),
         "conservative_coverage_images": len(representatives),
         "view_counts": view_counts,
         "region_counts": region_counts,
