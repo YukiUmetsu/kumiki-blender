@@ -110,7 +110,7 @@ bash scripts/mac_splat_test.sh photo-advice \
   .review/mac-splat-smoke/cohorts-20261103T053322Z-10742/cohort-01/source-index.json
 
 # If you know which REGISTERED photo depicts the front of the statue:
-PHOTO_FRONT_REFERENCE=photo-0011.png \
+PHOTO_FRONT_REFERENCE=photo-0002.png \
   bash scripts/mac_splat_test.sh photo-advice \
   .review/mac-splat-smoke/splat-20261103T053355Z-11041
 ```
