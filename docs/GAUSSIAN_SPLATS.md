@@ -139,6 +139,32 @@ new information. On no improvement, the Mac wrapper automatically
 generates the photo-value and missing-angle report from the original
 sparse revision (if it can read the diagnostic inputs).
 
+#### Grounded photo-angle and bridge recommendations
+
+The photo advisor now prioritizes **existing photos that might be recovered**
+before requesting additional images. Its Markdown/JSON report identifies each
+recover-first or needs-overlap-bridge image, the best **registered overlap
+partner** (ranked by verified matches touching existing 3D tracks), and
+candidate 2D–3D count/spatial coverage. The contact sheet also displays
+**unverified filename hints** (front, rear, overhead, side) where available;
+these are never treated as camera measurements.
+
+If the reference photo is not a manually verified **registered front view**,
+the advisor does **not** issue numeric target azimuth/elevation instructions.
+An arbitrary COLMAP reference orientation cannot tell someone where to stand
+relative to the actual monument. It instead requests overlapping
+**transitions between named photos** and identifies weakly supported frontal,
+rear or overhead reference shots. The SVG orbit legend states that no
+physical target azimuth is available.
+
+For the current Sphinx photos, `sphinx-face7.jpg` is a recover-first
+candidate and `sphinx-face10.jpg` needs a bridge, based on the user's
+photo-value report. Their 2D–3D candidate counts are **not PnP inliers**.
+Keep the face-front, rear and overhead photos as visual references even
+if they do not currently register. For heterogeneous internet photographs,
+prefer finding coherent, same-source overlapping sequences or an actual
+survey/scan over accumulating isolated viewpoints.
+
 #### Find which photos help and which camera angles are missing
 
 After a reconstruction attempt, run **photo-advice** to get a per-image
