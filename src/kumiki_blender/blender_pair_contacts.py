@@ -150,7 +150,6 @@ def measure_pair_contacts(shot: PhysicsShot, assignments: list[tuple[Any, Any]],
                     point, face_normal, _, distance = target.find_nearest(vertex, tolerance)
                     if distance is None or distance > tolerance or distance >= best or point is None:
                         continue
-                    best = distance
                     point_a, point_b = (vertex, point) if source_a else (point, vertex)
                     # The other mesh's face normal is reversed when it is A.
                     normal = face_normal.copy() if source_a else -face_normal
@@ -160,6 +159,7 @@ def measure_pair_contacts(shot: PhysicsShot, assignments: list[tuple[Any, Any]],
                         normal.negate()
                     if normal.length > 1e-8:
                         normal.normalize()
+                        best = distance
                         nearest = (point_a.copy(), point_b.copy(), normal)
             contact_cache[index] = (overlapping or nearest is not None, nearest)
             return contact_cache[index]
