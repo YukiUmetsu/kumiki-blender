@@ -663,7 +663,21 @@ view, not automatically all six parts: a tightly cropped face shot cannot
 be expected to show paws or tail. Include a box for each visible part and
 one or more `part_points` on its real stone surface. Mark sky, sand,
 pyramids, people and scaffolding with negative points. The example numbers
-are *not* Sphinx annotations. Use `--sam2-device cpu` through
+are *not* Sphinx annotations.
+
+**SAM 2.1 quality gate:** for **each registered photo** add a complete
+`part_visibility` inventory containing `head`, `headdress`, `neck`, `torso`,
+`paws`, and `tail`. Mark each `visible` or `not_visible` after inspecting the
+actual frame. `uncertain` is allowed while drafting, but blocks training until
+reviewed. A `visible` part must have a matching `component_boxes` entry and
+at least one `part_points` landmark that remains foreground. A part genuinely
+cropped out or fully occluded should be `not_visible`. This catches the common
+failure where a guide labels only the head, so a head-only segmentation might
+otherwise pass. The inventory is a **human visual claim**, not independent proof
+of complete geometry. It survives mask refinement and hybrid selection, so a
+later revision cannot silently drop the requirement.
+
+Use `--sam2-device cpu` through
 `SAM2_DEVICE=cpu` if MPS fails; the default bounded 1280-pixel inference
 controls peak memory and produces full-size binary mask outputs.
 
@@ -684,6 +698,8 @@ part landmark is missing, any mask retains less than 5% or more than 90%
 foreground, more than 5% of its foreground lies outside annotated component
 boxes, a camera has over 20% majority outliers, there are fewer than 25
 compared tracks, or more than 15% shared tracks have inconsistent labels.
+SAM 2.1 candidates also fail when the six-part visibility inventory is
+incomplete or contradicts the part boxes/landmarks.
 These are conservative rejection gates, not proof of correctness.
 
 Inspect **every** photo in

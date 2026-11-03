@@ -80,6 +80,9 @@ class Sam2MaskTests(TestCase):
              "foreground_points": [[0.8, 0.8]]},
             {"component_boxes": {"head": [0.2, 0.2, 0.4, 0.4]},
              "part_points": {"tail": [[0.3, 0.3]]}},
+            {"part_visibility": {"sky": "visible"}},
+            {"part_visibility": {"tail": "perhaps"}},
+            {"part_visibility": ["head", "torso"]},
         ):
             bad.write_text(json.dumps({"images": {"view-00.png": value}}))
             with self.assertRaises(ReferenceError):
@@ -101,6 +104,7 @@ class Sam2MaskTests(TestCase):
             report = generate_rectified_masks(self.sparse, output, segmenter="sam2",
                                               sam2_checkpoint=checkpoint, guides=guide_file)
         self.assertEqual(report["segmentation_model"], "sam2.1_hiera_small")
+        self.assertTrue(report["requires_anatomy_inventory"])
         self.assertEqual(report["segmentation_model_sha256"], hashlib.sha256(checkpoint.read_bytes()).hexdigest())
         self.assertFalse(report["approved_for_reconstruction"])
         self.assertEqual(len(predictor.calls), 8)

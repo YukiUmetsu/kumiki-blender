@@ -14,6 +14,7 @@ from typing import Any
 
 from kumiki_blender.reconstruction.dense import _check_regular, _json, _sha256
 from kumiki_blender.reconstruction.mask_selection import _mask_source
+from kumiki_blender.reconstruction.masking import _SPHINX_PARTS
 from kumiki_blender.reconstruction.references import ReferenceError
 
 
@@ -90,6 +91,33 @@ def validate_foreground_pipeline(reconstruction: Path, mask_revision: Path,
                 recommendations[name].append("Re-segment the complete silhouette; check head, torso, paws and tail")
             guide = current.get("guide")
             boxes = guide.get("component_boxes") if isinstance(guide, dict) else None
+            parts = guide.get("part_points") if isinstance(guide, dict) else None
+            visibility = guide.get("part_visibility") if isinstance(guide, dict) else None
+            if masks["requires_anatomy_inventory"] or visibility is not None:
+                if not isinstance(visibility, dict) or set(visibility) != _SPHINX_PARTS:
+                    issues.append(f"{name}: incomplete anatomy visibility inventory; classify all six Sphinx parts")
+                    recommendations[name].append(
+                        "Inspect this photo and mark each head/headdress/neck/torso/paws/tail part visible or not_visible")
+                else:
+                    visible_count = 0
+                    for part, state in sorted(visibility.items()):
+                        if state == "visible":
+                            visible_count += 1
+                            if not (isinstance(parts, dict) and parts.get(part)
+                                    and isinstance(boxes, dict) and boxes.get(part)):
+                                issues.append(f"{name}: visible {part} lacks a component box or landmark")
+                                recommendations[name].append(
+                                    f"Mark the {part} region and a positive point on the statue surface")
+                        elif state == "not_visible":
+                            if ((isinstance(parts, dict) and parts.get(part))
+                                    or (isinstance(boxes, dict) and boxes.get(part))):
+                                issues.append(f"{name}: {part} marked not_visible but still has a box or landmarks")
+                        elif state == "uncertain":
+                            issues.append(f"{name}: uncertain {part} visibility requires photo review")
+                        else:
+                            issues.append(f"{name}: invalid {part} visibility label")
+                    if not visible_count:
+                        issues.append(f"{name}: no visible Sphinx anatomy declared")
             outside_fraction = 0.0
             if isinstance(boxes, dict) and boxes:
                 allowed = Image.new("L", (width, height), 0)
@@ -108,7 +136,6 @@ def validate_foreground_pipeline(reconstruction: Path, mask_revision: Path,
                 if outside_fraction > 0.05:
                     issues.append(f"{name}: {outside_fraction:.1%} mask foreground outside component boxes (>5%)")
                     recommendations[name].append("Inspect sky, sand or buildings; add negative prompts or expand boxes around real anatomy")
-            parts = guide.get("part_points") if isinstance(guide, dict) else None
             if not isinstance(parts, dict) or not parts:
                 issues.append(f"{name}: no verified visible-part landmarks")
                 recommendations[name].append("Mark at least one visible part; mark every visible head/headdress/neck/torso/paws/tail part")
@@ -164,6 +191,7 @@ def validate_foreground_pipeline(reconstruction: Path, mask_revision: Path,
             issues.append(f"{name}: {outlier_fraction:.1%} track majority outliers (>20%)")
             recommendations[name].append("Inspect cyan missing-subject and red background-leak markers; never accept majority automatically")
         camera_quality.append({"filename": name, "foreground_fraction": round(fraction, 5),
+                               "part_visibility": visibility,
                                "foreground_outside_component_boxes": round(outside_fraction, 5),
                                "parts_checked": sorted(parts), "missing_parts": sorted(set(missing_parts)),
                                "positive_seed_violations": positive_missing,

@@ -70,6 +70,7 @@ class MaskRefinementTests(unittest.TestCase):
     def test_island_hole_and_polygon_cleanup_preserves_source_and_openmvs_compatibility(self):
         source_report = self.source_masks / "mask-report.json"
         before = json.loads(source_report.read_text())
+        before["requires_anatomy_inventory"] = True
         before["images"][0]["guide"] = {"part_points": {"head": [[0.5, 0.4]],
                                                          "torso": [[0.5, 0.7]]},
                                         "background_points": [[0.05, 0.1]]}
@@ -82,6 +83,7 @@ class MaskRefinementTests(unittest.TestCase):
                                         max_hole_pixels=10)
         self.assertEqual(report["status"], "candidate / refined-mask-review-required")
         self.assertFalse(report["approved_for_reconstruction"])
+        self.assertTrue(report["requires_anatomy_inventory"])
         self.assertEqual(len(report["images"]), 3)
         self.assertTrue((target / report["contact_sheet"]).is_file())
         with Image.open(target / "masks/view-00.jpg.mask.png") as output:

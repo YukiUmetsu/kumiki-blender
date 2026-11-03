@@ -249,6 +249,8 @@ def refine_rectified_masks(reconstruction: str | Path, mask_revision: str | Path
         "schema_version": 1, "source_revision": str(sparse),
         "source_mask_revision": str(source),
         "source_mask_report_sha256": _sha256(source / "mask-report.json"),
+        "requires_anatomy_inventory": (previous.get("requires_anatomy_inventory") is True
+                                       or previous.get("segmenter") == "sam2"),
         "edits_sha256": edits_sha,
         "min_island_pixels": min_island_pixels,
         "max_hole_pixels": max_hole_pixels,

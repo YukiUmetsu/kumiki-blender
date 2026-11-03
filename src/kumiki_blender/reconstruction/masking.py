@@ -42,7 +42,7 @@ def _box(value: Any) -> tuple[float, float, float, float]:
 
 def _guide(value: Any, *, default_box: tuple[float, ...]) -> dict[str, Any]:
     if not isinstance(value, dict) or set(value) - {"box", "foreground_points", "background_points",
-                                                     "component_boxes", "part_points"}:
+                                                     "component_boxes", "part_points", "part_visibility"}:
         raise ReferenceError("Mask guide contains unsupported fields")
     box = _box(value.get("box", default_box))
     points: dict[str, list[list[float]]] = {}
@@ -53,9 +53,14 @@ def _guide(value: Any, *, default_box: tuple[float, ...]) -> dict[str, Any]:
         points[key] = [list(_normalized_pair(item, key)) for item in raw]
     components = value.get("component_boxes", {})
     landmarks = value.get("part_points", {})
+    visibility = value.get("part_visibility", {})
     if (not isinstance(components, dict) or not isinstance(landmarks, dict)
             or set(components) - _SPHINX_PARTS or set(landmarks) - _SPHINX_PARTS):
         raise ReferenceError("component_boxes and part_points must name Sphinx anatomy")
+    if (not isinstance(visibility, dict) or set(visibility) - _SPHINX_PARTS
+            or any(value not in ("visible", "not_visible", "uncertain")
+                   for value in visibility.values())):
+        raise ReferenceError("part_visibility must mark Sphinx anatomy visible/not_visible/uncertain")
     if len(components) > 6:
         raise ReferenceError("Too many component boxes")
     checked_boxes = {name: list(_box(bounds)) for name, bounds in components.items()}
@@ -77,7 +82,8 @@ def _guide(value: Any, *, default_box: tuple[float, ...]) -> dict[str, Any]:
                    for x, y in checked_points[name]):
                 raise ReferenceError(f"{name} landmark must lie inside its component box")
     return {"box": list(box), **points,
-            "component_boxes": checked_boxes, "part_points": checked_points}
+            "component_boxes": checked_boxes, "part_points": checked_points,
+            "part_visibility": dict(visibility)}
 
 
 def _load_sam2_predictor(checkpoint: Path, size: str, requested_device: str) -> tuple[Any, str]:
@@ -347,6 +353,7 @@ def generate_rectified_masks(reconstruction: str | Path, output: str | Path, *,
         "segmentation_model_sha256": model_sha,
         "segmentation_model_checkpoint": str(checkpoint) if checkpoint else None,
         "segmentation_device": device,
+        "requires_anatomy_inventory": segmenter == "sam2",
         "status": "incomplete / manual-mask-review-required", "images": [],
         "approved_for_reconstruction": False,
     }

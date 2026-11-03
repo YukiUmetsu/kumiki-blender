@@ -190,6 +190,70 @@ class MaskConsistencyTests(unittest.TestCase):
             validate_foreground_pipeline(self.sparse, masks, audit,
                                          self.root / "denied-positive-seed", min_compared_tracks=3)
 
+    def test_sam2_requires_full_view_by_view_anatomy_visibility_inventory(self):
+        masks, _ = self._foreground_pipeline_candidates()
+        for name, pixel in (("view-00.jpg", (4, 60)), ("view-02.jpg", (4, 40))):
+            path = masks / "masks" / (name + ".mask.png")
+            with Image.open(path) as source:
+                adjusted = source.copy()
+            adjusted.putpixel(pixel, 255)
+            adjusted.save(path)
+        report_path = masks / "mask-report.json"
+        document = json.loads(report_path.read_text())
+        document["requires_anatomy_inventory"] = True
+        for item in document["images"]:
+            item["mask_sha256"] = _digest(masks / item["mask"])
+            item["guide"] = {"part_points": {"head": [[0.3, 0.375]]},
+                             "component_boxes": {"head": [0.0, 0.0, 0.99, 0.99]},
+                             "background_points": [[0.1, 0.1]]}
+        report_path.write_text(json.dumps(document))
+        audit = self.root / "anatomy-audit"
+        audit_multiview_masks(self.sparse, masks / "masks", audit)
+
+        target = self.root / "anatomy-training"
+        initial = validate_foreground_pipeline(self.sparse, masks, audit, target,
+                                                min_compared_tracks=3,
+                                                require_quality=False)
+        self.assertFalse(initial["quality_passed"])
+        self.assertTrue(any("visibility inventory" in failure
+                            for failure in initial["quality_failures"]))
+
+        visibility = {part: "not_visible" for part in (
+            "headdress", "neck", "torso", "paws", "tail")}
+        visibility["head"] = "visible"
+        for item in document["images"]:
+            item["guide"]["part_visibility"] = visibility.copy()
+        report_path.write_text(json.dumps(document))
+        verified = validate_foreground_pipeline(self.sparse, masks, audit, target,
+                                                min_compared_tracks=3)
+        self.assertTrue(verified["quality_passed"])
+        self.assertEqual(verified["images"][0]["part_visibility"], visibility)
+
+        for item in document["images"]:
+            item["guide"]["part_visibility"]["paws"] = "visible"
+        report_path.write_text(json.dumps(document))
+        missing_paws = validate_foreground_pipeline(self.sparse, masks, audit, target,
+                                                    min_compared_tracks=3,
+                                                    require_quality=False)
+        self.assertTrue(any("paws" in failure for failure in missing_paws["quality_failures"]))
+
+        for item in document["images"]:
+            item["guide"]["part_visibility"]["paws"] = "uncertain"
+        report_path.write_text(json.dumps(document))
+        uncertain = validate_foreground_pipeline(self.sparse, masks, audit, target,
+                                                 min_compared_tracks=3,
+                                                 require_quality=False)
+        self.assertTrue(any("uncertain" in failure for failure in uncertain["quality_failures"]))
+
+        for item in document["images"]:
+            item["guide"]["part_visibility"]["paws"] = "not_visible"
+            item["guide"]["component_boxes"]["paws"] = [0.1, 0.7, 0.9, 0.99]
+        report_path.write_text(json.dumps(document))
+        contradictory = validate_foreground_pipeline(self.sparse, masks, audit, target,
+                                                    min_compared_tracks=3,
+                                                    require_quality=False)
+        self.assertTrue(any("not_visible" in failure for failure in contradictory["quality_failures"]))
+
     def test_flags_one_majority_outlier_and_ambiguous_two_view_track(self):
         target = self.root / "audit"
         result = audit_multiview_masks(self.sparse, self.masks, target)

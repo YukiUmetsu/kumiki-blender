@@ -21,6 +21,14 @@
         "paws": [[0.68, 0.85]],
         "tail": [[0.18, 0.76]]
       },
+      "part_visibility": {
+        "head": "visible",
+        "headdress": "visible",
+        "neck": "visible",
+        "torso": "visible",
+        "paws": "visible",
+        "tail": "visible"
+      },
       "foreground_points": [[0.52, 0.7]],
       "background_points": [[0.02, 0.05], [0.97, 0.12], [0.95, 0.95]]
     }
