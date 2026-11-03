@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import importlib.util
+import hashlib
 import json
 import os
 import shutil
@@ -69,12 +70,9 @@ class OpenSplatCrashQATests(unittest.TestCase):
         self.assertTrue(report["saw_native_crash"])
         self.assertTrue(any("frame #0" in frame for frame in report["frame_excerpt"]))
         self.assertIn("--cpu", report["lldb_command"])
-        self.assertEqual(report["lldb_command"][-2], "--cpu" if False else
-                         str(output / "splat.ply"))
+        self.assertEqual(report["lldb_command"][-2], str(output / "splat.ply"))
         self.assertTrue((output / "dataset/sparse/0/points3D.bin").is_file())
-        self.assertEqual(crash._sha256(original_image) if hasattr(crash, "_sha256")
-                         else __import__("hashlib").sha256(original_image.read_bytes()).hexdigest(),
-                         digest)
+        self.assertEqual(hashlib.sha256(original_image.read_bytes()).hexdigest(), digest)
         self.assertTrue((output / "lldb.log").is_file())
         self.assertEqual(json.loads((output / "crash-qa.json").read_text()), report)
         with self.assertRaises(FileExistsError):
