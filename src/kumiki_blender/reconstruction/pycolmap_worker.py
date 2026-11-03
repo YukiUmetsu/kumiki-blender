@@ -24,15 +24,23 @@ def _set_supported_option(options: object, name: str, value: object, *, required
 
 def _configure_high_recall_extraction(options: object) -> None:
     """Increase SIFT coverage for small details and viewpoint/scale changes."""
-    _set_supported_option(options, "max_num_features", 12_000, required=True)
-    _set_supported_option(options, "peak_threshold", 0.003, required=True)
-    _set_supported_option(options, "estimate_affine_shape", True)
-    _set_supported_option(options, "domain_size_pooling", True)
+    # PyCOLMAP 4.2.1 exposes these on FeatureExtractionOptions.sift,
+    # not on the outer FeatureExtractionOptions object.
+    sift = getattr(options, "sift", None)
+    if sift is None:
+        raise ValueError("Installed PyCOLMAP lacks FeatureExtractionOptions.sift")
+    _set_supported_option(sift, "max_num_features", 12_000, required=True)
+    _set_supported_option(sift, "peak_threshold", 0.003, required=True)
+    _set_supported_option(sift, "estimate_affine_shape", True)
+    _set_supported_option(sift, "domain_size_pooling", True)
 
 
 def _configure_high_recall_matching(options: object) -> None:
     """Expand candidate matches but keep geometric verification mandatory."""
-    _set_supported_option(options, "max_ratio", 0.85, required=True)
+    sift = getattr(options, "sift", None)
+    if sift is None:
+        raise ValueError("Installed PyCOLMAP lacks FeatureMatchingOptions.sift")
+    _set_supported_option(sift, "max_ratio", 0.85, required=True)
     _set_supported_option(options, "guided_matching", True, required=True)
 
 
