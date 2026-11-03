@@ -50,6 +50,11 @@ def analyze(root: Path, min_inliers: int) -> dict:
     if not db_path.is_file():
         raise FileNotFoundError(f"COLMAP database not found: {db_path}")
     registered = registered_images(sparse)
+    staged_index = sparse / "staged-reference-index.json"
+    staged = {}
+    if staged_index.is_file():
+        data = json.loads(staged_index.read_text(encoding="utf-8"))
+        staged = {entry["filename"]: entry for entry in data["images"]}
     with sqlite3.connect(db_path.as_uri() + "?mode=ro", uri=True) as db:
         names = dict(db.execute("SELECT image_id, name FROM images"))
         keypoints = dict(db.execute("SELECT image_id, rows FROM keypoints")) if _has_table(db, "keypoints") else {}
@@ -85,6 +90,21 @@ def analyze(root: Path, min_inliers: int) -> dict:
                     queue.append(neighbor)
         components.append(sorted(names[image_id] for image_id in seen))
     components.sort(key=len, reverse=True)
+    imported = set(names.values())
+    omitted = []
+    for filename in sorted(staged.keys() - imported):
+        photo = sparse / "images" / filename
+        omitted.append({
+            "filename": filename, "extension": Path(filename).suffix.lower(),
+            "staged_file_exists": photo.is_file(),
+            "staged_bytes": photo.stat().st_size if photo.is_file() else None,
+        })
+    extraction_log = sparse / "logs" / "01-feature_extractor.log"
+    warnings = []
+    if extraction_log.is_file():
+        for line in extraction_log.read_text(encoding="utf-8", errors="replace").splitlines():
+            if any(word in line.lower() for word in ("warn", "error", "fail", "skip", "cannot", "could not", "unsupported", "read image")):
+                warnings.append(line.strip()[:400])
     images = [
         {"filename": name, "keypoints": keypoints.get(image_id, 0),
          "verified_inliers_across_pairs": inlier_totals[image_id],
@@ -94,9 +114,13 @@ def analyze(root: Path, min_inliers: int) -> dict:
     ]
     return {
         "photos": len(names), "registered": len(registered),
+        "staged_photos": len(staged) if staged else None,
+        "missing_from_database": omitted,
+        "feature_extraction_warnings": warnings[-30:],
         "min_inliers_for_diagnostic_edge": min_inliers,
         "strong_pair_count": sum(rows >= min_inliers for rows, *_ in pairs),
         "connected_component_sizes": [len(group) for group in components],
+        "connected_components": components,
         "registered_filenames": sorted(registered),
         "weak_or_isolated": [image for image in images if image["strong_neighbors"] == 0],
         "images": images,
@@ -123,9 +147,18 @@ def main() -> int:
     if args.json:
         print(json.dumps(result, indent=2))
         return 0
-    print(f"Registered: {result['registered']}/{result['photos']}")
+    print(f"Registered: {result['registered']}/{result['photos']} database images")
+    if result["staged_photos"] is not None:
+        print(f"Staged photos: {result['staged_photos']}; missing from COLMAP database: {len(result['missing_from_database'])}")
+        for item in result["missing_from_database"]:
+            print(f"  NOT IMPORTED: {item['filename']} (exists={item['staged_file_exists']}, bytes={item['staged_bytes']})")
+    if result["feature_extraction_warnings"]:
+        print("Feature-extraction log warnings:")
+        for warning in result["feature_extraction_warnings"]:
+            print(f"  {warning}")
     print(f"Verified pairs with >= {args.min_inliers} inliers: {result['strong_pair_count']}")
     print("Connected component sizes:", result["connected_component_sizes"])
+    print("Largest connected component:", ", ".join(result["connected_components"][0]))
     print("Registered:", ", ".join(result["registered_filenames"]) or "(none)")
     print("\nImages with no strong verified neighbor:")
     for item in result["weak_or_isolated"][:30]:
