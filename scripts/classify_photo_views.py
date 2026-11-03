@@ -100,8 +100,15 @@ def classify(path: Path, *, model: str, endpoint: str = "http://127.0.0.1:11434/
     request = urllib.request.Request(
         endpoint, data=body, headers={"Content-Type": "application/json"},
         method="POST")
+    class NoRedirect(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, req, fp, code, msg, headers, newurl):
+            raise ValueError("Local vision endpoint redirect rejected; image not forwarded")
+
+    # Disable environment proxies and redirects: no image may leave loopback.
+    opener = urllib.request.build_opener(
+        urllib.request.ProxyHandler({}), NoRedirect())
     try:
-        with urllib.request.urlopen(request, timeout=timeout) as stream:
+        with opener.open(request, timeout=timeout) as stream:
             response = json.load(stream)
     except (urllib.error.URLError, TimeoutError) as error:
         raise RuntimeError(f"Local Ollama vision request failed: {error}") from error
