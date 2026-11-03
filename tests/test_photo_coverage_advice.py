@@ -42,6 +42,8 @@ class PhotoCoverageAdviceTests(unittest.TestCase):
             self.assertEqual(report["registered_in_best_model"], 2)
             self.assertEqual(report["photos"], 4)
             self.assertFalse(report["camera_gate_met"])
+            self.assertEqual(report["required_registered_at_current_photo_count"], 8)
+            self.assertEqual(report["additional_registrations_needed_at_current_photo_count"], 6)
             images = {p["filename"]: p for p in report["images"]}
             self.assertEqual(images["photo-0001.png"]["assessment"], "keep")
             self.assertEqual(images["photo-0003.png"]["pnp_support"]["conservative_one_to_one_2d3d"], 5)
@@ -77,6 +79,9 @@ class PhotoCoverageAdviceTests(unittest.TestCase):
             _add_camera_geometry(sparse)
             report = advice.analyze(root, front_photo="orig-3.jpg")
             self.assertEqual(report["angle_reference"]["kind"], "arbitrary-reference-camera")
+            self.assertEqual(report["angle_reference"]["requested_front_status"],
+                             "not-registered-in-best-model")
+            self.assertIn("Front anchor unavailable", advice._markdown(report))
             self.assertIn("not a verified front/side",
                           report["images"][0]["estimated_view"]["label"])
             self.assertIsNone(next(p for p in report["images"]
