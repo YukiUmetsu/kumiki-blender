@@ -200,6 +200,12 @@ TEMPLATE = r'''<!doctype html>
     return Array.isArray(point) && point.length === 2 && point.every(v => Number.isFinite(v))
       && point[0] >= 0 && point[0] < image.width && point[1] >= 0 && point[1] < image.height;
   }
+  function outlineArea2(outline) {
+    return outline.reduce((sum, point, i) => {
+      const next = outline[(i+1)%outline.length];
+      return sum + point[0]*next[1] - next[0]*point[1];
+    }, 0);
+  }
   function validateImport(raw) {
     if (!raw || raw.schema_version !== 1 || !Array.isArray(raw.images) || raw.images.length > source.length)
       throw Error('Expected annotation JSON with schema_version=1 and an images array.');
@@ -229,13 +235,8 @@ TEMPLATE = r'''<!doctype html>
       if (!Array.isArray(outline) || (outline.length !== 0 && outline.length < 3) || outline.length > 2048
           || outline.some(point => !validPoint(point, source[index])))
         throw Error('Imported outline must contain 3–2048 in-bounds points.');
-      if (outline.length >= 3) {
-        const area2 = outline.reduce((sum, point, i) => {
-          const nextPoint = outline[(i+1)%outline.length];
-          return sum + point[0]*nextPoint[1] - nextPoint[0]*point[1];
-        }, 0);
-        if (Math.abs(area2) < 1) throw Error('Imported head outline has zero area.');
-      }
+      if (outline.length >= 3 && Math.abs(outlineArea2(outline)) < 1)
+        throw Error('Imported head outline has zero area.');
       next[index] = {view:row.view, points, outline:clone(outline)};
     }
     return next;
@@ -284,10 +285,8 @@ TEMPLATE = r'''<!doctype html>
   function downloadJson() {
     if (state.some(entry => entry.outline.length > 0 && entry.outline.length < 3))
       return announce('Finish or clear the incomplete outline before exporting.', true);
-    if (state.some(entry => entry.outline.length >= 3 && Math.abs(entry.outline.reduce((sum, point, i) => {
-      const next = entry.outline[(i+1)%entry.outline.length];
-      return sum + point[0]*next[1] - next[0]*point[1];
-    }, 0)) < 1)) return announce('A head outline has zero area. Move its vertices or clear it.', true);
+    if (state.some(entry => entry.outline.length >= 3 && Math.abs(outlineArea2(entry.outline)) < 1))
+      return announce('A head outline has zero area. Undo recent vertices or clear it.', true);
     const blob = new Blob([JSON.stringify(exportData(), null, 2) + '\n'], {type:'application/json'});
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
@@ -395,14 +394,15 @@ TEMPLATE = r'''<!doctype html>
     const photo = source[active];
     if (forceImage || dom.image.dataset.imageId !== photo.image_id) {
       dom.image.src = photo.preview; dom.image.dataset.imageId = photo.image_id;
-      dom.image.alt = photo.image_id + ', ' + state[active].view.replaceAll('-', ' ') + ' view';
       dom.image.onload = fitStage;
     }
+    dom.image.alt = photo.image_id + ', ' + state[active].view.replaceAll('-', ' ') + ' view';
     dom.progress.textContent = 'Photo ' + (active+1) + ' of ' + source.length + ' · offline · private';
     dom.view.value = state[active].view;
     dom.outline.classList.toggle('is-active', mode === 'outline');
     dom.outline.setAttribute('aria-pressed', mode === 'outline' ? 'true' : 'false');
-    dom.finish.disabled = mode !== 'outline' || state[active].outline.length < 3;
+    dom.finish.disabled = mode !== 'outline' || state[active].outline.length < 3 ||
+      Math.abs(outlineArea2(state[active].outline)) < 1;
     dom.clear.disabled = state[active].outline.length === 0;
     dom.undo.disabled = history.length === 0;
     renderPhotos(); renderLandmarks(); renderOverlay(); fitStage();
@@ -416,6 +416,8 @@ TEMPLATE = r'''<!doctype html>
   function finishOutline() {
     if (state[active].outline.length < 3)
       return announce('Add at least three head-outline vertices.', true);
+    if (Math.abs(outlineArea2(state[active].outline)) < 1)
+      return announce('Head outline has zero area; undo or add a non-collinear vertex.', true);
     mode = 'point'; render(false); announce('Head outline ready. You can still add or clear vertices.');
   }
   function handlePlacement(event) {
