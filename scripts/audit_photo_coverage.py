@@ -378,6 +378,7 @@ def analyze(revision: Path, *, source_index: Path | None = None,
         })
     images.sort(key=lambda item: item["original_filename"])
     counts = dict(sorted(Counter(item["assessment"] for item in images).items()))
+    required_registered = max(8, math.ceil(0.6 * len(images)))
     weak_tracks = sum(item["assessment"] in ("low-current-value", "needs-overlap-bridge")
                       for item in images)
     shots = _shot_plan(angles, front_known=front_known, anchor=anchor,
@@ -428,12 +429,19 @@ def analyze(revision: Path, *, source_index: Path | None = None,
         "best_model": best_name,
         "photos": len(images),
         "registered_in_best_model": len(best_files),
-        "camera_gate_met": len(best_files) >= 8 and len(best_files) / max(1, len(images)) >= 0.6,
+        "camera_gate_met": len(best_files) >= required_registered,
+        "required_registered_at_current_photo_count": required_registered,
+        "additional_registrations_needed_at_current_photo_count":
+            max(0, required_registered - len(best_files)),
         "assessments": counts,
         "angle_reference": {
             "filename": anchor, "original_filename": original.get(anchor, anchor) if anchor else None,
             "kind": "annotated-front" if front_known else
                     ("arbitrary-reference-camera" if anchor else "unavailable"),
+            "requested_front_photo": front_photo,
+            "requested_front_status": ("used" if front_known else
+                                       "not-registered-in-best-model" if front_photo else
+                                       "not-supplied"),
             "centroid_basis": "median of reconstructed 3D points; not verified object center",
             "limitations": "Relative azimuth/elevation come from estimated cameras in ONE sparse model. "
                            "Camera-image-up defines vertical; roll, focal length, incomplete surface "
@@ -467,7 +475,11 @@ def _markdown(report: dict) -> str:
         "",
         f"**Reconstruction:** {report['registered_in_best_model']}/{report['photos']} "
         f"registered in model {report['best_model']}; camera gate: "
-        f"{'met' if report['camera_gate_met'] else 'not met'}.",
+        f"{'met' if report['camera_gate_met'] else 'not met'}. "
+        f"At the current photo count, need "
+        f"{report['additional_registrations_needed_at_current_photo_count']} "
+        f"more registrations (target "
+        f"{report['required_registered_at_current_photo_count']}).",
         "",
         "**Caution:** Low current value means weak evidence for this SfM run, "
         "not that the image is bad or its viewpoint is unnecessary. "
@@ -479,6 +491,11 @@ def _markdown(report: dict) -> str:
         "## Photos to review first",
         "",
     ]
+    if report["angle_reference"]["requested_front_status"] == "not-registered-in-best-model":
+        lines.append("**Front anchor unavailable:** Requested frontal photo is not "
+                     "registered in the selected model; angles remain relative "
+                     "to an arbitrary camera.")
+        lines.append("")
     low = [p for p in report["images"]
            if p["assessment"] in ("low-current-value", "cannot-use")]
     for photo in low:
@@ -603,7 +620,9 @@ def main() -> int:
     except (OSError, ValueError, KeyError, RuntimeError) as error:
         parser.exit(2, f"ERROR: {error}\n")
     print(f"Registered {report['registered_in_best_model']}/{report['photos']}; "
-          f"camera gate met: {report['camera_gate_met']}")
+          f"camera gate met: {report['camera_gate_met']}; "
+          f"need {report['additional_registrations_needed_at_current_photo_count']} "
+          f"more registrations at current photo count")
     print("Photo assessment counts:", report["assessments"])
     print(f"Angle reference: {report['angle_reference']['kind']} "
           f"({report['angle_reference']['original_filename']})")
