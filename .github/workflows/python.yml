@@ -33,10 +33,10 @@ jobs:
         env:
           PYTHONPATH: src
         run: python -m unittest tests.test_head_base tests.test_head_base_cli tests.test_makehuman_source tests.test_makehuman_cli -v
-      - name: Test Blender physics shot plans, export and headless worker boundary
+      - name: Test Blender physics and deformable-shot plans, export and headless worker boundary
         env:
           PYTHONPATH: src:tests
-        run: python -m unittest tests.test_physics_plan tests.test_blender_physics tests.test_glb_motion tests.test_impact_measurement -v
+        run: python -m unittest tests.test_physics_plan tests.test_deformation_plan tests.test_blender_physics tests.test_glb_motion tests.test_impact_measurement -v
       - name: Test measured Khufu masonry and Sphinx source intake
         env:
           PYTHONPATH: src
@@ -132,6 +132,15 @@ jobs:
             --python scripts/blender_physics_pair_contacts_smoke.py -- .review/ci/physics-pair-contacts
           python -m kumiki_blender audit --model .review/ci/physics-pair-contacts/physics-r01/model.glb
           test -s .review/ci/physics-pair-contacts/physics-r01/baked-actions.json
+      - name: Verify real Blender cloth simulation becomes animated glTF morphs
+        env:
+          PYTHONPATH: src
+        run: |
+          python -m kumiki_blender plan-deformation --spec examples/cloth-deformation-shot.json
+          blender --background --factory-startup --threads 2 --python-exit-code 1 \
+            --python scripts/blender_deformation_smoke.py -- .review/ci/cloth-deformation
+          python -m kumiki_blender audit --model .review/ci/cloth-deformation/deformation-r01/model.glb
+          test -s .review/ci/cloth-deformation/deformation-r01/source.blend
       - name: Install optional AssetSpec and image QA dependencies (host Python only)
         run: python -m pip install -e '.[composer,qa]'
       - name: Verify guided surfaces, GLB, tiled UDIM and relighting gallery in Blender
