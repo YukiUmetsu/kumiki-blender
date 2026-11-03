@@ -52,6 +52,24 @@ camera-tour MP4 and HTML viewer; both still require visual and license review.
 
 ## New: reference-driven statue reconstruction evidence
 
+**One photo folder → editable 3D mesh:** The `plan-photo-model` and
+`build-photo-model` commands join real multi-photo camera registration, dense
+surface meshing, Blender export and photo-matched preview rendering in one
+private revision. They accept 8–256 source photos, including 30-angle statue
+sets, and produce `model.glb` plus a `.blend` **only if the photos actually
+register and yield a dense mesh**. There is no procedural fallback or invented
+Sphinx geometry. On Apple Silicon use PyCOLMAP + CPU OpenMVS + Blender; NVIDIA
+systems can select COLMAP CUDA dense meshing. Example:
+
+```bash
+kumiki-blender plan-photo-model --photos /path/to/statue-photos \
+  --asset-id great-sphinx --output .review/great-sphinx/mesh-r01
+kumiki-blender build-photo-model --photos /path/to/statue-photos \
+  --asset-id great-sphinx --output .review/great-sphinx/mesh-r01
+```
+
+See [one-command photo-to-mesh setup and failure reporting](docs/PHOTO_TO_GLB.md).
+
 For the Sphinx, Statue of Liberty, Christ the Redeemer, and future monuments,
 the optional [reference reconstruction foundation](docs/REFERENCE_RECONSTRUCTION.md)
 validates source-attributed local photographs, detects repeated evidence,
