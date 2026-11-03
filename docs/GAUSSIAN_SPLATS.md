@@ -176,6 +176,26 @@ The OpenSplat binary should also have a matching Metal library
 (`default.metallib`) in its build directory. No fallback is automatically
 claimed to fix SIGSEGV without reviewing the log or native backtrace.
 
+**Warren 2019 follow-up:** Both MPS (`-d 4, -n 300`) and CPU
+(`--cpu -d 8 -n 100`) retries exited with `SIGSEGV (-11)`. A GPU-only
+failure is therefore unlikely; neither result proves a corrupt COLMAP dataset.
+Capture a native stack trace from the failed CPU retry before changing data:
+
+```bash
+git pull --ff-only
+CPU_RETRY=.review/mac-splat-smoke/splat-retry-20261103T125237Z-90435
+bash scripts/mac_splat_test.sh crash-qa "$CPU_RETRY"
+```
+
+The `crash-qa` command validates the retry report, copies and SHA-256 checks
+its staged dataset, probes the binary version and linked libraries, then runs
+LLDB with `-o run -k "thread backtrace all"`. Results are stored in a new
+`opensplat-crash-qa-*/lldb.log` and `crash-qa.json` without modifying
+the original registered photos or COLMAP model. If LLDB cannot launch the
+inferior due to macOS developer-tools permissions, the log records the
+launch error; that is **not** a native backtrace. Inspect the first crashing
+frame and its caller before changing PyTorch, OpenSplat, or COLMAP.
+
 The `photo-advice` report now requests **zero additional photos for
 registration** when all images are registered. This does not prove full surface
 visibility: the collection visibly emphasizes side/rear tourist angles and
