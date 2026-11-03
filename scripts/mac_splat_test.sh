@@ -82,10 +82,25 @@ elif [[ "$mode" == plan || "$mode" == run ]]; then
   [[ "$mode" == plan ]] && exit 0
   check_tool "$trainer"
   python3 -c 'import pycolmap' || die 'Install photogrammetry dependencies: pip install -e ".[photogrammetry]"'
-  kumiki-blender build-splats --photos "$photos" --asset-id "$slug" --output "$output" \
+  if kumiki-blender build-splats --photos "$photos" --asset-id "$slug" --output "$output" \
     --engine pycolmap --opensplat "$trainer" --max-image-size "$max_image_size" \
-    --registration-profile "$profile" --iterations "${ITERATIONS:-3000}"
-  printf '\nTraining output: %s\nRun QA: bash scripts/mac_splat_test.sh qa "%s"\n' "$output" "$output"
+    --registration-profile "$profile" --iterations "${ITERATIONS:-3000}"; then
+    printf '\nTraining output: %s\nRun QA: bash scripts/mac_splat_test.sh qa "%s"\n' "$output" "$output"
+  else
+    status=$?
+    if [[ -f "$output/sparse-reconstruction/database.db" ]]; then
+      diagnostic="$(new_output registration)"
+      printf '\nCamera reconstruction failed. Generating read-only registration diagnosis...\n' >&2
+      if python3 scripts/diagnose_splat_registration.py "$output" --contact-sheet "$diagnostic.jpg"; then
+        printf '\nRegistration contact sheet: %s.jpg\n' "$diagnostic" >&2
+        open "$diagnostic.jpg" 2>/dev/null || true
+      else
+        printf 'WARNING: Registration diagnosis failed; original build exit code preserved.\n' >&2
+      fi
+    fi
+    printf 'Failed splat revision retained at: %s\n' "$output" >&2
+    exit "$status"
+  fi
 elif [[ "$mode" == mask || "$mode" == hybrid || "$mode" == run-masked ]]; then
   revision="$2"
   [[ -f "$revision/splat-report.json" && -d "$revision/sparse-reconstruction" ]] || die "Expected a completed multiview splat revision with sparse-reconstruction: $revision"
