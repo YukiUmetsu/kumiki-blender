@@ -119,7 +119,10 @@ The new `photo-advice-*/` directory contains:
 
 - **`photo-advice.md`**: table of all original photo names, estimated
   reconstruction value, keypoint/verified-match/PnP evidence, measured angles
-  where available, and a specific next action.
+  where available, and a specific next action. Registered photos also show
+  how many 3D tracks they observe and how many **two-view tracks would lose
+  triangulation if that camera were removed** (a measured fragility proxy,
+  not a leave-one-out SfM rerun).
 - **`photo-advice.json`**: machine-readable statuses and prioritized
   suggested photo azimuth/elevation, framing and reason.
 - **`photo-advice.jpg`**: contact sheet labeling each original photo
