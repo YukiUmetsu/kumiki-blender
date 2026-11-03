@@ -395,6 +395,9 @@ def analyze(revision: Path, *, source_index: Path | None = None,
         view_counts = visual_counts["view"]
         framing_counts = visual_counts["framing"]
         elevation_counts = visual_counts["elevation"]
+        successful_labels = sum(
+            item["source"] == "local-vision-model / not verified"
+            for item in vision.values())
         semantic_gaps = [
             ("head-and-torso", "medium-distance head, neck and torso",
              "Vision labels found no head-and-torso context shot bridging detail and body",
@@ -407,7 +410,7 @@ def analyze(revision: Path, *, source_index: Path | None = None,
              "elevated" not in elevation_counts),
         ]
         for view, framing, reason, needed in semantic_gaps:
-            if needed:
+            if needed and successful_labels >= max(2, math.ceil(0.7 * len(vision))):
                 shots.append({
                     "priority": len(shots) + 1,
                     "kind": "vision-estimated-coverage-gap",
