@@ -617,6 +617,54 @@ interchangeable with undistorted images.
 
 ### Remove background artifacts without repeating camera registration (macOS)
 
+#### Foreground-first pipeline (recommended for large statues)
+
+The Mac helper now assembles the existing rectified segmentation, COLMAP
+track-consistency audit, hash/provenance verification, training and calibrated
+visual QA into two explicit stages. Original photographs and camera poses are
+preserved. **Mask generation alone is never approval to train:** removing part
+of a head, ear or weathered stone will teach OpenSplat an incorrect silhouette.
+
+First generate masks on the **registered, undistorted** photos and audit their
+3D track consistency. This does not rerun SfM or launch OpenSplat:
+
+```bash
+SOURCE=.review/mac-splat-smoke/splat-20261103T063944Z-55327
+bash scripts/mac_splat_test.sh foreground-prep "$SOURCE" rembg
+```
+
+The command prints an immutable `foreground-mask-...` revision and a separate
+`foreground-audit-...` revision. Inspect **every** photo in
+`mask-contact-sheet.jpg`, especially facial edges, headdress, body and tail.
+Also inspect the cross-view `mask-consistency-contact-sheet.jpg`: red markers
+suggest background leakage; cyan markers suggest missing subject, and yellow
+markers indicate ambiguous tracks. These are review cues, not automatic truth.
+If semantic segmentation cuts away genuine statue surfaces, generate guided
+GrabCut alternatives or use `refine-dense-masks` / `compose-dense-masks`, then
+rerun `kumiki-blender audit-dense-masks` on the corrected revision.
+
+After that human review, opt into training with an explicit acknowledgement:
+
+```bash
+MASKS=.review/mac-splat-smoke/foreground-mask-<timestamp>
+AUDIT=.review/mac-splat-smoke/foreground-audit-<timestamp>
+MASKS_REVIEWED=1 \
+  OPENSPLAT=/absolute/path/to/working/opensplat \
+  DOWNSCALE_FACTOR=4 ITERATIONS=3000 \
+  bash scripts/mac_splat_test.sh foreground-train "$SOURCE" "$MASKS" "$AUDIT"
+```
+
+The training gate checks mask-report hashes, photo provenance, registered
+camera source, binary/full-resolution masks, multi-view audit coverage and
+COLMAP model integrity. It refuses unreviewed masks by default. Successful
+training automatically generates a paired multi-angle splat contact sheet
+(unless `FOREGROUND_AUTO_QA=0`). The `--downscale` setting reaches the
+registered-reconstruction OpenSplat path, allowing realistic memory budgets
+on Apple Silicon. This remains a **private splat candidate**, not a validated
+mesh or a photo-faithful likeness.
+
+#### Individual mask tools and manual alternatives
+
 The Mac smoke helper can reuse the successful PyCOLMAP cameras inside an
 existing `splat-...` revision. A first unmasked model often learns floating
 sky, mountains, and city textures:
