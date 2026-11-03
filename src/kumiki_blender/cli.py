@@ -196,6 +196,8 @@ def main(argv: list[str] | None = None) -> int:
                                        help="Folder of 8–256 photos of the same object")
         photo_model_input.add_argument("--manifest", type=Path,
                                        help="Curated multi-view ReferenceSet JSON manifest")
+        photo_model_input.add_argument("--reconstruction", type=Path,
+                                       help="Reuse a previous registered sparse-reconstruction/ revision; skip COLMAP")
         photo_model_parser.add_argument("--asset-id", help="Required with --photos")
         photo_model_parser.add_argument("--output", type=Path, required=True,
                                         help="New private, immutable output revision")
@@ -212,6 +214,8 @@ def main(argv: list[str] | None = None) -> int:
         photo_model_parser.add_argument("--max-image-size", type=int, default=3200)
         photo_model_parser.add_argument("--no-texture", action="store_true")
         photo_model_parser.add_argument("--no-renders", action="store_true")
+        photo_model_parser.add_argument("--rectified-masks", type=Path,
+                                        help="Reviewed masks for existing undistorted cameras only")
     for command in ("plan-dense-photos", "build-dense-photos"):
         dense_parser = subcommands.add_parser(
             command, help="Review or reconstruct a private dense statue mesh from registered cameras")
@@ -929,7 +933,7 @@ def main(argv: list[str] | None = None) -> int:
                     report["status"].startswith("dense-mesh-candidate") else 3)
         if args.command in ("plan-photo-model", "build-photo-model"):
             from .reconstruction.photo_model import (PhotoModelSettings, build_photo_model,
-                                                     plan_photo_model)
+                                                     plan_photo_model, plan_registered_photo_model)
             from .reconstruction.references import ReferenceError, load_reference_set
             from .reconstruction.splat_input import load_photo_folder
             try:
@@ -937,7 +941,10 @@ def main(argv: list[str] | None = None) -> int:
                     raise ReferenceError("--asset-id is required with --photos")
                 if args.asset_id and not args.photos:
                     raise ReferenceError("--asset-id is only used with --photos")
-                references = (load_photo_folder(args.photos, args.asset_id)
+                if args.rectified_masks and not args.reconstruction:
+                    raise ReferenceError("--rectified-masks requires --reconstruction")
+                references = (None if args.reconstruction else
+                              load_photo_folder(args.photos, args.asset_id)
                               if args.photos else load_reference_set(args.manifest))
                 settings = PhotoModelSettings(
                     engine=args.engine, dense_backend=args.backend, colmap=args.colmap,
@@ -947,9 +954,16 @@ def main(argv: list[str] | None = None) -> int:
                     dense_timeout_seconds=args.dense_timeout_seconds,
                     max_image_size=args.max_image_size,
                     texture=not args.no_texture, render_previews=not args.no_renders)
-                report = (plan_photo_model(references, args.output, settings)
-                          if args.command == "plan-photo-model" else
-                          build_photo_model(references, args.output, settings))
+                if args.command == "plan-photo-model":
+                    report = (plan_registered_photo_model(
+                        args.reconstruction, args.output, settings,
+                        rectified_masks=args.rectified_masks) if args.reconstruction else
+                        plan_photo_model(references, args.output, settings))
+                else:
+                    report = build_photo_model(
+                        references, args.output, settings,
+                        registered_reconstruction=args.reconstruction,
+                        rectified_masks=args.rectified_masks)
             except ReferenceError as error:
                 raise RecipeError(str(error)) from error
             print(json.dumps(report, indent=2))
