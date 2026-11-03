@@ -345,7 +345,8 @@ def build_sparse_reconstruction(reference_set: ReferenceSet, output: str | Path,
                                 engine: str = "colmap",
                                 timeout_seconds: int = 3600,
                                 undistort: bool = False,
-                                max_image_size: int = 4000) -> dict[str, Any]:
+                                max_image_size: int = 4000,
+                                registration_profile: str = "standard") -> dict[str, Any]:
     """Produce auditable camera/sparse data using a locally installed COLMAP.
 
     External tools may fail on historical or unrelated internet photos. Their
@@ -361,6 +362,10 @@ def build_sparse_reconstruction(reference_set: ReferenceSet, output: str | Path,
         raise ReferenceError("undistort must be bool and max_image_size must be 512–16384")
     if engine not in ("colmap", "pycolmap"):
         raise ReferenceError("Sparse engine must be colmap or pycolmap")
+    if registration_profile not in ("standard", "high-recall"):
+        raise ReferenceError("Registration profile must be standard or high-recall")
+    if registration_profile == "high-recall" and engine != "pycolmap":
+        raise ReferenceError("High-recall registration currently requires --engine pycolmap")
     audit = audit_reference_set(reference_set)
     references = _staged_images(reference_set, audit)
     if len(references) < 3:
@@ -391,6 +396,7 @@ def build_sparse_reconstruction(reference_set: ReferenceSet, output: str | Path,
         "manifest_sha256": reference_set.manifest_sha256,
         "source_images": len(reference_set.images),
         "staged_independent_images": len(references),
+        "registration_profile": registration_profile,
         "registered_images": 0,
         "undistortion_requested": undistort,
         "colmap_info": colmap_info,
@@ -415,12 +421,14 @@ def build_sparse_reconstruction(reference_set: ReferenceSet, output: str | Path,
     images = target / "images"
     sparse = target / "sparse"
     sparse.mkdir()
+    profile_args = (["--registration-profile", "high-recall"]
+                    if registration_profile == "high-recall" else [])
     stages = [
         ("feature_extractor", ["--database_path", str(database), "--image_path", str(images)] +
          (["--ImageReader.mask_path", str(target / "masks")] if has_masks else []) +
          [cpu_flags[0], "0"] +
-         (["--max_image_size", str(max_image_size)] if engine == "pycolmap" else [])),
-        ("exhaustive_matcher", ["--database_path", str(database), cpu_flags[1], "0"]),
+         (["--max_image_size", str(max_image_size)] if engine == "pycolmap" else []) + profile_args),
+        ("exhaustive_matcher", ["--database_path", str(database), cpu_flags[1], "0"] + profile_args),
         ("mapper", ["--database_path", str(database), "--image_path", str(images),
                     "--output_path", str(sparse)]),
     ]
