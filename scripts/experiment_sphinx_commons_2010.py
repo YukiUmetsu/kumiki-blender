@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Reproducible, photo-derived Great Sphinx SfM experiment (no proxy mesh).
 
-Download five verified same-day Commons photographs, reconstruct cameras and
-sparse points with the existing PyCOLMAP pipeline, and preserve diagnostics.
+Reconstruct cameras and sparse points from five verified Commons photos or a
+local multi-view photo folder, preserving source hashes and diagnostics.
 A point-cloud GLB is NOT a watertight or photo-faithful monument mesh.
 """
 from __future__ import annotations
@@ -54,7 +54,7 @@ def download_photo(filename: str, destination: Path, *, offline_dir: Path | None
     else:
         url = original_url(filename)
         request = urllib.request.Request(url, headers={
-            "User-Agent": "KumikiBlenderPhotogrammetryExperiment/0.1 (research; Wikimedia Commons)",
+            "User-Agent": "KumikiBlenderPhotogrammetryExperiment/0.1 (https://github.com/YukiUmetsu/kumiki-blender)",
             "Accept": "image/jpeg,image/*",
         })
         error = None
@@ -69,7 +69,22 @@ def download_photo(filename: str, destination: Path, *, offline_dir: Path | None
                     raise ValueError(f"Invalid original size: {filename}")
                 destination.write_bytes(payload)
                 break
-            except (OSError, urllib.error.URLError, ValueError) as exc:
+            except urllib.error.HTTPError as exc:
+                if exc.code == 429:
+                    # Wikimedia explicitly requires respecting 429 and Retry-After.
+                    # Do not retry, switch hosts, or rotate user agents to evade it.
+                    delay = exc.headers.get("Retry-After") if exc.headers else None
+                    hint = f" Retry-After: {delay}." if delay else ""
+                    raise RuntimeError(
+                        f"Wikimedia rate-limited the photo download (HTTP 429).{hint} "
+                        "Use --photos-dir /path/to/existing-sphinx-photos to work offline, "
+                        "or --offline-photos /path/to/manually-downloaded-commons-originals."
+                    ) from exc
+                error = exc
+                if attempt == 2 or exc.code < 500:
+                    raise RuntimeError(f"Could not download {commons_page(filename)}: {error}") from error
+                time.sleep(attempt + 1)
+            except (OSError, ValueError) as exc:
                 error = exc
                 if attempt == 2:
                     raise RuntimeError(f"Could not download {commons_page(filename)}: {error}") from error
@@ -120,6 +135,65 @@ def prepare_sources(target: Path, offline_dir: Path | None) -> tuple[Path, list[
     ]
     credits += [f"- [{item['file']}]({item['source_page']})" for item in metadata]
     (target / "CREDITS.md").write_text("\n".join(credits) + "\n", encoding="utf-8")
+    return path, metadata
+
+
+def prepare_local_sources(target: Path, photos_dir: Path) -> tuple[Path, list[dict]]:
+    """Stage an existing multi-view photo folder without making network requests.
+
+    The photos' public provenance and reuse rights are unknown. Do not claim
+    Wikimedia authorship, licensing, or fidelity for these local inputs.
+    """
+    from PIL import Image
+
+    if not photos_dir.is_dir():
+        raise FileNotFoundError(f"Photo directory does not exist: {photos_dir}")
+    extensions = {".jpg", ".jpeg", ".png", ".webp"}
+    originals = sorted(
+        (p for p in photos_dir.iterdir() if p.is_file() and p.suffix.lower() in extensions),
+        key=lambda p: p.name.casefold(),
+    )
+    if not 3 <= len(originals) <= 256:
+        raise ValueError(f"Need 3–256 local photos; found {len(originals)} in {photos_dir}")
+    if len({p.name.casefold() for p in originals}) != len(originals):
+        raise ValueError("Local photos have case-insensitive filename collisions")
+    images = target / "input" / "photos"
+    images.mkdir(parents=True)
+    metadata, entries = [], []
+    for index, source in enumerate(originals, 1):
+        if source.is_symlink() or source.stat().st_size > 50 * 1024 * 1024:
+            raise ValueError(f"Refusing symlink or oversized source: {source.name}")
+        destination = images / source.name
+        shutil.copyfile(source, destination)
+        with Image.open(destination) as photo:
+            photo.verify()
+        with Image.open(destination) as photo:
+            width, height = photo.size
+        if min(width, height) < 640 or width * height > 40_000_000:
+            raise ValueError(f"Photo dimensions unsuitable for SfM: {source.name}")
+        sha = hashlib.sha256(destination.read_bytes()).hexdigest()
+        metadata.append({"file": source.name, "sha256": sha, "width": width,
+                         "height": height, "source_kind": "user-upload",
+                         "author": "unverified", "license": "unverified"})
+        entries.append({"id": f"local-{index:04d}", "file": f"photos/{source.name}",
+                        "source_kind": "user-upload", "view": "unknown",
+                        "regions": ["object"], "expected_sha256": sha})
+    manifest = {
+        "schema_version": 1, "asset_id": "great-sphinx-local-multiview",
+        "subject": "Great Sphinx of Giza: user-provided local photo experiment",
+        "required_views": ["unknown"], "required_regions": ["object"], "images": entries,
+    }
+    path = target / "input" / "reference-set.json"
+    path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    (target / "source-metadata.json").write_text(json.dumps(metadata, indent=2) + "\n",
+                                                  encoding="utf-8")
+    (target / "CREDITS.md").write_text(
+        "# Local photographs\n\n"
+        "Photographs supplied by the user. Public source, author, and reuse "
+        "rights have **not** been verified. Do not redistribute these images "
+        "or derivatives without permission.\n",
+        encoding="utf-8",
+    )
     return path, metadata
 
 
@@ -182,8 +256,11 @@ def diagnose(revision: Path, target: Path) -> dict:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--offline-photos", type=Path,
-                        help="Use original photographs already downloaded to this directory")
+    sources = parser.add_mutually_exclusive_group()
+    sources.add_argument("--offline-photos", type=Path,
+                         help="Use five manually downloaded Commons originals with exact filenames")
+    sources.add_argument("--photos-dir", type=Path,
+                         help="Use ALL local JPG, PNG and WebP photos without downloading anything")
     parser.add_argument("--max-image-size", type=int, default=2400)
     parser.add_argument("--profile", choices=("standard", "high-recall"), default="high-recall")
     args = parser.parse_args(argv)
@@ -191,8 +268,8 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("Output already exists: choose a new experiment revision")
     target = args.output.resolve()
     target.mkdir(parents=True)
-    summary = {"experiment": "wknight94-2010-sphinx", "source_photos": len(SOURCES),
-               "status": "in-progress", "mesh_generated": False,
+    summary = {"experiment": "local-sphinx-multiview" if args.photos_dir else "wknight94-2010-sphinx",
+               "source_photos": 0, "status": "in-progress", "mesh_generated": False,
                "limitations": "Sparse photogrammetry is not a faithful Sphinx surface mesh."}
 
     def checkpoint() -> None:
@@ -200,7 +277,11 @@ def main(argv: list[str] | None = None) -> int:
                                             encoding="utf-8")
     checkpoint()
     try:
-        manifest, metadata = prepare_sources(target, args.offline_photos)
+        if args.photos_dir:
+            manifest, metadata = prepare_local_sources(target, args.photos_dir)
+        else:
+            manifest, metadata = prepare_sources(target, args.offline_photos)
+        summary["source_photos"] = len(metadata)
         summary["photos"] = metadata
         checkpoint()
         from kumiki_blender.reconstruction.references import load_reference_set
@@ -227,8 +308,8 @@ def main(argv: list[str] | None = None) -> int:
             summary["point_cloud"] = export_sparse_point_cloud(sparse, best["model"], target)
         else:
             summary["point_cloud"] = {"status": "unavailable", "reason": "No sparse models"}
-        # The source series contains only five views: the production 8-view
-        # gate remains intact. Never mislabel the point cloud as a mesh.
+        # Sparse points alone cannot establish a usable surface, even when
+        # more than eight input photos were provided. Never claim a mesh.
         summary["surface_mesh"] = "not-generated / insufficient-validated-dense-geometry"
         checkpoint()
         print(json.dumps({"status": summary["status"], "best_model": summary.get("best_model"),
