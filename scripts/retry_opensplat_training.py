@@ -164,14 +164,23 @@ def train_existing(revision: Path, output: Path, *, opensplat: str = "opensplat"
                 stream.seek(max(0, log_file.stat().st_size - 16384))
                 report["log_tail"] = stream.read().decode("utf-8", "replace")[-8000:]
         report["debug_command"] = shlex.join([
-            "lldb", "--batch", "-o", "run", "-o", "thread backtrace all",
-            "--", *command[:-1], command[-1]
+            "lldb", "--batch", "-o", "run", "-k", "thread backtrace all",
+            "--", *command
         ])
-        report["next_action"] = (
-            "Inspect logs/opensplat.log. If MPS crashed, retry from the original "
-            "source revision with --cpu to isolate GPU-specific failures. "
-            "Run debug_command manually for a native stack trace."
-        )
+        if cpu:
+            report["next_action"] = (
+                "CPU mode also crashed: this does not establish a Metal/MPS-only "
+                "failure. Run 'bash scripts/mac_splat_test.sh crash-qa "
+                + shlex.quote(str(target)) +
+                "' to capture the native LLDB backtrace from a separate dataset "
+                "copy; inspect the first crashing frame."
+            )
+        else:
+            report["next_action"] = (
+                "Inspect logs/opensplat.log. Retry the original registered dataset "
+                "with TRAIN_CPU=1 to distinguish a GPU-specific failure. If CPU "
+                "also crashes, run crash-qa on that CPU retry."
+            )
     return save()
 
 
