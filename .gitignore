@@ -5,6 +5,8 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 .review/
+# Generated offline workbenches embed private photo previews.
+annotation-workbench.html
 dist/
 build/
 *.blend1

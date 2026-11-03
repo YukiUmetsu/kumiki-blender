@@ -220,7 +220,10 @@ def write_analysis_revision(output: Path, audit: dict[str, Any],
         raise ValueError(f"Output parent directory does not exist: {parent}")
     with tempfile.TemporaryDirectory(prefix=".face-analysis-stage-", dir=parent) as temporary:
         staged = Path(temporary) / "revision"
-        staged.mkdir()
+        # Embedded photographic previews must remain inaccessible to other
+        # local accounts even after this directory is moved out of the
+        # private TemporaryDirectory (normally mode 0700 on POSIX).
+        staged.mkdir(mode=0o700 if workbench_html is not None else 0o777)
         files = []
         if audit:
             _write_json(staged / "photo-audit.json", audit)
@@ -231,7 +234,10 @@ def write_analysis_revision(output: Path, audit: dict[str, Any],
             _render_contact_sheet(photos, annotations, staged / "contact-sheet.png")
             files.append("contact-sheet.png")
         if workbench_html is not None:
-            (staged / "annotation-workbench.html").write_text(workbench_html, encoding="utf-8")
+            html_path = staged / "annotation-workbench.html"
+            html_path.write_text(workbench_html, encoding="utf-8")
+            if os.name == "posix":
+                html_path.chmod(0o600)
             files.append("annotation-workbench.html")
         if proposals is not None:
             _write_json(staged / "landmark-proposals.json", proposals)

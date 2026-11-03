@@ -2,8 +2,10 @@
 
 import base64
 import json
+import os
 import re
 import shutil
+import stat
 import subprocess
 
 import pytest
@@ -76,6 +78,27 @@ def test_workbench_requires_small_bounded_set_of_photos(tmp_path):
     many = photos * 65
     with pytest.raises(ValueError, match="1–64"):
         build_annotation_workbench(many)
+
+
+def test_workbench_rejects_photo_changed_after_intake(tmp_path):
+    path = _image(tmp_path / "face.png", (140, 150, 160))
+    photos = load_photo_set([path])
+    _image(path, (220, 50, 40))
+    with pytest.raises(ValueError, match="changed since intake"):
+        build_annotation_workbench(photos)
+
+
+def test_private_workbench_output_is_owner_only(tmp_path):
+    if os.name != "posix":
+        pytest.skip("POSIX permission bits are not portable to this platform")
+    source = tmp_path / "photos"
+    source.mkdir()
+    _image(source / "face.png")
+    output = tmp_path / "review-r01"
+    assert main(["inspect", "--images-dir", str(source), "--workbench",
+                 "--output", str(output)]) == 0
+    assert stat.S_IMODE(output.stat().st_mode) & 0o077 == 0
+    assert stat.S_IMODE((output / "annotation-workbench.html").stat().st_mode) & 0o077 == 0
 
 
 def test_embedded_editor_script_has_valid_js_syntax(tmp_path):

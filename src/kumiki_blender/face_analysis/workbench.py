@@ -7,6 +7,7 @@ private report artifact and is never stored with the model repository.
 from __future__ import annotations
 
 import base64
+import hashlib
 import io
 import json
 from typing import Sequence
@@ -34,12 +35,21 @@ def build_annotation_workbench(photos: Sequence[Photo],
     preview_size = 0
     for photo in photos:
         view = annotations.images.get(photo.image_id) if annotations else None
-        with Image.open(photo.path) as original:
-            preview = original.convert("RGB")
-            preview.thumbnail((1200, 1400), Image.Resampling.LANCZOS)
-            stream = io.BytesIO()
-            preview.save(stream, format="JPEG", quality=82, optimize=True)
-            data = stream.getvalue()
+        # Bind the embedded pixels to the exact image that intake audited.
+        # Read through the same file handle to avoid a path-swap between hash
+        # verification and preview decoding.
+        with photo.path.open("rb") as source:
+            if hashlib.file_digest(source, "sha256").hexdigest() != photo.sha256:
+                raise ValueError(f"Photo changed since intake: {photo.image_id}")
+            source.seek(0)
+            with Image.open(source) as original:
+                if original.size != (photo.width, photo.height):
+                    raise ValueError(f"Photo dimensions changed since intake: {photo.image_id}")
+                preview = original.convert("RGB")
+                preview.thumbnail((1200, 1400), Image.Resampling.LANCZOS)
+                stream = io.BytesIO()
+                preview.save(stream, format="JPEG", quality=82, optimize=True)
+                data = stream.getvalue()
         preview_size += len(data)
         if preview_size > 40 * 1024 * 1024:
             raise ValueError("Annotation previews exceed 40 MiB; split the photo set")
