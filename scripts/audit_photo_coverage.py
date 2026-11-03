@@ -476,6 +476,30 @@ def _markdown(report: dict) -> str:
         f"**Angle basis:** {report['angle_reference']['kind']} "
         f"({report['angle_reference']['original_filename'] or 'none'}).",
         "",
+        "## Photos to review first",
+        "",
+    ]
+    low = [p for p in report["images"]
+           if p["assessment"] in ("low-current-value", "cannot-use")]
+    for photo in low:
+        lines.append(f"- **{photo['original_filename']}** ({photo['assessment']}): "
+                     f"{photo['reasons'][-1]}")
+    if not low:
+        lines.append("- None have zero/weak evidence under the current thresholds.")
+    overlap = [p["original_filename"] for p in report["images"]
+               if p["assessment"] == "keep-check-overlap"]
+    if overlap:
+        lines.append("- **Possible duplicate angles (keep until verified):** " +
+                     ", ".join(overlap))
+    lines.extend(["", "## Priority new photos", ""])
+    for shot in report["recommended_photos"]:
+        angle = (f"azimuth {shot['target_azimuth_deg']:+.1f}°, "
+                 f"elevation {shot['target_elevation_deg']:+.1f}°"
+                 if shot["target_azimuth_deg"] is not None else "angle unmeasured")
+        lines.append(f"{shot['priority']}. **{shot['view']}** ({angle}): "
+                     f"{shot['framing']}. {shot['reason']}.")
+    lines.extend([
+        "",
         "## Photo-by-photo",
         "",
         "| Original photo | Assessment | Evidence | Angle | View/framing | Action |",
@@ -499,13 +523,6 @@ def _markdown(report: dict) -> str:
             kind += " (vision estimate)"
         action = photo["next_action"].replace("|", "/")
         lines.append(f"| {name} | {photo['assessment']} | {evidence} | {angle} | {kind} | {action} |")
-    lines.extend(["", "## Photos to capture next", ""])
-    for shot in report["recommended_photos"]:
-        angle = (f"azimuth {shot['target_azimuth_deg']:+.1f}°, "
-                 f"elevation {shot['target_elevation_deg']:+.1f}°"
-                 if shot["target_azimuth_deg"] is not None else "angle unmeasured")
-        lines.append(f"{shot['priority']}. **{shot['view']}** ({angle}): "
-                     f"{shot['framing']}. {shot['reason']}.")
     lines.extend(["", "## Limits", "", report["angle_reference"]["limitations"], "",
                   *("- " + note for note in report["capture_notes"]), ""])
     return "\n".join(lines)
