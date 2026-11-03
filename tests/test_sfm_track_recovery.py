@@ -34,6 +34,11 @@ class FakeReconstruction:
         path.mkdir(parents=True, exist_ok=True)
         (path / "model-marker.txt").write_text(",".join(self._names))
 
+    def write_text(self, path):
+        path = Path(path)
+        path.mkdir(parents=True, exist_ok=True)
+        (path / "images.txt").write_text(",".join(self._names))
+
 
 class FakePyCOLMAP:
     def __init__(self, recovered=None, *, fail=False):
@@ -95,6 +100,7 @@ class SfmTrackRecoveryTests(unittest.TestCase):
             self.assertEqual(recovery._sha256(output / "database.db"), original_hash)
             self.assertTrue((output / "seed" / "model-marker.txt").is_file())
             self.assertTrue((output / "sparse" / "0" / "model-marker.txt").is_file())
+            self.assertTrue((output / "text-models" / "0" / "images.txt").is_file())
             self.assertEqual(json.loads((output / "recovery-report.json").read_text()),
                              report)
             with self.assertRaises(FileExistsError):
