@@ -147,6 +147,54 @@ def _database_match_evidence(database: Path, seed_names: set[str],
         }
 
 
+def diagnose_only(revision: Path, output: Path, *, model: int = 0) -> dict:
+    """Inspect a failed seed without invoking PyCOLMAP or rerunning SfM."""
+    if not 0 <= model <= 1000:
+        raise ValueError("model must be in 0..1000")
+    source = revision.resolve()
+    sparse = source / "sparse-reconstruction" if (
+        source / "sparse-reconstruction").is_dir() else source
+    model_path = sparse / "text-models" / str(model) / "images.txt"
+    database = sparse / "database.db"
+    if not model_path.is_file() or model_path.is_symlink():
+        raise FileNotFoundError(f"Missing COLMAP text model: {model_path}")
+    if not database.is_file() or database.is_symlink():
+        raise FileNotFoundError(f"Missing COLMAP database: {database}")
+    if output.exists() or output.is_symlink():
+        raise FileExistsError(f"Output already exists: {output}")
+    seed_names = set()
+    with model_path.open(encoding="utf-8") as stream:
+        for line in stream:
+            if not line.strip() or line.lstrip().startswith("#"):
+                continue
+            parts = line.split()
+            if len(parts) < 10 or not parts[0].isdigit() or not parts[8].isdigit():
+                raise ValueError(f"Malformed COLMAP image pose: {model_path}")
+            seed_names.add(parts[9])
+            next(stream, None)
+    if not seed_names:
+        raise ValueError("Seed model has no registered cameras")
+    evidence = _database_match_evidence(database, seed_names)
+    report = {
+        "schema_version": 1,
+        "status": "read-only-match-audit",
+        "source_revision": str(source),
+        "source_model_index": model,
+        "registered_seed_photos": len(seed_names),
+        "registered_seed_filenames": sorted(seed_names),
+        "match_evidence": evidence,
+        "next_action": (
+            "Use photo-advice to prioritize overlap bridge shots and inspect "
+            "2D-to-3D support before retrying seeded registration."
+        ),
+    }
+    output.mkdir(parents=True, exist_ok=False)
+    with (output / "recovery-match-qa.json").open("x", encoding="utf-8") as stream:
+        json.dump(report, stream, indent=2)
+        stream.write("\n")
+    return report
+
+
 def recover(revision: Path, output: Path, *, model: int = 0,
             retriangulate: bool = True, fix_seed_poses: bool = True,
             pycolmap_module=None) -> dict:
@@ -271,7 +319,24 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--model", type=int, default=0)
     parser.add_argument("--skip-retriangulation", action="store_true")
     parser.add_argument("--allow-seed-pose-refinement", action="store_true")
+    parser.add_argument("--diagnose-only", action="store_true",
+                        help="Inspect seed-to-missing match graph without running PyCOLMAP")
     args = parser.parse_args(argv)
+    if args.diagnose_only:
+        try:
+            report = diagnose_only(args.revision, args.output, model=args.model)
+        except (OSError, RuntimeError, ValueError) as error:
+            parser.exit(2, f"ERROR: {error}\n")
+        evidence = report["match_evidence"]
+        print(f"Seed: {report['registered_seed_photos']} registered photos")
+        print(f"Database: {evidence['verified_pairs']} verified pairs; "
+              f"{evidence['strong_seed_to_missing_pairs']} strong seed-to-missing bridges")
+        print(f"Status: {evidence['status']}")
+        for photo in evidence["unregistered_photo_advice"]:
+            print(f"  {photo['filename']}: {photo['assessment']} "
+                  f"({photo['strong_pairs_to_seed']} strong seed links)")
+        print(f"Report: {args.output / 'recovery-match-qa.json'}")
+        return 0
     try:
         report = recover(
             args.revision, args.output, model=args.model,
