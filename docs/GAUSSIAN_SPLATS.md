@@ -139,6 +139,48 @@ new information. On no improvement, the Mac wrapper automatically
 generates the photo-value and missing-angle report from the original
 sparse revision (if it can read the diagnostic inputs).
 
+#### Warren 2019 Sphinx: 26/26 registered, OpenSplat native crash
+
+The independent Warren LeMay 2019 cohort achieved **26/26 registered cameras**,
+**29,844 sparse points**, 271 strong verified pairs in one connected component,
+and **1.262 px median sparse reprojection error**. This is a major SfM
+improvement over the mixed-source 7/26 run, but **not a verified surface scan**.
+OpenSplat exited with native signal 11 (`SIGSEGV`), so there is **no finished
+splat**. Do not rerun COLMAP to debug the native trainer.
+
+Use the existing staged dataset in a fresh, isolated training revision:
+
+```bash
+git pull --ff-only
+REV=.review/mac-splat-smoke/splat-20261103T063944Z-55327
+DOWNSCALE_FACTOR=4 ITERATIONS=300 bash scripts/mac_splat_test.sh train-existing "$REV"
+```
+
+This command validates image and camera SHA-256 hashes, **copies** the COLMAP
+dataset (OpenSplat may create a cache next to its input), and invokes
+`opensplat <new-copy>/dataset -n 300 -d 4 -o <new-output>/splat.ply`.
+It preserves all original photos, registered poses and sparse tracks. On failure,
+inspect the new `logs/opensplat.log` and `retry-report.json` for the native
+exit signal and an optional LLDB stack-trace command.
+
+If the GPU path still crashes, isolate it with a **diagnostic-only CPU run**:
+
+```bash
+TRAIN_CPU=1 DOWNSCALE_FACTOR=8 ITERATIONS=100 \
+  bash scripts/mac_splat_test.sh train-existing "$REV"
+```
+
+CPU may be much slower. A successful CPU run with a failed MPS run would
+implicate the native GPU path, but **would not by itself identify the cause**.
+The OpenSplat binary should also have a matching Metal library
+(`default.metallib`) in its build directory. No fallback is automatically
+claimed to fix SIGSEGV without reviewing the log or native backtrace.
+
+The `photo-advice` report now requests **zero additional photos for
+registration** when all images are registered. This does not prove full surface
+visibility: the collection visibly emphasizes side/rear tourist angles and
+has limited close-up frontal facial detail.
+
 #### Grounded photo-angle and bridge recommendations
 
 The photo advisor now prioritizes **existing photos that might be recovered**
