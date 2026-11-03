@@ -190,6 +190,36 @@ class PhotoModelTests(unittest.TestCase):
         self.assertIn("--asset-id", error.getvalue())
         self.assertFalse(target.exists())
 
+    def test_sparse_only_cli_accepts_folder_and_learned_matching(self):
+        target = self.root / "sparse-learned"
+        captured = {}
+
+        def build(refs, output, **kwargs):
+            captured["count"] = len(refs.images)
+            captured["output"] = output
+            captured["kwargs"] = kwargs
+            return {"status": "candidate / visual-review-required", "registered_images": 8}
+
+        output = io.StringIO()
+        with patch("kumiki_blender.reconstruction.colmap.build_sparse_reconstruction", side_effect=build):
+            with contextlib.redirect_stdout(output):
+                result = main(["reconstruct-photos", "--photos", str(self.photos),
+                               "--asset-id", "sphinx-cameras", "--output", str(target),
+                               "--engine", "colmap", "--matching-preset", "loma", "--undistort"])
+        self.assertEqual(result, 0)
+        self.assertEqual(captured["count"], 8)
+        self.assertEqual(captured["kwargs"]["matching_preset"], "loma")
+        self.assertTrue(captured["kwargs"]["undistort"])
+        self.assertEqual(captured["output"], target)
+        self.assertEqual(json.loads(output.getvalue())["registered_images"], 8)
+
+    def test_learned_matching_validation_does_not_create_photo_model(self):
+        settings = PhotoModelSettings(engine="pycolmap", matching_preset="loma")
+        with self.assertRaisesRegex(ReferenceError, "requires --engine colmap"):
+            plan_photo_model(self.references, self.root / "bad", settings,
+                             dependencies=self.dependencies)
+        self.assertFalse((self.root / "bad").exists())
+
     def test_unrelated_web_photos_are_not_treated_as_sufficient_overlap(self):
         output = self.root / "inadequate-overlap"
 

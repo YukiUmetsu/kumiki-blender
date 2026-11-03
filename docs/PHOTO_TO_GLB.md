@@ -5,6 +5,9 @@ Blender GLB-export workers into one command. This is **photogrammetry**, not a
 procedural reconstruction or Gaussian splat. It can use a private folder of
 8–256 overlapping photographs, including a 30-photo monument reference set.
 
+For mixed internet photos where left/right-side cameras remain disconnected,
+see [learned COLMAP matching and camera coverage comparisons](NEURAL_CAMERA_RECONSTRUCTION.md).
+
 ## Mac (Apple Silicon)
 
 Install Python with `pip install -e '.[photogrammetry,qa]'` and Blender separately.

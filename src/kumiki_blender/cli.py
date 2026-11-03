@@ -176,14 +176,21 @@ def main(argv: list[str] | None = None) -> int:
     for command in ("reference-audit", "reconstruct-photos"):
         photo_parser = subcommands.add_parser(
             command, help="Audit statue photo evidence or build a sparse COLMAP camera reconstruction")
-        photo_parser.add_argument("--manifest", type=Path, required=True,
-                                  help="Local reference-only image dossier JSON")
+        photo_input = photo_parser.add_mutually_exclusive_group(required=True)
+        photo_input.add_argument("--manifest", type=Path,
+                                 help="Local reference-only image dossier JSON")
         if command == "reconstruct-photos":
+            photo_input.add_argument("--photos", type=Path,
+                                     help="Folder of 8–256 local photos; skip dense meshing")
+            photo_parser.add_argument("--asset-id", help="Required with --photos")
             photo_parser.add_argument("--output", type=Path, required=True,
                                       help="New immutable reconstruction revision directory")
             photo_parser.add_argument("--colmap", default="colmap", help="Installed COLMAP executable")
             photo_parser.add_argument("--engine", choices=("colmap", "pycolmap"), default="colmap",
                                       help="COLMAP CLI (default) or pip-installed CPU PyCOLMAP")
+            photo_parser.add_argument("--matching-preset",
+                                      choices=("sift", "sift-lightglue", "aliked-lightglue", "loma", "loma128"),
+                                      default="sift", help="Learned matching requires ONNX-enabled COLMAP 4.2+")
             photo_parser.add_argument("--timeout-seconds", type=int, default=3600)
             photo_parser.add_argument("--undistort", action="store_true",
                                       help="Rectify camera intrinsics and image pixels for accurate Blender projection")
@@ -203,6 +210,9 @@ def main(argv: list[str] | None = None) -> int:
                                         help="New private, immutable output revision")
         photo_model_parser.add_argument("--engine", choices=("pycolmap", "colmap"),
                                         default="pycolmap", help="Sparse registration engine")
+        photo_model_parser.add_argument("--matching-preset",
+                                        choices=("sift", "sift-lightglue", "aliked-lightglue", "loma", "loma128"),
+                                        default="sift", help="Learned matching requires --engine colmap and COLMAP 4.2+")
         photo_model_parser.add_argument("--backend", choices=("openmvs", "colmap"),
                                         default="openmvs", help="Dense meshing backend")
         photo_model_parser.add_argument("--colmap", default="colmap")
@@ -214,6 +224,11 @@ def main(argv: list[str] | None = None) -> int:
         photo_model_parser.add_argument("--max-image-size", type=int, default=3200)
         photo_model_parser.add_argument("--no-texture", action="store_true")
         photo_model_parser.add_argument("--no-renders", action="store_true")
+    camera_compare_parser = subcommands.add_parser(
+        "compare-camera-registrations",
+        help="Read-only before/after registration coverage for two COLMAP revisions")
+    camera_compare_parser.add_argument("--baseline", type=Path, required=True)
+    camera_compare_parser.add_argument("--candidate", type=Path, required=True)
     for command in ("plan-dense-photos", "build-dense-photos"):
         dense_parser = subcommands.add_parser(
             command, help="Review or reconstruct a private dense statue mesh from registered cameras")
@@ -966,6 +981,15 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(report, indent=2))
             return (0 if args.command == "plan-dense-photos" or
                     report["status"].startswith("dense-mesh-candidate") else 3)
+        if args.command == "compare-camera-registrations":
+            from .reconstruction.camera_compare import compare_camera_registrations
+            from .reconstruction.references import ReferenceError
+            try:
+                report = compare_camera_registrations(args.baseline, args.candidate)
+            except ReferenceError as error:
+                raise RecipeError(str(error)) from error
+            print(json.dumps(report, indent=2))
+            return 0
         if args.command in ("plan-photo-model", "build-photo-model"):
             from .reconstruction.photo_model import (PhotoModelSettings, build_photo_model,
                                                      plan_photo_model)
@@ -979,7 +1003,8 @@ def main(argv: list[str] | None = None) -> int:
                 references = (load_photo_folder(args.photos, args.asset_id)
                               if args.photos else load_reference_set(args.manifest))
                 settings = PhotoModelSettings(
-                    engine=args.engine, dense_backend=args.backend, colmap=args.colmap,
+                    engine=args.engine, matching_preset=args.matching_preset,
+                    dense_backend=args.backend, colmap=args.colmap,
                     blender=args.blender, min_registered_images=args.min_registered_images,
                     min_registered_fraction=args.min_registered_fraction,
                     sparse_timeout_seconds=args.sparse_timeout_seconds,
@@ -1227,16 +1252,25 @@ def main(argv: list[str] | None = None) -> int:
         if args.command in ("reference-audit", "reconstruct-photos"):
             from .reconstruction.references import (ReferenceError, audit_reference_set,
                                                     load_reference_set)
+            from .reconstruction.splat_input import load_photo_folder
             from .reconstruction.colmap import build_sparse_reconstruction
             try:
-                references = load_reference_set(args.manifest)
+                if args.command == "reconstruct-photos":
+                    if args.photos and not args.asset_id:
+                        raise ReferenceError("--asset-id is required with --photos")
+                    if args.asset_id and not args.photos:
+                        raise ReferenceError("--asset-id is only used with --photos")
+                references = (load_photo_folder(args.photos, args.asset_id)
+                              if args.command == "reconstruct-photos" and args.photos else
+                              load_reference_set(args.manifest))
                 report = (audit_reference_set(references) if args.command == "reference-audit" else
                           build_sparse_reconstruction(references, args.output, colmap=args.colmap,
                                                       engine=args.engine,
                                                       timeout_seconds=args.timeout_seconds,
                                                       undistort=args.undistort,
                                                       max_image_size=args.max_image_size,
-                                                      registration_profile=args.registration_profile))
+                                                      registration_profile=args.registration_profile,
+                                                      matching_preset=args.matching_preset))
             except ReferenceError as error:
                 raise RecipeError(str(error)) from error
             print(json.dumps(report, indent=2))

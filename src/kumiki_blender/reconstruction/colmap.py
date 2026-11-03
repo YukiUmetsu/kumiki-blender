@@ -13,6 +13,7 @@ import importlib.util
 import json
 import sqlite3
 import math
+import re
 import shutil
 import statistics
 import subprocess
@@ -21,6 +22,50 @@ from pathlib import Path
 from typing import Any
 
 from .references import ReferenceError, ReferenceImage, ReferenceSet, audit_reference_set
+
+
+# Pairs come from COLMAP's documented compatible extractor/matcher combinations.
+# Each revision uses a fresh database: descriptors from different extractors must
+# never be mixed, even when their dimensionality happens to agree.
+MATCHING_PRESETS: dict[str, tuple[str, str]] = {
+    "sift": ("SIFT", "SIFT_BRUTEFORCE"),
+    "sift-lightglue": ("SIFT", "SIFT_LIGHTGLUE"),
+    "aliked-lightglue": ("ALIKED_N16ROT", "ALIKED_LIGHTGLUE"),
+    "loma": ("LOMA_B", "LOMA_B"),
+    "loma128": ("LOMA_B128", "LOMA_B128"),
+}
+
+
+def _validate_matching_preset(preset: str, engine: str) -> None:
+    if preset not in MATCHING_PRESETS:
+        raise ReferenceError("Matching preset must be one of: " + ", ".join(MATCHING_PRESETS))
+    if preset != "sift" and engine != "colmap":
+        raise ReferenceError("Learned matching requires --engine colmap with a recent ONNX-enabled COLMAP CLI")
+
+
+def _preflight_matching_preset(executable: str, preset: str) -> bool:
+    """Reject unsupported learned models before writing an immutable revision."""
+    if preset == "sift":
+        return False
+    extractor, matcher = MATCHING_PRESETS[preset]
+    try:
+        extraction = subprocess.run([executable, "feature_extractor", "--help"],
+                                    capture_output=True, text=True, check=False, timeout=20)
+        matching = subprocess.run([executable, "exhaustive_matcher", "--help"],
+                                  capture_output=True, text=True, check=False, timeout=20)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise ReferenceError(f"Learned COLMAP preflight failed: {error}") from error
+    extractor_help = extraction.stdout + extraction.stderr
+    matcher_help = matching.stdout + matching.stderr
+    if (extraction.returncode != 0 or matching.returncode != 0 or
+            "--FeatureExtraction.type" not in extractor_help or
+            "--FeatureMatching.type" not in matcher_help or
+            re.search(rf"\b{re.escape(extractor)}\b", extractor_help) is None or
+            re.search(rf"\b{re.escape(matcher)}\b", matcher_help) is None):
+        raise ReferenceError(
+            f"COLMAP does not advertise {preset} ({extractor}/{matcher}); "
+            "install COLMAP 4.2+ with ONNX enabled, or choose --matching-preset sift")
+    return "--FeatureExtraction.max_image_size" in extractor_help
 
 
 def _sha256(path: Path) -> str:
@@ -296,6 +341,24 @@ def _registered_image_count(text_model: Path) -> int:
     return len(camera_ids)
 
 
+def _registered_image_names(text_model: Path) -> list[str]:
+    """Read image names from camera-pose rows, skipping alternating observations."""
+    path = text_model / "images.txt"
+    if path.is_symlink() or not path.is_file():
+        return []
+    names: list[str] = []
+    lines = iter(path.read_text(encoding="utf-8").splitlines())
+    for line in lines:
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        parts = line.split(maxsplit=9)
+        if (len(parts) == 10 and parts[0].isdigit() and parts[8].isdigit()
+                and all(_finite_float(value) for value in parts[1:8])):
+            names.append(parts[9])
+            next(lines, None)
+    return sorted(set(names))
+
+
 def _finite_float(value: str) -> bool:
     try:
         from math import isfinite
@@ -346,7 +409,8 @@ def build_sparse_reconstruction(reference_set: ReferenceSet, output: str | Path,
                                 timeout_seconds: int = 3600,
                                 undistort: bool = False,
                                 max_image_size: int = 4000,
-                                registration_profile: str = "standard") -> dict[str, Any]:
+                                registration_profile: str = "standard",
+                                matching_preset: str = "sift") -> dict[str, Any]:
     """Produce auditable camera/sparse data using a locally installed COLMAP.
 
     External tools may fail on historical or unrelated internet photos. Their
@@ -366,6 +430,7 @@ def build_sparse_reconstruction(reference_set: ReferenceSet, output: str | Path,
         raise ReferenceError("Registration profile must be standard or high-recall")
     if registration_profile == "high-recall" and engine != "pycolmap":
         raise ReferenceError("High-recall registration currently requires --engine pycolmap")
+    _validate_matching_preset(matching_preset, engine)
     audit = audit_reference_set(reference_set)
     references = _staged_images(reference_set, audit)
     if len(references) < 3:
@@ -381,6 +446,8 @@ def build_sparse_reconstruction(reference_set: ReferenceSet, output: str | Path,
             raise ReferenceError(f"COLMAP executable not found: {colmap}")
         executable = found
     colmap_info, cpu_flags = _probe_colmap(executable)
+    supports_extraction_size = (_preflight_matching_preset(executable, matching_preset)
+                                if engine == "colmap" else False)
     colmap_info["engine"] = engine
     # Re-check before creating anything: photo files can be edited after intake.
     for image in references:
@@ -397,6 +464,7 @@ def build_sparse_reconstruction(reference_set: ReferenceSet, output: str | Path,
         "source_images": len(reference_set.images),
         "staged_independent_images": len(references),
         "registration_profile": registration_profile,
+        "matching_preset": matching_preset,
         "registered_images": 0,
         "undistortion_requested": undistort,
         "colmap_info": colmap_info,
@@ -423,12 +491,21 @@ def build_sparse_reconstruction(reference_set: ReferenceSet, output: str | Path,
     sparse.mkdir()
     profile_args = (["--registration-profile", "high-recall"]
                     if registration_profile == "high-recall" else [])
+    extractor, matcher = MATCHING_PRESETS[matching_preset]
+    extract_args = (["--FeatureExtraction.type", extractor]
+                    if matching_preset != "sift" else [])
+    if supports_extraction_size:
+        extract_args += ["--FeatureExtraction.max_image_size", str(max_image_size)]
+    match_args = (["--FeatureMatching.type", matcher]
+                  if matching_preset != "sift" else [])
     stages = [
         ("feature_extractor", ["--database_path", str(database), "--image_path", str(images)] +
          (["--ImageReader.mask_path", str(target / "masks")] if has_masks else []) +
          [cpu_flags[0], "0"] +
-         (["--max_image_size", str(max_image_size)] if engine == "pycolmap" else []) + profile_args),
-        ("exhaustive_matcher", ["--database_path", str(database), cpu_flags[1], "0"] + profile_args),
+         (["--max_image_size", str(max_image_size)] if engine == "pycolmap" else []) +
+         profile_args + extract_args),
+        ("exhaustive_matcher", ["--database_path", str(database), cpu_flags[1], "0"] +
+         profile_args + match_args),
         ("mapper", ["--database_path", str(database), "--image_path", str(images),
                     "--output_path", str(sparse)]),
     ]
@@ -454,6 +531,8 @@ def build_sparse_reconstruction(reference_set: ReferenceSet, output: str | Path,
         report["failed_stage"] = "no_sparse_models"
         return checkpoint()
     counts = []
+    staged_index = json.loads((target / "staged-reference-index.json").read_text(encoding="utf-8"))
+    staged_names = {entry["filename"] for entry in staged_index["images"]}
     for index, model in enumerate(models):
         text_model = target / "text-models" / model.name
         text_model.mkdir(parents=True, exist_ok=False)
@@ -465,7 +544,13 @@ def build_sparse_reconstruction(reference_set: ReferenceSet, output: str | Path,
         if code:
             report["failed_stage"], report["exit_code"] = "model_converter", code
             return checkpoint()
-        counts.append({"model": model.name, "registered_images": _registered_image_count(text_model)})
+        registered_names = _registered_image_names(text_model)
+        if not set(registered_names).issubset(staged_names):
+            report.update(failed_stage="camera_provenance_mismatch", exit_code=2,
+                          error="Sparse model refers to images absent from staged sources")
+            return checkpoint()
+        counts.append({"model": model.name, "registered_images": len(registered_names),
+                       "registered_filenames": registered_names})
     report["models"] = counts
     report["registered_images"] = max(item["registered_images"] for item in counts)
     if report["registered_images"] >= 3:
@@ -474,6 +559,11 @@ def build_sparse_reconstruction(reference_set: ReferenceSet, output: str | Path,
         report["failed_stage"] = "insufficient_registered_views"
         return checkpoint()
     best = max(counts, key=lambda item: item["registered_images"])["model"]
+    best_names = next(item["registered_filenames"] for item in counts if item["model"] == best)
+    report["registered_filenames"] = best_names
+    report["unregistered_filenames"] = sorted(
+        entry["filename"] for entry in staged_index["images"]
+        if entry["filename"] not in best_names)
     report["sparse_feature_evidence"] = _sparse_point_metrics(target / "text-models" / best)
     checkpoint()
     if undistort:

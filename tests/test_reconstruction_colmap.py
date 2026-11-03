@@ -33,8 +33,13 @@ if task == "--version":
 if "--help" in params:
     if task == "feature_extractor":
         print("--SiftExtraction.use_gpu" if legacy else "--FeatureExtraction.use_gpu")
+        if "FAKE_LEARNED_COLMAP" in os.environ:
+            print("--FeatureExtraction.type SIFT ALIKED_N16ROT LOMA_B LOMA_B128")
+            print("--FeatureExtraction.max_image_size")
     elif task == "exhaustive_matcher":
         print("--SiftMatching.use_gpu" if legacy else "--FeatureMatching.use_gpu")
+        if "FAKE_LEARNED_COLMAP" in os.environ:
+            print("--FeatureMatching.type SIFT_LIGHTGLUE ALIKED_LIGHTGLUE LOMA_B LOMA_B128")
     sys.exit(0)
 def argument(key):
     return Path(params[params.index(key)+1])
@@ -170,6 +175,57 @@ class ColmapWorkflowTests(unittest.TestCase):
         self.assertEqual(report["commands"][0][-2:], ["--SiftExtraction.use_gpu", "0"])
         self.assertEqual(report["commands"][1][-2:], ["--SiftMatching.use_gpu", "0"])
         self.assertEqual(report["colmap_info"]["cpu_flag_family"], "sift")
+
+    def test_learned_matching_presets_pass_compatible_colmap_arguments(self):
+        presets = {"sift-lightglue": ("SIFT", "SIFT_LIGHTGLUE"),
+                   "aliked-lightglue": ("ALIKED_N16ROT", "ALIKED_LIGHTGLUE"),
+                   "loma": ("LOMA_B", "LOMA_B"),
+                   "loma128": ("LOMA_B128", "LOMA_B128")}
+        with patch.dict(os.environ, {"FAKE_LEARNED_COLMAP": "1"}):
+            for preset, (extractor, matcher) in presets.items():
+                with self.subTest(preset=preset):
+                    output = self.root / preset
+                    report = build_sparse_reconstruction(
+                        self.references(), output, colmap=str(self.fake), matching_preset=preset)
+                    self.assertEqual(report["status"], "candidate / visual-review-required")
+                    self.assertEqual(report["matching_preset"], preset)
+                    self.assertEqual(report["registered_filenames"],
+                                     ["front.png", "left.png", "right.png"])
+                    self.assertEqual(report["unregistered_filenames"], [])
+                    self.assertIn(["--FeatureExtraction.type", extractor],
+                                  [report["commands"][0][index:index + 2]
+                                   for index in range(len(report["commands"][0]) - 1)])
+                    self.assertEqual(report["commands"][0][-2:],
+                                     ["--FeatureExtraction.max_image_size", "4000"])
+                    self.assertEqual(report["commands"][1][-2:],
+                                     ["--FeatureMatching.type", matcher])
+
+    def test_learned_matching_preflight_fails_before_creating_revision(self):
+        output = self.root / "unsupported-learned"
+        with self.assertRaisesRegex(ReferenceError, "does not advertise"):
+            build_sparse_reconstruction(self.references(), output, colmap=str(self.fake),
+                                        matching_preset="aliked-lightglue")
+        self.assertFalse(output.exists())
+        with self.assertRaisesRegex(ReferenceError, "requires --engine colmap"):
+            build_sparse_reconstruction(self.references(), output, engine="pycolmap",
+                                        matching_preset="loma")
+        self.assertFalse(output.exists())
+
+    def test_registration_names_use_normalized_staged_filenames_not_original_jpeg_extensions(self):
+        self.references()
+        manifest = self.root / "reference-set.json"
+        raw = json.loads(manifest.read_text())
+        for entry in raw["images"]:
+            old = self.root / entry["file"]
+            jpg = old.with_suffix(".jpg")
+            with Image.open(old) as image:
+                image.save(jpg)
+            entry["file"] = "photos/" + jpg.name
+        manifest.write_text(json.dumps(raw))
+        source = load_reference_set(manifest)
+        report = build_sparse_reconstruction(source, self.root / "jpeg-revision", colmap=str(self.fake))
+        self.assertEqual(report["registered_filenames"], ["front.png", "left.png", "right.png"])
+        self.assertEqual(report["unregistered_filenames"], [])
 
     def test_similar_but_distinct_photos_are_not_excluded_from_colmap(self):
         self.references()

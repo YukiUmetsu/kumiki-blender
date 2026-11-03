@@ -34,10 +34,14 @@ class PhotoModelSettings:
     max_image_size: int = 3200
     texture: bool = True
     render_previews: bool = True
+    matching_preset: str = "sift"
 
     def validate(self) -> None:
+        from .colmap import _validate_matching_preset
+
         if self.engine not in ("pycolmap", "colmap"):
             raise ReferenceError("Sparse engine must be pycolmap or colmap")
+        _validate_matching_preset(self.matching_preset, self.engine)
         if self.dense_backend not in ("openmvs", "colmap"):
             raise ReferenceError("Dense backend must be openmvs or colmap")
         if not isinstance(self.colmap, str) or not self.colmap.strip():
@@ -117,7 +121,8 @@ def plan_photo_model(references: ReferenceSet, output: str | Path,
         "source_manifest_sha256": references.manifest_sha256,
         "missing_photo_rights": any(image.source_url == "local-unattributed"
                                     for image in references.images),
-        "sparse_engine": settings.engine, "dense_backend": settings.dense_backend,
+        "sparse_engine": settings.engine, "matching_preset": settings.matching_preset,
+        "dense_backend": settings.dense_backend,
         "min_registered_images": settings.min_registered_images,
         "min_registered_fraction": settings.min_registered_fraction,
         "texture_requested": settings.texture,
@@ -177,7 +182,8 @@ def build_photo_model(
     try:
         sparse = sparse_fn(references, target / "sparse", colmap=settings.colmap,
                            engine=settings.engine, timeout_seconds=settings.sparse_timeout_seconds,
-                           undistort=True, max_image_size=settings.max_image_size)
+                           undistort=True, max_image_size=settings.max_image_size,
+                           matching_preset=settings.matching_preset)
         report["sparse"] = {key: sparse.get(key) for key in
                             ("status", "registered_images", "staged_independent_images",
                              "failed_stage", "error")}
