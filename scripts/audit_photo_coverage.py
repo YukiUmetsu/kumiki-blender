@@ -575,7 +575,7 @@ def _markdown(report: dict) -> str:
         "",
         "| Original photo | Assessment | Evidence | Angle | View/framing | Action |",
         "| --- | --- | --- | --- | --- | --- |",
-    ]
+    ])
     for photo in report["images"]:
         name = photo["original_filename"].replace("|", "/")
         evidence = (f"{photo['strong_neighbors']} strong neighbors; "
