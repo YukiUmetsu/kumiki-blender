@@ -99,6 +99,67 @@ REGISTRATION_PROFILE=high-recall MAX_IMAGE_SIZE=3200 \
   bash scripts/mac_splat_test.sh run ~/Pictures/statue-photos/sphinx sphinx
 ```
 
+#### Find which photos help and which camera angles are missing
+
+After a reconstruction attempt, run **photo-advice** to get a per-image
+recommendation, a labeled contact sheet, and a prioritized capture plan:
+
+```bash
+bash scripts/mac_splat_test.sh photo-advice \
+  .review/mac-splat-smoke/splat-20261103T053355Z-11041 \
+  .review/mac-splat-smoke/cohorts-20261103T053322Z-10742/cohort-01/source-index.json
+
+# If you know which REGISTERED photo depicts the front of the statue:
+PHOTO_FRONT_REFERENCE=photo-0011.png \
+  bash scripts/mac_splat_test.sh photo-advice \
+  .review/mac-splat-smoke/splat-20261103T053355Z-11041
+```
+
+The new `photo-advice-*/` directory contains:
+
+- **`photo-advice.md`**: table of all original photo names, estimated
+  reconstruction value, keypoint/verified-match/PnP evidence, measured angles
+  where available, and a specific next action.
+- **`photo-advice.json`**: machine-readable statuses and prioritized
+  suggested photo azimuth/elevation, framing and reason.
+- **`photo-advice.jpg`**: contact sheet labeling each original photo
+  with status and its known/unknown angle.
+
+Statuses distinguish **keep**, **recover-first**, **needs-overlap-bridge**,
+**low-current-value**, **keep-separate-model**, **keep-check-overlap** and
+**cannot-use**. Low current value means the photo does not currently connect
+well to this SfM reconstruction. It is **not** a verdict that the image is
+unnecessary, poorly composed, or can safely be deleted. An unregistered
+image may contain valuable unique surface detail.
+
+**Angles are only computed for registered cameras in the largest sparse
+model**, relative to a registered reference view and the median of its
+reconstructed 3D points. By default that view is *not* assumed to be the
+statue's front. Set `PHOTO_FRONT_REFERENCE` to a known frontal photo
+(staged or original name) to label relative front/three-quarter/profile
+angles. This is an estimated coordinate frame, **not** a verified survey
+orientation. The analyzer does not invent camera angles for unregistered
+photos, combine disconnected models, or infer photo semantics from filenames.
+
+To add known semantic information (or output from a separate vision
+classifier), invoke the Python tool with `--annotations tags.json`, where
+`tags.json` can contain:
+
+```json
+{
+  "photo-0013.png": {"view": "left profile", "framing": "head close-up"},
+  "photo-0026.png": {"view": "elevated rear", "framing": "full statue"}
+}
+```
+
+These tags are user/vision-supplied **annotations**, not automatically
+verified pose estimates. Suggestions favor 10–15 degree bridging steps,
+60–80% overlapping subject content, medium shots including shared
+head/neck/torso landmarks, and elevated/lower views when accessible. For
+the Sphinx, inaccessible rear geometry should instead be sourced from
+verified scans or surveys. The Mac `run` command now generates this report
+**automatically when registration fails** and text models exist.
+
 #### Try seeded sparse recovery (no new feature extraction)
 
 The Sphinx cohort's model 0 has 4 registered cameras and only 508
