@@ -124,6 +124,9 @@ The new `photo-advice-*/` directory contains:
   suggested photo azimuth/elevation, framing and reason.
 - **`photo-advice.jpg`**: contact sheet labeling each original photo
   with status and its known/unknown angle.
+- **`photo-angle-map.svg`**: top-down relative camera-orbit diagram, with
+  registered camera viewpoints and proposed intermediate shots. Created only
+  when a usable reconstructed point center and camera poses exist.
 
 Statuses distinguish **keep**, **recover-first**, **needs-overlap-bridge**,
 **low-current-value**, **keep-separate-model**, **keep-check-overlap** and
