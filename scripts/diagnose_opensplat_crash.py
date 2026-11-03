@@ -122,7 +122,7 @@ def diagnose(retry_revision: Path, output: Path, *, lldb: str = "lldb",
                   tail, re.IGNORECASE))
     summary["frame_excerpt"] = [
         line.strip() for line in tail.splitlines()
-        if re.search(r"frame #\\d+|stop reason =|error: process launch failed",
+        if re.search(r"frame #\d+|stop reason =|error: process launch failed",
                      line, re.IGNORECASE)
     ][:50]
     summary["log_tail"] = tail[-12000:]
