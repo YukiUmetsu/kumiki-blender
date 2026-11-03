@@ -27,6 +27,54 @@ class SphinxCommonsExperimentTests(unittest.TestCase):
         self.assertTrue(all(experiment.commons_page(name).startswith(
             "https://commons.wikimedia.org/wiki/File:") for name in experiment.SOURCES))
 
+    def test_local_photos_bypass_network_and_keep_provenance_unverified(self):
+        from unittest.mock import patch
+        from kumiki_blender.reconstruction.references import load_reference_set
+
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            originals = root / "local"
+            originals.mkdir()
+            for index, extension in enumerate(("jpg", "png", "webp"), 1):
+                Image.new("RGB", (960, 720), (30 * index, 70, 90)).save(
+                    originals / f"photo-{index:04d}.{extension}"
+                )
+            target = root / "revision"
+            with patch.object(experiment.urllib.request, "urlopen",
+                              side_effect=AssertionError("network should not be called")):
+                manifest, metadata = experiment.prepare_local_sources(target, originals)
+            self.assertEqual(len(metadata), 3)
+            self.assertEqual(len(load_reference_set(manifest).images), 3)
+            entries = json.loads(manifest.read_text())["images"]
+            self.assertTrue(all(entry["source_kind"] == "user-upload" for entry in entries))
+            self.assertTrue(all("source_url" not in entry for entry in entries))
+            self.assertTrue(all(entry["expected_sha256"] for entry in entries))
+            self.assertIn("not", (target / "CREDITS.md").read_text().lower())
+            self.assertFalse((target / "sparse-points.glb").exists())
+
+    def test_local_photos_reject_insufficient_views(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            originals = root / "local"
+            originals.mkdir()
+            Image.new("RGB", (960, 720)).save(originals / "one.jpg")
+            with self.assertRaisesRegex(ValueError, "Need 3"):
+                experiment.prepare_local_sources(root / "revision", originals)
+
+    def test_wikimedia_429_is_not_retried(self):
+        from unittest.mock import patch
+        from urllib.error import HTTPError
+        with tempfile.TemporaryDirectory() as folder:
+            error = HTTPError("https://upload.wikimedia.org/", 429, "Too Many Requests",
+                              {"Retry-After": "120"}, None)
+            with patch.object(experiment.urllib.request, "urlopen", side_effect=error) as mocked:
+                with patch.object(experiment.time, "sleep") as sleep:
+                    with self.assertRaisesRegex(RuntimeError, "Use --photos-dir"):
+                        experiment.download_photo(experiment.SOURCES[0],
+                                                  Path(folder) / "test.jpg")
+                    mocked.assert_called_once()
+                    sleep.assert_not_called()
+
     def test_offline_sources_generate_valid_provenance_manifest_without_mesh(self):
         from kumiki_blender.reconstruction.references import load_reference_set
         with tempfile.TemporaryDirectory() as folder:
