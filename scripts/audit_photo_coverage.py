@@ -877,8 +877,14 @@ def _angle_map(report: dict, path: Path) -> bool:
     parts.extend([
         '<circle cx="95" cy="598" r="6" fill="#62d49a"/>',
         '<text x="110" y="602" fill="#dce4ed" font-size="13">Registered camera</text>',
-        '<circle cx="95" cy="627" r="7" fill="none" stroke="#efb65d" stroke-width="3"/>',
-        '<text x="110" y="631" fill="#dce4ed" font-size="13">Suggested overlapping shot</text>',
+        ('<circle cx="95" cy="627" r="7" fill="none" stroke="#efb65d" stroke-width="3"/>'
+         if any(shot["target_azimuth_deg"] is not None
+                for shot in report["recommended_photos"]) else ''),
+        ('<text x="110" y="631" fill="#dce4ed" font-size="13">Suggested overlapping shot</text>'
+         if any(shot["target_azimuth_deg"] is not None
+                for shot in report["recommended_photos"]) else
+         '<text x="110" y="631" fill="#dce4ed" font-size="13">'
+         'No physical target azimuth without a verified front anchor</text>'),
         '<text x="320" y="667" fill="#bdc7d1" text-anchor="middle" font-size="11">'
         'Angles relative to median reconstructed points; not true monument center.</text>',
         '</svg>',
