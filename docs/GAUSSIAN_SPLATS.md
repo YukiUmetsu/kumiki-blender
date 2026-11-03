@@ -99,6 +99,30 @@ REGISTRATION_PROFILE=high-recall MAX_IMAGE_SIZE=3200 \
   bash scripts/mac_splat_test.sh run ~/Pictures/statue-photos/sphinx sphinx
 ```
 
+#### Why seeded recovery can register zero new photos
+
+If `bash scripts/mac_splat_test.sh recover <revision> 0` reports
+`No images with matches` and `no-registration-improvement`, the run
+has **not** improved the camera model. The updated
+`recovery-report.json` now includes `match_evidence`:
+
+- `raw_match_pairs`, `verified_pairs`, and `strong_verified_pairs`
+  distinguish stored feature matches from geometrically verified pairs.
+- `seed_to_missing_pairs` and `strong_seed_to_missing_pairs` identify
+  whether any verified image pairs bridge registered seed cameras to
+  unregistered photographs (threshold: 15 inliers).
+- `unregistered_photo_advice` reports each missing camera's seed match
+  support and the next action: collect an overlapping bridge shot or
+  investigate 2D–3D tracks, parallax, and camera calibration.
+
+A zero `Loading matches` line in COLMAP does **not** prove the entire
+database contains zero matches; it may reflect mapper filtering or
+disconnected matches. A single matched pair is not sufficient proof of
+a registerable PnP camera. Do not rerun recovery unchanged and expect
+new information. On no improvement, the Mac wrapper automatically
+generates the photo-value and missing-angle report from the original
+sparse revision (if it can read the diagnostic inputs).
+
 #### Find which photos help and which camera angles are missing
 
 After a reconstruction attempt, run **photo-advice** to get a per-image
