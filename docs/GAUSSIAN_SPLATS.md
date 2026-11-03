@@ -200,6 +200,24 @@ that captures both the crash and stack frames reports
 `trace-captured / inspect-log` and exits successfully. Inspect the first
 crashing frame and its caller before changing PyTorch, OpenSplat, or COLMAP.
 
+**M4 Mac crash evidence (2026-11-03):** The CPU retry's LLDB trace showed
+`EXC_BAD_ACCESS` in `libprotobuf.36.2.0.dylib` with an immediate caller in
+`libprotobuf.29.3.0.dylib`, during descriptor initialization. This is strong
+evidence of incompatible native C++ Protobuf runtimes in one process, **not**
+evidence of bad sparse cameras or a Metal-only crash. C++ Protobuf does not
+guarantee ABI compatibility across versions. The full dependency ownership is
+not established by the stack frames alone. Run `otool -L` on the executable
+and its dependencies to find which library requires each Protobuf version;
+rebuild with one coherent library set. Do **not** manually change dylib
+symlinks or overwrite the original OpenSplat binary as a shortcut.
+
+`crash-qa.json` now records `protobuf_libraries_in_trace` and an actionable
+`native_diagnosis` when multiple versions appear. If LLDB times out *after*
+printing a native crash and frames, the result is
+`trace-captured / debugger-timeout` rather than discarding useful evidence.
+This preserves the fact that the debugger had to be killed while recognizing
+that the stack trace was captured.
+
 The `photo-advice` report now requests **zero additional photos for
 registration** when all images are registered. This does not prove full surface
 visibility: the collection visibly emphasizes side/rear tourist angles and
