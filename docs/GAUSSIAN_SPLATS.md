@@ -99,6 +99,43 @@ REGISTRATION_PROFILE=high-recall MAX_IMAGE_SIZE=3200 \
   bash scripts/mac_splat_test.sh run ~/Pictures/statue-photos/sphinx sphinx
 ```
 
+#### Explain why matched photos still fail camera registration
+
+The 14-photo Sphinx cohort showed median reconstructed triangulation angles
+of **20.811° (model 0)** and **39.908° (model 1)**, with 0% of fitted
+point tracks below 2°. This rules out a trivially tiny baseline **among
+successfully reconstructed tracks** but does not validate camera poses or
+explain missing registrations.
+
+A 2D-to-2D verified match does not imply that its registered-image feature
+is part of an existing triangulated 3D track. For a missing camera, the
+incremental mapper needs sufficient **consistent 2D-to-3D correspondences**
+to estimate and refine its pose.
+
+```bash
+bash scripts/mac_splat_test.sh pnp-qa \
+  .review/mac-splat-smoke/splat-20261103T053355Z-11041 \
+  .review/mac-splat-smoke/cohorts-20261103T053322Z-10742/cohort-01/source-index.json
+```
+
+This saves a private `pnp-qa-*.json` and prints, for **each independent
+sparse model** and each missing photo:
+
+- Verified matches to already registered photos
+- How many of those matches touch a 3D track in that model
+- Distinct candidate 3D points, ambiguous 2D keypoints, and conservative
+  one-to-one 2D-to-3D associations
+- 4×4 image-space coverage of the one-to-one candidate correspondences
+  (if image dimensions are present in COLMAP's database)
+- COLMAP verified two-view geometry configuration counts
+
+**Interpretation:** Very few 2D-to-3D candidates despite many 2D-to-2D
+matches indicates that the existing sparse model has too little shared
+triangulated geometry. Many well-distributed candidates but a failed
+camera registration suggest bad associations, camera calibration, pose
+initialization, or PnP verification thresholds. This audit does **not**
+run PnP, establish geometric inliers, or manufacture a mesh.
+
 #### Measure reconstructed camera baselines before changing SfM settings
 
 After reviewing the match lines, run the existing read-only registration diagnosis
