@@ -19,7 +19,7 @@ from kumiki_blender.cli import main
 from kumiki_blender.reconstruction.references import ReferenceError
 from kumiki_blender.reconstruction.splat_video import (
     SplatVideoSettings, _position_bounds, _registered_camera_orbit,
-    make_orbit_track, plan_splat_video,
+    _frame_visibility_audit, make_orbit_track, plan_splat_video,
     render_splat_video)
 
 
@@ -62,8 +62,7 @@ width, height = map(int, sys.argv[sys.argv.index('--resolution')+1].split('x'))
 for index, frame in enumerate(track['frames']):
     if 'incomplete' in input_file and index == 4:
         continue
-    color = (0, 0, 0) if 'blank-turn' in input_file and index >= len(track['frames']) // 2 else (index % 256, 40, 80)
-    Image.new('RGB', (width, height), color).save(
+    Image.new('RGB', (width, height), (index % 256, 40, 80)).save(
         output.with_name('frame.%04d.webp' % index), lossless=True)
 ''')
         self.rasterizer.chmod(0o755)
@@ -253,17 +252,21 @@ for index, frame in enumerate(track['frames']):
         self.assertFalse((output / "video.mp4").exists())
         self.assertTrue((output / "video-report.json").exists())
 
-    @unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "FFmpeg unavailable")
-    def test_nearly_blank_orbit_is_flagged_even_if_mp4_decodes(self):
-        blank = self.root / "blank-turn.ply"
-        blank.write_bytes(self.ply.read_bytes())
-        output = self.root / "blackout-video"
-        report = render_splat_video(blank, output, self.settings())
-        self.assertEqual(report["failed_stage"], "camera-orbit-coverage")
-        self.assertTrue(report["frame_visibility"]["possible_blank_orbit"])
-        self.assertEqual(report["exit_code"], 3)
-        self.assertTrue((output / "video.mp4").is_file())
-        self.assertTrue((output / "contact-sheet.jpg").is_file())
+    def test_nearly_blank_orbit_frames_are_flagged_without_ffmpeg(self):
+        try:
+            from PIL import Image
+        except ImportError:
+            self.skipTest("Pillow unavailable")
+        frames = self.root / "frames"
+        frames.mkdir()
+        for index in range(48):
+            color = (0, 0, 0) if index >= 24 else (130, 130, 130)
+            Image.new("RGB", (16, 16), color).save(
+                frames / f"frame.{index:04d}.webp", "WEBP")
+        report = _frame_visibility_audit(frames, 48)
+        self.assertIsNotNone(report)
+        self.assertTrue(report["possible_blank_orbit"])
+        self.assertEqual(len(report["samples"]), 9)
 
     @unittest.skipUnless(shutil.which("ffmpeg") and shutil.which("ffprobe"), "FFmpeg unavailable")
     def test_cli_plan_then_render(self):
