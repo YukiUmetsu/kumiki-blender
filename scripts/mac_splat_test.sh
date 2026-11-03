@@ -65,7 +65,7 @@ if [[ "$mode" == plan || "$mode" == run ]]; then
   (( count >= 8 && count <= 256 )) || die "Need 8–256 photos; found $count."
   output="$(new_output splat)"
   printf 'Photos: %s | Output: %s\n' "$count" "$output"
-  kumiki-blender plan-splats --photos "$photos" --asset-id "$slug" --output "$output"
+  kumiki-blender plan-splats --photos "$photos" --asset-id "$slug" --output "$output" --opensplat "$trainer"
   [[ "$mode" == plan ]] && exit 0
   check_tool "$trainer"
   python3 -c 'import pycolmap' || die 'Install photogrammetry dependencies: pip install -e ".[photogrammetry]"'
