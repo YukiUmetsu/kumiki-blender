@@ -548,6 +548,50 @@ subdirectories. Files and the recipe are hash-pinned before processing.
   **glTF/GLB does not encode true height
   displacement**, so GLB appearance will differ from a high-resolution Cycles
   render unless geometry is intentionally baked.
+
+  To bake **real measured scan geometry** rather than inventing bumps from a
+  color photograph, the dense PLY and UV-textured OBJ can be used together:
+
+  ```bash
+  # Verify the scale from survey measurements first. Example below assumes
+  # ONE COLMAP world unit is ONE real-world metre; do not guess this value.
+  kumiki-blender plan-scan-displacement \
+    --dense-revision .review/statue/dense-masked-r01 \
+    --output .review/statue/scan-height-r01 \
+    --meters-per-unit 1.0 --max-offset-m 0.05
+
+  kumiki-blender bake-scan-displacement \
+    --dense-revision .review/statue/dense-masked-r01 \
+    --output .review/statue/scan-height-r01 \
+    --meters-per-unit 1.0 --max-offset-m 0.05 \
+    --max-side 4096 --blender blender
+
+  kumiki-blender finish-dense-textures \
+    --dense-revision .review/statue/dense-masked-r01 \
+    --output .review/statue/finished-with-height-r01 \
+    --surface-recipe .review/statue/scan-height-r01/surface-recipe.example.json
+
+  kumiki-blender package-finished-udim \
+    --texture-finish .review/statue/finished-with-height-r01 \
+    --output .review/statue/scan-height-udim-r01
+  ```
+
+  Blender ray-casts each UV texel on the textured low mesh against the verified
+  high-density PLY. It exports a signed **16-bit grayscale height map** with
+  neutral midpoint, an 8-bit geometric coverage mask, a signed-relief preview
+  for quick visual QA, and pinned provenance.
+  `scan-displacement-report.json` distinguishes valid mapped UV texels from
+  missing intersections or overlapping islands; it records signed-offset
+  percentiles and warns about low ray coverage or nearly flat results. Both
+  meshes MUST be in the
+  same reconstruction frame. `--meters-per-unit` is mandatory because COLMAP
+  geometry alone has no known metric scale; obtain it from surveyed dimensions
+  or known-distance markers. `--max-offset-m` limits the sampled relief and
+  the Cycles displacement scale. Increase it only when the geometry supports
+  it. `--max-side` limits expensive ray samples; upscaling smaller samples to
+  the original atlas resolution does **not** recover missing geometric detail.
+  Review gaps and normal correspondence before accepting output. The example
+  region mask and roughness prior are NOT physical material measurements.
 - **UDIM:** `package-finished-udim` assigns numbered tiles (1001, 1002, ...)
   to original atlas pages, duplicates shared per-material OBJ `vt` indices,
   and emits `udim.obj`, `udim.mtl`, `albedo.<tile>.png`, plus any roughness and
