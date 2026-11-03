@@ -202,7 +202,7 @@ def main() -> int:
         try:
             make_contact_sheet(args.revision.resolve(), result, args.contact_sheet.resolve())
         except (OSError, ValueError) as error:
-            parser.exit(2, f"ERROR: {error}\\n")
+            parser.exit(2, f"ERROR: {error}\n")
         print(f"Contact sheet: {args.contact_sheet}", file=__import__("sys").stderr)
     if args.json_output is not None:
         destination = args.json_output
@@ -210,9 +210,9 @@ def main() -> int:
             destination.parent.mkdir(parents=True, exist_ok=True)
             with destination.open("x", encoding="utf-8") as stream:
                 json.dump(result, stream, indent=2)
-                stream.write("\\n")
+                stream.write("\n")
         except OSError as error:
-            parser.exit(2, f"ERROR: Cannot save diagnostics: {error}\\n")
+            parser.exit(2, f"ERROR: Cannot save diagnostics: {error}\n")
         print(f"Registration JSON: {destination}", file=__import__("sys").stderr)
     if args.json:
         print(json.dumps(result, indent=2))
