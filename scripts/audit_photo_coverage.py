@@ -458,6 +458,7 @@ def analyze(revision: Path, *, source_index: Path | None = None,
                       else ("medium-context", "head-and-torso")))),
             ("side profiles", "head-and-shoulders side profile with shared landmarks",
              "Vision labels found no clear side profile",
+             subject_type in ("object", "statue") and
              not any(name in view_counts for name in ("left-profile", "right-profile"))),
             ("elevated oblique", "medium-distance elevated oblique",
              "Vision labels found no elevated view; capture only where accessible",
@@ -512,12 +513,12 @@ def analyze(revision: Path, *, source_index: Path | None = None,
         "capture_notes": [
             "Collect 10–15 degree neighboring views with 60–80% subject overlap; "
             "keep head, neck, and body landmarks in shared frames.",
-            "Prioritize consistent, sharp, similarly exposed photographs of the actual statue; "
+            "Prioritize consistent, sharp, similarly exposed photographs of the actual subject; "
             "avoid cutouts, replicas, changing shadows and unrelated backgrounds.",
             "Do not delete a photo solely because it is currently unregistered: "
             "it may show unique geometry or belong to a separate useful cohort.",
             "Back/rear and low angles should be requested only where physically accessible. "
-            "A verified scan or survey is preferable for inaccessible monument surfaces.",
+            "A verified scan or survey is preferable for inaccessible surfaces.",
         ],
     }
 
