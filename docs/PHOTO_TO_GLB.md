@@ -82,6 +82,9 @@ needed when photographs do not contain reconstructible details.
 
 ## Alternative camera registration: MapAnything (`--engine mapanything`)
 
+For step-by-step usage, tuning and troubleshooting, see
+[MAPANYTHING_PHOTO_REGISTRATION.md](MAPANYTHING_PHOTO_REGISTRATION.md).
+
 When COLMAP registers too few photos (for example 4 of 14 in a Mac smoke run),
 `--engine mapanything` predicts a camera pose, intrinsics and depth for every
 photo in one feed-forward pass instead of matching features. It is an
