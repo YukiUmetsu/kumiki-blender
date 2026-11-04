@@ -14,7 +14,8 @@ from PIL import Image
 from kumiki_blender.cli import main
 from kumiki_blender.reconstruction.references import ReferenceError
 from kumiki_blender.reconstruction.statue_pipeline import (
-    StatuePipelineSettings, _coverage_warnings, _mask_warnings, build_statue_glb,
+    StatuePipelineSettings, _coverage_warnings, _mask_warnings,
+    _infer_front_photo, _resolve_sam2_checkpoint, build_statue_glb,
 )
 
 
@@ -72,7 +73,8 @@ class StatuePipelineTests(unittest.TestCase):
                     Image.new("L", (64, 64), 255).save(folder / "masks" / (filename + ".mask.png"))
                     images.append({"filename": filename, "foreground_fraction": 0.4,
                                    "warnings": (["No visible-anatomy landmarks"] if mask_bad else []),
-                                   "missing_parts": [], "background_seed_violations": 0})
+                                   "missing_parts": (["head"] if mask_bad else []),
+                                   "background_seed_violations": 0})
                 (folder / "mask-report.json").write_text(json.dumps({"images": images}))
             elif stage.startswith("mask-audit-"):
                 folder = self.output / stage
@@ -166,21 +168,47 @@ class StatuePipelineTests(unittest.TestCase):
         with self.assertRaisesRegex(ReferenceError, "quality settings changed"):
             self.build(run, resume=True)
 
-    def test_preflight_requires_checkpoint_or_reviewed_masks(self):
-        settings = StatuePipelineSettings(front_photo="image-0.png")
-        with self.assertRaisesRegex(ReferenceError, "sam2-checkpoint"):
-            self.build(self.runner()[0], settings)
+    def test_preflight_auto_checkpoint_discovery_and_offline_failure(self):
+        model, source = _resolve_sam2_checkpoint(self.model, "small", allow_download=False)
+        self.assertEqual((model, source), (self.model.resolve(), "explicit"))
+        cached = self.root / "models"
+        cached.mkdir()
+        installed = cached / "sam2.1_hiera_small.pt"
+        installed.write_bytes(b"cached official-model fixture")
+        with patch.dict("os.environ", {"KUMIKI_SAM2_CHECKPOINT": "", "SAM2_CHECKPOINT": ""}):
+            auto, source = _resolve_sam2_checkpoint(None, "small", allow_download=False,
+                                                     cache_root=cached)
+        self.assertEqual((auto, source), (installed.resolve(), "discovered"))
+        settings = StatuePipelineSettings(front_photo="image-0.png", auto_download_model=False)
+        with patch("kumiki_blender.reconstruction.statue_pipeline._resolve_sam2_checkpoint",
+                   side_effect=ReferenceError("SAM2 model not found locally")):
+            with self.assertRaisesRegex(ReferenceError, "not found locally"):
+                self.build(self.runner()[0], settings)
         self.assertFalse(self.output.exists())
 
     def test_cli_fails_before_creating_anything_without_checkpoint(self):
         stderr = io.StringIO()
-        with contextlib.redirect_stderr(stderr):
+        with contextlib.redirect_stderr(stderr), patch(
+                "kumiki_blender.reconstruction.statue_pipeline.importlib.util.find_spec",
+                return_value=None):
             code = main(["build-statue-glb", "--photos", str(self.photos),
-                         "--asset-id", "great-sphinx-test", "--output", str(self.output),
-                         "--front-photo", "image-0.png"])
+                         "--asset-id", "great-sphinx-test", "--output", str(self.output)])
         self.assertEqual(code, 2)
-        self.assertIn("--sam2-checkpoint", stderr.getvalue())
+        self.assertIn("SAM2 is not installed", stderr.getvalue())
         self.assertFalse(self.output.exists())
+
+    def test_auto_front_chooses_registered_frontal_photo_and_records_uncertainty(self):
+        sparse = self.root / "camera-revision"
+        sparse.mkdir()
+        (sparse / "staged-reference-index.json").write_text(json.dumps({"images": [
+            {"filename": "photo-0001.png", "original_filename": "sphinx-left-side.jpg"},
+            {"filename": "photo-0002.png", "original_filename": "1280px-front_view.jpeg"},
+            {"filename": "photo-0003.png", "original_filename": "sphinx-top-view.jpg"}]}))
+        result = _infer_front_photo(sparse, {"registered_filenames": ["photo-0001.png", "photo-0002.png"]})
+        self.assertEqual(result["filename"], "1280px-front_view.jpeg")
+        self.assertEqual(result["confidence"], "tentative")
+        unknown = _infer_front_photo(sparse, {"registered_filenames": ["photo-0001.png"]})
+        self.assertIsNone(unknown["filename"])
 
     def test_geometry_and_masks_gates_are_conservative(self):
         self.assertTrue(_coverage_warnings(self.coverage(), 0.75, 0.8))

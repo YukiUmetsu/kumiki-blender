@@ -10,9 +10,12 @@ import hashlib
 import importlib.util
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
+import tempfile
+import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
@@ -33,14 +36,16 @@ class StatuePipelineSettings:
     mask_guides: Path | None = None
     masks_dir: Path | None = None
     mask_cache_dir: Path | None = None
+    auto_download_model: bool = True
     min_registered_fraction: float = 0.80
     max_mixed_mask_fraction: float = 0.12
     max_colmap_rss_mb: int = 12288
     timeout_seconds: int = 14400
 
     def validate(self) -> None:
-        if not self.front_photo or Path(self.front_photo).name != self.front_photo:
-            raise ReferenceError("Statue quality gate needs --front-photo (original filename only)")
+        if self.front_photo is not None and (not self.front_photo or
+                 Path(self.front_photo).name != self.front_photo):
+            raise ReferenceError("--front-photo must be an original filename, not a path")
         if not 0.25 <= self.min_registered_fraction <= 1:
             raise ReferenceError("min_registered_fraction must be between 0.25 and 1")
         if not 0 <= self.max_mixed_mask_fraction <= 1:
@@ -53,8 +58,6 @@ class StatuePipelineSettings:
             raise ReferenceError("max_colmap_rss_mb must be between 1024 and 131072")
         if not 60 <= self.timeout_seconds <= 86400:
             raise ReferenceError("timeout_seconds must be between 60 and 86400")
-        if self.masks_dir is None and self.sam2_checkpoint is None:
-            raise ReferenceError("Provide --sam2-checkpoint or reviewed --masks-dir; no unreviewed GrabCut fallback")
         for name, path in (("mask guides", self.mask_guides),
                            ("SAM2 checkpoint", self.sam2_checkpoint)):
             if path is not None and (path.is_symlink() or not path.is_file()):
@@ -65,6 +68,89 @@ class StatuePipelineSettings:
                 (self.mask_cache_dir.is_symlink() or
                  (self.mask_cache_dir.exists() and not self.mask_cache_dir.is_dir()))):
             raise ReferenceError("--mask-cache-dir must not be a symlink or file")
+
+
+_SAM2_FILES = {size: f"sam2.1_hiera_{size}.pt"
+               for size in ("tiny", "small", "base_plus", "large")}
+_SAM2_OFFICIAL = "https://dl.fbaipublicfiles.com/segment_anything_2/092824/"
+
+
+def _resolve_sam2_checkpoint(explicit: Path | None, size: str, *,
+                             allow_download: bool = True,
+                             cache_root: Path | None = None) -> tuple[Path, str]:
+    """Find existing official weights, or download once from Meta's fixed URL."""
+    filename = _SAM2_FILES[size]
+    if explicit is not None:
+        return explicit.resolve(), "explicit"
+    candidates = [Path(value) for key in ("KUMIKI_SAM2_CHECKPOINT", "SAM2_CHECKPOINT")
+                  if (value := os.environ.get(key))]
+    cache = cache_root or (Path.home() / ".cache/kumiki-blender/models")
+    candidates += [cache / filename,
+                   Path.home() / ".cache/torch/hub/checkpoints" / filename,
+                   Path.home() / "Downloads" / filename,
+                   Path.cwd() / "checkpoints" / filename]
+    for path in candidates:
+        if path.is_symlink():
+            continue
+        if path.is_file() and 0 < path.stat().st_size < 2_000_000_000:
+            return path.resolve(), "discovered"
+    if not allow_download:
+        raise ReferenceError(f"SAM2 {filename} was not found locally; allow automatic model download or pass --sam2-checkpoint")
+    if cache.is_symlink() or (cache.exists() and not cache.is_dir()):
+        raise ReferenceError("Model cache must be a real directory")
+    cache.mkdir(parents=True, exist_ok=True)
+    destination = cache / filename
+    if destination.is_symlink():
+        raise ReferenceError("Refusing symbolic link as SAM2 download target")
+    temporary: Path | None = None
+    try:
+        request = urllib.request.Request(_SAM2_OFFICIAL + filename,
+                                         headers={"User-Agent": "kumiki-blender/1"})
+        with urllib.request.urlopen(request, timeout=120) as source:
+            if source.url.split(":", 1)[0] != "https":
+                raise ReferenceError("Model download redirected to non-HTTPS URL")
+            with tempfile.NamedTemporaryFile(dir=cache, prefix=".sam2-", delete=False) as stream:
+                temporary = Path(stream.name)
+                count = 0
+                while block := source.read(1024 * 1024):
+                    count += len(block)
+                    if count > 1_000_000_000:
+                        raise ReferenceError("Model download exceeds 1 GB safety limit")
+                    stream.write(block)
+        if count < 1_000_000:
+            raise ReferenceError("Model download was unexpectedly small; refusing checkpoint")
+        os.replace(temporary, destination)
+        temporary = None
+        return destination, "official-meta-download"
+    except (OSError, ValueError) as error:
+        raise ReferenceError(f"Automatic SAM2 download failed: {error}") from error
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+
+
+def _infer_front_photo(sparse: Path, camera: dict[str, Any]) -> dict[str, Any]:
+    """Suggest a front anchor from existing photo labels; never claim visual proof."""
+    index = _read_report(sparse / "staged-reference-index.json")
+    registered = set(camera.get("registered_filenames") or [])
+    ranked = []
+    for item in index.get("images", []):
+        if not isinstance(item, dict) or item.get("filename") not in registered:
+            continue
+        name = str(item.get("original_filename") or item["filename"])
+        words = set(re.findall(r"[a-z]+", name.lower()))
+        score = (12 * bool({"front", "frontal"} & words)
+                 + 3 * bool("face" in words)
+                 - 9 * bool({"left", "right", "side", "profile"} & words)
+                 - 20 * bool({"rear", "back", "behind", "top", "aerial"} & words))
+        if score > 0:
+            ranked.append((score, name))
+    ranked.sort(key=lambda item: (-item[0], item[1]))
+    if ranked and ranked[0][0] >= 10:
+        return {"filename": ranked[0][1], "source": "filename-hint / unverified",
+                "confidence": "tentative", "other_candidates": [name for _, name in ranked[1:4]]}
+    return {"filename": None, "source": "unknown / arbitrary-reference-camera",
+            "confidence": "none", "other_candidates": [name for _, name in ranked[:4]]}
 
 
 def _read_report(path: Path) -> dict[str, Any]:
@@ -117,7 +203,8 @@ def _coverage_warnings(coverage: dict[str, Any], registered_fraction: float,
         warnings.append(f"Only {registered_fraction:.1%} registered; require at least {threshold:.1%}")
     reference = coverage.get("angle_reference", {})
     if reference.get("kind") != "annotated-front":
-        warnings.append("Frontal camera could not be calibrated; side coverage cannot be trusted")
+        # Camera registration can be audited without pretending that the
+        # arbitrary coordinate frame points at the object's anatomical front.
         return warnings
     images = [item for item in coverage.get("images", [])
               if item.get("registered_in_best_model") and isinstance(item.get("estimated_view"), dict)]
@@ -130,10 +217,6 @@ def _coverage_warnings(coverage: dict[str, Any], registered_fraction: float,
         warnings.append(f"Weak side coverage: {left} front-image-left and {right} front-image-right profile views (need >=2 each)")
     if elevated < 2:
         warnings.append(f"Weak elevated coverage: only {elevated} cameras above 12 degrees (need >=2)")
-    for item in coverage.get("existing_photo_priorities", []):
-        name = str(item.get("filename", ""))
-        if any(word in name.lower() for word in ("left", "right", "back", "top", "above", "face")):
-            warnings.append(f"Important photo unregistered: {name}")
     return warnings
 
 
@@ -150,9 +233,7 @@ def _mask_warnings(mask_report: dict[str, Any], audit: dict[str, Any],
             warnings.append(f"{name}: foreground extent looks implausible")
         if item.get("missing_parts") or item.get("background_seed_violations"):
             warnings.append(f"{name}: anatomy missing or background prompts violated")
-        if any("No visible-anatomy landmarks" in warning or
-               "guessed one central object box" in warning or
-               "Foreground touches photo border" in warning
+        if any("Foreground touches photo border" in warning
                for warning in item.get("warnings", [])):
             warnings.append(f"{name}: segmentation needs guided anatomy/boundary review")
     mixed = audit.get("mixed_label_fraction")
@@ -202,6 +283,13 @@ def build_statue_glb(
 ) -> dict[str, Any]:
     """Build once, or resume from validated stage receipts without redoing SfM."""
     settings.validate()
+    if settings.masks_dir is None and any(importlib.util.find_spec(name) is None
+                                          for name in ("torch", "sam2")):
+        raise ReferenceError("SAM2 is not installed; install official facebookresearch/sam2 and PyTorch first")
+    checkpoint_file, checkpoint_source = (None, "reviewed-masks") if (
+        settings.masks_dir is not None and settings.sam2_checkpoint is None) else (
+        _resolve_sam2_checkpoint(settings.sam2_checkpoint, settings.sam2_size,
+                                 allow_download=settings.auto_download_model and settings.masks_dir is None))
     refs = load_photo_folder(photos, asset_id)
     audit_reference_set(refs)
     target = output.resolve()
@@ -211,9 +299,8 @@ def build_statue_glb(
     source_fingerprint = refs.manifest_sha256
     settings_fingerprint = hashlib.sha256(json.dumps({
         "front_photo": settings.front_photo,
-        "sam2_checkpoint": str(settings.sam2_checkpoint.resolve()) if settings.sam2_checkpoint else None,
-        "sam2_checkpoint_sha256": (_sha256_file(settings.sam2_checkpoint)
-                                   if settings.sam2_checkpoint else None),
+        "sam2_checkpoint": str(checkpoint_file) if checkpoint_file else None,
+        "sam2_checkpoint_sha256": (_sha256_file(checkpoint_file) if checkpoint_file else None),
         "sam2_size": settings.sam2_size,
         "sam2_device": settings.sam2_device,
         "mask_guides": str(settings.mask_guides.resolve()) if settings.mask_guides else None,
@@ -244,8 +331,6 @@ def build_statue_glb(
         missing = [name for name in ("colmap", "InterfaceCOLMAP", "DensifyPointCloud",
                                     "ReconstructMesh", settings.blender)
                    if shutil.which(name, path=executable_path) is None]
-        if settings.masks_dir is None:
-            missing.extend(name for name in ("torch", "sam2") if importlib.util.find_spec(name) is None)
         if missing:
             raise ReferenceError("Missing local reconstruction dependencies: " + ", ".join(missing))
         target.mkdir(parents=True)
@@ -256,6 +341,8 @@ def build_statue_glb(
                   "status": "running", "completed_stages": [], "warnings": [],
                   "distribution_allowed": False, "historical_fidelity_verified": False,
                   "model_glb": None}
+    report["model_checkpoint"] = ({"path": str(checkpoint_file), "source": checkpoint_source,
+                                    "sha256": _sha256_file(checkpoint_file)} if checkpoint_file else None)
 
     def checkpoint(status: str, stage: str | None = None, warnings: list[str] | None = None):
         report.update(status=status, stopped_stage=stage, warnings=warnings or [])
@@ -318,16 +405,39 @@ def build_statue_glb(
     if not str(camera.get("status", "")).startswith("candidate") or camera.get("undistorted_images") != registered:
         return checkpoint("blocked / registration-insufficient", "cameras", ["Camera reconstruction is not a successful undistorted candidate"])
 
+    front = ({"filename": settings.front_photo, "source": "user-annotation",
+              "confidence": "explicit"} if settings.front_photo else
+             _infer_front_photo(sparse, camera))
+    report["front_selection"] = front
+
     script = Path(__file__).resolve().parents[3] / "scripts" / "audit_photo_coverage.py"
     run_stage("coverage", [sys.executable, str(script), str(sparse),
-                           "--output", str(coverage_dir), "--subject-type", "statue",
-                           "--front-photo", settings.front_photo],
+                           "--output", str(coverage_dir), "--subject-type", "statue"]
+              + (["--front-photo", front["filename"]] if front["filename"] else []),
               coverage_dir / "photo-advice.json")
     coverage = _read_report(coverage_dir / "photo-advice.json")
     issues = _coverage_warnings(coverage, registered / total, settings.min_registered_fraction)
     report["coverage_report"] = str(Path("coverage/photo-advice.md"))
     report["registered_images"] = registered
     report["source_images"] = total
+    report["unregistered_photo_advice"] = coverage.get("existing_photo_priorities", [])
+    if camera.get("unregistered_filenames"):
+        # Before asking for more pictures, analyze existing verified match
+        # graphs for independent-cohort and seeded-camera recovery.
+        try:
+            from .sfm_cohort_recovery import plan_cohort_recovery
+            recovery = plan_cohort_recovery(sparse)
+            recovery_file = coverage_dir / "cohort-recovery-plan.json"
+            recovery_file.write_text(json.dumps(recovery, indent=2) + "\n", encoding="utf-8")
+            report["camera_recovery_plan"] = str(recovery_file.relative_to(target))
+            report["camera_recovery_status"] = recovery["status"]
+        except (OSError, ValueError, ImportError) as error:
+            report["camera_recovery_status"] = "diagnostic-unavailable"
+            report["camera_recovery_error"] = str(error)[:250]
+    if front["confidence"] in ("tentative", "none"):
+        report["orientation_warning"] = (
+            "Automatically selected front is unverified; side labels are provisional" if front["filename"]
+            else "No reliable frontal photo hint; true left/right geometry remains unverified")
     if issues:
         return checkpoint("blocked / missing-photo-coverage", "coverage", issues)
 
@@ -335,7 +445,7 @@ def build_statue_glb(
         run_stage("masks", executable + ["prepare-dense-masks", "--reconstruction", str(sparse),
             "--output", str(mask_dir), "--segmenter", "sam2",
             "--sam2-size", settings.sam2_size, "--sam2-device", settings.sam2_device,
-            "--sam2-checkpoint", str(settings.sam2_checkpoint.resolve()),
+            "--sam2-checkpoint", str(checkpoint_file),
             "--cache-dir", str(shared_cache)]
             + (["--guides", str(settings.mask_guides.resolve())] if settings.mask_guides else []),
             mask_dir / "mask-report.json")

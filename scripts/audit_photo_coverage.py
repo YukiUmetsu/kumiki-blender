@@ -326,6 +326,10 @@ def _status(photo: dict, *, registered: bool, alternate: bool,
             return "recover-first", "medium", reasons
         if count >= 8:
             reasons.append("Some shared tracks exist, but spatial coverage or count may be insufficient for PnP.")
+            if photo["strong_neighbors"] >= 2:
+                reasons.append("Multiple verified photo neighbors exist: attempt camera registration "
+                               "or independent-cohort recovery before acquiring new bridge photos.")
+                return "recover-first", "medium", reasons
             return "needs-overlap-bridge", "medium", reasons
     reasons.append("Weak or missing connections to reconstructed 3D tracks; "
                    "its exact viewing angle is unknown until registration.")
@@ -388,8 +392,10 @@ def _photo_priorities(images: list[dict]) -> list[dict]:
             "recommendation": (
                 "Test camera PnP/track consistency and intrinsics before adding photos."
                 if kind == "try-registration-first" else
-                "Find intermediate views with shared head, neck and torso features "
-                "between this photo and the registered bridge photo; retry registration."),
+                "Existing verified photo matches already exist. Retry seeded PnP, "
+                "intrinsics, and independent-cohort registration before seeking new "
+                "real intermediate viewpoints; weak 2D-to-3D support is not proof "
+                "that a physical bridge photograph is missing."),
             "evidence": "verified 2D matches touching estimated 3D tracks; not PnP inliers",
         })
     if separate:

@@ -19,24 +19,38 @@ it exports an editable `.blend` and `model.glb` without rendering previews.
 ```bash
 kumiki-blender build-statue-glb \
   --photos "$HOME/Pictures/sphinx-reconstruction-candidates/warren-2019/photos" \
-  --asset-id great-sphinx --front-photo 1280px-front_view.jpeg \
+  --asset-id great-sphinx \
   --output .review/great-sphinx/statue-hq-r01 \
   --openmvs-dir /Applications/OpenMVS-2.4.0 \
-  --blender /Applications/Blender.app/Contents/MacOS/Blender \
-  --sam2-checkpoint /path/to/sam2.1_hiera_small.pt \
-  --sam2-device mps
+  --blender /Applications/Blender.app/Contents/MacOS/Blender
 ```
 
-Prerequisites: COLMAP, Blender, the OpenMVS executables, a locally installed
-official `facebookresearch/sam2` Python package and its matching official
-checkpoint. This tool never downloads weights or requests model approval.
-Use `--mask-guides /private/guides.json` for per-camera head/headdress/torso/
+Prerequisites: COLMAP, Blender, the OpenMVS executables, and the official
+`facebookresearch/sam2` Python package with PyTorch. If the SAM2.1 small
+checkpoint is not supplied, the command looks in local environment variables,
+the shared Kumiki cache, PyTorch's checkpoint cache, Downloads and a local
+`checkpoints/` folder. If absent, it downloads the official weights once over
+HTTPS from Meta into `~/.cache/kumiki-blender/models/`. Use
+`--no-auto-model-download` for fully offline mode or `--sam2-checkpoint` to
+choose another installed model. The checkpoint SHA-256 and origin are recorded.
+
+`--front-photo` is optional. The pipeline looks for a registered photo with an
+unambiguous front-facing filename hint and marks it **tentative**, never a
+verified anatomical orientation. If none can be identified, camera angles are
+reported relative to an arbitrary reference and anatomical left/right coverage
+is not claimed. Explicit `--front-photo` remains an override.
+
+If no guide file is supplied, SAM2 automatically samples conservative blue-sky
+negative points and starts with a broad subject prompt. Those mask candidates
+are reviewed by cross-view and contamination QA, not treated as hand-labeled
+statue parts. The output remains **private and unverified** even after automated
+gates pass. Optional `--mask-guides /private/guides.json` supplies head/headdress/torso/
 paws/tail boxes and positive/negative points (see
 [`examples/statue-mask-guides.example.json`](../examples/statue-mask-guides.example.json)).
 Guide keys identify the registered `photo-0001.png`-style rectified images in
 the camera revision, not necessarily their original downloaded filenames.
-Without guided anatomy, SAM2's central-box candidates intentionally fail the
-mask quality gate rather than silently entering the final mesh.
+Automatic guidance cannot guarantee correct anatomy; background leakage,
+incomplete silhouettes and weak geometric registration still stop the run.
 
 On a blocked run, inspect `statue-pipeline-report.json`, `coverage/photo-advice.md`,
 `masks/mask-contact-sheet.jpg`, and the SHA-named mask audit contact sheet.
@@ -48,13 +62,22 @@ reissue the same `build-statue-glb` invocation with `--resume --masks-dir
 camera solution, verifies the corrected mask revision's camera provenance
 and per-image hashes, re-audits the new masks, then continues if its gates pass.
 
-The gates require a calibrated frontal reference, at least two registered
-side views on **each** side beyond ±65°, at least two elevated cameras above
+When a reliable front reference exists, the gates require at least two registered
+side views on **each** side beyond ±65°. They also require two elevated cameras above
 12°, the configured registration fraction (80% by default), bounded mask
-foreground, no missing anatomy prompts or explicit background violations,
+foreground, no missing prompted anatomy or explicit background violations,
 under 12% cross-view label disagreement, and no obvious blue-sky leakage.
-Camera azimuth directions are relative to the **front image**, not the
-Sphinx's anatomical left and right. These are deliberately conservative
+Existing unregistered photos described as `needs-overlap-bridge` are **advice**,
+not an automatic failure: 2D–3D track support can be weak even when overlapping
+photos exist. The pipeline writes `coverage/cohort-recovery-plan.json` for
+unregistered views when the source match graph supports that diagnostic.
+Multiple verified neighbors now prioritize camera recovery, not another photo
+request. Try camera recovery and intrinsic diagnostics before acquiring
+additional images. AI-generated in-between photographs are **not independent
+geometric measurements** and must never be silently added as real COLMAP
+inputs; they are suitable only for separately labeled creative references.
+Camera azimuth directions are relative to the **front image**
+when known, not the Sphinx's verified anatomical axes. These are deliberately conservative
 indicators, not proof of a watertight mesh, a faithful face, or accurate scale.
 An unattended model with an incomplete left side is worse than a paused run
 with an actionable missing-photo checklist.

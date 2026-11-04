@@ -275,16 +275,18 @@ def main(argv: list[str] | None = None) -> int:
     statue_glb.add_argument("--photos", type=Path, required=True)
     statue_glb.add_argument("--asset-id", required=True)
     statue_glb.add_argument("--output", type=Path, required=True)
-    statue_glb.add_argument("--front-photo", required=True,
-                           help="Original filename showing the statue's true frontal direction")
+    statue_glb.add_argument("--front-photo",
+                           help="Optional frontal image override; otherwise infer from registered image metadata")
     statue_glb.add_argument("--openmvs-dir", type=Path, default=Path("/Applications/OpenMVS-2.4.0"))
     statue_glb.add_argument("--blender", default="/Applications/Blender.app/Contents/MacOS/Blender")
     statue_glb.add_argument("--sam2-checkpoint", type=Path,
-                           help="Official local SAM2.1 checkpoint; no automatic downloads")
+                           help="Optional SAM2.1 checkpoint (discover locally or download from Meta if omitted)")
+    statue_glb.add_argument("--no-auto-model-download", action="store_true",
+                           help="Never download missing model weights; search local caches only")
     statue_glb.add_argument("--sam2-size", choices=("tiny", "small", "base_plus", "large"), default="small")
     statue_glb.add_argument("--sam2-device", choices=("auto", "mps", "cpu"), default="mps")
     statue_glb.add_argument("--mask-guides", type=Path,
-                           help="Per-camera anatomy boxes and positive/negative landmarks")
+                           help="Optional manual overrides for automatically inferred segmentation prompts")
     statue_glb.add_argument("--masks-dir", type=Path,
                            help="Previously reviewed rectified masks; skips automatic SAM2 masking")
     statue_glb.add_argument("--mask-cache-dir", type=Path,
@@ -1184,6 +1186,7 @@ def main(argv: list[str] | None = None) -> int:
                         front_photo=args.front_photo, blender=args.blender,
                         openmvs_dir=args.openmvs_dir,
                         sam2_checkpoint=args.sam2_checkpoint,
+                        auto_download_model=not args.no_auto_model_download,
                         sam2_size=args.sam2_size, sam2_device=args.sam2_device,
                         mask_guides=args.mask_guides, masks_dir=args.masks_dir,
                         mask_cache_dir=args.mask_cache_dir,

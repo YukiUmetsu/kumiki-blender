@@ -257,6 +257,21 @@ class PhotoCoverageAdviceTests(unittest.TestCase):
         self.assertEqual(status, "keep")
         self.assertTrue(any("12 two-view tracks" in reason for reason in reasons))
 
+    def test_existing_verified_neighbors_prioritize_camera_recovery_over_new_bridge(self):
+        photo = {"imported": True, "keypoints": 1850, "strong_neighbors": 4}
+        candidate = {"conservative_one_to_one_2d3d": 12,
+                     "one_to_one_4x4_image_coverage": 0.125}
+        status, _, reasons = advice._status(
+            photo, registered=False, alternate=False, candidate=candidate,
+            near_angle=None, contribution=None)
+        self.assertEqual(status, "recover-first")
+        self.assertTrue(any("before acquiring" in text for text in reasons))
+        photo["strong_neighbors"] = 1
+        status, _, _ = advice._status(
+            photo, registered=False, alternate=False, candidate=candidate,
+            near_angle=None, contribution=None)
+        self.assertEqual(status, "needs-overlap-bridge")
+
     def test_missing_import_and_invalid_annotation(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

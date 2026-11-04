@@ -9,7 +9,9 @@ from unittest.mock import patch
 import numpy as np
 from PIL import Image
 
-from kumiki_blender.reconstruction.masking import _load_guides, _sam2_mask, generate_rectified_masks
+from kumiki_blender.reconstruction.masking import (
+    _auto_sam2_guide, _load_guides, _sam2_mask, generate_rectified_masks,
+)
 from kumiki_blender.reconstruction.references import ReferenceError
 from tests.test_reconstruction_masking import DenseMaskTests
 
@@ -43,6 +45,29 @@ class FakePredictor:
 
 class Sam2MaskTests(TestCase):
     setUp = DenseMaskTests.setUp
+
+    def test_automatic_sam2_guide_uses_blue_sky_as_negative_evidence(self):
+        image = Image.new("RGB", (300, 220), (192, 155, 98))
+        for y in range(80):
+            for x in range(300):
+                image.putpixel((x, y), (68, 128, 215))
+        guide = _auto_sam2_guide(image, (0.12, 0.04, 0.88, 0.96))
+        self.assertGreater(len(guide["background_points"]), 4)
+        self.assertTrue(all(y < 0.45 for _, y in guide["background_points"]))
+        self.assertFalse(guide["part_points"])  # Do not fabricate anatomy.
+
+    def test_missing_guides_generates_candidate_masks_with_provenance(self):
+        checkpoint = self.root / "sam2.1_hiera_small.pt"
+        checkpoint.write_bytes(b"local test weights")
+        fake = FakePredictor()
+        with patch("kumiki_blender.reconstruction.masking._load_sam2_predictor",
+                   return_value=(fake, "cpu")):
+            result = generate_rectified_masks(self.sparse, self.root / "auto-masks",
+                                              segmenter="sam2", sam2_checkpoint=checkpoint)
+        self.assertTrue(result["automatic_guidance"])
+        self.assertEqual(result["images"][0]["guide_source"],
+                         "auto-sky-negative-prompts / tentative")
+        self.assertFalse(result["approved_for_reconstruction"])
     def test_component_boxes_union_head_torso_and_paws_and_choose_point_compliance(self):
         guide = {
             "box": [0.1, 0.1, 0.9, 0.9],
