@@ -161,6 +161,34 @@ def _encode(work: Path, plan: ShotPlan, output: Path) -> None:
                     "-color_trc", "bt709", "-movflags", "+faststart", "-an", str(output)], check=True, timeout=1800)
 
 
+def _assemble(bpy: Any, plan: ShotPlan) -> tuple[dict[str, Any], dict[str, ActorRig]]:
+    bpy.ops.wm.read_homefile(use_factory_startup=True, use_empty=True)
+    objects = build_set(bpy, plan.set_path)
+    rigs = {actor.id: build_actor(bpy, load_actor(actor.pack, actor.profile)) for actor in plan.actors}
+    camera = _camera(bpy, plan)
+    _key_camera(camera, plan)
+    _key_objects(objects, plan)
+    _key_lights(objects, plan)
+    for actor_id, channels in plan.bake.actors.items():
+        if channels:
+            _key_actor(rigs[actor_id], channels, plan.bake.duration_frames)
+    _configure(bpy, plan)
+    return objects, rigs
+
+
+def preview_frame(bpy: Any, plan: ShotPlan, frame: int, output: Path) -> dict[str, Any]:
+    """Render one frame of the shot to a PNG, through the same build as the full render."""
+    if not 0 <= frame < plan.bake.duration_frames:
+        raise ShotPlanError(f"Frame {frame} is outside the shot")
+    _assemble(bpy, plan)
+    scene = bpy.context.scene
+    scene.frame_set(frame + 1)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    scene.render.filepath = str(output)
+    bpy.ops.render.render(write_still=True)
+    return {"frame": frame, "output": str(output)}
+
+
 def build_shot(bpy: Any, plan: ShotPlan, spec_path: Path, output: Path, *, save_blend: bool = True) -> dict[str, Any]:
     if output.exists():
         raise ShotPlanError(f"Output already exists: {output}")
@@ -171,20 +199,8 @@ def build_shot(bpy: Any, plan: ShotPlan, spec_path: Path, output: Path, *, save_
         shutil.rmtree(work)
     work.mkdir(parents=True, exist_ok=True)
     stamp.write_text(fingerprint)
-    bpy.ops.wm.read_homefile(use_factory_startup=True, use_empty=True)
     started = time.monotonic()
-    objects = build_set(bpy, plan.set_path)
-    rigs = {}
-    for actor in plan.actors:
-        rigs[actor.id] = build_actor(bpy, load_actor(actor.pack, actor.profile))
-    camera = _camera(bpy, plan)
-    _key_camera(camera, plan)
-    _key_objects(objects, plan)
-    _key_lights(objects, plan)
-    for actor_id, channels in plan.bake.actors.items():
-        if channels:
-            _key_actor(rigs[actor_id], channels, plan.bake.duration_frames)
-    _configure(bpy, plan)
+    _, rigs = _assemble(bpy, plan)
     scene = bpy.context.scene
     # Measure every contact before rendering, so a miss costs seconds, not a full render.
     errors: dict[str, float] = {}

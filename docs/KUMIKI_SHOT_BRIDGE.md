@@ -7,6 +7,8 @@ kumiki-blender plan-shot --spec shot.json
 kumiki-blender build-shot --spec shot.json --output renders/shot-r01
 ```
 
+`preview-frame --spec shot.json --frame N --output frame.png` renders one frame through the same build, for fast look checks.
+
 `build-shot` starts Blender when needed. Set `KUMIKI_BLENDER` or pass `--blender`.
 
 ## Actors
@@ -23,7 +25,7 @@ An actor is a Character Studio pack (`character.json` + `layers/`) plus a stagin
 ```
 
 - `layer` is depth in metres. Negative is toward the camera.
-- `inflate` is how far the layer domes.
+- `inflate` is how far the layer domes. `profile` is `dome` (round, steep rim) for bodies and heads, or `cushion` (gentle rim) for parts with thin feathers, fur tips or fingers, which would otherwise become narrow shaded ridges.
 - `ground_parts` names the parts that stand on the ground. Use it when a tail or cape hangs below the feet.
 - Each part is one mesh built from the union of all its drawings, so a blink, an expression or a mouth shape changes the texture, never the shape. Drawings of one part must share one image size. Kumiki `variantFrom` and `variantMix` crossfade two drawings by premultiplied blend.
 - An effector adds a bone chain that follows the drawn limb, so the limb bends under IK.

@@ -48,15 +48,22 @@ def _box_blur(values: np.ndarray, radius: int) -> np.ndarray:
     return out
 
 
-def inflate_mask(mask: np.ndarray, *, plateau: float = .8, smooth: int = 2) -> np.ndarray:
-    """Normalised dome height for a filled mask: a round cross-section, 0 outside."""
+def inflate_mask(mask: np.ndarray, *, plateau: float = .8, smooth: int = 2, profile: str = "dome") -> np.ndarray:
+    """Normalised height for a filled mask, 0 outside.
+
+    `dome` is a round cross-section with a steep rim, for bodies and heads.
+    `cushion` rises gently from the rim, so thin feathers, fur tips and fingers stay
+    nearly flat instead of becoming narrow ridges with hard shading.
+    """
     mask = np.asarray(mask, bool)
     if not mask.any():
         raise ValueError("Cannot inflate an empty layer")
+    if profile not in ("dome", "cushion"):
+        raise ValueError(f"Unknown inflation profile {profile}")
     distance = _erosion_distance(mask)
     reach = max(float(distance.max()) * plateau, 1.0)
     unit = np.clip(distance / reach, 0, 1)
-    height = np.sqrt(1 - (1 - unit) ** 2)
+    height = np.sqrt(1 - (1 - unit) ** 2) if profile == "dome" else unit * unit * (3 - 2 * unit)
     if smooth:
         height = _box_blur(height, smooth)
         height *= mask

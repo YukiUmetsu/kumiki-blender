@@ -33,6 +33,7 @@ class PartStage:
     layer: float | None = None
     inflate: float | None = None
     back: float = .55
+    profile: str = "dome"
 
 
 @dataclass(frozen=True)
@@ -120,10 +121,12 @@ def parse_actor(pack: Path, character: Any, profile: Any) -> ActorPlan:
     for part_id, raw in (profile.get("parts") or {}).items():
         if part_id not in ids:
             raise ActorPlanError(f"Profile staged an unknown part {part_id}")
-        extra = raw.keys() - {"layer", "inflate", "back"}
+        extra = raw.keys() - {"layer", "inflate", "back", "profile"}
         if extra:
             raise ActorPlanError(f"Part stage has unknown fields: {sorted(extra)}")
-        stage[part_id] = PartStage(raw.get("layer"), raw.get("inflate"), raw.get("back", .55))
+        if raw.get("profile", "dome") not in ("dome", "cushion"):
+            raise ActorPlanError(f"Part {part_id} profile must be dome or cushion")
+        stage[part_id] = PartStage(raw.get("layer"), raw.get("inflate"), raw.get("back", .55), raw.get("profile", "dome"))
     effectors = []
     for effector_id, raw in (profile.get("effectors") or {}).items():
         if raw.get("part") not in ids:

@@ -112,11 +112,11 @@ def _part_material(bpy: Any, name: str, variants: list[tuple[str, Any]], roughne
 
 def _part_mesh(bpy: Any, plan: ActorPlan, name: str, material: Any, mask: np.ndarray, *,
                logical: tuple[float, float], scale: float, layer: float, inflate: float,
-               back: float, footprint: np.ndarray | None = None) -> tuple[Any, np.ndarray]:
+               back: float, footprint: np.ndarray | None = None, profile: str = "dome") -> tuple[Any, np.ndarray]:
     step = plan.grid_step
     # The dome comes from the main drawing alone. Other drawings only widen the flat footprint,
     # so a rare big-tufted face cannot swell the head every other face sits on.
-    height = inflate_mask(_downsample(mask, step))
+    height = inflate_mask(_downsample(mask, step), profile=profile)
     mesh = heightfield_mesh(height, step, None if footprint is None else _downsample(footprint, step))
     art_height, art_width = mask.shape
     sx, sy = logical[0] / art_width, logical[1] / art_height
@@ -273,7 +273,8 @@ def build_actor(bpy: Any, plan: ActorPlan) -> ActorRig:
         name = f"{plan.actor_id}-{part.id}"
         material, weights = _part_material(bpy, name, drawings, plan.roughness)
         obj, design = _part_mesh(bpy, plan, name, material, masks[reference], logical=logical, scale=scale, layer=layer / parent_depth,
-                                 inflate=inflate / parent_depth, back=back, footprint=union)
+                                 inflate=inflate / parent_depth, back=back, footprint=union,
+                                 profile=stage.profile if stage else "dome")
         obj.parent = rig.empties[part.id]
         rig.meshes[part.id] = obj
         rig.weights[part.id] = weights

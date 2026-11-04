@@ -40,6 +40,16 @@ class Inflation(unittest.TestCase):
         quarter = rim + (centre - rim) // 4
         self.assertGreater(float(height[40, quarter]), .5)
 
+    def test_cushion_rises_gently_at_the_rim(self):
+        dome = inflate_mask(disc(), smooth=0)
+        cushion = inflate_mask(disc(), smooth=0, profile="cushion")
+        rim, centre = 8, 40
+        near_rim = rim + 3
+        self.assertLess(float(cushion[40, near_rim]), float(dome[40, near_rim]) * .5)
+        self.assertAlmostEqual(float(cushion.max()), 1.0, places=3)
+        with self.assertRaisesRegex(ValueError, "profile"):
+            inflate_mask(disc(), profile="pillow")
+
     def test_empty_mask_is_rejected(self):
         with self.assertRaises(ValueError):
             inflate_mask(np.zeros((8, 8), bool))

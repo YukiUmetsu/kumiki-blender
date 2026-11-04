@@ -180,9 +180,13 @@ def main(argv: list[str] | None = None) -> int:
         if command == "build-deformation":
             deform_parser.add_argument("--output", type=Path, required=True,
                                       help="New GLB/manifest bundle (requires Blender background with a saved .blend)")
-    for command in ("plan-shot", "build-shot"):
+    for command in ("plan-shot", "build-shot", "preview-frame"):
         shot_parser = subcommands.add_parser(command, help="Validate or render one shot from a set, cast and Kumiki bake")
         shot_parser.add_argument("--spec", type=Path, required=True)
+        if command == "preview-frame":
+            shot_parser.add_argument("--frame", type=int, required=True, help="Zero-based frame to render as PNG")
+            shot_parser.add_argument("--output", type=Path, required=True, help="PNG path")
+            shot_parser.add_argument("--blender", default=os.environ.get("KUMIKI_BLENDER", "blender"))
         if command == "build-shot":
             shot_parser.add_argument("--output", type=Path, required=True,
                                      help="New shot bundle (run under Blender through scripts/blender_entry.py)")
@@ -863,8 +867,22 @@ def main(argv: list[str] | None = None) -> int:
             bpy.ops.wm.read_homefile(use_factory_startup=True, use_empty=True)
             print(json.dumps(describe_actor(build_actor(bpy, plan))))
             return 0
-        if args.command in ("plan-shot", "build-shot"):
+        if args.command in ("plan-shot", "build-shot", "preview-frame"):
             shot = load_shot_plan(args.spec)
+            if args.command == "preview-frame":
+                try:
+                    import bpy  # type: ignore[import-not-found]
+                except ImportError:
+                    executable = shutil.which(args.blender)
+                    if not executable:
+                        raise RuntimeError(f"Blender executable not found: {args.blender}")
+                    entry = Path(__file__).resolve().parents[2] / "scripts/blender_entry.py"
+                    return _run_cancellable([executable, "--background", "--factory-startup", "--python-exit-code", "1",
+                                             "--python", str(entry), "--", "preview-frame", "--spec", str(args.spec.resolve()),
+                                             "--frame", str(args.frame), "--output", str(args.output.resolve())])
+                from .blender_shot import preview_frame
+                print(json.dumps(preview_frame(bpy, shot, args.frame, args.output)))
+                return 0
             if args.command == "plan-shot":
                 print(json.dumps({"shot_id": shot.shot_id, "frames": shot.bake.duration_frames,
                                   "actors": [actor.id for actor in shot.actors], "profile": shot.profile}, indent=2))

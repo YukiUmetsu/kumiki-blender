@@ -52,6 +52,11 @@ class ParseActor(unittest.TestCase):
         with self.assertRaisesRegex(ActorPlanError, "ground_parts"):
             parse_actor(PACK, CHARACTER, {**PROFILE, "ground_parts": ["nope"]})
 
+    def test_part_profile_is_validated(self):
+        self.assertEqual(parse_actor(PACK, CHARACTER, {**PROFILE, "parts": {"arm": {"profile": "cushion"}}}).stage["arm"].profile, "cushion")
+        with self.assertRaisesRegex(ActorPlanError, "profile"):
+            parse_actor(PACK, CHARACTER, {**PROFILE, "parts": {"arm": {"profile": "pillow"}}})
+
     def test_rejects_bad_height(self):
         with self.assertRaisesRegex(ActorPlanError, "height_m"):
             parse_actor(PACK, CHARACTER, {**PROFILE, "height_m": 40})
