@@ -127,6 +127,10 @@ class PartTransform(unittest.TestCase):
         placed = self.apply(self.transform(), 140, 260)
         np.testing.assert_allclose(placed, (flat[0] * .001, 0, -flat[1] * .001), atol=1e-12)
 
+    def test_depth_scales_with_width_so_reach_is_even(self):
+        _, _, scale = self.transform()
+        self.assertEqual(scale[1], scale[0])
+
     def test_positive_yaw_turns_the_face_toward_screen_right(self):
         _, rotation, _ = self.transform(yaw=30)
         self.assertGreater((rotation @ np.array((0, -1, 0)))[0], 0)

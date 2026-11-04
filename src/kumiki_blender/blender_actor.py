@@ -186,6 +186,11 @@ def build_actor(bpy: Any, plan: ActorPlan) -> ActorRig:
     bpy.context.collection.objects.link(root)
     rig = ActorRig(plan, root, scale, ((left + right) / 2, ground))
     ordered = sorted(plan.parts, key=lambda part: part.z)
+
+    def depth_scale(part: ActorPart) -> float:
+        own = part.rest.get("scaleX", 1)
+        return own * depth_scale(plan.by_id[part.parent]) if part.parent else own
+
     for part in plan.parts:
         empty = bpy.data.objects.new(f"{plan.actor_id}-{part.id}", None)
         bpy.context.collection.objects.link(empty)
@@ -207,14 +212,16 @@ def build_actor(bpy: Any, plan: ActorPlan) -> ActorRig:
                 continue
             logical = _logical_size(plan, key, image)
             inflate = stage.inflate if stage and stage.inflate is not None else plan.height_m * .05
+            # Profiles use real metres. Part empties scale depth, so divide that back out.
+            parent_depth = depth_scale(part)
             name = f"{plan.actor_id}-{part.id}-{key}"
-            obj, design = _part_mesh(bpy, plan, name, image, mask, logical=logical, scale=scale, layer=layer,
-                                     inflate=inflate, back=back)
+            obj, design = _part_mesh(bpy, plan, name, image, mask, logical=logical, scale=scale, layer=layer / parent_depth,
+                                     inflate=inflate / parent_depth, back=back)
             obj.parent = rig.empties[part.id]
             rig.meshes[(part.id, key)] = obj
             effector = effector_of.get((part.id, variant)) or (effector_of.get((part.id, None)) if key == part.asset else None)
             if effector:
-                _add_chain(bpy, rig, effector, part, obj, rig.empties[part.id], mask, design, logical, layer)
+                _add_chain(bpy, rig, effector, part, obj, rig.empties[part.id], mask, design, logical, layer / parent_depth)
     apply_state(rig, {}, None)
     root.location = (0, 0, 0)
     return rig

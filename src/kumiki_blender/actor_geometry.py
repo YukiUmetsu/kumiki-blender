@@ -225,7 +225,8 @@ def part_transform(*, pivot: tuple[float, float], x: float, y: float, rotation: 
     about_z = np.array([[math.cos(turn_yaw), -math.sin(turn_yaw), 0], [math.sin(turn_yaw), math.cos(turn_yaw), 0], [0, 0, 1]])
     about_x = np.array([[1, 0, 0], [0, math.cos(turn_pitch), -math.sin(turn_pitch)], [0, math.sin(turn_pitch), math.cos(turn_pitch)]])
     orientation = about_z @ about_x @ about_y
-    scale = np.array((scale_x, 1.0, scale_y))
+    # Depth scales with X, so a limb under a scaled parent reaches equally far in every direction.
+    scale = np.array((scale_x, scale_x, scale_y))
     centre = np.array((pivot[0] * metres_per_px, 0.0, -pivot[1] * metres_per_px))
     placed = centre + np.array((x * metres_per_px, 0.0, -y * metres_per_px))
-    return placed - orientation @ (scale * centre), orientation, (scale_x, 1.0, scale_y)
+    return placed - orientation @ (scale * centre), orientation, (scale_x, scale_x, scale_y)
