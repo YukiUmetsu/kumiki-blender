@@ -270,6 +270,30 @@ def main(argv: list[str] | None = None) -> int:
         photo_model_parser.add_argument("--max-image-size", type=int, default=3200)
         photo_model_parser.add_argument("--no-texture", action="store_true")
         photo_model_parser.add_argument("--no-renders", action="store_true")
+    statue_glb = subcommands.add_parser(
+        "build-statue-glb", help="One-command MPS statue reconstruction with angle/mask QA gates and resumable GLB export")
+    statue_glb.add_argument("--photos", type=Path, required=True)
+    statue_glb.add_argument("--asset-id", required=True)
+    statue_glb.add_argument("--output", type=Path, required=True)
+    statue_glb.add_argument("--front-photo", required=True,
+                           help="Original filename showing the statue's true frontal direction")
+    statue_glb.add_argument("--openmvs-dir", type=Path, default=Path("/Applications/OpenMVS-2.4.0"))
+    statue_glb.add_argument("--blender", default="/Applications/Blender.app/Contents/MacOS/Blender")
+    statue_glb.add_argument("--sam2-checkpoint", type=Path,
+                           help="Official local SAM2.1 checkpoint; no automatic downloads")
+    statue_glb.add_argument("--sam2-size", choices=("tiny", "small", "base_plus", "large"), default="small")
+    statue_glb.add_argument("--sam2-device", choices=("auto", "mps", "cpu"), default="mps")
+    statue_glb.add_argument("--mask-guides", type=Path,
+                           help="Per-camera anatomy boxes and positive/negative landmarks")
+    statue_glb.add_argument("--masks-dir", type=Path,
+                           help="Previously reviewed rectified masks; skips automatic SAM2 masking")
+    statue_glb.add_argument("--mask-cache-dir", type=Path,
+                           help="Persistent per-image mask cache (defaults to a sibling of the output revision)")
+    statue_glb.add_argument("--min-registered-fraction", type=float, default=0.80)
+    statue_glb.add_argument("--max-mixed-mask-fraction", type=float, default=0.12)
+    statue_glb.add_argument("--max-colmap-rss-mb", type=int, default=12288)
+    statue_glb.add_argument("--timeout-seconds", type=int, default=14400)
+    statue_glb.add_argument("--resume", action="store_true")
     camera_compare_parser = subcommands.add_parser(
         "compare-camera-registrations",
         help="Read-only before/after registration coverage for two COLMAP revisions")
@@ -449,6 +473,8 @@ def main(argv: list[str] | None = None) -> int:
     photo_mask_parser.add_argument("--sam2-size", choices=("tiny", "small", "base_plus", "large"),
                                    default="small")
     photo_mask_parser.add_argument("--sam2-device", choices=("auto", "mps", "cpu"), default="auto")
+    photo_mask_parser.add_argument("--cache-dir", type=Path,
+                                   help="Optional content-addressed cache of masks for identical rectified photos")
     refine_mask_parser = subcommands.add_parser(
         "refine-dense-masks", help="Remove tiny mask islands/holes or apply camera-specific polygon cleanup")
     refine_mask_parser.add_argument("--reconstruction", type=Path, required=True)
@@ -740,7 +766,7 @@ def main(argv: list[str] | None = None) -> int:
                     center_box=tuple(args.center_box), max_side=args.max_side,
                     iterations=args.iterations, segmenter=args.segmenter,
                     sam2_checkpoint=args.sam2_checkpoint, sam2_size=args.sam2_size,
-                    sam2_device=args.sam2_device)
+                    sam2_device=args.sam2_device, cache_dir=args.cache_dir)
             except ReferenceError as error:
                 raise RecipeError(str(error)) from error
             print(json.dumps(report, indent=2))
@@ -1148,6 +1174,27 @@ def main(argv: list[str] | None = None) -> int:
                 raise RecipeError(str(error)) from error
             print(json.dumps(report, indent=2))
             return 0 if report["status"].startswith("alignment-evidence-passes") else 3
+        if args.command == "build-statue-glb":
+            from .reconstruction.statue_pipeline import StatuePipelineSettings, build_statue_glb
+            from .reconstruction.references import ReferenceError
+            try:
+                report = build_statue_glb(
+                    args.photos, args.asset_id, args.output,
+                    StatuePipelineSettings(
+                        front_photo=args.front_photo, blender=args.blender,
+                        openmvs_dir=args.openmvs_dir,
+                        sam2_checkpoint=args.sam2_checkpoint,
+                        sam2_size=args.sam2_size, sam2_device=args.sam2_device,
+                        mask_guides=args.mask_guides, masks_dir=args.masks_dir,
+                        mask_cache_dir=args.mask_cache_dir,
+                        min_registered_fraction=args.min_registered_fraction,
+                        max_mixed_mask_fraction=args.max_mixed_mask_fraction,
+                        max_colmap_rss_mb=args.max_colmap_rss_mb,
+                        timeout_seconds=args.timeout_seconds), resume=args.resume)
+            except (ReferenceError, ValueError, ImportError) as error:
+                raise RecipeError(str(error)) from error
+            print(json.dumps(report, indent=2))
+            return 0 if report["status"].startswith("private-GLB-candidate") else 3
         if args.command in ("plan-photo-model", "build-photo-model"):
             from .reconstruction.photo_model import (PhotoModelSettings, build_photo_model,
                                                      plan_photo_model)

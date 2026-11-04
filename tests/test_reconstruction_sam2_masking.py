@@ -111,6 +111,93 @@ class Sam2MaskTests(TestCase):
         self.assertEqual(report["images"][0]["missing_parts"], [])
         self.assertTrue((output / "mask-contact-sheet.jpg").exists())
 
+    def test_incremental_cache_reuses_unchanged_rectified_views_after_adding_photo(self):
+        checkpoint = self.root / "sam2.1_hiera_small.pt"
+        checkpoint.write_bytes(b"local test weights")
+        guide = self.root / "guides.json"
+        guide.write_text(json.dumps({"default": {
+            "component_boxes": {"head": [0.3, 0.05, 0.7, 0.45],
+                                "torso": [0.2, 0.4, 0.8, 0.9]},
+            "part_points": {"head": [[0.5, 0.2]], "torso": [[0.5, 0.7]]}}}))
+        cache = self.root / "shared-cache"
+        # The shared fixture uses identical image bytes; make distinct source
+        # views so that the test exercises four separate cache entries.
+        index_path = self.sparse / "undistorted-reference-index.json"
+        unique_index = json.loads(index_path.read_text())
+        for index, entry in enumerate(unique_index["images"]):
+            image_path = self.sparse / "undistorted/images" / entry["filename"]
+            with Image.open(image_path) as image:
+                changed = image.copy()
+            changed.putpixel((0, 0), (index + 10, 20, 30))
+            changed.save(image_path)
+            entry["sha256"] = hashlib.sha256(image_path.read_bytes()).hexdigest()
+        index_path.write_text(json.dumps(unique_index))
+        first_predictor = FakePredictor()
+        with patch("kumiki_blender.reconstruction.masking._load_sam2_predictor",
+                   return_value=(first_predictor, "cpu")):
+            first = generate_rectified_masks(
+                self.sparse, self.root / "masks-before", segmenter="sam2",
+                sam2_checkpoint=checkpoint, guides=guide, cache_dir=cache)
+        self.assertEqual(first["cache"], {"directory": str(cache.resolve()),
+                                           "hits": 0, "misses": 4})
+        self.assertEqual(len(first_predictor.calls), 8)
+
+        # A new camera/photo arrives; previous rectified image content is
+        # identical, so only the new photo should incur SAM2 inference.
+        new_name = "view-04.png"
+        image_path = self.sparse / "undistorted/images" / new_name
+        Image.new("RGB", (320, 256), (110, 145, 125)).save(image_path)
+        index = json.loads(index_path.read_text())
+        index["images"].append({"filename": new_name,
+                                "sha256": hashlib.sha256(image_path.read_bytes()).hexdigest(),
+                                "dimensions": [320, 256]})
+        index_path.write_text(json.dumps(index))
+        revision_report = self.sparse / "reconstruction-report.json"
+        report = json.loads(revision_report.read_text())
+        report.update(registered_images=5, staged_independent_images=5, undistorted_images=5)
+        revision_report.write_text(json.dumps(report))
+
+        new_predictor = FakePredictor()
+        with patch("kumiki_blender.reconstruction.masking._load_sam2_predictor",
+                   return_value=(new_predictor, "cpu")):
+            second = generate_rectified_masks(
+                self.sparse, self.root / "masks-after", segmenter="sam2",
+                sam2_checkpoint=checkpoint, guides=guide, cache_dir=cache)
+        self.assertEqual(second["cache"]["hits"], 4)
+        self.assertEqual(second["cache"]["misses"], 1)
+        self.assertEqual(len(new_predictor.calls), 2)
+        self.assertTrue(all(item["cache_hit"] for item in second["images"][:4]))
+        self.assertFalse(second["images"][-1]["cache_hit"])
+
+        # A completely warm rerun must not load the heavyweight SAM2 model.
+        with patch("kumiki_blender.reconstruction.masking._load_sam2_predictor",
+                   side_effect=AssertionError("model should not be loaded for cache hits")):
+            warm = generate_rectified_masks(
+                self.sparse, self.root / "masks-warm", segmenter="sam2",
+                sam2_checkpoint=checkpoint, guides=guide, cache_dir=cache)
+        self.assertEqual(warm["cache"]["hits"], 5)
+        self.assertEqual(warm["cache"]["misses"], 0)
+
+        # Re-rectification of one old photo must invalidate just that view.
+        image_path = self.sparse / "undistorted/images/view-02.png"
+        with Image.open(image_path) as image:
+            changed = image.copy()
+        changed.putpixel((0, 0), (201, 42, 11))
+        changed.save(image_path)
+        changed_index = json.loads(index_path.read_text())
+        changed_index["images"][2]["sha256"] = hashlib.sha256(image_path.read_bytes()).hexdigest()
+        index_path.write_text(json.dumps(changed_index))
+        after_rectification = FakePredictor()
+        with patch("kumiki_blender.reconstruction.masking._load_sam2_predictor",
+                   return_value=(after_rectification, "cpu")):
+            fourth = generate_rectified_masks(
+                self.sparse, self.root / "masks-rectified", segmenter="sam2",
+                sam2_checkpoint=checkpoint, guides=guide, cache_dir=cache)
+        self.assertEqual(fourth["cache"]["hits"], 4)
+        self.assertEqual(fourth["cache"]["misses"], 1)
+        self.assertEqual(len(after_rectification.calls), 2)
+        self.assertFalse(fourth["images"][2]["cache_hit"])
+
     def test_sam2_requires_explicit_regular_checkpoint_before_creating_output(self):
         with self.assertRaisesRegex(ReferenceError, "checkpoint"):
             generate_rectified_masks(self.sparse, self.root / "missing", segmenter="sam2")

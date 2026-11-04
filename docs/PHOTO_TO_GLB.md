@@ -8,6 +8,84 @@ procedural reconstruction or Gaussian splat. It can use a private folder of
 For mixed internet photos where left/right-side cameras remain disconnected,
 see [learned COLMAP matching and camera coverage comparisons](NEURAL_CAMERA_RECONSTRUCTION.md).
 
+## One-command, quality-gated statue reconstruction (Apple Silicon)
+
+`build-statue-glb` runs a fresh COLMAP SIFT-LightGlue/MPS camera solution,
+produces an annotated missing-angle report, prepares SAM2.1/MPS mask
+candidates, audits cross-view mask consistency, then runs **resolution-level 0**
+OpenMVS without geometry-destroying refinement. If all conservative gates pass,
+it exports an editable `.blend` and `model.glb` without rendering previews.
+
+```bash
+kumiki-blender build-statue-glb \
+  --photos "$HOME/Pictures/sphinx-reconstruction-candidates/warren-2019/photos" \
+  --asset-id great-sphinx --front-photo 1280px-front_view.jpeg \
+  --output .review/great-sphinx/statue-hq-r01 \
+  --openmvs-dir /Applications/OpenMVS-2.4.0 \
+  --blender /Applications/Blender.app/Contents/MacOS/Blender \
+  --sam2-checkpoint /path/to/sam2.1_hiera_small.pt \
+  --sam2-device mps
+```
+
+Prerequisites: COLMAP, Blender, the OpenMVS executables, a locally installed
+official `facebookresearch/sam2` Python package and its matching official
+checkpoint. This tool never downloads weights or requests model approval.
+Use `--mask-guides /private/guides.json` for per-camera head/headdress/torso/
+paws/tail boxes and positive/negative points (see
+[`examples/statue-mask-guides.example.json`](../examples/statue-mask-guides.example.json)).
+Guide keys identify the registered `photo-0001.png`-style rectified images in
+the camera revision, not necessarily their original downloaded filenames.
+Without guided anatomy, SAM2's central-box candidates intentionally fail the
+mask quality gate rather than silently entering the final mesh.
+
+On a blocked run, inspect `statue-pipeline-report.json`, `coverage/photo-advice.md`,
+`masks/mask-contact-sheet.jpg`, and the SHA-named mask audit contact sheet.
+Additional real photos require a **fresh output revision**: the input hashes
+cannot change under `--resume`. To correct masks, run the existing
+`refine-dense-masks` command against the same `cameras/` revision, then
+reissue the same `build-statue-glb` invocation with `--resume --masks-dir
+/path/to/corrected-revision/masks`. The resumed run reuses the completed
+camera solution, verifies the corrected mask revision's camera provenance
+and per-image hashes, re-audits the new masks, then continues if its gates pass.
+
+The gates require a calibrated frontal reference, at least two registered
+side views on **each** side beyond ±65°, at least two elevated cameras above
+12°, the configured registration fraction (80% by default), bounded mask
+foreground, no missing anatomy prompts or explicit background violations,
+under 12% cross-view label disagreement, and no obvious blue-sky leakage.
+Camera azimuth directions are relative to the **front image**, not the
+Sphinx's anatomical left and right. These are deliberately conservative
+indicators, not proof of a watertight mesh, a faithful face, or accurate scale.
+An unattended model with an incomplete left side is worse than a paused run
+with an actionable missing-photo checklist.
+
+The original `build-photo-model` command below remains available for a quick,
+unmasked diagnostic GLB and continues to use its unchanged defaults.
+
+### Incremental cache when adding photos
+
+Each new `build-statue-glb` output revision uses the persistent sibling folder
+`_statue_mask_cache/` (override with `--mask-cache-dir`). Automatic SAM2 mask
+results for **exactly unchanged rectified pixels** are reused, including the
+same model checkpoint, model size, image dimensions, processing resolution
+and per-image anatomy guidance. The report records `mask_cache.hits/misses`
+and each candidate mask's `cache_hit` and content key. Cache entries contain
+only binary masks and small provenance receipts, never the original photos.
+
+Adding a new photo can change estimated cameras and image undistortion. A
+changed rectified image correctly results in a cache miss; old masks are **not**
+resized into a different camera grid. COLMAP camera solving, new photo-pair
+matching and OpenMVS depth maps still need fresh work when the source set
+changes. A stopped run on the *same* images can instead use `--resume` to skip
+its completed stages. Neither mechanism fabricates missing viewpoints.
+
+To regenerate after adding photos, run the same command with an unused output
+such as `--output .review/great-sphinx/statue-hq-r02`. The cache from `r01`
+is discovered automatically as long as both outputs share a parent directory.
+On an entirely cached re-mask, the official SAM2 model is not loaded at all;
+cache misses are recomputed with the installed model and a verified checkpoint
+hash. To inspect reuse, read `mask_cache` in `statue-pipeline-report.json`.
+
 ## Mac (Apple Silicon)
 
 Install Python with `pip install -e '.[photogrammetry,qa]'` and Blender separately.
