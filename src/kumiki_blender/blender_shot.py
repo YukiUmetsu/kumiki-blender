@@ -192,7 +192,7 @@ def build_shot(bpy: Any, plan: ShotPlan, spec_path: Path, output: Path, *, save_
         scene.frame_set(index + 1)
         for actor_id, channels in plan.bake.actors.items():
             for effector, track in (channels.get("effectors") or {}).items():
-                if track["influence"][index] > .99:
+                if track["holding"][index]:
                     key = f"{actor_id}.{effector}"
                     error = _contact_error(bpy, rigs[actor_id], effector)
                     if error > errors.get(key, 0):

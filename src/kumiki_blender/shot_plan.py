@@ -118,6 +118,7 @@ def parse_bake(raw: Any) -> Bake:
         for effector, track in (channels.get("effectors") or {}).items():
             _length(track.get("position"), f"{name}.{effector}.position", frames)
             _length(track.get("influence"), f"{name}.{effector}.influence", frames)
+            _length(track.get("holding"), f"{name}.{effector}.holding", frames)
     lights = raw.get("lights") or {}
     for name, values in lights.items():
         _length(values, f"lights.{name}", frames)

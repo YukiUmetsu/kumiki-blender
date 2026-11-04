@@ -42,6 +42,6 @@ A set is JSON. Kinds are `box`, `lathe` and `document`. Positions use Kumiki Y-u
 
 ## Output
 
-A new bundle with `shot.mp4`, an editable `shot.blend` and `shot-manifest.json`. The manifest records the fingerprint, Blender version, timing and the worst hand-to-target distance per effector. A distance over 2 mm fails the build.
+A new bundle with `shot.mp4`, an editable `shot.blend` and `shot-manifest.json`. The manifest records the fingerprint, Blender version, timing and the worst hand-to-target distance per effector. Only frames marked `holding` count, and a distance over 2 mm fails the build before any frame renders.
 
 Frames are written to a work directory, so a retry resumes. The bundle appears only by rename after success, and an existing output is never overwritten.

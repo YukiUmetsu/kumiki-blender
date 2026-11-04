@@ -71,7 +71,7 @@ class BuildShot(unittest.TestCase):
                 "lights": {"key": [1, .9, .8]}, "contacts": [{"frame": 1, "kind": "grasp", "actor": "a", "effector": "hand", "object": "paper"}],
                 "actors": {"a": {"root": {"position": repeat([0, 0, 0], frames), "yaw": repeat(0, frames)},
                                  "parts": repeat({}, frames),
-                                 "effectors": {"hand": {"position": repeat(list(reach), frames), "influence": [0, 1, 1]}}}}}
+                                 "effectors": {"hand": {"position": repeat(list(reach), frames), "influence": [0, 1, 1], "holding": [False, True, True]}}}}}
         (self.root / "bake.json").write_text(json.dumps(bake))
         path = self.root / "shot.json"
         path.write_text(json.dumps({"schema_version": 1, "shot_id": "tiny", "set": "set.json", "bake": "bake.json",
