@@ -114,6 +114,7 @@ jobs:
       - name: Import and align actual GLB completion parts in Blender
         env:
           KUMIKI_RENDER_PROFILE: smoke
+          PYTHONPATH: src
         run: |
           blender --background --factory-startup --threads 2 --python-exit-code 1 \
             --python scripts/smoke_completion_blender.py -- .review/ci/completion-smoke

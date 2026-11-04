@@ -1,6 +1,7 @@
 """Pure contract checks for Blender provenance and texture scope."""
 
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 
 from kumiki_blender.blender_completion import (
@@ -13,6 +14,13 @@ from tests.test_completion import CompletionTests
 
 
 class CompletionBlenderContracts(unittest.TestCase):
+    def test_blender_ci_audit_can_import_source_package(self):
+        workflow = (Path(__file__).resolve().parents[1] / ".github/workflows/python.yml").read_text()
+        section = workflow.split("- name: Import and align actual GLB completion parts in Blender", 1)[1]
+        section = section.split("- name:", 1)[0]
+        self.assertIn("PYTHONPATH: src", section)
+        self.assertIn("python -m kumiki_blender audit", section)
+
     def test_historical_mode_rejects_inferred_base_components(self):
         mesh = {"kumiki_geometry_origin": "inferred", "kumiki_part": "completion-ear"}
         with self.assertRaisesRegex(CompletionError, "inferred"):
