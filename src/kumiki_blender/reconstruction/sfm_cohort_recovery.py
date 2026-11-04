@@ -503,7 +503,10 @@ def assess_disconnected_alignment(baseline, cohort, database: Path, qa_index: Pa
     if result["reasons"]:
         return result
     try:
-        correspondences = extract_verified_3d_matches(database, baseline, cohort, qa_index=qa_index)
+        evidence_audit: dict = {}
+        correspondences = extract_verified_3d_matches(
+            database, baseline, cohort, qa_index=qa_index, audit=evidence_audit)
+        result["evidence_audit"] = evidence_audit
         first_points = [np.asarray(item.xyz).reshape(3) for item in baseline.points3D.values()]
         other_points = [np.asarray(item.xyz).reshape(3) for item in cohort.points3D.values()]
         fit = estimate_point_alignment(correspondences,

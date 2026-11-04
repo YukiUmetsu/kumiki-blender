@@ -475,7 +475,10 @@ def build_statue_glb(
                              "foreground_misses": prepared_report.get("foreground_misses"),
                              "qa_hits": prepared_report.get("qa_hits"),
                              "qa_misses": prepared_report.get("qa_misses"),
-                             "qa_warnings": prepared_report.get("qa_warning_count")}
+                             "qa_warnings": prepared_report.get("qa_warning_count"),
+                             "auxiliary_model_status": prepared_report.get("auxiliary_model_status"),
+                             "refinement_attempts": prepared_report.get("refinement_attempts"),
+                             "refinement_accepted": prepared_report.get("refinement_accepted")}
     report["early_photo_qa"] = "photo-preprocess/photo-qa-contact-sheet.jpg"
     camera_argv = executable + ["reconstruct-photos", "--photos", str(photos.resolve()),
         "--asset-id", asset_id, "--output", str(sparse), "--engine", "colmap",
@@ -624,6 +627,14 @@ def build_statue_glb(
             "Automatically selected front is unverified; side labels are provisional" if front["filename"]
             else "No reliable frontal photo hint; true left/right geometry remains unverified")
     if issues:
+        # A verified recovered candidate can clear the numeric registration
+        # threshold while still failing viewpoint coverage. Report its actual
+        # remaining blockers; do not imply the original 47-camera model is
+        # promoted or repeat an outdated 78.3% registration warning.
+        candidate_count = report.get("verified_camera_candidate_registered", 0)
+        if candidate_count > registered and "camera_recovery_coverage_warnings" in report:
+            report["initial_coverage_warnings"] = issues
+            issues = report["camera_recovery_coverage_warnings"]
         return checkpoint("blocked / missing-photo-coverage", "coverage", issues)
 
     if settings.masks_dir is None:

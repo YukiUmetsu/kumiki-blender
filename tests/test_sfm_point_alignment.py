@@ -163,8 +163,14 @@ class DisconnectedAlignmentTests(unittest.TestCase):
             positions = {i: (i * 2., i % 4 * 3., i % 3 * 5.) for i in range(15)}
             baseline = Model([Image(i, f"base-{i}.png", list(range(15))) for i in (1, 2, 3)], positions)
             alternate = Model([Image(i, f"new-{i}.png", list(range(15))) for i in (10, 11, 12)], positions)
-            pairs = extract_verified_3d_matches(database, baseline, alternate)
+            audit = {}
+            pairs = extract_verified_3d_matches(database, baseline, alternate, audit=audit)
             self.assertEqual(len(pairs), 15)
+            self.assertEqual(audit["cross_registered_geometry_pairs"], 8)
+            self.assertEqual(audit["nonplanar_geometry_pairs"], 3)
+            self.assertEqual(audit["cross_keypoint_observations"], 45)
+            self.assertEqual(audit["both_points_triangulated"], 45)
+            self.assertEqual(audit["unique_3d_correspondences"], 15)
             self.assertEqual(len(pairs[0]["image_pairs"]), 3)
             self.assertEqual(set(baseline.images) & set(alternate.images), set())
 

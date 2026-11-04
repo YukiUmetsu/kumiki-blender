@@ -75,7 +75,8 @@ def _subject_lookup(path: Path | None):
 
 
 def extract_verified_3d_matches(database: Path, baseline, cohort, *,
-                                qa_index: Path | None = None) -> list[dict]:
+                                qa_index: Path | None = None,
+                                audit: dict | None = None) -> list[dict]:
     """Join geometric 2D matches to real reconstructed 3D track identifiers.
 
     A verified two-view pair crosses from registered baseline image to a
@@ -90,6 +91,13 @@ def extract_verified_3d_matches(database: Path, baseline, cohort, *,
     cohort_ids = set(cohort.reg_image_ids())
     if baseline_ids & cohort_ids:
         raise ValueError("Point-only alignment requires zero common registered camera IDs")
+    counts = {name: 0 for name in (
+        "cross_registered_geometry_pairs", "nonplanar_geometry_pairs",
+        "cross_keypoint_observations", "invalid_feature_indices",
+        "neither_point_triangulated", "only_baseline_point_triangulated",
+        "only_cohort_point_triangulated", "both_points_triangulated",
+        "valid_finite_3d_pairs", "subject_verified_pairs", "ambiguous_3d_pairs",
+        "unique_3d_correspondences")}
     subject = _subject_lookup(qa_index)
     matches = defaultdict(lambda: {"image_pairs": set(), "verified_subject_pairs": 0,
                                     "observations": 0, "sample": None})
@@ -98,13 +106,18 @@ def extract_verified_3d_matches(database: Path, baseline, cohort, *,
         for pair_id, count, columns, config, blob in db.execute(
                 "SELECT pair_id, rows, cols, config, data FROM two_view_geometries WHERE rows>=12"):
             left, right = divmod(pair_id, MAX_IMAGE_ID)
+            if not ((left in baseline_ids and right in cohort_ids) or
+                    (right in baseline_ids and left in cohort_ids)):
+                continue
+            counts["cross_registered_geometry_pairs"] += 1
             # Exclude planar-only, panoramic, watermark and degenerate
             # geometries: their inliers can describe background billboards.
-            if config not in NONPLANAR_GEOMETRY_CONFIGS or not ((left in baseline_ids and right in cohort_ids) or
-                                         (right in baseline_ids and left in cohort_ids)):
+            if config not in NONPLANAR_GEOMETRY_CONFIGS:
                 continue
             if columns != 2 or not isinstance(blob, bytes) or len(blob) != count * 8:
                 continue
+            counts["nonplanar_geometry_pairs"] += 1
+            counts["cross_keypoint_observations"] += count
             processed += count
             if processed > MAX_CROSS_VIEW_MATCHES:
                 raise ValueError("Cross-model evidence exceeds bounded feature-match budget")
@@ -115,10 +128,17 @@ def extract_verified_3d_matches(database: Path, baseline, cohort, *,
                                     (right_idx, left_idx))
                 base_img, co_img = baseline.images[base_id], cohort.images[co_id]
                 if (base_idx >= len(base_img.points2D) or co_idx >= len(co_img.points2D)):
+                    counts["invalid_feature_indices"] += 1
                     continue
                 bp, cp = base_img.points2D[base_idx], co_img.points2D[co_idx]
-                if not bp.has_point3D() or not cp.has_point3D():
+                bp_3d, cp_3d = bp.has_point3D(), cp.has_point3D()
+                if not bp_3d or not cp_3d:
+                    label = ("neither_point_triangulated" if not bp_3d and not cp_3d else
+                             "only_baseline_point_triangulated" if bp_3d else
+                             "only_cohort_point_triangulated")
+                    counts[label] += 1
                     continue
+                counts["both_points_triangulated"] += 1
                 bp_id, cp_id = int(bp.point3D_id), int(cp.point3D_id)
                 if bp_id not in baseline.points3D or cp_id not in cohort.points3D:
                     continue
@@ -126,10 +146,13 @@ def extract_verified_3d_matches(database: Path, baseline, cohort, *,
                 cxyz = np.asarray(cohort.points3D[cp_id].xyz, dtype=float).reshape(3)
                 if not np.isfinite(bxyz).all() or not np.isfinite(cxyz).all():
                     continue
+                counts["valid_finite_3d_pairs"] += 1
                 row = matches[(bp_id, cp_id)]
                 row["image_pairs"].add((base_id, co_id))
-                row["verified_subject_pairs"] += int(subject(base_img.name, bp.xy) and
-                                                     subject(co_img.name, cp.xy))
+                verified = bool(subject(base_img.name, bp.xy) and
+                                subject(co_img.name, cp.xy))
+                row["verified_subject_pairs"] += int(verified)
+                counts["subject_verified_pairs"] += int(verified)
                 row["observations"] += 1
                 row["sample"] = (bxyz, cxyz, base_id, co_id, base_idx, co_idx)
     by_base, by_cohort = defaultdict(set), defaultdict(set)
@@ -139,6 +162,7 @@ def extract_verified_3d_matches(database: Path, baseline, cohort, *,
     result = []
     for (base_id, co_id), record in sorted(matches.items()):
         if len(by_base[base_id]) != 1 or len(by_cohort[co_id]) != 1:
+            counts["ambiguous_3d_pairs"] += 1
             continue
         bxyz, cxyz, image_id, cohort_id, bidx, cidx = record["sample"]
         result.append({"baseline_point_id": base_id, "cohort_point_id": co_id,
@@ -148,6 +172,9 @@ def extract_verified_3d_matches(database: Path, baseline, cohort, *,
                        "subject_verified": record["verified_subject_pairs"] > 0,
                        "sample": {"baseline_image_id": image_id, "cohort_image_id": cohort_id,
                                   "baseline_keypoint": bidx, "cohort_keypoint": cidx}})
+    counts["unique_3d_correspondences"] = len(result)
+    if audit is not None:
+        audit.update(counts)
     return result
 
 
