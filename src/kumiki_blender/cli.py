@@ -305,6 +305,8 @@ def main(argv: list[str] | None = None) -> int:
     statue_glb.add_argument("--max-colmap-rss-mb", type=int, default=12288)
     statue_glb.add_argument("--timeout-seconds", type=int, default=14400)
     statue_glb.add_argument("--resume", action="store_true")
+    statue_glb.add_argument("--no-progress", action="store_true",
+                           help="Disable live phase dashboard on stderr (stdout remains JSON)")
     camera_compare_parser = subcommands.add_parser(
         "compare-camera-registrations",
         help="Read-only before/after registration coverage for two COLMAP revisions")
@@ -1223,10 +1225,13 @@ def main(argv: list[str] | None = None) -> int:
             return 0 if report["status"].startswith("alignment-evidence-passes") else 3
         if args.command == "build-statue-glb":
             from .reconstruction.statue_pipeline import StatuePipelineSettings, build_statue_glb
+            from .reconstruction.live_progress import LiveProgress
             from .reconstruction.statue_asset_registry import (
                 remember_statue_inputs, resolve_statue_inputs,
             )
             from .reconstruction.references import ReferenceError
+            progress = (None if args.no_progress else LiveProgress(
+                args.asset_id, ai_bridges=args.ai_bridges or args.ai_bridge_workflow is not None))
             try:
                 photos, output = resolve_statue_inputs(
                     args.asset_id, args.photos, args.output, resume=args.resume)
@@ -1246,8 +1251,11 @@ def main(argv: list[str] | None = None) -> int:
                         min_registered_fraction=args.min_registered_fraction,
                         max_mixed_mask_fraction=args.max_mixed_mask_fraction,
                         max_colmap_rss_mb=args.max_colmap_rss_mb,
-                        timeout_seconds=args.timeout_seconds), resume=args.resume)
+                        timeout_seconds=args.timeout_seconds), resume=args.resume,
+                    progress_callback=progress.emit if progress is not None else None)
             except (ReferenceError, ValueError, ImportError) as error:
+                if progress is not None:
+                    progress.emit({"kind": "failed", "detail": str(error)})
                 raise RecipeError(str(error)) from error
             print(json.dumps(report, indent=2))
             return 0 if report["status"].startswith("private-GLB-candidate") else 3

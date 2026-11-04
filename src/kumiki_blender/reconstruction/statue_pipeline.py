@@ -12,7 +12,6 @@ import json
 import os
 import re
 import shutil
-import subprocess
 import sys
 import tempfile
 import urllib.request
@@ -82,7 +81,8 @@ _SAM2_OFFICIAL = "https://dl.fbaipublicfiles.com/segment_anything_2/092824/"
 
 def _resolve_sam2_checkpoint(explicit: Path | None, size: str, *,
                              allow_download: bool = True,
-                             cache_root: Path | None = None) -> tuple[Path, str]:
+                             cache_root: Path | None = None,
+                             download_progress: Callable[[int, int | None], None] | None = None) -> tuple[Path, str]:
     """Find existing official weights, or download once from Meta's fixed URL."""
     filename = _SAM2_FILES[size]
     if explicit is not None:
@@ -114,6 +114,9 @@ def _resolve_sam2_checkpoint(explicit: Path | None, size: str, *,
         with urllib.request.urlopen(request, timeout=120) as source:
             if source.url.split(":", 1)[0] != "https":
                 raise ReferenceError("Model download redirected to non-HTTPS URL")
+            content_length = source.headers.get("Content-Length")
+            expected = (int(content_length) if content_length and content_length.isdigit()
+                        else None)
             with tempfile.NamedTemporaryFile(dir=cache, prefix=".sam2-", delete=False) as stream:
                 temporary = Path(stream.name)
                 count = 0
@@ -122,6 +125,8 @@ def _resolve_sam2_checkpoint(explicit: Path | None, size: str, *,
                     if count > 1_000_000_000:
                         raise ReferenceError("Model download exceeds 1 GB safety limit")
                     stream.write(block)
+                    if download_progress is not None:
+                        download_progress(count, expected)
         if count < 1_000_000:
             raise ReferenceError("Model download was unexpectedly small; refusing checkpoint")
         os.replace(temporary, destination)
@@ -285,8 +290,14 @@ def build_statue_glb(
     photos: Path, asset_id: str, output: Path, settings: StatuePipelineSettings,
     *, resume: bool = False,
     runner: Callable[[list[str], Path, dict[str, str]], int] | None = None,
+    progress_callback: Callable[[dict[str, Any]], None] | None = None,
 ) -> dict[str, Any]:
     """Build once, or resume from validated stage receipts without redoing SfM."""
+    def emit(kind: str, phase: str, detail: str = "") -> None:
+        if progress_callback is not None:
+            progress_callback({"kind": kind, "phase": phase, "detail": detail})
+
+    emit("start", "preflight", "Checking local tools, photos and model weights")
     settings.validate()
     if settings.masks_dir is None and any(importlib.util.find_spec(name) is None
                                           for name in ("torch", "sam2")):
@@ -294,7 +305,11 @@ def build_statue_glb(
     checkpoint_file, checkpoint_source = (None, "reviewed-masks") if (
         settings.masks_dir is not None and settings.sam2_checkpoint is None) else (
         _resolve_sam2_checkpoint(settings.sam2_checkpoint, settings.sam2_size,
-                                 allow_download=settings.auto_download_model and settings.masks_dir is None))
+                                 allow_download=settings.auto_download_model and settings.masks_dir is None,
+                                 download_progress=lambda count, total: emit(
+                                     "tick", "preflight", "Downloading official SAM2 weights: "
+                                     + (f"{count * 100 // total}% ({count // 1048576} MiB)"
+                                        if total else f"{count // 1048576} MiB"))))
     refs = load_photo_folder(photos, asset_id)
     audit_reference_set(refs)
     target = output.resolve()
@@ -331,6 +346,8 @@ def build_statue_glb(
                 raise ReferenceError("Previously completed model.glb is missing; original result cannot be trusted")
             if _sha256_file(final) != report.get("model_sha256"):
                 raise ReferenceError("Previously completed model.glb changed; refuse unverified resume")
+            emit("done", "preflight")
+            emit("finished", "export", "Already completed; existing GLB verified")
             return report
     else:
         if target.exists():
@@ -357,21 +374,19 @@ def build_statue_glb(
     def checkpoint(status: str, stage: str | None = None, warnings: list[str] | None = None):
         report.update(status=status, stopped_stage=stage, warnings=warnings or [])
         report_path.write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
+        if status.startswith("blocked"):
+            emit("blocked", "mask_audit" if (stage or "").startswith("mask-audit-") else
+                 stage or "preflight", "; ".join(warnings or []) or status)
         return report
 
+    active_phase = "preflight"
     if runner is None:
+        from .live_progress import run_monitored_worker
+
         def runner(argv: list[str], log: Path, environment: dict[str, str]) -> int:
-            with log.open("w", encoding="utf-8") as stream:
-                try:
-                    return subprocess.run(argv, env=environment, stdout=stream,
-                                          stderr=subprocess.STDOUT,
-                                          timeout=settings.timeout_seconds, check=False).returncode
-                except subprocess.TimeoutExpired:
-                    stream.write("\nStage timed out\n")
-                    return 124
-                except OSError as error:
-                    stream.write(f"\nCould not start stage: {error}\n")
-                    return 127
+            return run_monitored_worker(
+                argv, log, environment, settings.timeout_seconds, stage=active_phase,
+                root=target, emit=progress_callback)
 
     environment = os.environ.copy()
     if settings.openmvs_dir:
@@ -379,8 +394,13 @@ def build_statue_glb(
     executable = [sys.executable, "-m", "kumiki_blender.cli"]
 
     def run_stage(name: str, argv: list[str], receipt: Path) -> dict[str, Any]:
+        nonlocal active_phase
+        phase = "mask_audit" if name.startswith("mask-audit-") else name
+        emit("start", phase, f"Log: {target / 'logs' / (name + '.log')}")
         if name in report["completed_stages"]:
+            emit("skip", phase)
             return _read_report(receipt)
+        active_phase = phase
         code = runner(argv, target / "logs" / f"{name}.log", environment)
         if code:
             checkpoint("blocked / worker-failed", name, [f"Stage exited {code}; inspect logs/{name}.log"])
@@ -388,6 +408,7 @@ def build_statue_glb(
         record = _read_report(receipt)
         report["completed_stages"].append(name)
         checkpoint("running")
+        emit("done", phase)
         return record
 
     sparse = target / "cameras"
@@ -399,6 +420,7 @@ def build_statue_glb(
     review = target / "review"
 
     checkpoint("running")
+    emit("done", "preflight")
     camera_argv = executable + ["reconstruct-photos", "--photos", str(photos.resolve()),
         "--asset-id", asset_id, "--output", str(sparse), "--engine", "colmap",
         "--matching-preset", "sift-lightglue", "--matching-device", "mps",
@@ -432,6 +454,7 @@ def build_statue_glb(
     report["source_images"] = total
     report["unregistered_photo_advice"] = coverage.get("existing_photo_priorities", [])
     if settings.ai_bridges:
+        emit("start", "ai_bridges", "Generating private synthetic reference previews")
         from .ai_bridge_previews import build_ai_bridge_previews
         bridge_output = target / "ai-bridge-previews"
         bridge_report = (_read_report(bridge_output / "bridge-preview-report.json")
@@ -443,6 +466,7 @@ def build_statue_glb(
                              require_mps=settings.sam2_device != "cpu"))
         report["ai_bridge_previews"] = "ai-bridge-previews/bridge-preview-report.json"
         report["ai_bridge_preview_status"] = bridge_report["status"]
+        emit("done", "ai_bridges")
     if camera.get("unregistered_filenames"):
         # Before asking for more pictures, analyze existing verified match
         # graphs for independent-cohort and seeded-camera recovery.
@@ -475,6 +499,7 @@ def build_statue_glb(
         report["mask_cache"] = mask_record.get("cache")
     else:
         mask_record = {"images": []}
+        emit("skip", "masks")
 
     if not mask_source.is_dir():
         return checkpoint("blocked / mask-review-required", "masks", ["Expected mask directory is missing"])
@@ -541,11 +566,15 @@ def build_statue_glb(
     glb = review / name
     if glb.is_symlink() or not glb.is_file():
         return checkpoint("blocked / blender-review-required", "review", ["GLB is missing or a symbolic link"])
+    emit("start", "export", "Auditing GLB structure and writing final model")
     try:
         report["glb_audit"] = audit_glb(glb)
     except AuditError as error:
-        return checkpoint("blocked / blender-review-required", "review", [str(error)])
+        return checkpoint("blocked / blender-review-required", "export", [str(error)])
     shutil.copyfile(glb, target / "model.glb")
     report["model_glb"] = "model.glb"
     report["model_sha256"] = _sha256_file(target / "model.glb")
-    return checkpoint("private-GLB-candidate / review-required")
+    completed = checkpoint("private-GLB-candidate / review-required")
+    emit("done", "export")
+    emit("finished", "export")
+    return completed

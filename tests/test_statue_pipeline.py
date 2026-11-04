@@ -103,13 +103,32 @@ class StatuePipelineTests(unittest.TestCase):
 
         return run, calls
 
-    def build(self, run, settings=None, *, resume=False):
+    def build(self, run, settings=None, *, resume=False, progress_callback=None):
         with patch("kumiki_blender.reconstruction.statue_pipeline.shutil.which", return_value="/bin/true"), \
              patch("kumiki_blender.reconstruction.statue_pipeline.importlib.util.find_spec", return_value=True), \
              patch("kumiki_blender.reconstruction.statue_pipeline._possible_blue_sky_leaks", return_value=[]), \
              patch("kumiki_blender.reconstruction.statue_pipeline.audit_glb", return_value={"meshes": 1}):
             return build_statue_glb(self.photos, "great-sphinx-test", self.output,
-                                    settings or self.settings, resume=resume, runner=run)
+                                    settings or self.settings, resume=resume, runner=run,
+                                    progress_callback=progress_callback)
+
+    def test_live_progress_tracks_real_pipeline_phases_and_finish(self):
+        run, _calls = self.runner()
+        events = []
+        self.build(run, progress_callback=events.append)
+        started = [item["phase"] for item in events if item["kind"] == "start"]
+        self.assertEqual(started, ["preflight", "cameras", "coverage", "masks",
+                                   "mask_audit", "dense", "review", "export"])
+        self.assertEqual([item["phase"] for item in events if item["kind"] == "done"],
+                         started)
+        self.assertEqual(events[-1]["kind"], "finished")
+
+    def test_live_progress_reports_gate_failures(self):
+        run, _calls = self.runner(coverage_bad=True)
+        events = []
+        self.build(run, progress_callback=events.append)
+        self.assertEqual(events[-1]["kind"], "blocked")
+        self.assertEqual(events[-1]["phase"], "coverage")
 
     def test_one_command_runs_every_stage_and_copies_audited_glb(self):
         run, calls = self.runner()

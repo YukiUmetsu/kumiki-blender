@@ -26,6 +26,32 @@ kumiki-blender build-statue-glb \
 kumiki-blender build-statue-glb --asset-id great-sphinx
 ```
 
+### Live CLI progress
+
+The command now displays a live, single-line phase dashboard in an interactive
+terminal. It shows the current phase (such as camera matching, SAM2 masks,
+OpenMVS dense geometry or Blender export), elapsed time, recent worker activity,
+and a bar counting **completed workflow phases**. For example:
+
+```text
+KUMIKI great-sphinx [━━━━············] 25% phases · 3/8 Checking camera coverage · 00:27 · Worker running
+```
+
+The overall percentage counts completed phases; it **does not estimate time
+remaining**. Real per-worker counts are displayed separately when available,
+including COLMAP matched-pair counts, generated SAM2 masks (with cache hits),
+and completed OpenMVS steps. Long-running native jobs with no measurable count
+still show elapsed time and the latest log activity. In non-interactive terminals,
+the command prints readable phase lines plus a heartbeat every 15 seconds.
+
+The progress dashboard writes to **stderr**; the final machine-readable JSON
+still writes to **stdout**. Detailed worker logs remain in
+`<output>/logs/<phase>.log`, including if a phase fails. To disable the dashboard:
+
+```bash
+kumiki-blender build-statue-glb --asset-id great-sphinx --no-progress
+```
+
 Run from the same project directory each time. The local private registry
 `.review/great-sphinx/asset-state.json` remembers the last photo folder and
 allocates `.review/great-sphinx/statue-hq-r001`, `r002`, etc. It records the
