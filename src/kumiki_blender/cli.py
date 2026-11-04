@@ -34,6 +34,7 @@ from .render_profiles import RenderProfileError
 from .revision_audit import RevisionAuditError, audit_revision
 from .surfaces import SurfaceError
 from .reconstruction.head_base import HeadFitError
+from .reconstruction.completion import CompletionError
 from .head_sources.makehuman import MakeHumanSourceError
 from .vintage_biplane import make_biplane
 
@@ -567,6 +568,13 @@ def main(argv: list[str] | None = None) -> int:
         if command == "build-head-base":
             head_parser.add_argument("--output", type=Path, required=True)
             head_parser.add_argument("--blender", default="blender")
+    for command in ("plan-completion", "build-completion"):
+        completion_parser = subcommands.add_parser(
+            command, help="Fit evidence-pinned candidate GLBs in historical or cinematic mode")
+        completion_parser.add_argument("--manifest", type=Path, required=True)
+        if command == "build-completion":
+            completion_parser.add_argument("--output", type=Path, required=True)
+            completion_parser.add_argument("--blender", default="blender")
     makehuman_parser = subcommands.add_parser(
         "prepare-makehuman-head", help="Prepare an official, pinned CC0 MakeHuman head base")
     makehuman_input = makehuman_parser.add_mutually_exclusive_group(required=True)
@@ -1166,6 +1174,35 @@ def main(argv: list[str] | None = None) -> int:
                                           head_fit=plan, bpy_module=bpy)
             print(json.dumps(result, indent=2))
             return 0
+        if args.command in ("plan-completion", "build-completion"):
+            from .reconstruction.completion import evaluate_completion, load_completion_plan
+            plan = load_completion_plan(args.manifest)
+            report = evaluate_completion(plan)
+            if args.command == "plan-completion":
+                print(json.dumps(report, indent=2))
+                return 0
+            output = args.output.resolve()
+            if args.output.is_symlink() or output.exists():
+                raise CompletionError(f"Output revision already exists: {output}")
+            try:
+                import bpy  # type: ignore[import-not-found]
+            except ImportError:
+                executable = shutil.which(args.blender)
+                if executable is None:
+                    raise RuntimeError(f"Blender executable not found: {args.blender}")
+                entry = Path(__file__).resolve().parents[2] / "scripts/blender_entry.py"
+                if not entry.is_file():
+                    raise RuntimeError("Blender build requires scripts/blender_entry.py from a source checkout")
+                completed = subprocess.run([
+                    executable, "--background", "--factory-startup", "--python-exit-code", "1",
+                    "--python", str(entry), "--", "build-completion",
+                    "--manifest", str(args.manifest.resolve()), "--output", str(output),
+                ], check=False)
+                return completed.returncode
+            from .blender_completion import build_completion_scene
+            result = build_completion_scene(plan, report, output, bpy_module=bpy)
+            print(json.dumps(result, indent=2))
+            return 0
         if args.command == "prepare-camera-plan":
             from .reconstruction.cameras import create_camera_plan
             from .reconstruction.references import ReferenceError
@@ -1675,7 +1712,7 @@ def main(argv: list[str] | None = None) -> int:
         manifest = build_scene(recipe, plan, output, bpy_module=bpy)
         print(json.dumps(manifest, indent=2))
         return 0
-    except (CatalogError, RecipeError, PorticoError, FacadeError, MonumentError, GeometryError, AssetImportError, HeadFitError, MakeHumanSourceError, RenderProfileError, RevisionAuditError, AuditError, ExportAuditError, MotionExportError, PhysicsPlanError, DeformationPlanError,
+    except (CatalogError, RecipeError, PorticoError, FacadeError, MonumentError, GeometryError, AssetImportError, HeadFitError, CompletionError, MakeHumanSourceError, RenderProfileError, RevisionAuditError, AuditError, ExportAuditError, MotionExportError, PhysicsPlanError, DeformationPlanError,
             SurfaceError, RuntimeError, OSError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 2

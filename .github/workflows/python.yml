@@ -36,6 +36,10 @@ jobs:
         env:
           PYTHONPATH: src
         run: python -m unittest tests.test_head_base tests.test_head_base_cli tests.test_makehuman_source tests.test_makehuman_cli -v
+      - name: Test evidence-guided completion policies, geometry, CLI and import contracts
+        env:
+          PYTHONPATH: src
+        run: python -m unittest tests.test_completion tests.test_completion_cli tests.test_completion_blender_contract -v
       - name: Test Blender physics and deformable-shot plans, export and headless worker boundary
         env:
           PYTHONPATH: src:tests
@@ -107,6 +111,13 @@ jobs:
           blender --background --factory-startup --threads 4 --python-exit-code 1 \
             --python scripts/blender_entry.py -- \
             build-egypt-map --output .review/ci/egypt-map
+      - name: Import and align actual GLB completion parts in Blender
+        env:
+          KUMIKI_RENDER_PROFILE: smoke
+        run: |
+          blender --background --factory-startup --threads 2 --python-exit-code 1 \
+            --python scripts/smoke_completion_blender.py -- .review/ci/completion-smoke
+          python -m kumiki_blender audit --model .review/ci/completion-smoke/revision/model.glb
       - name: Bake real two-body Blender simulation and verify PM2 motion
         env:
           PYTHONPATH: src
