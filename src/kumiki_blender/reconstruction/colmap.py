@@ -366,7 +366,7 @@ def _cap_colmap_sift_features(database: Path, maximum: int) -> dict[str, int]:
             raise ReferenceError("Missing SIFT features; cannot apply a neural keypoint cap")
         changes: list[tuple[int, bytes, bytes, int]] = []
         for image_id, width, height, n, kc, kdata, dn, dc, ddata in rows:
-            if (n != dn or kc != 4 or dc != 128 or
+            if (n != dn or kc not in (4, 6) or dc != 128 or
                     len(kdata) != 4 * kc * n or len(ddata) != dc * dn):
                 raise ReferenceError("Invalid SIFT feature dimensions; refusing to rewrite database")
             max_original = max(max_original, n)
@@ -374,9 +374,15 @@ def _cap_colmap_sift_features(database: Path, maximum: int) -> dict[str, int]:
             if n <= maximum:
                 max_selected = max(max_selected, n)
                 continue
-            selected = select_spatial_keypoints(
-                [(x, y, scale) for x, y, scale, _ in struct.iter_unpack("<ffff", kdata)],
-                width, height, maximum)
+            keypoints = struct.iter_unpack("<" + "f" * kc, kdata)
+            # For 6-column COLMAP keypoints compute the size of the affine
+            # shape, not its a11 coefficient (which can be negative).
+            selection_points = [
+                (row[0], row[1], row[2] if kc == 4 else
+                 (math.hypot(row[2], row[4]) + math.hypot(row[3], row[5])) / 2.0)
+                for row in keypoints
+            ]
+            selected = select_spatial_keypoints(selection_points, width, height, maximum)
             if not selected:
                 raise ReferenceError("No valid SIFT keypoints remain after selection")
             new_kdata = b"".join(kdata[i * kc * 4:(i + 1) * kc * 4] for i in selected)

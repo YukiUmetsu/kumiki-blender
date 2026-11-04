@@ -90,10 +90,18 @@ def _load_features(database: sqlite3.Connection, name: str, cap: int) -> dict:
 
     keypoints = np.frombuffer(kblob, dtype="<f4").reshape(krows, kcols)
     descriptors = np.frombuffer(dblob, dtype="u1").reshape(drows, dcols)
-    if kcols != 4:
-        raise ValueError("Affine SIFT keypoints are not supported by the MPS matcher")
+    if kcols == 4:
+        scales, orientations = keypoints[:, 2], keypoints[:, 3]
+    else:
+        # COLMAP's six-column geometry encodes an affine shape as
+        # (a11, a12, a21, a22), not (scale, orientation, ...). Use the
+        # same scale/orientation projection as FeatureKeypoint::ComputeScale
+        # and FeatureKeypoint::ComputeOrientation in COLMAP's feature/types.cc.
+        a11, a12, a21, a22 = (keypoints[:, column] for column in range(2, 6))
+        scales = (np.hypot(a11, a21) + np.hypot(a12, a22)) / 2.0
+        orientations = np.arctan2(a21, a11)
     chosen = select_spatial_keypoints(
-        [(float(k[0]), float(k[1]), float(k[2])) for k in keypoints],
+        [(float(k[0]), float(k[1]), float(scale)) for k, scale in zip(keypoints, scales)],
         width, height, cap)
     selected = np.asarray(chosen, dtype=np.int64)
     # COLMAP uses pixel-corner (0.5, 0.5), LightGlue uses pixel-center (0, 0).
@@ -104,8 +112,8 @@ def _load_features(database: sqlite3.Connection, name: str, cap: int) -> dict:
     values /= np.maximum(np.linalg.norm(values, axis=1, keepdims=True), 1e-8)
     return {"image_id": image_id, "image_size": (width, height),
             "indices": selected, "keypoints": kpts, "descriptors": values,
-            "scales": keypoints[selected, 2].astype(np.float32),
-            "oris": keypoints[selected, 3].astype(np.float32),
+            "scales": scales[selected].astype(np.float32),
+            "oris": orientations[selected].astype(np.float32),
             "original_count": krows}
 
 

@@ -2,6 +2,7 @@
 
 import sqlite3
 import struct
+import math
 import tempfile
 import unittest
 from pathlib import Path
@@ -41,6 +42,20 @@ class MPSLightGlueFeatureTests(unittest.TestCase):
                 db.execute("INSERT INTO keypoints VALUES (?, ?, 4, ?)", (image_id, count, points))
                 db.execute("INSERT INTO descriptors VALUES (?, ?, 128, ?)", (image_id, count, descriptor))
 
+    def _set_affine_keypoints(self, image_id=1):
+        """Encode COLMAP's six-column affine shape, including rotation and shear."""
+        rotation, shear = 0.5, 0.2
+        with sqlite3.connect(self.database) as db:
+            points = db.execute("SELECT rows, data FROM keypoints WHERE image_id=?",
+                                (image_id,)).fetchone()
+            affine = b"".join(
+                struct.pack("<ffffff", x, y, 2 * math.cos(rotation),
+                            -3 * math.sin(rotation + shear), 2 * math.sin(rotation),
+                            3 * math.cos(rotation + shear))
+                for x, y, _, _ in struct.iter_unpack("<ffff", points[1]))
+            db.execute("UPDATE keypoints SET cols=6, data=? WHERE image_id=?",
+                       (affine, image_id))
+
     def test_spatial_selection_is_exact_deterministic_and_spatially_diverse(self):
         points = [(i % 100, i // 100, 1.0 + i / 100) for i in range(3000)]
         chosen = select_spatial_keypoints(points, 100, 30, 256)
@@ -65,6 +80,39 @@ class MPSLightGlueFeatureTests(unittest.TestCase):
                 for index in range(256):
                     source_index = round((struct.unpack_from("<f", kp[1], index * 16 + 8)[0] - 1.0) * 1000)
                     self.assertEqual(desc[1][index * 128], source_index % 255)
+
+    def test_cpu_cap_preserves_six_column_affine_keypoint_rows_and_descriptors(self):
+        self._set_affine_keypoints(image_id=1)
+        result = _cap_colmap_sift_features(self.database, 256)
+        self.assertEqual(result["max_selected"], 256)
+        with sqlite3.connect(self.database) as db:
+            rows, cols, blob = db.execute(
+                "SELECT rows, cols, data FROM keypoints WHERE image_id=1").fetchone()
+            descriptors = db.execute("SELECT rows, data FROM descriptors WHERE image_id=1").fetchone()
+            self.assertEqual((rows, cols, len(blob)), (256, 6, 256 * 24))
+            self.assertEqual(descriptors[0], 256)
+            self.assertEqual(len(descriptors[1]), 256 * 128)
+
+    def test_mps_accepts_affine_geometry_with_colmap_scale_and_orientation(self):
+        try:
+            import numpy as np
+        except ImportError:
+            self.skipTest("numpy is an optional MPS worker dependency")
+        self._set_affine_keypoints(image_id=1)
+        with sqlite3.connect(self.database) as db:
+            features = _load_features(db, "photo-a.png", 256)
+            np.testing.assert_allclose(features["scales"], 2.5, atol=1e-5)
+            np.testing.assert_allclose(features["oris"], 0.5, atol=1e-5)
+            self.assertEqual(len(features["indices"]), 256)
+            self.assertEqual(features["original_count"], 300)
+            self.assertEqual(db.execute("SELECT cols FROM keypoints WHERE image_id=1").fetchone()[0], 6)
+            # No reindexing in MPS: neural correspondence indices map back to
+            # original database rows for COLMAP geometric verification.
+            right = _load_features(db, "photo-b.png", 256)
+            write_matches(db, features, right, np.array([[2, 3]], dtype=np.int64))
+            match = db.execute("SELECT data FROM matches").fetchone()[0]
+            self.assertEqual(struct.unpack("<II", match),
+                             (int(features["indices"][2]), int(right["indices"][3])))
 
     def test_refuses_reindexing_after_any_match_has_been_saved(self):
         with sqlite3.connect(self.database) as db:
