@@ -228,7 +228,9 @@ def describe_actor(rig: ActorRig) -> dict[str, Any]:
         tail = armature.matrix_world @ pose[bone].tail
         scale = armature.matrix_world.to_scale().x
         reach = sum(item.length for item in armature.data.bones) * scale
-        effectors[effector] = {"rest": [tail.x, tail.z, -tail.y], "shoulder": [head.x, head.z, -head.y], "reach_m": reach}
+        part = next(item.part for item in rig.plan.effectors if item.id == effector)
+        effectors[effector] = {"rest": [tail.x, tail.z, -tail.y], "shoulder": [head.x, head.z, -head.y],
+                               "reach_m": reach, "part": part}
     return {"actor_id": rig.plan.actor_id, "revision": rig.plan.revision, "height_m": rig.plan.height_m,
             "effectors": effectors, "parts": [part.id for part in rig.plan.parts]}
 

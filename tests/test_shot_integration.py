@@ -119,6 +119,7 @@ class BuildShot(unittest.TestCase):
         report = json.loads(line)
         hand = report["effectors"]["hand"]
         self.assertGreater(hand["reach_m"], .05)
+        self.assertEqual(hand["part"], "arm")
         self.assertGreater(hand["rest"][1], .05, "Y must be height above the actor's feet")
         straight = sum((a - b) ** 2 for a, b in zip(hand["rest"], hand["shoulder"])) ** .5
         self.assertGreaterEqual(hand["reach_m"], straight * .98, "reach must include part scale")
