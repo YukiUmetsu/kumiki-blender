@@ -175,7 +175,7 @@ def build_udim_relighting_review(bpy: Any, package: str | Path, output: str | Pa
             calibrated.type = "PERSP"
             calibrated.sensor_fit = "HORIZONTAL"
             calibrated.sensor_width = 36.0
-            calibrated.lens = intr["fx_px"] * 36.0 / intr["width"]
+            calibrated.lens = 0.5 * (intr["fx_px"] + intr["fy_px"]) * 36.0 / intr["width"]
             calibrated.shift_x = (intr["width"] / 2 - intr["cx_px"]) / intr["width"]
             calibrated.shift_y = (intr["cy_px"] - intr["height"] / 2) / intr["width"]
             camera_obj = bpy.data.objects.new(calibrated.name, calibrated)

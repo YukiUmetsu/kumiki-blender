@@ -72,6 +72,26 @@ def _preflight_matching_preset(executable: str, preset: str) -> bool:
     return "--FeatureExtraction.max_image_size" in extractor_help
 
 
+def _preflight_mps_worker() -> None:
+    """Check optional neural dependencies in an isolated process before extraction.
+
+    Importing PyTorch in the COLMAP orchestrator would retain its memory while
+    native feature extraction runs. The lightweight worker check exits without
+    constructing LightGlue or downloading model weights.
+    """
+    command = [sys.executable, "-m", "kumiki_blender.reconstruction.mps_lightglue_worker",
+               "check", "--device", "mps"]
+    try:
+        result = subprocess.run(command, capture_output=True, text=True,
+                                timeout=90, check=False)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise ReferenceError(f"MPS LightGlue preflight failed: {error}") from error
+    if result.returncode:
+        details = (result.stderr or result.stdout).strip().splitlines()
+        reason = details[-1][:400] if details else f"worker exited {result.returncode}"
+        raise ReferenceError(f"MPS LightGlue preflight failed: {reason}")
+
+
 def _sha256(path: Path) -> str:
     with path.open("rb") as stream:
         return hashlib.file_digest(stream, "sha256").hexdigest()
@@ -480,20 +500,9 @@ def _next_stage_number(target: Path, commands: list[list[str]]) -> int:
     return max(numbers) + 1
 
 
-def _match_in_bounded_processes(
-    executable: str | list[str], target: Path, database: Path,
-    match_args: list[str], timeout_seconds: int, max_rss_mb: int | None,
-    staged_names: list[str], pairs_per_process: int,
-    report: dict[str, Any], checkpoint: Callable[[], dict[str, Any]],
-    *, matching_device: str = "colmap-cpu", max_keypoints: int = 4096,
-    matching_pair_list: Path | None = None,
-) -> bool:
-    """Persist pair-matching progress across independent COLMAP workers.
-
-    A failed group is safe to retry: COLMAP skips previously verified pairs in
-    the shared database. Chunk boundaries and progress are saved after every
-    completed group, allowing --resume after an interrupted process.
-    """
+def _resolve_matching_pairs(staged_names: list[str], matching_pair_list: Path | None,
+                            report: dict[str, Any]) -> tuple[list[tuple[str, str]], str]:
+    """Validate the immutable pair selection and checkpoint without writing it."""
     names = sorted(staged_names)
     if len(names) != len(set(names)):
         raise ReferenceError("Duplicate staged image names cannot be matched safely")
@@ -518,6 +527,32 @@ def _match_in_bounded_processes(
     # accumulated pair count and order must not be interpreted as a subset.
     if old_fingerprint is None and report.get("matching_progress") and matching_pair_list is not None:
         raise ReferenceError("Cannot apply a new pair list to an existing matching checkpoint")
+    progress = report.get("matching_progress")
+    if progress is not None:
+        if (type(progress) is not dict or progress.get("total_pairs") != len(pairs) or
+                type(progress.get("next_pair_index")) is not int or
+                not 0 <= progress["next_pair_index"] <= len(pairs) or
+                type(progress.get("batch_size")) is not int or
+                not 1 <= progress["batch_size"] <= 1024):
+            raise ReferenceError("Invalid or incompatible matching checkpoint; refusing resume")
+    return pairs, fingerprint
+
+
+def _match_in_bounded_processes(
+    executable: str | list[str], target: Path, database: Path,
+    match_args: list[str], timeout_seconds: int, max_rss_mb: int | None,
+    staged_names: list[str], pairs_per_process: int,
+    report: dict[str, Any], checkpoint: Callable[[], dict[str, Any]],
+    *, matching_device: str = "colmap-cpu", max_keypoints: int = 4096,
+    matching_pair_list: Path | None = None,
+) -> bool:
+    """Persist pair-matching progress across independent COLMAP workers.
+
+    A failed group is safe to retry: COLMAP skips previously verified pairs in
+    the shared database. Chunk boundaries and progress are saved after every
+    completed group, allowing --resume after an interrupted process.
+    """
+    pairs, fingerprint = _resolve_matching_pairs(staged_names, matching_pair_list, report)
     report["matching_pair_fingerprint"] = fingerprint
     report["matching_pair_selection"] = "manual" if matching_pair_list else "exhaustive"
     progress = report.setdefault("matching_progress", {
@@ -525,12 +560,6 @@ def _match_in_bounded_processes(
         "completed_pairs": 0, "completed_batches": 0,
         "batch_size": pairs_per_process, "status": "in-progress",
     })
-    if (type(progress) is not dict or progress.get("total_pairs") != len(pairs) or
-            type(progress.get("next_pair_index")) is not int or
-            not 0 <= progress["next_pair_index"] <= len(pairs) or
-            type(progress.get("batch_size")) is not int or
-            not 1 <= progress["batch_size"] <= 1024):
-        raise ReferenceError("Invalid or incompatible matching checkpoint; refusing resume")
     # On resume, allow the caller to tighten (but not silently loosen) a
     # previously established safe batch-size ceiling.
     if progress.get("matching_device", "colmap-cpu") != matching_device:
@@ -818,6 +847,8 @@ def build_sparse_reconstruction(reference_set: ReferenceSet, output: str | Path,
     colmap_info, cpu_flags = _probe_colmap(executable)
     supports_extraction_size = (_preflight_matching_preset(executable, matching_preset)
                                 if engine == "colmap" else False)
+    if matching_device == "mps":
+        _preflight_mps_worker()
     colmap_info["engine"] = engine
     # Re-check before creating anything: photo files can be edited after intake.
     for image in references:
@@ -898,6 +929,10 @@ def build_sparse_reconstruction(reference_set: ReferenceSet, output: str | Path,
         if ((matching_complete and report.get("failed_stage") != "geometric_verifier") or
                 any((target / "sparse").iterdir())):
             raise ReferenceError("Cannot resume a completed matching or mapping stage")
+        # Reject incompatible pair selections before clearing errors or writing
+        # the next checkpoint. Failed resumes must preserve the prior report.
+        _resolve_matching_pairs([entry["filename"] for entry in entries],
+                                matching_pair_list, report)
         previous_error = report.get("error")
         if previous_error:
             report.setdefault("prior_failures", []).append({
@@ -1025,9 +1060,12 @@ def build_sparse_reconstruction(reference_set: ReferenceSet, output: str | Path,
                 matching_device=matching_device, max_keypoints=effective_match_features or 4096,
                 matching_pair_list=matching_pair_list):
             return report
-    if matching_device == "mps":
+    if matching_device == "mps" or any(
+            command and command[0] == "match" for command in report["commands"]):
         # The worker stores raw COLMAP correspondence rows. Without two-view
         # geometric verification the mapper will silently see zero matches.
+        # This also applies when switching to CPU while resuming MPS-produced
+        # raw matches (including a previous failed verification attempt).
         if not run_stage("geometric_verifier", ["--database_path", str(database),
                                                 "--FeatureMatching.num_threads",
                                                 str(effective_matching_threads or 1)]):

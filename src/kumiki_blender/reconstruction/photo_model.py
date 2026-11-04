@@ -18,6 +18,8 @@ from typing import Any, Callable
 
 from ..glb_audit import AuditError, audit_glb
 from .dense import DenseSettings, build_dense_reconstruction
+from .feedforward_sparse import (DEPTH_TOLERANCE, DEVICE_CHOICES, MAPANYTHING_DEFAULT_MODEL,
+                                 build_feedforward_sparse_reconstruction, is_valid_model_id)
 from .references import ReferenceError, ReferenceSet, audit_reference_set
 
 
@@ -25,6 +27,9 @@ from .references import ReferenceError, ReferenceSet, audit_reference_set
 class PhotoModelSettings:
     engine: str = "pycolmap"
     dense_backend: str = "openmvs"
+    mapanything_model: str = MAPANYTHING_DEFAULT_MODEL
+    mapanything_device: str = "auto"
+    mapanything_depth_tolerance: float = DEPTH_TOLERANCE
     colmap: str = "colmap"
     blender: str = "blender"
     min_registered_images: int = 8
@@ -47,8 +52,15 @@ class PhotoModelSettings:
     def validate(self) -> None:
         from .colmap import _validate_matching_preset
 
-        if self.engine not in ("pycolmap", "colmap"):
-            raise ReferenceError("Sparse engine must be pycolmap or colmap")
+        if self.engine not in ("pycolmap", "colmap", "mapanything"):
+            raise ReferenceError("Sparse engine must be pycolmap, colmap or mapanything")
+        if not is_valid_model_id(self.mapanything_model):
+            raise ReferenceError("mapanything_model must be a Hugging Face repo id such as facebook/map-anything-apache")
+        if self.mapanything_device not in DEVICE_CHOICES:
+            raise ReferenceError(f"mapanything_device must be one of {', '.join(DEVICE_CHOICES)}")
+        if (type(self.mapanything_depth_tolerance) not in (int, float)
+                or not 0.01 <= self.mapanything_depth_tolerance <= 1.0):
+            raise ReferenceError("mapanything_depth_tolerance must be in [0.01, 1.0]")
         _validate_matching_preset(self.matching_preset, self.engine)
         if self.matching_device not in ("colmap-cpu", "mps"):
             raise ReferenceError("matching_device must be colmap-cpu or mps")
@@ -123,9 +135,15 @@ def _dependencies(settings: PhotoModelSettings) -> tuple[dict[str, str], list[st
             missing.append("pycolmap (pip install pycolmap)")
         else:
             found["pycolmap"] = "python-module"
-    else:
+    elif settings.engine == "colmap":
         names.append(settings.colmap)
-    if settings.matching_device == "mps":
+    elif settings.engine == "mapanything":
+        for module in ("torch", "mapanything"):
+            if importlib.util.find_spec(module) is None:
+                missing.append(f"{module} (pip install -e '.[mapanything]')")
+            else:
+                found[module] = "python-module"
+    if settings.engine == "colmap" and settings.matching_device == "mps":
         for name in ("numpy", "torch", "lightglue"):
             if importlib.util.find_spec(name) is None:
                 missing.append(f"{name} (MPS matching dependency)")
@@ -234,21 +252,28 @@ def build_photo_model(
     checkpoint()
     from .colmap import build_sparse_reconstruction
 
-    sparse_fn = sparse_builder or build_sparse_reconstruction
     dense_fn = dense_builder or build_dense_reconstruction
     try:
-        sparse = sparse_fn(references, target / "sparse", colmap=settings.colmap,
-                           engine=settings.engine, timeout_seconds=settings.sparse_timeout_seconds,
-                           undistort=True, max_image_size=settings.max_image_size,
-                           matching_preset=settings.matching_preset,
-                           matching_device=settings.matching_device,
-                           feature_threads=settings.feature_threads,
-                           matching_threads=settings.matching_threads,
-                           sift_first_octave=settings.sift_first_octave,
-                           max_colmap_rss_mb=settings.max_colmap_rss_mb,
-                           matching_block_size=settings.matching_block_size,
-                           matching_max_features=settings.matching_max_features,
-                           matching_pairs_per_process=settings.matching_pairs_per_process)
+        if settings.engine == "mapanything":
+            sparse_fn = sparse_builder or build_feedforward_sparse_reconstruction
+            sparse = sparse_fn(references, target / "sparse", model_id=settings.mapanything_model,
+                               device=settings.mapanything_device,
+                               timeout_seconds=settings.sparse_timeout_seconds,
+                               depth_tolerance=settings.mapanything_depth_tolerance)
+        else:
+            sparse_fn = sparse_builder or build_sparse_reconstruction
+            sparse = sparse_fn(references, target / "sparse", colmap=settings.colmap,
+                               engine=settings.engine, timeout_seconds=settings.sparse_timeout_seconds,
+                                undistort=True, max_image_size=settings.max_image_size,
+                                matching_preset=settings.matching_preset,
+                                matching_device=settings.matching_device,
+                                feature_threads=settings.feature_threads,
+                                matching_threads=settings.matching_threads,
+                                sift_first_octave=settings.sift_first_octave,
+                                max_colmap_rss_mb=settings.max_colmap_rss_mb,
+                                matching_block_size=settings.matching_block_size,
+                                matching_max_features=settings.matching_max_features,
+                                matching_pairs_per_process=settings.matching_pairs_per_process)
         report["sparse"] = {key: sparse.get(key) for key in
                             ("status", "registered_images", "staged_independent_images",
                              "failed_stage", "error")}

@@ -229,8 +229,15 @@ def main(argv: list[str] | None = None) -> int:
         photo_model_parser.add_argument("--asset-id", help="Required with --photos")
         photo_model_parser.add_argument("--output", type=Path, required=True,
                                         help="New private, immutable output revision")
-        photo_model_parser.add_argument("--engine", choices=("pycolmap", "colmap"),
-                                        default="pycolmap", help="Sparse registration engine")
+        photo_model_parser.add_argument("--engine", choices=("pycolmap", "colmap", "mapanything"),
+                                        default="pycolmap",
+                                        help="Sparse registration engine; mapanything predicts poses feed-forward (Mac MPS, CUDA or CPU)")
+        photo_model_parser.add_argument("--mapanything-model", default="facebook/map-anything-apache",
+                                        help="Hugging Face MapAnything checkpoint (default Apache-2.0)")
+        photo_model_parser.add_argument("--mapanything-device", choices=("auto", "cuda", "mps", "cpu"),
+                                        default="auto", help="Torch device for --engine mapanything")
+        photo_model_parser.add_argument("--mapanything-depth-tolerance", type=float, default=0.30,
+                                        help="Relative depth agreement (0.01–1.0) for views to count as mutually consistent")
         photo_model_parser.add_argument("--matching-preset",
                                         choices=("sift", "sift-lightglue", "aliked-lightglue", "loma", "loma128"),
                                         default="sift", help="Learned matching requires --engine colmap and COLMAP 4.2+")
@@ -1041,7 +1048,11 @@ def main(argv: list[str] | None = None) -> int:
                 references = (load_photo_folder(args.photos, args.asset_id)
                               if args.photos else load_reference_set(args.manifest))
                 settings = PhotoModelSettings(
-                    engine=args.engine, matching_preset=args.matching_preset,
+                    engine=args.engine, dense_backend=args.backend, colmap=args.colmap,
+                    mapanything_model=args.mapanything_model,
+                    mapanything_device=args.mapanything_device,
+                    mapanything_depth_tolerance=args.mapanything_depth_tolerance,
+                    matching_preset=args.matching_preset,
                     matching_device=args.matching_device,
                     feature_threads=args.feature_threads, matching_threads=args.matching_threads,
                     sift_first_octave=args.sift_first_octave,
@@ -1049,7 +1060,6 @@ def main(argv: list[str] | None = None) -> int:
                     matching_block_size=args.matching_block_size,
                     matching_max_features=args.matching_max_features,
                     matching_pairs_per_process=args.matching_pairs_per_process,
-                    dense_backend=args.backend, colmap=args.colmap,
                     blender=args.blender, min_registered_images=args.min_registered_images,
                     min_registered_fraction=args.min_registered_fraction,
                     sparse_timeout_seconds=args.sparse_timeout_seconds,

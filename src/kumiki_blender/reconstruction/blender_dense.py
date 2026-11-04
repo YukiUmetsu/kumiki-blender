@@ -255,8 +255,8 @@ def _attach_finished_surface_nodes(bpy: Any, material: Any,
 
 def _matched_scan_cameras(report: dict[str, Any], count: int) -> list[dict[str, Any]]:
     """Camera poses and the dense PLY share COLMAP coordinates: no sculpt anchors."""
-    from .cameras import (_matmul, _matvec, _quat_matrix, _read_intrinsics,
-                          _read_poses)
+    from .cameras import (MAPANYTHING_MAX_FOCAL_ASYMMETRY, _matmul, _matvec, _quat_matrix,
+                          _read_intrinsics, _read_poses)
 
     source_value = report.get("source_revision")
     if not isinstance(source_value, str):
@@ -276,7 +276,10 @@ def _matched_scan_cameras(report: dict[str, Any], count: int) -> list[dict[str, 
     entries = {entry["filename"]: entry for entry in index.get("images", [])
                if isinstance(entry, dict) and isinstance(entry.get("filename"), str)}
     poses = _read_poses(model / "images.txt")
-    intrinsics = _read_intrinsics(model / "cameras.txt")
+    mapanything = sparse_report.get("engine") == "mapanything"
+    intrinsics = _read_intrinsics(
+        model / "cameras.txt", require_square_pixels=not mapanything,
+        max_focal_asymmetry=MAPANYTHING_MAX_FOCAL_ASYMMETRY if mapanything else None)
     if (len(poses) < count or len(entries) != len(index.get("images", []))
             or len(poses) != sparse_report.get("registered_images")):
         raise ReferenceError("Matched-view image and camera counts differ from sparse report")
@@ -432,7 +435,7 @@ def _preview_matched(bpy: Any, target: Path, entries: list[dict[str, Any]],
         camera_data.type = "PERSP"
         camera_data.sensor_fit = "HORIZONTAL"
         camera_data.sensor_width = 36.0
-        camera_data.lens = intr["fx_px"] * 36.0 / intr["width"]
+        camera_data.lens = 0.5 * (intr["fx_px"] + intr["fy_px"]) * 36.0 / intr["width"]
         camera_data.shift_x = (intr["width"] / 2 - intr["cx_px"]) / intr["width"]
         camera_data.shift_y = (intr["cy_px"] - intr["height"] / 2) / intr["width"]
         camera_data.show_background_images = True

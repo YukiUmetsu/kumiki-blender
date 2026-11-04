@@ -190,6 +190,31 @@ class PhotoModelTests(unittest.TestCase):
         self.assertIn("--asset-id", error.getvalue())
         self.assertFalse(target.exists())
 
+    def test_cli_preserves_mapanything_and_colmap_matching_options_after_merge(self):
+        for engine, options in (
+            ("mapanything", ["--mapanything-device", "cpu",
+                            "--mapanything-depth-tolerance", "0.25"]),
+            ("colmap", ["--matching-preset", "sift-lightglue",
+                        "--matching-device", "mps", "--matching-pairs-per-process", "4"]),
+        ):
+            with self.subTest(engine=engine):
+                output = io.StringIO()
+                target = self.root / f"plan-{engine}"
+                with contextlib.redirect_stdout(output):
+                    code = main(["plan-photo-model", "--photos", str(self.photos),
+                                 "--asset-id", "test-sphinx", "--output", str(target),
+                                 "--engine", engine, *options])
+                self.assertEqual(code, 0)
+                report = json.loads(output.getvalue())
+                self.assertEqual(report["sparse_engine"], engine)
+                self.assertFalse(target.exists())
+                if engine == "mapanything":
+                    self.assertEqual(report["matching_device"], "colmap-cpu")
+                    self.assertNotIn("lightglue (MPS matching dependency)", report["missing_dependencies"])
+                else:
+                    self.assertEqual(report["matching_device"], "mps")
+                    self.assertEqual(report["memory_controls"]["matching_pairs_per_process"], 4)
+
     def test_sparse_only_cli_accepts_folder_and_learned_matching(self):
         target = self.root / "sparse-learned"
         captured = {}

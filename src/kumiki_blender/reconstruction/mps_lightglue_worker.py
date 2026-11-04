@@ -142,18 +142,27 @@ def write_matches(database: sqlite3.Connection, first: dict, second: dict,
     return len(pairs)
 
 
+def _check_dependencies(device: str):
+    """Validate the matcher environment without loading neural model weights."""
+    try:
+        import numpy  # noqa: F401  (required by feature loading)
+        import torch
+        from lightglue import LightGlue
+    except (ImportError, OSError, RuntimeError) as error:
+        raise RuntimeError(
+            "MPS LightGlue requires working numpy, torch and cvg/LightGlue: "
+            "pip install numpy torch && "
+            "pip install git+https://github.com/cvg/LightGlue.git"
+        ) from error
+    if device == "mps" and not torch.backends.mps.is_available():
+        raise RuntimeError("PyTorch MPS is unavailable; check Apple Silicon and torch installation")
+    return torch, LightGlue
+
+
 def match_pair_file(database_path: Path, pairs_path: Path, max_keypoints: int,
                     device: str) -> None:
     # Import only here so every other CLI works without ML dependencies.
-    try:
-        import torch
-        from lightglue import LightGlue
-    except ImportError as error:
-        raise RuntimeError(
-            "MPS LightGlue requires: pip install torch numpy && "
-            "pip install git+https://github.com/cvg/LightGlue.git") from error
-    if device == "mps" and not torch.backends.mps.is_available():
-        raise RuntimeError("PyTorch MPS is unavailable; check Apple Silicon and torch installation")
+    torch, LightGlue = _check_dependencies(device)
     model = LightGlue(features="sift", mp=False).eval().to(device)
     names = read_pairs(pairs_path)
     with sqlite3.connect(database_path) as db:
@@ -173,16 +182,22 @@ def match_pair_file(database_path: Path, pairs_path: Path, max_keypoints: int,
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Bounded Apple MPS SIFT-LightGlue pair worker")
-    parser.add_argument("command", choices=("match",))
-    parser.add_argument("--database", type=Path, required=True)
-    parser.add_argument("--pairs", type=Path, required=True)
-    parser.add_argument("--max-keypoints", type=int, required=True)
+    parser.add_argument("command", choices=("match", "check"))
+    parser.add_argument("--database", type=Path)
+    parser.add_argument("--pairs", type=Path)
+    parser.add_argument("--max-keypoints", type=int)
     parser.add_argument("--device", choices=("mps", "cpu"), required=True)
     args = parser.parse_args(argv)
-    if not 256 <= args.max_keypoints <= 32768:
-        parser.error("max-keypoints must be 256–32768")
+    if args.command == "match":
+        if args.database is None or args.pairs is None or args.max_keypoints is None:
+            parser.error("match requires --database, --pairs, and --max-keypoints")
+        if not 256 <= args.max_keypoints <= 32768:
+            parser.error("max-keypoints must be 256–32768")
     try:
-        match_pair_file(args.database, args.pairs, args.max_keypoints, args.device)
+        if args.command == "check":
+            _check_dependencies(args.device)
+        else:
+            match_pair_file(args.database, args.pairs, args.max_keypoints, args.device)
     except (OSError, sqlite3.Error, RuntimeError, ValueError) as error:
         print(f"MPS LightGlue worker failed: {error}", file=sys.stderr)
         return 1

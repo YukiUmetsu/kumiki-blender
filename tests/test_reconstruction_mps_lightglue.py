@@ -5,10 +5,11 @@ import struct
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from kumiki_blender.reconstruction.colmap import _cap_colmap_sift_features
 from kumiki_blender.reconstruction.mps_lightglue_worker import (
-    MAX_IMAGE_ID, _load_features, pair_id, read_pairs, select_spatial_keypoints,
+    MAX_IMAGE_ID, _load_features, main, pair_id, read_pairs, select_spatial_keypoints,
     write_matches,
 )
 from kumiki_blender.reconstruction.references import ReferenceError
@@ -99,6 +100,16 @@ class MPSLightGlueFeatureTests(unittest.TestCase):
         pairs_file.write_text("photo-a.png photo-a.png\n", encoding="utf-8")
         with self.assertRaisesRegex(ValueError, "Invalid pair"):
             read_pairs(pairs_file)
+
+    def test_worker_check_validates_environment_without_requiring_match_inputs(self):
+        with patch("kumiki_blender.reconstruction.mps_lightglue_worker._check_dependencies") as check:
+            self.assertEqual(main(["check", "--device", "mps"]), 0)
+        check.assert_called_once_with("mps")
+
+    def test_worker_check_reports_missing_mps_support_without_matching(self):
+        with patch("kumiki_blender.reconstruction.mps_lightglue_worker._check_dependencies",
+                   side_effect=RuntimeError("PyTorch MPS is unavailable")):
+            self.assertEqual(main(["check", "--device", "mps"]), 1)
 
 
 if __name__ == "__main__":
