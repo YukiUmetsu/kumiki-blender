@@ -264,12 +264,23 @@ The run report includes `qa_hits`, `qa_misses`, `qa_warning_count`,
 On a machine with a previously downloaded, verified IS-Net model, install the
 optional library with `pip install -e '.[mask-ai]'` to enable offline
 model-consensus refinement. The normal SAM2-only path remains supported when
-this extra is absent. The project checks the weight hash *before* creating a
-rembg session and does not download model weights implicitly. If importing the
-optional runtime fails (including an exception without an error message), the
-probe records `auxiliary_model_status: unavailable / rembg-probe-<ExceptionType>`
-and preprocessing proceeds with SAM2 alone. This intentionally preserves
-photos and the old cache instead of aborting the reconstruction.
+this extra is absent. The model probe checks the pinned local weight hash
+**without importing rembg or ONNXRuntime into the SAM2/PyTorch process**.
+Each independent proposal runs in a short-lived subprocess, preventing a native
+ONNXRuntime/OpenMP crash from aborting the parent MPS worker on Apple Silicon.
+The child verifies the same checkpoint hash and never downloads unverified
+weights. If the optional runtime crashes or times out, the parent records
+`failed / auxiliary-inference`, disables further optional attempts for that
+run and finishes with original RGB evidence and SAM2-only candidates. The
+failure is also recorded under `auxiliary_model_status` and
+`auxiliary_failure_reason` in the preprocessing report. Cached SAM2 fallback
+results remain valid across `--resume` and unchanged photo sets. Never set
+`KMP_DUPLICATE_LIB_OK=TRUE`: suppressing native runtime safety checks is not
+a substitute for process isolation.
+If the previous native abort occurred before the *first* photo, `--resume`
+also allows the previously unprobed auxiliary model to become available without
+discarding the revision. Resuming after any completed photo still requires
+the same model identity, to protect the cached image evidence.
 
 If a fresh `build-statue-glb` revision stops during `photo_preprocess`, inspect
 `statue-pipeline-report.json` under `failed_worker` for the stage's exit code

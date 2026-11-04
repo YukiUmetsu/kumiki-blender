@@ -7,8 +7,11 @@ COLMAP still receives the full normalized RGB photograph. Foreground masks are
 from __future__ import annotations
 
 import hashlib
+import importlib.util
 import json
 import os
+import subprocess
+import sys
 import tempfile
 from pathlib import Path
 from typing import Any, Callable
@@ -138,25 +141,74 @@ def normalize_cached_photo(photo: ReferenceImage, cache: Path) -> tuple[Path, di
 
 
 def _offline_isnet_model() -> tuple[Path | None, str]:
-    """Probe an optional local model without allowing import failure to block SAM2.
+    """Locate verified IS-Net weights *without importing rembg or ONNXRuntime*.
 
-    Importing rembg can initialize ONNXRuntime, so third-party import failures
-    may occur even before a session exists, occasionally without a message.
-    This optional probe must fail closed to SAM2-only with a useful status.
+    Importing either native runtime in SAM2's process can abort macOS with an
+    OpenMP duplicate-library SIGABRT; no Python exception handler can catch it.
     """
+    from .masking import _ISNET_SHA256
+
     try:
-        from rembg.sessions.base import BaseSession  # type: ignore[import-not-found]
-        from .masking import _ISNET_SHA256
-        path = Path(BaseSession.model_dir()) / "isnet-general-use.onnx"
-        if path.is_symlink() or not path.is_file():
-            return None, "unavailable / isnet-checkpoint-not-cached"
-        if _digest(path) != _ISNET_SHA256:
-            return None, "unavailable / isnet-checkpoint-hash-mismatch"
-        return path, "ready / verified-cached-isnet"
-    except Exception as error:
-        # An optional background model must never prevent the verified RGB
-        # source workflow from beginning or force users to approve a download.
-        return None, f"unavailable / rembg-probe-{type(error).__name__}"
+        rembg_available = importlib.util.find_spec("rembg") is not None
+    except (ImportError, ValueError, OSError):
+        rembg_available = False
+    if not rembg_available:
+        return None, "unavailable / rembg-not-installed"
+    roots = [Path(value) for key in ("REMBG_HOME", "U2NET_HOME")
+             if (value := os.environ.get(key))]
+    if os.environ.get("XDG_DATA_HOME"):
+        roots.append(Path(os.environ["XDG_DATA_HOME"]) / "rembg")
+    roots.extend((Path.home() / ".u2net", Path.home() / ".rembg",
+                  Path.home() / ".cache" / "rembg"))
+    seen = set()
+    invalid = False
+    for root in roots:
+        if root in seen:
+            continue
+        seen.add(root)
+        path = root / "isnet-general-use.onnx"
+        if root.is_symlink() or path.is_symlink() or not path.is_file():
+            continue
+        try:
+            if path.stat().st_size > 500_000_000 or _digest(path) != _ISNET_SHA256:
+                invalid = True
+                continue
+        except OSError:
+            invalid = True
+            continue
+        return path.resolve(), "ready / verified-cached-isnet-isolated"
+    return None, ("unavailable / isnet-checkpoint-hash-mismatch" if invalid else
+                  "unavailable / isnet-checkpoint-not-cached")
+
+
+def _run_rembg_isolated(normalized: Path, checkpoint: Path, output: Path, *,
+                        timeout_seconds: int = 180) -> None:
+    """Run optional CPU ONNX inference outside the MPS/Torch Python process."""
+    from .masking import _ISNET_SHA256
+
+    if (checkpoint.is_symlink() or not checkpoint.is_file() or
+            _digest(checkpoint) != _ISNET_SHA256):
+        raise ReferenceError("Independent IS-Net model is missing or unverified")
+    if output.is_symlink() or output.parent.is_symlink():
+        raise ReferenceError("Independent mask output cannot be a symbolic link")
+    env = os.environ.copy()
+    env.pop("KMP_DUPLICATE_LIB_OK", None)
+    env.update({"REMBG_HOME": str(checkpoint.parent), "U2NET_HOME": str(checkpoint.parent),
+                "OMP_NUM_THREADS": "1", "MKL_NUM_THREADS": "1", "OPENBLAS_NUM_THREADS": "1"})
+    command = [sys.executable, "-m", "kumiki_blender.reconstruction.rembg_worker",
+               "--image", str(normalized), "--checkpoint", str(checkpoint),
+               "--output", str(output)]
+    try:
+        completed = subprocess.run(command, env=env, capture_output=True, text=True,
+                                   timeout=timeout_seconds, check=False)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise ReferenceError(f"Independent rembg worker could not finish: {type(error).__name__}") from error
+    if completed.returncode:
+        message = (completed.stderr or completed.stdout).strip()[-300:]
+        raise ReferenceError(f"Independent rembg worker exited {completed.returncode}: "
+                             f"{message or 'no diagnostic'}")
+    if output.is_symlink() or not output.is_file():
+        raise ReferenceError("Independent rembg worker did not create a safe foreground mask")
 
 
 def _foreground_key(normalized_sha: str, checkpoint_sha: str, size: str,
@@ -171,8 +223,7 @@ def _foreground_preview(normalized: Path, cache: Path, source_sha: str,
                         predictor_loader: Callable[..., Any], state: dict) -> tuple[dict, bool]:
     from PIL import Image
     import numpy as np
-    from .masking import (_auto_sam2_guide, _sam2_mask, _DEFAULT_BOX, _guide,
-                          _rembg_mask, _verified_model_sha)
+    from .masking import _auto_sam2_guide, _sam2_mask, _DEFAULT_BOX, _guide
     from .source_mask_refinement import (mask_agreement, propose_refinement_guide,
                                          select_refined_candidate)
 
@@ -196,12 +247,14 @@ def _foreground_preview(normalized: Path, cache: Path, source_sha: str,
                                        _digest(old_auxiliary) == record.get("refinement", {}).get(
                                            "auxiliary_sha256"))
         else:
-            auxiliary_receipt_valid = not state.get("auxiliary_model_sha256")
+            auxiliary_receipt_valid = (not state.get("auxiliary_model_sha256") or
+                                       record.get("refinement", {}).get("status") in (
+                                           "failed / auxiliary-inference",
+                                           "unavailable / auxiliary-worker-disabled"))
     if (record is not None and record.get("schema") == FOREGROUND_SCHEMA
             and record.get("key") == key and mask.is_file() and preview.is_file()
             and not mask.is_symlink() and not preview.is_symlink()
             and auxiliary_receipt_valid
-            and record.get("refinement", {}).get("status") != "failed / auxiliary-inference"
             and record.get("mask_sha256") == _digest(mask)
             and record.get("isolated_sha256") == _digest(preview)):
         try:
@@ -224,18 +277,16 @@ def _foreground_preview(normalized: Path, cache: Path, source_sha: str,
     refinement = {"status": "unavailable / no-independent-background-candidate",
                   "attempted": False, "accepted": False}
     auxiliary_file = None
-    if state.get("auxiliary_model_sha256"):
+    if state.get("auxiliary_model_sha256") and not state.get("auxiliary_disabled_reason"):
         try:
             proposer = state.get("background_proposer")
             if proposer is None:
-                if "rembg_session" not in state:
-                    from rembg import new_session  # type: ignore[import-not-found]
-                    session = new_session("isnet-general-use")
-                    if _verified_model_sha(session) != state["auxiliary_model_sha256"]:
-                        raise ReferenceError("Cached IS-Net weights changed during preprocessing")
-                    state["rembg_session"] = session
-                proposer = lambda image: _rembg_mask(image, state["rembg_session"])
-            independent = np.asarray(proposer(photo))
+                auxiliary_file = folder / f"auxiliary-foreground-{key}.png"
+                _run_rembg_isolated(normalized, state["auxiliary_model_path"], auxiliary_file)
+                with Image.open(auxiliary_file) as auxiliary:
+                    independent = np.asarray(auxiliary.convert("L")).copy()
+            else:
+                independent = np.asarray(proposer(photo))
             if independent.shape != mask_array.shape:
                 raise ReferenceError("Independent background model returned mismatched dimensions")
             auxiliary_file = folder / f"auxiliary-foreground-{key}.png"
@@ -260,7 +311,14 @@ def _foreground_preview(normalized: Path, cache: Path, source_sha: str,
         except (ImportError, RuntimeError, OSError, ReferenceError, ValueError, TypeError) as error:
             refinement = {"status": "failed / auxiliary-inference", "attempted": True,
                           "accepted": False, "reason": str(error)[:200]}
+            if proposer is None:
+                # Avoid restarting a crashing optional native runtime for every photo.
+                state["auxiliary_disabled_reason"] = refinement["reason"]
             auxiliary_file = None
+    elif state.get("auxiliary_disabled_reason"):
+        refinement = {"status": "unavailable / auxiliary-worker-disabled",
+                      "attempted": False, "accepted": False,
+                      "reason": state["auxiliary_disabled_reason"]}
     binary = Image.fromarray(np.asarray(mask_array, dtype=np.uint8), mode="L")
     _atomic_image(binary, mask)
     rgba = photo.convert("RGBA")
@@ -315,13 +373,19 @@ def prepare_statue_photo_cache(references: ReferenceSet, cache: Path, output: Pa
         prior = _read_entry(output / "photo-preprocess-report.json")
         if (not output.is_dir() or prior is None or
                 prior.get("source_manifest_sha256") != references.manifest_sha256 or
-                prior.get("foreground_model_sha256") != sha or
-                prior.get("auxiliary_model_sha256") != auxiliary_identity):
+                prior.get("foreground_model_sha256") != sha):
             raise ReferenceError("Cannot resume preprocessing with changed photos or model")
+        if prior.get("auxiliary_model_sha256") != auxiliary_identity:
+            # A native abort during the previous optional-model probe can
+            # leave a "running" receipt without even one completed image.
+            # No foreground evidence exists to invalidate in that case.
+            if prior.get("status") != "running" or prior.get("images") != []:
+                raise ReferenceError("Cannot resume preprocessing with changed photos or model")
     else:
         output.mkdir(parents=True, exist_ok=False)
     state: dict[str, Any] = {
         "auxiliary_model_sha256": auxiliary_identity,
+        "auxiliary_model_path": auxiliary_path,
         "background_proposer": background_proposer,
     }
     report: dict[str, Any] = {"schema_version": 1, "asset_id": references.asset_id,
@@ -399,5 +463,15 @@ def prepare_statue_photo_cache(references: ReferenceSet, cache: Path, output: Pa
     report["qa_contact_sheet"] = "photo-qa-contact-sheet.jpg"
     report["qa_warning_count"] = sum(bool(row["qa_warnings"]) for row in report["images"])
     report["status"] = "candidate / cached-photo-preparation"
+    if state.get("auxiliary_disabled_reason"):
+        report["auxiliary_model_status"] = "failed / isolated-worker-disabled"
+        report["auxiliary_failure_reason"] = state["auxiliary_disabled_reason"]
+    elif auxiliary_identity and any(
+            row.get("refinement", {}).get("status") == "failed / auxiliary-inference"
+            for row in report["images"]):
+        report["auxiliary_model_status"] = "failed / cached-auxiliary-worker-failure"
+        report["auxiliary_failure_reason"] = next(
+            row["refinement"]["reason"] for row in report["images"]
+            if row.get("refinement", {}).get("status") == "failed / auxiliary-inference")
     checkpoint_report()
     return report

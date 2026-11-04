@@ -3,7 +3,9 @@
 import hashlib
 import builtins
 import json
+import os
 import shutil
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -17,7 +19,8 @@ from kumiki_blender.reconstruction.colmap import (
 )
 from kumiki_blender.reconstruction.references import ReferenceError, audit_reference_set
 from kumiki_blender.reconstruction.photo_preprocess_cache import (
-    _offline_isnet_model, prepare_statue_photo_cache, read_normalized_photo,
+    _offline_isnet_model, _run_rembg_isolated, prepare_statue_photo_cache,
+    read_normalized_photo,
 )
 from kumiki_blender.reconstruction.photo_early_qa import analyze_cached_photo
 from kumiki_blender.reconstruction.splat_input import load_photo_folder
@@ -51,22 +54,99 @@ class PhotoPreprocessCacheTests(unittest.TestCase):
                 source, self.cache, self.root / f"run-{ordinal}", checkpoint=self.checkpoint,
                 predictor_loader=lambda *_: (object(), "mps"))
 
-    def test_blank_optional_rembg_import_error_falls_back_without_blocking_photo_cache(self):
+    def test_parent_never_imports_rembg_while_probing_or_preprocessing(self):
         original_import = builtins.__import__
 
         def import_with_broken_rembg(name, *args, **kwargs):
-            if name == "rembg.sessions.base":
-                raise RuntimeError()  # Reproduces an eight-byte "error: \n" CLI log.
+            if name == "rembg" or name.startswith("rembg."):
+                raise AssertionError("rembg must never be imported by the SAM2 parent")
             return original_import(name, *args, **kwargs)
 
-        with patch("builtins.__import__", side_effect=import_with_broken_rembg):
+        with (patch("builtins.__import__", side_effect=import_with_broken_rembg),
+              patch("kumiki_blender.reconstruction.photo_preprocess_cache.importlib.util.find_spec",
+                    return_value=None)):
             path, status = _offline_isnet_model()
             self.assertIsNone(path)
-            self.assertEqual(status, "unavailable / rembg-probe-RuntimeError")
+            self.assertEqual(status, "unavailable / rembg-not-installed")
             result = self.build(1)
         self.assertEqual(result["auxiliary_model_status"], status)
         self.assertEqual(result["normalized_misses"], 8)
         self.assertEqual(result["foreground_misses"], 8)
+
+    def test_isolated_onxx_worker_abort_falls_back_and_stops_retrying_per_photo(self):
+        checkpoint = self.root / "isnet-general-use.onnx"
+        checkpoint.write_bytes(b"pinned-test-isnet-weights")
+        weight_hash = hashlib.sha256(checkpoint.read_bytes()).hexdigest()
+        calls = []
+
+        def native_abort(*args, **kwargs):
+            calls.append((args, kwargs))
+            return subprocess.CompletedProcess(args=args[0], returncode=-6,
+                                               stderr="OMP: multiple OpenMP runtimes loaded")
+
+        source = load_photo_folder(self.photos, "great-sphinx")
+        with (patch.dict(os.environ, {"REMBG_HOME": str(self.root)}),
+              patch("kumiki_blender.reconstruction.masking._ISNET_SHA256", weight_hash),
+              patch("kumiki_blender.reconstruction.photo_preprocess_cache.importlib.util.find_spec",
+                    return_value=object()),
+              patch("kumiki_blender.reconstruction.photo_preprocess_cache.subprocess.run",
+                    side_effect=native_abort),
+              patch("kumiki_blender.reconstruction.masking._sam2_mask",
+                    side_effect=self.fake_mask)):
+            report = prepare_statue_photo_cache(
+                source, self.cache, self.root / "isolated-1", checkpoint=self.checkpoint,
+                predictor_loader=lambda *_: (object(), "mps"))
+            self.assertEqual(report["status"], "candidate / cached-photo-preparation")
+            self.assertEqual(report["auxiliary_model_status"], "failed / isolated-worker-disabled")
+            self.assertIn("OpenMP", report["auxiliary_failure_reason"])
+            self.assertEqual(report["refinement_attempts"], 1)
+            self.assertEqual(len(calls), 1, "never retry the same fatal worker for every image")
+            self.assertEqual(report["foreground_misses"], 8)
+            self.assertTrue(all(Path(item["foreground_mask_path"]).is_file()
+                                for item in report["images"]))
+            self.assertTrue(all(item["auxiliary_mask_path"] is None
+                                for item in report["images"]))
+            # All eight SAM2-only masks and QA receipts remain reusable even
+            # though the auxiliary process crashed before producing a mask.
+            with patch("kumiki_blender.reconstruction.masking._sam2_mask",
+                       side_effect=AssertionError("SAM2 cache unexpectedly invalidated")):
+                resumed = prepare_statue_photo_cache(
+                    source, self.cache, self.root / "isolated-1", checkpoint=self.checkpoint,
+                    predictor_loader=lambda *_: (object(), "mps"), resume=True)
+            self.assertEqual((resumed["foreground_hits"], resumed["foreground_misses"]), (8, 0))
+            self.assertEqual(resumed["qa_hits"], 8)
+            self.assertEqual(resumed["auxiliary_model_status"],
+                             "failed / cached-auxiliary-worker-failure")
+            self.assertEqual(len(calls), 1)
+
+    def test_successful_isolated_worker_keeps_verified_mask_and_no_in_process_runtime(self):
+        checkpoint = self.root / "isnet-general-use.onnx"
+        checkpoint.write_bytes(b"pinned-test-weights")
+        weight_hash = hashlib.sha256(checkpoint.read_bytes()).hexdigest()
+        output = self.root / "output-mask.png"
+
+        def completed_child(command, **kwargs):
+            self.assertIn("kumiki_blender.reconstruction.rembg_worker", command)
+            self.assertEqual(kwargs["env"]["REMBG_HOME"], str(self.root))
+            self.assertNotIn("KMP_DUPLICATE_LIB_OK", kwargs["env"])
+            Image.new("L", (96, 80), 255).save(output)
+            return subprocess.CompletedProcess(command, returncode=0)
+
+        with (patch("kumiki_blender.reconstruction.masking._ISNET_SHA256", weight_hash),
+              patch("kumiki_blender.reconstruction.photo_preprocess_cache.subprocess.run",
+                    side_effect=completed_child),
+              patch.dict(os.environ, {"KMP_DUPLICATE_LIB_OK": "TRUE"})):
+            _run_rembg_isolated(self.photos / "photo-01.jpg", checkpoint, output)
+        self.assertTrue(output.is_file())
+
+    def test_isolated_worker_rejects_changed_weight_before_starting_native_runtime(self):
+        checkpoint = self.root / "isnet-general-use.onnx"
+        checkpoint.write_bytes(b"wrong-model")
+        normalized = self.photos / "photo-01.jpg"
+        with patch("kumiki_blender.reconstruction.photo_preprocess_cache.subprocess.run") as run:
+            with self.assertRaisesRegex(ReferenceError, "unverified"):
+                _run_rembg_isolated(normalized, checkpoint, self.root / "mask.png")
+            run.assert_not_called()
 
     def test_new_photo_only_misses_its_own_preprocessing_keys(self):
         initial = self.build(1)
@@ -143,6 +223,32 @@ class PhotoPreprocessCacheTests(unittest.TestCase):
                 background_proposer=lambda image: np.full(
                     (image.height, image.width), 255, dtype=np.uint8), resume=True)
         self.assertEqual(receipt.read_bytes(), original)
+
+    def test_resume_allows_verified_auxiliary_change_after_abort_before_first_photo(self):
+        self.build(1)
+        receipt = self.root / "run-1/photo-preprocess-report.json"
+        prior = json.loads(receipt.read_text())
+        prior.update(status="running", images=[], auxiliary_model_sha256=None)
+        receipt.write_text(json.dumps(prior))
+        checkpoint = self.root / "isnet-general-use.onnx"
+        checkpoint.write_bytes(b"fake-isnet-weights")
+
+        def successful_isnet(_normalized, _checkpoint, output):
+            Image.new("L", (96, 80), 0).save(output)
+
+        source = load_photo_folder(self.photos, "great-sphinx")
+        with (patch("kumiki_blender.reconstruction.photo_preprocess_cache._offline_isnet_model",
+                    return_value=(checkpoint, "ready / verified-cached-isnet-isolated")),
+              patch("kumiki_blender.reconstruction.photo_preprocess_cache._run_rembg_isolated",
+                    side_effect=successful_isnet),
+              patch("kumiki_blender.reconstruction.masking._sam2_mask", side_effect=self.fake_mask)):
+            resumed = prepare_statue_photo_cache(
+                source, self.cache, self.root / "run-1", checkpoint=self.checkpoint,
+                predictor_loader=lambda *_: (object(), "mps"), resume=True)
+        self.assertEqual(resumed["status"], "candidate / cached-photo-preparation")
+        self.assertEqual(resumed["auxiliary_model_sha256"], hashlib.sha256(
+            checkpoint.read_bytes()).hexdigest())
+        self.assertEqual(len(resumed["images"]), 8)
 
     def test_early_qa_marks_unreliable_foreground_as_uncertain_not_background(self):
         photo = self.photos / "photo-01.jpg"
