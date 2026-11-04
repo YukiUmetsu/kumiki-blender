@@ -39,6 +39,8 @@ class PhotoModelSettings:
     matching_threads: int | None = None
     sift_first_octave: int | None = None
     max_colmap_rss_mb: int | None = None
+    matching_block_size: int | None = None
+    matching_max_features: int | None = None
 
     def validate(self) -> None:
         from .colmap import _validate_matching_preset
@@ -56,9 +58,17 @@ class PhotoModelSettings:
                 (type(self.max_colmap_rss_mb) is not int or
                  (self.max_colmap_rss_mb != 0 and not 1024 <= self.max_colmap_rss_mb <= 131072))):
             raise ReferenceError("max_colmap_rss_mb must be 0 or 1024–131072")
+        if (self.matching_block_size is not None and
+                (type(self.matching_block_size) is not int or not 1 <= self.matching_block_size <= 50)):
+            raise ReferenceError("matching_block_size must be 1–50")
+        if (self.matching_max_features is not None and
+                (type(self.matching_max_features) is not int or
+                 not 256 <= self.matching_max_features <= 32768)):
+            raise ReferenceError("matching_max_features must be 256–32768")
         if self.engine != "colmap" and any(value is not None for value in
                                            (self.feature_threads, self.matching_threads,
-                                            self.sift_first_octave, self.max_colmap_rss_mb)):
+                                            self.sift_first_octave, self.max_colmap_rss_mb,
+                                            self.matching_block_size, self.matching_max_features)):
             raise ReferenceError("COLMAP memory controls require --engine colmap")
         if self.sift_first_octave is not None and self.matching_preset not in ("sift", "sift-lightglue"):
             raise ReferenceError("SIFT first octave applies only to SIFT-based matching")
@@ -145,7 +155,9 @@ def plan_photo_model(references: ReferenceSet, output: str | Path,
         "memory_controls": {"feature_threads": settings.feature_threads,
                             "matching_threads": settings.matching_threads,
                             "sift_first_octave": settings.sift_first_octave,
-                            "max_colmap_rss_mb": settings.max_colmap_rss_mb},
+                            "max_colmap_rss_mb": settings.max_colmap_rss_mb,
+                            "matching_block_size": settings.matching_block_size,
+                            "matching_max_features": settings.matching_max_features},
         "dense_backend": settings.dense_backend,
         "min_registered_images": settings.min_registered_images,
         "min_registered_fraction": settings.min_registered_fraction,
@@ -211,7 +223,9 @@ def build_photo_model(
                            feature_threads=settings.feature_threads,
                            matching_threads=settings.matching_threads,
                            sift_first_octave=settings.sift_first_octave,
-                           max_colmap_rss_mb=settings.max_colmap_rss_mb)
+                           max_colmap_rss_mb=settings.max_colmap_rss_mb,
+                           matching_block_size=settings.matching_block_size,
+                           matching_max_features=settings.matching_max_features)
         report["sparse"] = {key: sparse.get(key) for key in
                             ("status", "registered_images", "staged_independent_images",
                              "failed_stage", "error")}

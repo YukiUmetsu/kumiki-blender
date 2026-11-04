@@ -43,7 +43,8 @@ its diagnostic log preserved.
 
 At 4,000-pixel input size, CPU SIFT may be killed by macOS when many feature
 workers run simultaneously. Learned presets now default to **one feature
-worker**, **one matching worker**, and a **12,288 MiB COLMAP-process RSS
+worker**, **one matching worker**, a **5-image matching cache block**,
+**4,096 descriptors per image pair**, and a **12,288 MiB COLMAP-process RSS
 watchdog**, while retaining the requested `--max-image-size` (default 4,000
 in `reconstruct-photos`). SIFT+LightGlue also defaults to
 `--SiftExtraction.first_octave 0`, avoiding SIFT's memory-heavy upsampled
@@ -56,19 +57,27 @@ kumiki-blender reconstruct-photos \
   --output "$LEARNED" --engine colmap \
   --matching-preset sift-lightglue \
   --feature-threads 1 --matching-threads 1 \
+  --matching-block-size 5 --matching-max-features 4096 \
   --sift-first-octave 0 --max-colmap-rss-mb 12288 \
   --max-image-size 4000 --undistort --timeout-seconds 7200
 ```
 
-The four resource options are optional for learned presets, as shown by their
-defaults above. The RSS watchdog samples the native COLMAP process and stops
+These resource options are optional for learned presets, as shown by their
+defaults above. Matching feature count is a quality/speed/RAM tradeoff, not
+image downscaling: the input pixels remain at their requested resolution, but
+some extracted features may be omitted from pair matching. The smaller
+exhaustive block also reduces the image/feature cache footprint. If registration
+is still poor after RAM is stable, increase the matching cap incrementally.
+
+The RSS watchdog samples the native COLMAP process and stops
 it before it consumes the configured budget; the report records exit code
 `125` with an explanation in the corresponding stage log. It requires the
 standard `ps` utility. Set `--max-colmap-rss-mb 0` only to deliberately
 disable this protection. A watchdog is **not a system-wide hard RAM limit**:
 very rapid allocations, other applications, child processes, or OS memory
 pressure can still trigger SIGKILL. Keep additional free RAM and inspect
-the report if the guard stops the job.
+the report if the guard stops the job. The detailed reason (actual RSS limit or
+monitoring failure) is in `logs/02-exhaustive_matcher.log` when matching stops.
 
 ## Great Sphinx: compare actual registered views
 

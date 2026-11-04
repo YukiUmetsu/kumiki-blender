@@ -209,8 +209,12 @@ class ColmapWorkflowTests(unittest.TestCase):
                                      ["--FeatureExtraction.max_image_size", "4000"])
                     self.assertIn("--FeatureExtraction.num_threads", report["commands"][0])
                     self.assertIn("--FeatureMatching.num_threads", report["commands"][1])
+                    self.assertIn("--FeatureMatching.max_num_matches", report["commands"][1])
+                    self.assertIn("--ExhaustiveMatching.block_size", report["commands"][1])
                     self.assertEqual(report["memory_controls"]["feature_threads"], 1)
                     self.assertEqual(report["memory_controls"]["max_colmap_rss_mb"], 12288)
+                    self.assertEqual(report["memory_controls"]["matching_max_features"], 4096)
+                    self.assertEqual(report["memory_controls"]["matching_block_size"], 5)
                     if preset == "sift-lightglue":
                         self.assertIn("--SiftExtraction.first_octave", report["commands"][0])
                     self.assertEqual(report["commands"][1][-2:],
@@ -247,18 +251,32 @@ class ColmapWorkflowTests(unittest.TestCase):
                                                      max_image_size=4000)
         self.assertEqual(report["failed_stage"], "feature_extractor")
         self.assertEqual(report["exit_code"], 125)
-        self.assertIn("resident-memory budget", report["error"])
+        self.assertEqual(report["memory_guard_reason"], "RSS 13312 MiB >= 12288 MiB")
+        self.assertIn(report["memory_guard_reason"], report["error"])
         self.assertIn("Memory guard stopped COLMAP", (output / "logs/01-feature_extractor.log").read_text())
 
     def test_memory_controls_reject_invalid_limits_before_creating_output(self):
         output = self.root / "invalid-controls"
         for controls in ({"feature_threads": 0}, {"matching_threads": 65},
-                         {"max_colmap_rss_mb": 100}, {"sift_first_octave": -2}):
+                         {"max_colmap_rss_mb": 100}, {"sift_first_octave": -2},
+                         {"matching_block_size": 0}, {"matching_max_features": 100}):
             with self.subTest(controls=controls):
                 with self.assertRaises(ReferenceError):
                     build_sparse_reconstruction(self.references(), output, colmap=str(self.fake),
                                                 **controls)
                 self.assertFalse(output.exists())
+
+    def test_matching_resource_controls_override_learned_defaults(self):
+        with patch.dict(os.environ, {"FAKE_LEARNED_COLMAP": "1"}):
+            report = build_sparse_reconstruction(
+                self.references(), self.root / "custom-matching-bounds",
+                colmap=str(self.fake), matching_preset="sift-lightglue",
+                matching_block_size=3, matching_max_features=2048)
+        args = report["commands"][1]
+        self.assertEqual(args[args.index("--ExhaustiveMatching.block_size") + 1], "3")
+        self.assertEqual(args[args.index("--FeatureMatching.max_num_matches") + 1], "2048")
+        self.assertEqual(report["memory_controls"]["matching_block_size"], 3)
+        self.assertEqual(report["memory_controls"]["matching_max_features"], 2048)
 
     def test_registration_names_use_normalized_staged_filenames_not_original_jpeg_extensions(self):
         self.references()

@@ -199,6 +199,10 @@ def main(argv: list[str] | None = None) -> int:
                                       help="SIFT pyramid start (learned SIFT default: 0, keeps input pixels)")
             photo_parser.add_argument("--max-colmap-rss-mb", type=int,
                                       help="Abort native COLMAP over RSS budget; 0 disables (learned default: 12288 MiB)")
+            photo_parser.add_argument("--matching-block-size", type=int,
+                                      help="Exhaustive pair-cache block size (learned default: 5)")
+            photo_parser.add_argument("--matching-max-features", type=int,
+                                      help="Cap features per matching pair without downscaling (learned default: 4096)")
             photo_parser.add_argument("--timeout-seconds", type=int, default=3600)
             photo_parser.add_argument("--undistort", action="store_true",
                                       help="Rectify camera intrinsics and image pixels for accurate Blender projection")
@@ -229,6 +233,10 @@ def main(argv: list[str] | None = None) -> int:
                                         help="SIFT pyramid start (learned SIFT default: 0)")
         photo_model_parser.add_argument("--max-colmap-rss-mb", type=int,
                                         help="Native COLMAP RSS limit, 0 disables (learned default: 12288 MiB)")
+        photo_model_parser.add_argument("--matching-block-size", type=int,
+                                        help="Exhaustive pair-cache block size (learned default: 5)")
+        photo_model_parser.add_argument("--matching-max-features", type=int,
+                                        help="Maximum features per matching pair (learned default: 4096)")
         photo_model_parser.add_argument("--backend", choices=("openmvs", "colmap"),
                                         default="openmvs", help="Dense meshing backend")
         photo_model_parser.add_argument("--colmap", default="colmap")
@@ -1023,6 +1031,8 @@ def main(argv: list[str] | None = None) -> int:
                     feature_threads=args.feature_threads, matching_threads=args.matching_threads,
                     sift_first_octave=args.sift_first_octave,
                     max_colmap_rss_mb=args.max_colmap_rss_mb,
+                    matching_block_size=args.matching_block_size,
+                    matching_max_features=args.matching_max_features,
                     dense_backend=args.backend, colmap=args.colmap,
                     blender=args.blender, min_registered_images=args.min_registered_images,
                     min_registered_fraction=args.min_registered_fraction,
@@ -1293,7 +1303,9 @@ def main(argv: list[str] | None = None) -> int:
                                                       feature_threads=args.feature_threads,
                                                       matching_threads=args.matching_threads,
                                                       sift_first_octave=args.sift_first_octave,
-                                                      max_colmap_rss_mb=args.max_colmap_rss_mb))
+                                                      max_colmap_rss_mb=args.max_colmap_rss_mb,
+                                                      matching_block_size=args.matching_block_size,
+                                                      matching_max_features=args.matching_max_features))
             except ReferenceError as error:
                 raise RecipeError(str(error)) from error
             print(json.dumps(report, indent=2))

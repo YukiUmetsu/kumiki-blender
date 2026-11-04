@@ -380,6 +380,21 @@ def _process_rss_kib(pid: int) -> int | None:
         return None
 
 
+def _memory_guard_reason(log: Path) -> str:
+    """Retrieve the small guard message appended after terminating COLMAP."""
+    try:
+        with log.open("rb") as stream:
+            size = stream.seek(0, 2)
+            stream.seek(max(0, size - 2048))
+            tail = stream.read().decode("utf-8", errors="replace")
+    except OSError:
+        return "details unavailable"
+    for line in reversed(tail.splitlines()):
+        if line.startswith("Memory guard stopped COLMAP: "):
+            return line.partition(": ")[2]
+    return "details unavailable"
+
+
 def _registered_image_count(text_model: Path) -> int:
     """Parse COLMAP's alternating pose/observations lines, not numeric points."""
     images = text_model / "images.txt"
@@ -473,7 +488,9 @@ def build_sparse_reconstruction(reference_set: ReferenceSet, output: str | Path,
                                 feature_threads: int | None = None,
                                 matching_threads: int | None = None,
                                 sift_first_octave: int | None = None,
-                                max_colmap_rss_mb: int | None = None) -> dict[str, Any]:
+                                max_colmap_rss_mb: int | None = None,
+                                matching_block_size: int | None = None,
+                                matching_max_features: int | None = None) -> dict[str, Any]:
     """Produce auditable camera/sparse data using a locally installed COLMAP.
 
     External tools may fail on historical or unrelated internet photos. Their
@@ -504,9 +521,16 @@ def build_sparse_reconstruction(reference_set: ReferenceSet, output: str | Path,
             (type(max_colmap_rss_mb) is not int or
              (max_colmap_rss_mb != 0 and not 1024 <= max_colmap_rss_mb <= 131072))):
         raise ReferenceError("max_colmap_rss_mb must be 0 (disabled) or 1024–131072")
+    if (matching_block_size is not None and
+            (type(matching_block_size) is not int or not 1 <= matching_block_size <= 50)):
+        raise ReferenceError("matching_block_size must be 1–50")
+    if (matching_max_features is not None and
+            (type(matching_max_features) is not int or not 256 <= matching_max_features <= 32768)):
+        raise ReferenceError("matching_max_features must be 256–32768")
     if engine != "colmap" and any(value is not None for value in
                                   (feature_threads, matching_threads, sift_first_octave,
-                                   max_colmap_rss_mb)):
+                                   max_colmap_rss_mb, matching_block_size,
+                                   matching_max_features)):
         raise ReferenceError("COLMAP memory controls require --engine colmap")
     if sift_first_octave is not None and matching_preset not in ("sift", "sift-lightglue"):
         raise ReferenceError("SIFT first octave applies only to SIFT-based matching")
@@ -517,6 +541,13 @@ def build_sparse_reconstruction(reference_set: ReferenceSet, output: str | Path,
                              0 if matching_preset == "sift-lightglue" else None)
     effective_rss_mb = (max_colmap_rss_mb if max_colmap_rss_mb is not None else
                         12288 if learned else 0)
+    # In CPU-only LightGlue, limiting concurrent workers alone still allows a
+    # large feature tensor per image pair and a large exhaustive cache. These
+    # caps keep 4K pixels intact, trading a bounded number of matches for RAM.
+    effective_block_size = (matching_block_size if matching_block_size is not None else
+                            5 if learned else None)
+    effective_match_features = (matching_max_features if matching_max_features is not None else
+                                4096 if learned else None)
     if effective_rss_mb:
         if not shutil.which("ps") or _process_rss_kib(os.getpid()) is None:
             raise ReferenceError("Memory guard needs a working ps command; refusing unmonitored COLMAP execution")
@@ -557,7 +588,9 @@ def build_sparse_reconstruction(reference_set: ReferenceSet, output: str | Path,
         "memory_controls": {"feature_threads": effective_feature_threads,
                             "matching_threads": effective_matching_threads,
                             "sift_first_octave": effective_sift_octave,
-                            "max_colmap_rss_mb": effective_rss_mb},
+                            "max_colmap_rss_mb": effective_rss_mb,
+                            "matching_block_size": effective_block_size,
+                            "matching_max_features": effective_match_features},
         "registered_images": 0,
         "undistortion_requested": undistort,
         "colmap_info": colmap_info,
@@ -591,6 +624,10 @@ def build_sparse_reconstruction(reference_set: ReferenceSet, output: str | Path,
         extract_resource_args += ["--SiftExtraction.first_octave", str(effective_sift_octave)]
     match_resource_args = (["--FeatureMatching.num_threads", str(effective_matching_threads)]
                            if effective_matching_threads is not None else [])
+    if effective_match_features is not None:
+        match_resource_args += ["--FeatureMatching.max_num_matches", str(effective_match_features)]
+    if effective_block_size is not None:
+        match_resource_args += ["--ExhaustiveMatching.block_size", str(effective_block_size)]
     extract_args = (["--FeatureExtraction.type", extractor]
                     if matching_preset != "sift" else [])
     if supports_extraction_size:
@@ -616,7 +653,9 @@ def build_sparse_reconstruction(reference_set: ReferenceSet, output: str | Path,
         if code:
             report["failed_stage"], report["exit_code"] = stage, code
             if code == 125:
-                report["error"] = ("COLMAP exceeded its resident-memory budget or monitoring failed; "
+                reason = _memory_guard_reason(target / "logs" / f"{number:02d}-{stage}.log")
+                report["memory_guard_reason"] = reason
+                report["error"] = (f"COLMAP memory guard stopped {stage}: {reason}; "
                                    f"see logs/{number:02d}-{stage}.log")
             elif code == -9:
                 report["error"] = "COLMAP received SIGKILL; inspect macOS memory pressure and the stage log"
