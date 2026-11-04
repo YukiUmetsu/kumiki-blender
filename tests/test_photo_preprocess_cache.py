@@ -14,7 +14,7 @@ from PIL import Image
 from kumiki_blender.reconstruction.colmap import (
     _prepare_images, _stage_subject_qa_index, _verify_subject_qa_resume, _staged_images,
 )
-from kumiki_blender.reconstruction.references import audit_reference_set
+from kumiki_blender.reconstruction.references import ReferenceError, audit_reference_set
 from kumiki_blender.reconstruction.photo_preprocess_cache import (
     prepare_statue_photo_cache, read_normalized_photo,
 )
@@ -113,6 +113,19 @@ class PhotoPreprocessCacheTests(unittest.TestCase):
                 predictor_loader=lambda *_: (object(), "mps"), resume=True)
         self.assertEqual((result["normalized_hits"], result["foreground_hits"]), (8, 8))
 
+    def test_resume_refuses_background_model_identity_change_without_touching_report(self):
+        self.build(1)
+        receipt = self.root / "run-1/photo-preprocess-report.json"
+        original = receipt.read_bytes()
+        source = load_photo_folder(self.photos, "great-sphinx")
+        with self.assertRaisesRegex(ReferenceError, "Cannot resume preprocessing"):
+            prepare_statue_photo_cache(
+                source, self.cache, self.root / "run-1", checkpoint=self.checkpoint,
+                predictor_loader=lambda *_: (object(), "mps"),
+                background_proposer=lambda image: np.full(
+                    (image.height, image.width), 255, dtype=np.uint8), resume=True)
+        self.assertEqual(receipt.read_bytes(), original)
+
     def test_early_qa_marks_unreliable_foreground_as_uncertain_not_background(self):
         photo = self.photos / "photo-01.jpg"
         source = next(item for item in load_photo_folder(self.photos, "great-sphinx").images
@@ -157,6 +170,10 @@ class PhotoPreprocessCacheTests(unittest.TestCase):
         first = self.build(1)
         self.assertEqual((first["qa_hits"], first["qa_misses"]), (0, 8))
         self.assertTrue((self.root / "run-1" / "photo-qa-contact-sheet.jpg").is_file())
+        detail = self.root / "run-1" / first["images"][0]["qa_visual_preview"]
+        self.assertTrue(detail.is_file())
+        with Image.open(detail) as panels:
+            self.assertEqual(panels.size, (1536, 576))
         Image.new("RGB", (96, 80), (30, 70, 130)).save(self.photos / "added.jpg")
         second = self.build(2)
         self.assertEqual((second["qa_hits"], second["qa_misses"]), (8, 1))
@@ -221,6 +238,58 @@ class PhotoPreprocessCacheTests(unittest.TestCase):
             list(json.loads(baseline)["images"])[0]]["qa_key"]
         receipt.write_text(json.dumps(data))
         _verify_subject_qa_resume(receipt, stage, checksum)
+
+    def test_cached_independent_background_guides_sam2_without_erasing_uncertain_regions(self):
+        for index, photo in enumerate(sorted(self.photos.iterdir())):
+            Image.new("RGB", (96, 80), (125 + index * 6, 100, 70)).save(photo)
+
+        def mask(image, guide, _predictor):
+            pixels = np.zeros((image.height, image.width), dtype=np.uint8)
+            pixels[15:65, 9:85] = 255
+            if guide["foreground_points"]:
+                pixels[20:60, 20:75] = 255
+                pixels[15:20] = 0
+                pixels[60:65] = 0
+            return pixels, {"components": ["subject"], "missing_parts": [],
+                            "background_seed_violations": 0}
+
+        calls = []
+        def independent(image):
+            calls.append(image.size)
+            pixels = np.zeros((image.height, image.width), dtype=np.uint8)
+            pixels[20:60, 20:75] = 255
+            return pixels
+
+        source = load_photo_folder(self.photos, "great-sphinx")
+        with patch("kumiki_blender.reconstruction.masking._sam2_mask", side_effect=mask):
+            first = prepare_statue_photo_cache(
+                source, self.cache, self.root / "consensus-1", checkpoint=self.checkpoint,
+                predictor_loader=lambda *_: (object(), "mps"),
+                background_proposer=independent)
+        self.assertEqual(first["refinement_accepted"], 8)
+        self.assertEqual(len(calls), 8)
+        first_row = first["images"][0]
+        self.assertTrue(Path(first_row["auxiliary_mask_path"]).is_file())
+        with Image.open(first_row["qa_confidence_path"]) as confidence:
+            data = np.asarray(confidence)
+            self.assertEqual(int(data[30, 30]), 255)
+            self.assertEqual(int(data[5, 5]), 0)
+            self.assertEqual(int(data[17, 30]), 128)
+        with patch("kumiki_blender.reconstruction.masking._sam2_mask", side_effect=AssertionError("cache miss")):
+            second = prepare_statue_photo_cache(
+                source, self.cache, self.root / "consensus-2", checkpoint=self.checkpoint,
+                predictor_loader=lambda *_: (object(), "mps"),
+                background_proposer=independent)
+        self.assertEqual(second["foreground_hits"], 8)
+        self.assertEqual(second["qa_hits"], 8)
+        self.assertEqual(len(calls), 8)
+        Path(first_row["auxiliary_mask_path"]).write_bytes(b"corrupted-independent-mask")
+        with patch("kumiki_blender.reconstruction.masking._sam2_mask", side_effect=mask):
+            repaired = prepare_statue_photo_cache(
+                source, self.cache, self.root / "consensus-3", checkpoint=self.checkpoint,
+                predictor_loader=lambda *_: (object(), "mps"),
+                background_proposer=independent)
+        self.assertEqual((repaired["foreground_hits"], repaired["foreground_misses"]), (7, 1))
 
 
 if __name__ == "__main__":

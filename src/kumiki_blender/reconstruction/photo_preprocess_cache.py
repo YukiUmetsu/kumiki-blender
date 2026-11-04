@@ -16,7 +16,7 @@ from typing import Any, Callable
 from .references import ReferenceError, ReferenceImage, ReferenceSet
 
 SCHEMA = "source-photo-preprocess-v1"
-FOREGROUND_SCHEMA = "source-foreground-sam2-v1"
+FOREGROUND_SCHEMA = "source-foreground-sam2-consensus-v2"
 
 
 def _digest(path: Path) -> str:
@@ -49,7 +49,8 @@ def _atomic_image(image, path: Path, *, fmt: str = "PNG") -> None:
         with tempfile.NamedTemporaryFile(dir=path.parent, prefix=".photo-", suffix=".png",
                                          delete=False) as stream:
             temporary = Path(stream.name)
-        image.save(temporary, format=fmt)
+        image.save(temporary, format=fmt, **({"quality": 88, "subsampling": 0}
+                                           if fmt == "JPEG" else {}))
         os.replace(temporary, path)
         temporary = None
     finally:
@@ -136,8 +137,25 @@ def normalize_cached_photo(photo: ReferenceImage, cache: Path) -> tuple[Path, di
     return folder / "normalized.png", receipt, False
 
 
-def _foreground_key(normalized_sha: str, checkpoint_sha: str, size: str) -> str:
-    fields = json.dumps([FOREGROUND_SCHEMA, normalized_sha, checkpoint_sha, size, 1280])
+def _offline_isnet_model() -> tuple[Path | None, str]:
+    """Only discover an already-installed verified IS-Net; never download it."""
+    try:
+        from rembg.sessions.base import BaseSession  # type: ignore[import-not-found]
+        from .masking import _ISNET_SHA256
+        path = Path(BaseSession.model_dir()) / "isnet-general-use.onnx"
+        if path.is_symlink() or not path.is_file():
+            return None, "unavailable / isnet-checkpoint-not-cached"
+        if _digest(path) != _ISNET_SHA256:
+            return None, "unavailable / isnet-checkpoint-hash-mismatch"
+        return path, "ready / verified-cached-isnet"
+    except (ImportError, OSError, AttributeError, TypeError):
+        return None, "unavailable / rembg-not-installed"
+
+
+def _foreground_key(normalized_sha: str, checkpoint_sha: str, size: str,
+                    auxiliary_sha: str | None = None) -> str:
+    fields = json.dumps([FOREGROUND_SCHEMA, normalized_sha, checkpoint_sha,
+                         size, 1280, auxiliary_sha])
     return hashlib.sha256(fields.encode()).hexdigest()
 
 
@@ -146,17 +164,37 @@ def _foreground_preview(normalized: Path, cache: Path, source_sha: str,
                         predictor_loader: Callable[..., Any], state: dict) -> tuple[dict, bool]:
     from PIL import Image
     import numpy as np
-    from .masking import _auto_sam2_guide, _sam2_mask, _DEFAULT_BOX
+    from .masking import (_auto_sam2_guide, _sam2_mask, _DEFAULT_BOX, _guide,
+                          _rembg_mask, _verified_model_sha)
+    from .source_mask_refinement import (mask_agreement, propose_refinement_guide,
+                                         select_refined_candidate)
 
-    key = _foreground_key(_digest(normalized), checkpoint_sha, size)
+    key = _foreground_key(_digest(normalized), checkpoint_sha, size,
+                          state.get("auxiliary_model_sha256"))
     folder = _folder(cache, source_sha)
     mask = folder / f"foreground-{key}.png"
     preview = folder / f"isolated-{key}.png"
     receipt_file = folder / f"foreground-{key}.json"
     record = _read_entry(receipt_file)
+    if record is not None and not isinstance(record.get("refinement"), dict):
+        record = None
+    auxiliary_receipt_valid = False
+    if record is not None:
+        auxiliary_receipt = record.get("auxiliary_mask_path")
+        if isinstance(auxiliary_receipt, str) and auxiliary_receipt:
+            old_auxiliary = Path(auxiliary_receipt)
+            auxiliary_receipt_valid = (old_auxiliary == folder / f"auxiliary-foreground-{key}.png" and
+                                       not old_auxiliary.is_symlink() and
+                                       old_auxiliary.is_file() and
+                                       _digest(old_auxiliary) == record.get("refinement", {}).get(
+                                           "auxiliary_sha256"))
+        else:
+            auxiliary_receipt_valid = not state.get("auxiliary_model_sha256")
     if (record is not None and record.get("schema") == FOREGROUND_SCHEMA
             and record.get("key") == key and mask.is_file() and preview.is_file()
             and not mask.is_symlink() and not preview.is_symlink()
+            and auxiliary_receipt_valid
+            and record.get("refinement", {}).get("status") != "failed / auxiliary-inference"
             and record.get("mask_sha256") == _digest(mask)
             and record.get("isolated_sha256") == _digest(preview)):
         try:
@@ -176,6 +214,46 @@ def _foreground_preview(normalized: Path, cache: Path, source_sha: str,
         photo = source.convert("RGB")
     guide = _auto_sam2_guide(photo, _DEFAULT_BOX)
     mask_array, details = _sam2_mask(photo, guide, state["predictor"])
+    refinement = {"status": "unavailable / no-independent-background-candidate",
+                  "attempted": False, "accepted": False}
+    auxiliary_file = None
+    if state.get("auxiliary_model_sha256"):
+        try:
+            proposer = state.get("background_proposer")
+            if proposer is None:
+                if "rembg_session" not in state:
+                    from rembg import new_session  # type: ignore[import-not-found]
+                    session = new_session("isnet-general-use")
+                    if _verified_model_sha(session) != state["auxiliary_model_sha256"]:
+                        raise ReferenceError("Cached IS-Net weights changed during preprocessing")
+                    state["rembg_session"] = session
+                proposer = lambda image: _rembg_mask(image, state["rembg_session"])
+            independent = np.asarray(proposer(photo))
+            if independent.shape != mask_array.shape:
+                raise ReferenceError("Independent background model returned mismatched dimensions")
+            auxiliary_file = folder / f"auxiliary-foreground-{key}.png"
+            if auxiliary_file.is_symlink():
+                raise ReferenceError("Auxiliary foreground cache is a symbolic link")
+            _atomic_image(Image.fromarray(np.where(independent >= 128, 255, 0).astype(np.uint8), "L"),
+                          auxiliary_file)
+            addition, refinement = propose_refinement_guide(mask_array, independent)
+            if addition is not None:
+                guided = _guide({"foreground_points": addition["foreground_points"],
+                                 "background_points": (guide["background_points"] +
+                                                       addition["background_points"])[:36]},
+                                default_box=_DEFAULT_BOX)
+                proposed, revised_details = _sam2_mask(photo, guided, state["predictor"])
+                mask_array, choice = select_refined_candidate(mask_array, proposed, independent)
+                refinement.update(choice)
+                if choice["accepted"]:
+                    details = revised_details
+            agreement = mask_agreement(mask_array, independent)
+            refinement.update({k: v for k, v in agreement.items() if k != "labels"})
+            refinement["auxiliary_sha256"] = _digest(auxiliary_file)
+        except (ImportError, RuntimeError, OSError, ReferenceError, ValueError, TypeError) as error:
+            refinement = {"status": "failed / auxiliary-inference", "attempted": True,
+                          "accepted": False, "reason": str(error)[:200]}
+            auxiliary_file = None
     binary = Image.fromarray(np.asarray(mask_array, dtype=np.uint8), mode="L")
     _atomic_image(binary, mask)
     rgba = photo.convert("RGBA")
@@ -187,6 +265,9 @@ def _foreground_preview(normalized: Path, cache: Path, source_sha: str,
               "model_sha256": checkpoint_sha, "sam2_size": size,
               "device": state["device"], "mask_sha256": _digest(mask),
               "isolated_sha256": _digest(preview),
+              "auxiliary_model_sha256": state.get("auxiliary_model_sha256"),
+              "auxiliary_mask_path": str(auxiliary_file) if auxiliary_file else None,
+              "refinement": refinement,
               "foreground_fraction": round(occupied, 6),
               "status": "candidate / manual-review-required" if 0.05 <= occupied <= 0.90
               else "suspect / manual-review-required",
@@ -200,6 +281,7 @@ def prepare_statue_photo_cache(references: ReferenceSet, cache: Path, output: Pa
                                checkpoint: Path | None = None, sam2_size: str = "small",
                                sam2_device: str = "mps", foreground: bool = True,
                                predictor_loader: Callable[..., Any] | None = None,
+                               background_proposer: Callable[..., Any] | None = None,
                                progress: Callable[[int, int, bool], None] | None = None,
                                resume: bool = False) -> dict:
     """Process all new photos, reuse unchanged cached work, write per-run index."""
@@ -215,15 +297,26 @@ def prepare_statue_photo_cache(references: ReferenceSet, cache: Path, output: Pa
         raise ReferenceError("Invalid SAM2 checkpoint size")
     cache.mkdir(parents=True, exist_ok=True)
     sha = _digest(checkpoint) if foreground and checkpoint is not None else None
+    auxiliary_path, auxiliary_status = (_offline_isnet_model()
+                                        if foreground and background_proposer is None else
+                                        (None, "disabled"))
+    auxiliary_identity = (_digest(auxiliary_path) if auxiliary_path else None)
+    if background_proposer is not None:
+        auxiliary_identity = "injected-independent-proposer-v1"
+        auxiliary_status = "available / injected-proposer"
     if resume:
         prior = _read_entry(output / "photo-preprocess-report.json")
         if (not output.is_dir() or prior is None or
                 prior.get("source_manifest_sha256") != references.manifest_sha256 or
-                prior.get("foreground_model_sha256") != sha):
+                prior.get("foreground_model_sha256") != sha or
+                prior.get("auxiliary_model_sha256") != auxiliary_identity):
             raise ReferenceError("Cannot resume preprocessing with changed photos or model")
     else:
         output.mkdir(parents=True, exist_ok=False)
-    state: dict[str, Any] = {}
+    state: dict[str, Any] = {
+        "auxiliary_model_sha256": auxiliary_identity,
+        "background_proposer": background_proposer,
+    }
     report: dict[str, Any] = {"schema_version": 1, "asset_id": references.asset_id,
                               "status": "running", "cache_root": str(cache.resolve()),
                               "source_manifest_sha256": references.manifest_sha256,
@@ -231,6 +324,9 @@ def prepare_statue_photo_cache(references: ReferenceSet, cache: Path, output: Pa
                               "images": [], "normalized_hits": 0, "normalized_misses": 0,
                               "foreground_hits": 0, "foreground_misses": 0,
                               "qa_hits": 0, "qa_misses": 0,
+                              "auxiliary_model_status": auxiliary_status,
+                              "auxiliary_model_sha256": state["auxiliary_model_sha256"],
+                              "refinement_attempts": 0, "refinement_accepted": 0,
                               "background_removal": "SAM2 candidate previews; never used as original evidence"
                               if foreground else "disabled"}
 
@@ -250,17 +346,24 @@ def prepare_statue_photo_cache(references: ReferenceSet, cache: Path, output: Pa
                 normalized, cache, photo.sha256, sha, checkpoint, sam2_size, sam2_device,
                 predictor_loader or _load_sam2_predictor, state)
             report["foreground_hits" if mask_hit else "foreground_misses"] += 1
+            refinement = mask.get("refinement", {})
+            report["refinement_attempts"] += int(refinement.get("attempted", False))
+            report["refinement_accepted"] += int(refinement.get("accepted", False))
             entry.update(foreground_cache_hit=mask_hit, foreground_status=mask["status"],
                          foreground_fraction=mask["foreground_fraction"],
                          foreground_key=mask["key"],
                          foreground_mask_path=str(_folder(cache, photo.sha256) /
                                                   f"foreground-{mask['key']}.png"),
                          isolated_preview_path=str(_folder(cache, photo.sha256) /
-                                                  f"isolated-{mask['key']}.png"))
+                                                  f"isolated-{mask['key']}.png"),
+                         auxiliary_mask_path=mask.get("auxiliary_mask_path"),
+                         refinement=refinement)
         from .photo_early_qa import analyze_cached_photo
         qa, qa_hit = analyze_cached_photo(
             normalized, photo.sha256, cache,
             mask_path=Path(entry["foreground_mask_path"]) if foreground else None,
+            auxiliary_mask_path=Path(entry["auxiliary_mask_path"])
+            if foreground and entry.get("auxiliary_mask_path") else None,
             model_sha=sha, mask_details=mask.get("details") if foreground else None)
         report["qa_hits" if qa_hit else "qa_misses"] += 1
         entry.update(qa_cache_hit=qa_hit, qa_key=qa["key"],

@@ -230,6 +230,13 @@ private `<asset-output-parent>/_statue_photo_cache/` directory (override with
   approved geometry masks and **are never substituted for original photographic
   evidence during SfM**. The camera-derived rectified masks are generated and
   verified separately downstream.
+- When a locally installed, SHA-verified IS-Net checkpoint and the optional
+  `rembg` library are available, a separate `auxiliary-foreground-*.png`
+  proposal is created on the **original RGB image**. Peripheral disagreements
+  can supply additional SAM2 negative clicks; a refinement is accepted only
+  when it preserves subject pixels on which both models agreed. Missing or
+  invalid IS-Net weights trigger a recorded SAM2-only fallback, never a model
+  download. No model votes create new photogrammetric geometry.
 - `normalized.json` / `foreground-*.json` integrity receipts and a per-run
   `photo-preprocess/photo-preprocess-report.json` index linking originals to
   cached pixels and recording cache hits/misses.
@@ -238,15 +245,27 @@ private `<asset-output-parent>/_statue_photo_cache/` directory (override with
   in the colorized `photo-preprocess/photo-qa-contact-sheet.jpg`. The actual
   monochrome maps store 255, 128 and 0 respectively. The report includes
   exposure, blur/detail, resolution, EXIF orientation, possible near duplicates,
-  mask boundary and blue-background warnings. A suspect mask marks **all
-  pixels uncertain**, including potentially removed facial or body anatomy.
+  mask boundary, blue-background warnings and independent-model disagreement.
+  When both proposals are usable, disagreement pixels stay **uncertain**;
+  invalid foreground masks make all pixels uncertain so useful anatomy is not
+  silently discarded.
 
 The source QA contact sheet is generated **before feature extraction** and
 does not replace the later rectified multi-view mask audit. Visual inspection
 is still required to confirm that the mask did not remove a cheek, nose, paw,
 tail, damaged stone or another distinctive part. Source-photo QA is advisory:
 low resolution and poor lighting do not automatically delete photographs.
-The run report includes `qa_hits`, `qa_misses` and `qa_warning_count`.
+The contact sheet now shows **original / binary SAM2 candidate / confidence
+overlay** separately. For closer inspection, find each 1536-pixel-wide
+triptych at `photo-preprocess/photo-qa-details/photo-XXXX.jpg`.
+The run report includes `qa_hits`, `qa_misses`, `qa_warning_count`,
+`auxiliary_model_status`, `refinement_attempts`, and `refinement_accepted`.
+
+On a machine with a previously downloaded, verified IS-Net model, install the
+optional library with `pip install -e '.[mask-ai]'` to enable offline
+model-consensus refinement. The normal SAM2-only path remains supported when
+this extra is absent. The project checks the weight hash *before* creating a
+rembg session and does not download model weights implicitly.
 
 With `build-statue-glb`, LightGlue reads these hash-verified confidence maps:
 it reserves most feature capacity for likely statue surfaces while keeping a
@@ -268,7 +287,8 @@ optional PyTorch CPU worker uses the same original feature indices. It still
 requires the LightGlue Python dependency and can be substantially slower.
 
 The cache uses **original image SHA-256, normalization version, checkpoint
-SHA-256 and SAM2 settings**, not filenames or ordinal `photo-XXXX` identifiers.
+SHA-256, SAM2 settings, refinement version and independently verified IS-Net
+weight identity (or absence)**, not filenames or ordinal `photo-XXXX` identifiers.
 When a new photo is added, only the new photo incurs normalization and SAM2
 preprocessing; unchanged images are verified and reused, even when adding a
 file shifts their staged names. Editing a photo or changing the SAM2 model
@@ -307,6 +327,12 @@ missing; rebuild a fresh revision if you want to test the new matching path.
 The independent 3-camera/119-point Great Sphinx result has **not** been shown
 to satisfy these new correspondence, reprojection or coverage gates. A passing
 synthetic unit test is not a validation of the actual Sphinx photographs.
+
+Every rejected disconnected-model alignment now records an `evidence_audit`:
+the number of cross-group verified image pairs, 2D observations, features with
+only one model's 3D track, features with *both* 3D tracks, ambiguous points,
+and subject-verified correspondences. This identifies why visually similar
+elevated photos cannot be aligned without weakening geometric validation.
 
 For a blocked reconstruction **that already has a subject QA index**, use
 `--resume` to retry camera recovery without repeating completed matching.
