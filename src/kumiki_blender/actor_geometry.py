@@ -90,12 +90,19 @@ class HeightMesh:
     faces: np.ndarray     # (m, 4) vertex indices
 
 
-def heightfield_mesh(height: np.ndarray, step: int) -> HeightMesh:
-    """Two grids that meet at the silhouette, without cells fully outside it."""
+def heightfield_mesh(height: np.ndarray, step: int, footprint: np.ndarray | None = None) -> HeightMesh:
+    """Two grids that meet at the silhouette, without cells fully outside it.
+
+    `footprint` widens the kept cells beyond the dome, flat at height 0, so other
+    drawings of the part have geometry under them without changing the dome.
+    """
     rows, columns = height.shape
     y, x = np.mgrid[:rows, :columns]
     index = np.arange(rows * columns).reshape(rows, columns)
-    corners = height[:-1, :-1] + height[:-1, 1:] + height[1:, :-1] + height[1:, 1:]
+    if footprint is not None and footprint.shape != height.shape:
+        raise ValueError("footprint must match the height field")
+    cover = height if footprint is None else np.maximum(height, footprint.astype(height.dtype))
+    corners = cover[:-1, :-1] + cover[:-1, 1:] + cover[1:, :-1] + cover[1:, 1:]
     keep = corners > 0
     a, b = index[:-1, :-1][keep], index[:-1, 1:][keep]
     c, d = index[1:, 1:][keep], index[1:, :-1][keep]

@@ -74,6 +74,17 @@ class Mesh(unittest.TestCase):
         self.assertLess(len(mesh.faces), total)
         self.assertGreater(len(mesh.faces), 100)
 
+    def test_footprint_adds_flat_cells_without_raising_the_dome(self):
+        height = inflate_mask(disc())
+        wide = np.ones_like(height, dtype=bool)
+        alone = heightfield_mesh(height, step=4)
+        widened = heightfield_mesh(height, step=4, footprint=wide)
+        self.assertGreater(len(widened.faces), len(alone.faces))
+        self.assertEqual(float(widened.heights.max()), float(alone.heights.max()))
+        self.assertEqual(float(widened.heights[0]), 0.0)
+        with self.assertRaisesRegex(ValueError, "footprint"):
+            heightfield_mesh(height, step=4, footprint=np.ones((3, 3), bool))
+
     def test_front_and_back_share_the_rim_plane(self):
         height = inflate_mask(disc())
         mesh = heightfield_mesh(height, step=4)

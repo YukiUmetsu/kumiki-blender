@@ -112,10 +112,12 @@ def _part_material(bpy: Any, name: str, variants: list[tuple[str, Any]], roughne
 
 def _part_mesh(bpy: Any, plan: ActorPlan, name: str, material: Any, mask: np.ndarray, *,
                logical: tuple[float, float], scale: float, layer: float, inflate: float,
-               back: float) -> tuple[Any, np.ndarray]:
+               back: float, footprint: np.ndarray | None = None) -> tuple[Any, np.ndarray]:
     step = plan.grid_step
+    # The dome comes from the main drawing alone. Other drawings only widen the flat footprint,
+    # so a rare big-tufted face cannot swell the head every other face sits on.
     height = inflate_mask(_downsample(mask, step))
-    mesh = heightfield_mesh(height, step)
+    mesh = heightfield_mesh(height, step, None if footprint is None else _downsample(footprint, step))
     art_height, art_width = mask.shape
     sx, sy = logical[0] / art_width, logical[1] / art_height
     design = mesh.pixels * (sx, sy)
@@ -263,15 +265,15 @@ def build_actor(bpy: Any, plan: ActorPlan) -> ActorRig:
             union, _ = variant_union(masks)
         except ValueError as error:
             raise ActorPlanError(f"Part {part.id}: {error}") from error
-        reference = next(key for key, mask in masks.items() if mask.any())
+        reference = part.asset if masks[part.asset].any() else next(key for key, mask in masks.items() if mask.any())
         logical = _logical_size(plan, reference, images[reference])
         inflate = stage.inflate if stage and stage.inflate is not None else plan.height_m * .05
         # Profiles use real metres. Part empties scale depth, so divide that back out.
         parent_depth = depth_scale(part)
         name = f"{plan.actor_id}-{part.id}"
         material, weights = _part_material(bpy, name, drawings, plan.roughness)
-        obj, design = _part_mesh(bpy, plan, name, material, union, logical=logical, scale=scale, layer=layer / parent_depth,
-                                 inflate=inflate / parent_depth, back=back)
+        obj, design = _part_mesh(bpy, plan, name, material, masks[reference], logical=logical, scale=scale, layer=layer / parent_depth,
+                                 inflate=inflate / parent_depth, back=back, footprint=union)
         obj.parent = rig.empties[part.id]
         rig.meshes[part.id] = obj
         rig.weights[part.id] = weights
