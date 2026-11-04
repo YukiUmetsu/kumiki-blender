@@ -35,9 +35,12 @@ class CohortRecoverySettings:
     max_seconds_per_trial: int = 1200
     merge_max_reproj_error: float = 4.0
     min_seed_ray_angle_degrees: float = 1.0
+    seed_strategy: str = "confidence"
 
     def validate(self) -> None:
-        if (self.min_pair_inliers < 15 or not 3 <= self.max_anchors <= 100 or
+        if (self.min_pair_inliers < 10 or
+                self.seed_strategy not in ("confidence", "anchor-first") or
+                not 3 <= self.max_anchors <= 100 or
                 not 1 <= self.max_trials <= 50 or
                 not 3 <= self.min_shared_cameras <= self.max_anchors or
                 not 1 <= self.min_new_cameras <= 100 or
@@ -283,7 +286,16 @@ def plan_cohort_recovery(revision: Path, *, model: int = 0,
         not edge["quality"].get("approximate_distortion", False) and
         edge["quality"]["median_ray_angle_degrees"] < settings.min_seed_ray_angle_degrees)]
     seed_pairs = [edge for edge in seed_pairs if edge not in unsuitable]
-    seed_pairs.sort(key=lambda edge: (-edge["seed_score"], -edge["inliers"], edge["a"], edge["b"]))
+    # A strong missing/missing pair may reconstruct a beautiful, completely
+    # disconnected model. During alignment retries, first initialize from a
+    # verified registered/missing pair so original camera anchors have a chance
+    # to join the cohort. Geometry/parallax checks stay unchanged.
+    def seed_rank(edge: dict) -> tuple:
+        anchored = ((edge["a"] in registered) != (edge["b"] in registered))
+        return ((0 if anchored else 1) if settings.seed_strategy == "anchor-first" else 0,
+                -edge["seed_score"], -edge["inliers"], edge["a"], edge["b"])
+
+    seed_pairs.sort(key=seed_rank)
     # Diverse seeds avoid spending all trial time on near-duplicate screenshots.
     diverse = []
     seen = set()

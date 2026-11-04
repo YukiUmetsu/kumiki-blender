@@ -47,7 +47,7 @@ class StatuePipelineTests(unittest.TestCase):
 
     def runner(self, *, mask_bad=False, coverage_bad=False,
                recovery_works=False, recovery_rejected=False,
-               recovery_followup=False):
+               recovery_followup=False, recovery_followup_rejected=False):
         calls = []
 
         def run(argv, log, _environment):
@@ -76,26 +76,31 @@ class StatuePipelineTests(unittest.TestCase):
                 if coverage_bad:
                     info["images"] = info["images"][:2]
                 (folder / "photo-advice.json").write_text(json.dumps(info))
-            elif stage in ("camera_recovery", "camera_recovery_followup"):
+            elif stage in ("camera_recovery", "camera_recovery_followup", "camera_recovery_confidence"):
                 followup = stage == "camera_recovery_followup"
-                folder = self.output / ("camera-recovery-followup" if followup else "camera-recovery")
+                confidence = stage == "camera_recovery_confidence"
+                folder = self.output / ("camera-recovery-confidence" if confidence else
+                                        "camera-recovery-followup" if followup else "camera-recovery")
                 folder.mkdir()
+                rejected = recovery_rejected or (followup and recovery_followup_rejected)
                 (folder / "camera-recovery-report.json").write_text(json.dumps({
-                    "status": ("no-verified-camera-recovery" if recovery_rejected else
+                    "status": ("no-verified-camera-recovery" if rejected else
                                "candidate / verified-real-photo-cameras"),
-                    "candidate_accepted": not recovery_rejected,
-                    "new_cameras": 0 if recovery_rejected else 1}))
+                    "candidate_accepted": not rejected,
+                    "new_cameras": 0 if rejected else 1}))
                 (folder / "reconstruction-report.json").write_text(json.dumps({
-                    "status": "candidate / visual-review-required", "registered_images": 9 if followup else 8,
+                    "status": "candidate / visual-review-required", "registered_images": 9 if (followup or confidence) else 8,
                     "staged_independent_images": 10 if recovery_followup else 8,
-                    "undistorted_images": 9 if followup else 8,
+                    "undistorted_images": 9 if (followup or confidence) else 8,
                     "unregistered_filenames": ["photo-0009.png"] if recovery_followup else []}))
-            elif stage in ("recovery_coverage", "recovery_coverage_followup"):
+            elif stage in ("recovery_coverage", "recovery_coverage_followup", "recovery_coverage_confidence"):
                 followup = stage == "recovery_coverage_followup"
-                folder = self.output / ("recovered-coverage-followup" if followup else "recovered-coverage")
+                confidence = stage == "recovery_coverage_confidence"
+                folder = self.output / ("recovered-coverage-confidence" if confidence else
+                                        "recovered-coverage-followup" if followup else "recovered-coverage")
                 folder.mkdir()
                 info = self.coverage()
-                if recovery_followup and not followup:
+                if recovery_followup and not (followup or confidence):
                     info["images"] = info["images"][:2]
                 (folder / "photo-advice.json").write_text(json.dumps(info))
             elif stage == "masks":
@@ -201,6 +206,20 @@ class StatuePipelineTests(unittest.TestCase):
         self.assertIn("recovery_coverage_followup", calls)
         self.assertTrue(report["active_camera_revision"].endswith("camera-recovery-followup"))
         self.assertTrue(report["status"].startswith("private-GLB-candidate"))
+
+    def test_resume_old_failed_cohort_uses_confidence_recovery_without_rematching_photos(self):
+        run, calls = self.runner(coverage_bad=True, recovery_followup=True,
+                                 recovery_followup_rejected=True)
+        stopped = self.build(run)
+        self.assertEqual(stopped["status"], "blocked / missing-photo-coverage")
+        self.assertIn("camera_recovery_followup", calls)
+        updated_run, updated_calls = self.runner(coverage_bad=True, recovery_followup=True)
+        result = self.build(updated_run, resume=True)
+        self.assertEqual(updated_calls[:2], ["camera_recovery_confidence", "recovery_coverage_confidence"])
+        self.assertTrue(result["active_camera_revision"].endswith("camera-recovery-confidence"))
+        self.assertEqual(result["camera_recovery_new_cameras"], 2)
+        self.assertNotIn("cameras", updated_calls)
+        self.assertNotIn("photo_preprocess", updated_calls)
 
     def test_rejected_ai_pose_never_bypasses_elevation_gate(self):
         run, calls = self.runner(coverage_bad=True, recovery_rejected=True)

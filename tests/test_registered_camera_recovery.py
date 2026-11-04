@@ -98,7 +98,7 @@ class RecoveryTests(unittest.TestCase):
             with patch("kumiki_blender.reconstruction.registered_camera_recovery.shutil.which",
                        return_value="/usr/bin/colmap"), \
                  patch("kumiki_blender.reconstruction.sfm_cohort_recovery.recover_cohort",
-                       side_effect=ValueError("no real matching tracks")), \
+                       side_effect=ValueError("no real matching tracks")) as cohort_attempt, \
                  patch("kumiki_blender.reconstruction.learned_camera_hypotheses.build_learned_camera_hypotheses",
                        return_value={"status": "unavailable / install-mapanything-extra"}):
                 result = recover_registered_cameras(
@@ -109,6 +109,12 @@ class RecoveryTests(unittest.TestCase):
             self.assertIn("image-registrator-produced-no-model",
                           result["initial_validation"]["reasons"])
             self.assertFalse((target / "reconstruction-report.json").exists())
+            self.assertEqual([call.kwargs["settings"].min_pair_inliers
+                              for call in cohort_attempt.call_args_list], [25, 18, 12, 10])
+            self.assertTrue(all(call.kwargs["settings"].seed_strategy == "anchor-first"
+                                for call in cohort_attempt.call_args_list))
+            self.assertEqual(len(result["cohort_attempts"]), 4)
+            self.assertEqual(result["remaining_elevated_filename_hints"], [])
 
     def test_existing_pnp_success_does_not_skip_missing_elevated_cohort(self):
         with tempfile.TemporaryDirectory() as temporary:

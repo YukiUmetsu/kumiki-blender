@@ -97,8 +97,14 @@ under `<output>/camera-recovery/`:
    COLMAP triangulates new **real 3D tracks** and retries registration (at most
    two more rounds). The first successful registration does not stop the search.
 3. Isolated, targeted COLMAP cohorts are attempted for still-missing elevated
-   source photos, using verified feature pairs and bounded reconstruction
-   trials, with similarity-alignment, model-merging, and camera-drift checks.
+   source photos, prioritizing **registered-to-missing** verified pair seeds.
+   The recovery tries existing geometrically verified pairs in descending
+   confidence tiers (25, 18, 12, then 10 inliers), each with a separate
+   immutable output and a bounded time budget. These lower counts affect
+   seed selection only: they **do not** relax 3D-track, shared-camera,
+   similarity-alignment, model-merging, or camera-drift acceptance checks.
+   Inspect `camera-recovery-report.json` → `cohort_attempts` for attempted
+   thresholds, reasons and trial outcomes.
 4. If those geometric attempts fail to recover the elevated candidates, an installed MapAnything model can
    estimate camera/depth hypotheses on an **8-photo MPS batch** emphasizing
    missing elevated views. These hypotheses are kept as private diagnostics;
@@ -112,6 +118,10 @@ under `<output>/camera-recovery/`:
 This can recover photographs that had enough visual overlap but no original
 camera pose. It cannot guarantee recovery from non-overlapping images and it
 never silently substitutes AI-generated intermediate images for real evidence.
+An older blocked `--resume` revision with an unsuccessful second recovery
+automatically adds a `camera-recovery-confidence/` attempt using the new pair
+tiers, without rerunning the original camera matching or overwriting the old
+cohort diagnostics.
 MapAnything is optional (`pip install -e '.[mapanything]'`); the COLMAP recovery
 strategies run without it. It uses Apple MPS and a bounded group rather than
 all 57 photos in one neural forward pass. Initial model weights may still need

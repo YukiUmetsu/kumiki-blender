@@ -140,6 +140,32 @@ class CohortRecoveryTests(unittest.TestCase):
             self.assertNotIn("w.png", proposal["registered_seed_filenames"])
             self.assertEqual(proposal["source_image_ids"]["u.png"], 5)
 
+    def test_weak_verified_cross_group_pair_is_seeded_after_confident_pairs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            revision = fixture(Path(tmp))
+            database = revision / "sparse-reconstruction/database.db"
+            with sqlite3.connect(database) as db:
+                # Only 12 geometrically verified correspondences connect the
+                # main registered group to w; strong u/v support remains.
+                db.execute("INSERT INTO two_view_geometries VALUES (?,?,?)",
+                           (1 * sfm.MAX_IMAGE_ID + 7, 12, 2))
+                db.execute("UPDATE two_view_geometries SET rows=400 WHERE pair_id=?",
+                           (5 * sfm.MAX_IMAGE_ID + 6,))
+            strict = sfm.plan_cohort_recovery(revision)
+            self.assertFalse(any({edge["a"], edge["b"]} == {"a.png", "w.png"}
+                                 for edge in strict["seed_pairs"]))
+            settings = sfm.CohortRecoverySettings(min_pair_inliers=12,
+                                                   seed_strategy="anchor-first")
+            relaxed = sfm.plan_cohort_recovery(revision, settings=settings)
+            self.assertTrue(any({edge["a"], edge["b"]} == {"a.png", "w.png"}
+                                for edge in relaxed["seed_pairs"]))
+            self.assertTrue(all({edge["a"], edge["b"]} & set(relaxed["anchor_filenames"])
+                                for edge in relaxed["seed_pairs"][:3]))
+            # Low seed count cannot override the downstream geometry QA.
+            self.assertEqual(settings.min_shared_cameras, sfm.CohortRecoverySettings().min_shared_cameras)
+            self.assertEqual(settings.max_camera_residual_ratio,
+                             sfm.CohortRecoverySettings().max_camera_residual_ratio)
+
     def test_arbitrary_target_manifest_names_and_preferred_anchor_validation(self):
         with tempfile.TemporaryDirectory() as tmp:
             revision = fixture(Path(tmp))

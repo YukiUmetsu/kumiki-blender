@@ -504,12 +504,26 @@ def build_statue_glb(
         candidate_source = sparse
         initial_registered = registered
         recovery_rounds = []
-        for round_number in range(1, 3):
-            stage = "camera_recovery" if round_number == 1 else "camera_recovery_followup"
-            coverage_stage = "recovery_coverage" if round_number == 1 else "recovery_coverage_followup"
-            recovery = target / ("camera-recovery" if round_number == 1 else "camera-recovery-followup")
+        # Previously blocked revisions can try the new confidence-ranked
+        # cross-group matcher without replacing immutable prior results or
+        # repeating the (potentially hours-long) original camera solve.
+        old_followup = target / "camera-recovery-followup/camera-recovery-report.json"
+        retry_old_followup = (resume and "camera_recovery_followup" in report["completed_stages"]
+                              and old_followup.is_file() and not old_followup.is_symlink()
+                              and "cohort_attempts" not in _read_report(old_followup))
+        for round_number in range(1, 4 if retry_old_followup else 3):
+            stage = ("camera_recovery" if round_number == 1 else
+                     "camera_recovery_followup" if round_number == 2 else
+                     "camera_recovery_confidence")
+            coverage_stage = ("recovery_coverage" if round_number == 1 else
+                              "recovery_coverage_followup" if round_number == 2 else
+                              "recovery_coverage_confidence")
+            recovery = target / ("camera-recovery" if round_number == 1 else
+                                 "camera-recovery-followup" if round_number == 2 else
+                                 "camera-recovery-confidence")
             new_coverage_dir = target / ("recovered-coverage" if round_number == 1 else
-                                         "recovered-coverage-followup")
+                                         "recovered-coverage-followup" if round_number == 2 else
+                                         "recovered-coverage-confidence")
             recovered = run_stage(stage, executable + [
                 "recover-registered-cameras", "--reconstruction", str(candidate_source),
                 "--output", str(recovery), "--timeout-seconds", str(settings.timeout_seconds)],
@@ -522,6 +536,10 @@ def build_statue_glb(
                                     "new_cameras": recovered.get("new_cameras", 0)})
             report["camera_recovery_rounds"] = recovery_rounds
             if recovered.get("candidate_accepted") is not True:
+                if retry_old_followup and round_number == 2:
+                    # The old second attempt is a recorded failure, not a
+                    # reason to lose the valid candidate from round one.
+                    continue
                 break
             recovered_camera = _read_report(recovery / "reconstruction-report.json")
             candidate_registered = recovered_camera.get("registered_images", 0)

@@ -323,24 +323,58 @@ def recover_registered_cameras(
             break
 
     # A successful but non-elevated PnP pass must *not* terminate recovery.
-    # Target missing overhead views explicitly and also try the remaining real
-    # photos when no filename hints are available.
+    # Start with strongly verified cross-group pairs, then admit progressively
+    # weaker *already geometrically verified* two-view matches. This threshold
+    # affects candidate SEED SELECTION only. It never reduces the 3D-track,
+    # baseline-pose, or common-camera alignment acceptance thresholds.
+    # Every tier has an isolated revision and an auditable receipt.
     if best is None or remaining_targets():
-        try:
-            from .sfm_cohort_recovery import CohortRecoverySettings, recover_cohort
-            targets = remaining_elevated() or remaining_targets()
-            alternate = recover_cohort(
-                source, target / "cohorts", model=int(best_model_name), targets=targets,
-                settings=CohortRecoverySettings(
-                    max_trials=4, min_new_cameras=1,
-                    max_seconds_per_trial=min(timeout_seconds, 1200)))
-            report["cohort_status"] = alternate.get("status")
-            report["cohort_report"] = "cohorts/cohort-recovery-report.json"
-            if alternate.get("status") == "candidate / needs-object-and-camera-visual-review":
-                try_promote(target / "cohorts/merged-candidate", "cohort")
-        except (ValueError, OSError, RuntimeError, ImportError, TypeError) as error:
-            report["cohort_error"] = f"{type(error).__name__}: {error}"[:250]
-        save()
+        from .sfm_cohort_recovery import CohortRecoverySettings, recover_cohort
+        report["cohort_attempts"] = []
+        for minimum_inliers in (25, 18, 12, 10):
+            if best is not None and not remaining_targets():
+                break
+            cohort_dir = target / f"cohorts-inliers-{minimum_inliers:02d}"
+            label = f"cohort_inliers_{minimum_inliers}"
+            attempt: dict[str, Any] = {
+                "min_pair_inliers": minimum_inliers,
+                "seed_strategy": "anchor-first",
+                "status": "running", "report": str(cohort_dir.relative_to(target) /
+                                                   "cohort-recovery-report.json")}
+            report["cohort_attempts"].append(attempt)
+            save()
+            try:
+                alternate = recover_cohort(
+                    source, cohort_dir, model=int(best_model_name),
+                    targets=remaining_elevated() or remaining_targets(),
+                    settings=CohortRecoverySettings(
+                        min_pair_inliers=minimum_inliers, seed_strategy="anchor-first",
+                        max_trials=4 if minimum_inliers == 25 else 3,
+                        min_new_cameras=1,
+                        max_seconds_per_trial=max(30, min(600, timeout_seconds // 26))))
+                attempt["status"] = alternate.get("status", "unknown")
+                attempt["trials"] = len(alternate.get("trials", []))
+                anchors = set(alternate.get("anchor_filenames", []))
+                attempt["available_registered_anchors"] = len(anchors)
+                attempt["verified_cross_group_seed_pairs"] = sum(
+                    (edge.get("a") in anchors) != (edge.get("b") in anchors)
+                    for edge in alternate.get("seed_pairs", []))
+                attempt["alignment_reasons"] = sorted({
+                    reason for trial in alternate.get("trials", [])
+                    for model in trial.get("models", [])
+                    for reason in model.get("alignment", {}).get("reasons", [])})
+                report["cohort_status"] = attempt["status"]
+                report["cohort_report"] = attempt["report"]
+                if attempt["status"] == "candidate / needs-object-and-camera-visual-review":
+                    attempt["promoted"] = try_promote(
+                        cohort_dir / "merged-candidate", label)
+                    if attempt["promoted"] and not remaining_elevated():
+                        break
+            except (ValueError, OSError, RuntimeError, ImportError, TypeError) as error:
+                attempt["status"] = "failed"
+                attempt["error"] = f"{type(error).__name__}: {error}"[:250]
+                report["cohort_error"] = attempt["error"]
+            save()
 
     if best is None or remaining_targets():
         learned: dict[str, Any] = {}
@@ -376,6 +410,8 @@ def recover_registered_cameras(
                 report["learned_guided_cohort_error"] = str(error)[:250]
         save()
     if best is None:
+        report["remaining_elevated_filename_hints"] = sorted(elevated_targets - original_names)
+        report["remaining_unregistered_photo_targets"] = remaining_targets()
         return fail("no-geometrically-validated-new-cameras")
     report["remaining_elevated_filename_hints"] = remaining_elevated()
     report["remaining_unregistered_photo_targets"] = remaining_targets()
