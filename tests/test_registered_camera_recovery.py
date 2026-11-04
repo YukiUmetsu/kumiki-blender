@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 from kumiki_blender.reconstruction.registered_camera_recovery import (
     prioritize_missing_camera_views, recover_registered_cameras, validate_camera_recovery,
+    copy_subject_qa_provenance,
 )
 from kumiki_blender.reconstruction.learned_camera_hypotheses import (
     align_learned_camera_hypotheses, select_learned_views,
@@ -39,6 +40,24 @@ class FakeModel:
 
 
 class RecoveryTests(unittest.TestCase):
+    def test_recovered_revision_keeps_original_subject_confidence_provenance(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source, target = root / "source", root / "target"
+            source.mkdir()
+            target.mkdir()
+            raster = root / "subject.png"
+            raster.write_bytes(b"bytes")
+            record = {"schema": "subject-feature-index-v1", "images": {
+                "photo.png": {"confidence_path": str(raster),
+                              "confidence_sha256": hashlib.sha256(b"bytes").hexdigest()}}}
+            (source / "subject-feature-index.json").write_text(json.dumps(record))
+            self.assertIsNotNone(copy_subject_qa_provenance(source, target))
+            self.assertEqual((source / "subject-feature-index.json").read_bytes(),
+                             (target / "subject-feature-index.json").read_bytes())
+            raster.write_bytes(b"altered")
+            with self.assertRaisesRegex(ValueError, "hash mismatch"):
+                copy_subject_qa_provenance(source, target)
     def setUp(self):
         self.original = [("a", (0, 0, 0), 50), ("b", (1, 0, 0), 50),
                          ("c", (0, 1, 0), 50), ("d", (1, 1, 0), 50)]

@@ -32,6 +32,30 @@ def _sha(path: Path) -> str:
         return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
+def copy_subject_qa_provenance(source: Path, target: Path) -> str | None:
+    """Carry original per-pixel evidence into independent recovered revisions."""
+    path = source / "subject-feature-index.json"
+    if not path.exists() and not path.is_symlink():
+        return None  # Older camera revisions legitimately have no early QA.
+    if path.is_symlink() or not path.is_file():
+        raise ValueError("Unsafe subject QA index")
+    index = json.loads(path.read_text(encoding="utf-8"))
+    if (index.get("schema") != "subject-feature-index-v1" or
+            not isinstance(index.get("images"), dict)):
+        raise ValueError("Invalid original subject QA index")
+    for entry in index["images"].values():
+        raster = Path(entry["confidence_path"])
+        if (raster.is_symlink() or not raster.is_file() or
+                _sha(raster) != entry.get("confidence_sha256")):
+            raise ValueError("Subject QA raster hash mismatch")
+    destination = target / path.name
+    if destination.is_symlink() or (destination.exists() and _sha(destination) != _sha(path)):
+        raise ValueError("Existing subject QA evidence is incompatible")
+    if not destination.exists():
+        shutil.copyfile(path, destination)
+    return _sha(destination)
+
+
 def _registered(model) -> dict[str, tuple[int, Any]]:
     return {model.images[image_id].name: (image_id, model.images[image_id])
             for image_id in model.reg_image_ids()}
@@ -447,6 +471,7 @@ def recover_registered_cameras(
         originals[name] = entry
     shutil.copyfile(source / "staged-reference-index.json", target / "staged-reference-index.json")
     shutil.copyfile(database, target / "database.db")
+    report["subject_qa_index_sha256"] = copy_subject_qa_provenance(source, target)
 
     saved_model = target / "sparse" / "0"
     saved_model.mkdir(parents=True)

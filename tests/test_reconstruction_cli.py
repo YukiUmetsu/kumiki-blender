@@ -75,6 +75,19 @@ class ReconstructionCLITests(unittest.TestCase):
         self.assertIn("reference", errors.getvalue().lower())
         self.assertFalse(destination.exists())
 
+    def test_photo_preparation_prints_per_photo_qa_progress(self):
+        for index in range(8):
+            Image.new("RGB", (120, 90), (20 + index, 80, 40)).save(
+                self.root / "photos" / f"extra-{index}.png")
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = main(["prepare-statue-photos", "--photos", str(self.root / "photos"),
+                         "--asset-id", "monument-test", "--output", str(self.root / "prepared"),
+                         "--cache-dir", str(self.root / "cache"), "--no-foreground"])
+        self.assertEqual(code, 0)
+        self.assertIn("Photo QA 1/", err.getvalue())
+        self.assertIn("photo-qa-contact-sheet.jpg", out.getvalue())
+
 
 if __name__ == "__main__":
     unittest.main()

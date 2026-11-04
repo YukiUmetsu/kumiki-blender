@@ -132,6 +132,23 @@ class PhotoPreprocessCacheTests(unittest.TestCase):
         self.assertFalse(hit)
         self.assertNotEqual(changed["key"], receipt["key"])
 
+    def test_missing_anatomy_prompt_invalidates_mask_confidence(self):
+        from kumiki_blender.reconstruction.photo_preprocess_cache import normalize_cached_photo
+        image = load_photo_folder(self.photos, "great-sphinx").images[0]
+        normalized, normalization, _ = normalize_cached_photo(image, self.cache)
+        candidate = self.root / "partial.png"
+        mask = Image.new("L", normalization["dimensions"], 0)
+        from PIL import ImageDraw
+        ImageDraw.Draw(mask).rectangle((15, 15, 75, 65), fill=255)
+        mask.save(candidate)
+        bad, _ = analyze_cached_photo(normalized, image.sha256, self.cache,
+                                      mask_path=candidate, model_sha="sam2-test",
+                                      mask_details={"missing_parts": ["tail"]})
+        self.assertIn("candidate-missing-part:tail", bad["warnings"])
+        with Image.open(bad["confidence_path"]) as confidence:
+            self.assertEqual(set(np.asarray(confidence).flat), {128})
+        self.assertEqual(normalization["exif_orientation_applied"], 1)
+
     def test_early_qa_cache_survives_new_photo_and_creates_contact_sheet(self):
         first = self.build(1)
         self.assertEqual((first["qa_hits"], first["qa_misses"]), (0, 8))

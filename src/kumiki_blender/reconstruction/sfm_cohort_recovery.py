@@ -482,6 +482,55 @@ def assess_alignment(baseline, cohort, settings: CohortRecoverySettings,
     return result
 
 
+def assess_disconnected_alignment(baseline, cohort, database: Path, qa_index: Path | None,
+                                  settings: CohortRecoverySettings) -> dict:
+    """Use verified 3D point identities where no common registered camera exists."""
+    import numpy as np
+    from .sfm_point_alignment import (estimate_point_alignment,
+                                      extract_verified_3d_matches, validate_cross_reprojection)
+
+    first, second = _registered_images(baseline), _registered_images(cohort)
+    gained = sorted(set(second) - set(first))
+    result = {"method": "verified-3d-points", "accepted": False,
+              "shared_cameras": 0, "shared_filenames": [],
+              "new_cameras": len(gained), "new_filenames": gained, "reasons": []}
+    if set(first) & set(second):
+        result["reasons"].append("point-alignment-requires-no-common-registered-cameras")
+    if len(gained) < settings.min_new_cameras:
+        result["reasons"].append("insufficient-new-cameras")
+    if qa_index is None:
+        result["reasons"].append("subject-confidence-unavailable")
+    if result["reasons"]:
+        return result
+    try:
+        correspondences = extract_verified_3d_matches(database, baseline, cohort, qa_index=qa_index)
+        first_points = [np.asarray(item.xyz).reshape(3) for item in baseline.points3D.values()]
+        other_points = [np.asarray(item.xyz).reshape(3) for item in cohort.points3D.values()]
+        fit = estimate_point_alignment(correspondences,
+                                       baseline_cloud=first_points, cohort_cloud=other_points)
+        result.update(fit)
+        if fit["accepted"]:
+            reproj = validate_cross_reprojection(correspondences, fit, baseline, cohort)
+            result["reprojection"] = reproj
+            if not reproj["accepted"]:
+                result["reasons"].append(reproj.get("reason") or "cross-model-reprojection-failed")
+        # Finite camera positions/orientations are required even when only
+        # point tracks generated the Sim(3); do not accept a degenerate pose.
+        if fit["accepted"]:
+            for name, (_, image) in second.items():
+                center = np.asarray(image.projection_center(), dtype=float).reshape(3)
+                forward = np.asarray(image.viewing_direction(), dtype=float).reshape(3)
+                if (not np.isfinite(center).all() or not np.isfinite(forward).all() or
+                        np.linalg.norm(forward) < 1e-9):
+                    result["reasons"].append("invalid-cohort-camera-pose")
+                    break
+    except (ValueError, KeyError, OSError, sqlite3.DatabaseError, TypeError,
+            np.linalg.LinAlgError) as error:
+        result["reasons"].append(f"invalid-cross-model-evidence: {error}")
+    result["accepted"] = not result["reasons"]
+    return result
+
+
 def _write_report(output: Path, report: dict) -> None:
     (output / "cohort-recovery-report.json").write_text(
         json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -532,7 +581,12 @@ def inspect_cohort_alignment(revision: Path, candidate_model: Path, *, model: in
         import pycolmap as pycolmap_module
     baseline = pycolmap_module.Reconstruction(paths["model"])
     alternate = pycolmap_module.Reconstruction(candidate_model)
-    qa = assess_alignment(baseline, alternate, settings, landmarks)
+    qa = (assess_disconnected_alignment(
+        baseline, alternate, paths["database"],
+        paths["sparse"] / "subject-feature-index.json"
+        if (paths["sparse"] / "subject-feature-index.json").is_file() else None, settings)
+        if not set(_registered_images(baseline)) & set(_registered_images(alternate)) else
+        assess_alignment(baseline, alternate, settings, landmarks))
     qa.update({"schema_version": 1, "baseline": str(paths["model"]),
                "candidate": str(candidate_model.resolve()),
                "landmark_manifest": str(landmarks_path) if landmarks_path else None,
@@ -611,7 +665,13 @@ def recover_cohort(revision: Path, output: Path, *, model: int = 0,
                     if any(planned["source_image_ids"][name] != image_id
                            for name, (image_id, _) in alternate.items()):
                         raise RuntimeError("Mapper used image IDs inconsistent with original database")
-                    alignment = assess_alignment(baseline, candidate, settings)
+                    alternate_common = set(alternate) & set(baseline_registered)
+                    alignment = (assess_alignment(baseline, candidate, settings)
+                                 if alternate_common else assess_disconnected_alignment(
+                                     baseline, candidate, paths["database"],
+                                     paths["sparse"] / "subject-feature-index.json"
+                                     if (paths["sparse"] / "subject-feature-index.json").is_file()
+                                     else None, settings))
                     gained_targets = sorted(set(alternate) & set(planned["missing_target_filenames"]))
                     alignment["new_target_filenames"] = gained_targets
                     alignment["new_target_cameras"] = len(gained_targets)
@@ -643,17 +703,34 @@ def recover_cohort(revision: Path, output: Path, *, model: int = 0,
         # Keep all unvalidated native output in a clearly non-promoted folder.
         merged_path = output / "merge-under-review"
         merged_path.mkdir()
-        command = [colmap, "model_merger", "--input_path1", str(paths["model"]),
-                   "--input_path2", str(candidate_path), "--output_path", str(merged_path),
-                   "--max_reproj_error", str(settings.merge_max_reproj_error)]
-        completed = merge_runner(command, capture_output=True, text=True,
-                                 timeout=settings.max_seconds_per_trial, check=False)
-        report["merge"] = {"from_trial": attempt, "alignment": alignment,
-                           "returncode": completed.returncode,
-                           "log_excerpt": (completed.stdout + "\n" + completed.stderr)[-2500:]}
-        if completed.returncode != 0:
-            report["status"] = "merge-rejected / colmap-geometric-check"
-            return report
+        if alignment.get("method") == "verified-3d-points":
+            from .sfm_point_alignment import fuse_disjoint_models
+            try:
+                independent = pycolmap_module.Reconstruction(candidate_path)
+                joined = fuse_disjoint_models(baseline, independent, alignment,
+                                              pycolmap_module=pycolmap_module)
+                joined.write(merged_path)
+                report["merge"] = {"from_trial": attempt, "alignment": alignment,
+                                   "method": "validated-disjoint-track-union", "returncode": 0,
+                                   "log_excerpt": "Aligned disjoint real camera tracks; points retain independent IDs."}
+            except (ValueError, RuntimeError, TypeError, OSError) as error:
+                report["merge"] = {"from_trial": attempt, "alignment": alignment,
+                                   "method": "validated-disjoint-track-union", "returncode": 2,
+                                   "error": f"{type(error).__name__}: {error}"[:300]}
+                report["status"] = "merge-rejected / disconnected-model-structure"
+                return report
+        else:
+            command = [colmap, "model_merger", "--input_path1", str(paths["model"]),
+                       "--input_path2", str(candidate_path), "--output_path", str(merged_path),
+                       "--max_reproj_error", str(settings.merge_max_reproj_error)]
+            completed = merge_runner(command, capture_output=True, text=True,
+                                     timeout=settings.max_seconds_per_trial, check=False)
+            report["merge"] = {"from_trial": attempt, "alignment": alignment,
+                               "returncode": completed.returncode,
+                               "log_excerpt": (completed.stdout + "\n" + completed.stderr)[-2500:]}
+            if completed.returncode != 0:
+                report["status"] = "merge-rejected / colmap-geometric-check"
+                return report
         merged = pycolmap_module.Reconstruction(merged_path)
         before = _registered_images(baseline)
         after = _registered_images(merged)

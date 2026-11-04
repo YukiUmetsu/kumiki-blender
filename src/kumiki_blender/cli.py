@@ -1261,6 +1261,9 @@ def main(argv: list[str] | None = None) -> int:
                     load_photo_folder(args.photos, args.asset_id), args.cache_dir, args.output,
                     checkpoint=args.sam2_checkpoint, sam2_size=args.sam2_size,
                     sam2_device=args.sam2_device, foreground=not args.no_foreground,
+                    progress=lambda count, total, hit: print(
+                        f"Photo QA {count}/{total}: normalized {'cache hit' if hit else 'processed'}",
+                        file=sys.stderr, flush=True),
                     resume=args.resume)
             except (ReferenceError, ValueError, OSError, ImportError) as error:
                 raise RecipeError(str(error)) from error

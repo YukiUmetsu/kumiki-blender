@@ -261,9 +261,10 @@ def prepare_statue_photo_cache(references: ReferenceSet, cache: Path, output: Pa
         qa, qa_hit = analyze_cached_photo(
             normalized, photo.sha256, cache,
             mask_path=Path(entry["foreground_mask_path"]) if foreground else None,
-            model_sha=sha)
+            model_sha=sha, mask_details=mask.get("details") if foreground else None)
         report["qa_hits" if qa_hit else "qa_misses"] += 1
         entry.update(qa_cache_hit=qa_hit, qa_key=qa["key"],
+                     exif_orientation_applied=receipt["exif_orientation_applied"],
                      qa_confidence_path=qa["confidence_path"],
                      qa_confidence_sha256=qa["confidence_sha256"],
                      qa_warnings=qa["warnings"], qa_status=qa["status"],

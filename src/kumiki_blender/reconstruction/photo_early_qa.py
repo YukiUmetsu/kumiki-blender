@@ -19,6 +19,7 @@ UNKNOWN, SUBJECT, BACKGROUND = 128, 255, 0
 
 def analyze_cached_photo(normalized: Path, source_sha: str, cache: Path, *,
                          mask_path: Path | None = None, model_sha: str | None = None,
+                         mask_details: dict | None = None,
                          minimum_side: int = 800) -> tuple[dict, bool]:
     """Return verified cached quality receipt and 0/128/255 confidence raster."""
     import numpy as np
@@ -33,8 +34,10 @@ def analyze_cached_photo(normalized: Path, source_sha: str, cache: Path, *,
         raise ReferenceError("QA mask is missing or a symlink")
     normalized_sha = _digest(normalized)
     mask_sha = _digest(mask_path) if mask_path is not None else None
+    details = mask_details or {}
     key = hashlib.sha256(json.dumps([QA_VERSION, normalized_sha, mask_sha,
-                                    model_sha, minimum_side]).encode()).hexdigest()
+                                    model_sha, minimum_side, details],
+                                   sort_keys=True).encode()).hexdigest()
     folder = _folder(cache, source_sha)
     folder.mkdir(parents=True, exist_ok=True)
     confidence_file = folder / f"qa-confidence-{key}.png"
@@ -78,6 +81,12 @@ def analyze_cached_photo(normalized: Path, source_sha: str, cache: Path, *,
         warnings.append("overexposed")
     if blur_score < 8:
         warnings.append("low-detail-or-blurred")
+    missing = details.get("missing_parts", [])
+    if isinstance(missing, list):
+        warnings.extend(f"candidate-missing-part:{part}" for part in missing
+                        if isinstance(part, str) and part)
+    if details.get("background_seed_violations", 0):
+        warnings.append("candidate-background-seed-violations")
 
     confidence = Image.new("L", rgb.size, UNKNOWN)
     fraction = None
@@ -108,7 +117,7 @@ def analyze_cached_photo(normalized: Path, source_sha: str, cache: Path, *,
             warnings.append("possible-blue-background-leakage")
         suspect = any(label in warnings for label in (
             "foreground-too-small", "foreground-too-large", "foreground-touches-frame",
-            "possible-blue-background-leakage"))
+            "possible-blue-background-leakage", "candidate-background-seed-violations")) or bool(missing)
         if not suspect:
             # Keep a broad uncertain band on both sides of the SAM2 boundary;
             # no feature is *removed* on the basis of segmentation alone.
@@ -127,7 +136,7 @@ def analyze_cached_photo(normalized: Path, source_sha: str, cache: Path, *,
                "foreground_fraction": round(fraction, 6) if fraction is not None else None,
                "brightness": round(brightness, 2), "blur_score": round(blur_score, 2),
                "average_hash": ahash, "warnings": warnings,
-               "status": "suspect / mask-uncertain" if any(x.startswith("foreground-") or
+               "status": "suspect / mask-uncertain" if any(x.startswith(("foreground-", "candidate-")) or
                            "leakage" in x for x in warnings) else "candidate / review-required",
                "interpretation": "Uncertain pixels retain real features. No verified anatomical labels."}
     _atomic_json(receipt, receipt_file)
@@ -137,6 +146,7 @@ def analyze_cached_photo(normalized: Path, source_sha: str, cache: Path, *,
 def write_qa_contact_sheet(entries: list[dict], output: Path) -> None:
     """Show source and confidence overlay, including warning annotations."""
     from PIL import Image, ImageDraw
+    import numpy as np
 
     columns, cell_width, cell_height = 3, 320, 260
     sheet = Image.new("RGB", (columns * cell_width,
@@ -146,10 +156,7 @@ def write_qa_contact_sheet(entries: list[dict], output: Path) -> None:
         with Image.open(row["normalized_cache_path"]) as image, \
                 Image.open(row["qa_confidence_path"]) as confidence:
             source = image.convert("RGB")
-            overlay = Image.new("RGB", source.size, (250, 175, 40))
             # Gold = uncertain, green = prioritized subject, blue = background.
-            values = confidence.convert("RGB").point(lambda x: x)
-            import numpy as np
             labels = np.asarray(confidence)
             false_color = np.zeros((*labels.shape, 3), dtype=np.uint8)
             false_color[labels == 0] = (65, 115, 230)

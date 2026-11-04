@@ -11,7 +11,8 @@ see [learned COLMAP matching and camera coverage comparisons](NEURAL_CAMERA_RECO
 ## One-command, quality-gated statue reconstruction (Apple Silicon)
 
 `build-statue-glb` runs a fresh COLMAP SIFT-LightGlue/MPS camera solution,
-first prepares an incremental, private normalization/foreground-preview cache,
+first prepares an incremental, private normalization/foreground-preview cache
+**and a source-photo QA pass before any feature matching**,
 produces an annotated missing-angle report, prepares SAM2.1/MPS mask
 candidates, audits cross-view mask consistency, then runs **resolution-level 0**
 OpenMVS without geometry-destroying refinement. When measured elevated or side
@@ -232,6 +233,39 @@ private `<asset-output-parent>/_statue_photo_cache/` directory (override with
 - `normalized.json` / `foreground-*.json` integrity receipts and a per-run
   `photo-preprocess/photo-preprocess-report.json` index linking originals to
   cached pixels and recording cache hits/misses.
+- SHA-addressed `qa-confidence-*.png` maps with three feature-priority classes:
+  **green/high-confidence subject**, **gold/uncertain**, and **blue/background**
+  in the colorized `photo-preprocess/photo-qa-contact-sheet.jpg`. The actual
+  monochrome maps store 255, 128 and 0 respectively. The report includes
+  exposure, blur/detail, resolution, EXIF orientation, possible near duplicates,
+  mask boundary and blue-background warnings. A suspect mask marks **all
+  pixels uncertain**, including potentially removed facial or body anatomy.
+
+The source QA contact sheet is generated **before feature extraction** and
+does not replace the later rectified multi-view mask audit. Visual inspection
+is still required to confirm that the mask did not remove a cheek, nose, paw,
+tail, damaged stone or another distinctive part. Source-photo QA is advisory:
+low resolution and poor lighting do not automatically delete photographs.
+The run report includes `qa_hits`, `qa_misses` and `qa_warning_count`.
+
+With `build-statue-glb`, LightGlue reads these hash-verified confidence maps:
+it reserves most feature capacity for likely statue surfaces while keeping a
+budget for uncertain regions and background. Obviously incompatible
+subject/background correspondences are excluded **without renumbering original
+COLMAP SIFT keypoints**. The original normalized RGB photographs and all
+uncertain areas remain available to the extractor. Ordinary `reconstruct-photos`
+is unchanged unless `--source-qa-report` is supplied (requires `sift-lightglue`
+and an MPS or `torch-cpu` worker). On a Mac use MPS by default; for a CPU
+fallback:
+
+```bash
+kumiki-blender build-statue-glb --asset-id great-sphinx --matching-device torch-cpu
+```
+
+This option changes the camera-matching backend and needs a fresh revision;
+previous completed COLMAP matching cannot be retroactively reweighted. The
+optional PyTorch CPU worker uses the same original feature indices. It still
+requires the LightGlue Python dependency and can be substantially slower.
 
 The cache uses **original image SHA-256, normalization version, checkpoint
 SHA-256 and SAM2 settings**, not filenames or ordinal `photo-XXXX` identifiers.
@@ -241,6 +275,38 @@ file shifts their staged names. Editing a photo or changing the SAM2 model
 invalidates the affected cache keys. Interrupted preprocessing can resume
 without recomputing completed, valid entries. The existing new-photo camera
 matching still needs to solve correspondences with the updated photo set.
+
+### Independent camera groups without common registered cameras
+
+Previously, the cohort merger could only align groups sharing at least three
+registered cameras. It now has a second, conservative path for **zero shared
+registered cameras**. A candidate elevated group is retained in its own
+immutable trial directory; the program looks for verified COLMAP 2D feature
+correspondences connecting triangulated 3D tracks in both models, using the
+original feature indices and source-photo confidence maps. Then it:
+
+1. Rejects ambiguous many-to-one tracks or missing subject-confidence evidence.
+2. Estimates a 7-degree-of-freedom similarity transform with robust RANSAC;
+   requires many non-collinear, well-distributed subject-feature correspondences
+   across multiple independent camera pairs.
+3. Checks transformed geometry against **both sets of calibrated camera
+   observations** in pixels, rejects implausible camera poses, insufficient
+   spatial coverage or unstable support.
+4. Copies independently reconstructed camera frames and original 2D/3D tracks
+   into a common aligned candidate only after these tests pass. Separate tracks
+   remain separate; they are not artificially welded into a sculpted surface.
+5. Reuses the existing post-merge baseline camera-drift and photo-coverage
+   gates before dense geometry. A rejection leaves the independent candidate
+   and its `alignment.reasons` and diagnostics intact.
+
+The standard COLMAP `model_merger` is still used when there are sufficient
+shared registered cameras. It is **not** used to claim a disjoint-group merge
+without shared cameras. Old revisions without early subject QA cannot use the
+new zero-overlap path automatically, because the object-surface evidence is
+missing; rebuild a fresh revision if you want to test the new matching path.
+The independent 3-camera/119-point Great Sphinx result has **not** been shown
+to satisfy these new correspondence, reprojection or coverage gates. A passing
+synthetic unit test is not a validation of the actual Sphinx photographs.
 
 For an existing blocked reconstruction, use the usual `--resume`. It prepares
 the new source cache and can run a second recovery pass from the already

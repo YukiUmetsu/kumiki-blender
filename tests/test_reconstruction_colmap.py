@@ -16,6 +16,7 @@ from PIL import Image, ImageDraw
 
 from kumiki_blender.reconstruction.colmap import (
     _prepare_images, _feature_import_report, _registered_image_count, _repair_jpeg_orientation, _sparse_point_metrics,
+    _preflight_torch_cpu_worker,
     build_sparse_reconstruction,
 )
 from kumiki_blender.reconstruction.references import ReferenceError, load_reference_set
@@ -133,6 +134,11 @@ else:
 
 
 class ColmapWorkflowTests(unittest.TestCase):
+    def test_pytorch_cpu_preflight_returns_actionable_dependency_error(self):
+        with patch("kumiki_blender.reconstruction.colmap.subprocess.run",
+                   return_value=subprocess.CompletedProcess([], 1, "", "missing torch/lightglue")):
+            with self.assertRaisesRegex(ReferenceError, "PyTorch CPU.*missing torch/lightglue"):
+                _preflight_torch_cpu_worker()
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)

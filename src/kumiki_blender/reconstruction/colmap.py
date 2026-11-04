@@ -105,6 +105,21 @@ def _preflight_mps_worker() -> None:
         raise ReferenceError(f"MPS LightGlue preflight failed: {reason}")
 
 
+def _preflight_torch_cpu_worker() -> None:
+    """Check CPU LightGlue dependencies before creating an immutable revision."""
+    command = [sys.executable, "-m", "kumiki_blender.reconstruction.mps_lightglue_worker",
+               "check", "--device", "cpu"]
+    try:
+        completed = subprocess.run(command, capture_output=True, text=True,
+                                   timeout=90, check=False)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        raise ReferenceError(f"PyTorch CPU LightGlue preflight failed: {error}") from error
+    if completed.returncode:
+        lines = (completed.stderr or completed.stdout).strip().splitlines()
+        reason = lines[-1][:350] if lines else f"worker exited {completed.returncode}"
+        raise ReferenceError(f"PyTorch CPU LightGlue preflight failed: {reason}")
+
+
 def _sha256(path: Path) -> str:
     with path.open("rb") as stream:
         return hashlib.file_digest(stream, "sha256").hexdigest()
@@ -937,8 +952,7 @@ def build_sparse_reconstruction(reference_set: ReferenceSet, output: str | Path,
         if matching_device == "mps":
             _preflight_mps_worker()
         else:
-            subprocess.run([sys.executable, "-m", "kumiki_blender.reconstruction.mps_lightglue_worker",
-                            "check", "--device", "cpu"], check=True, timeout=90, capture_output=True)
+            _preflight_torch_cpu_worker()
     colmap_info["engine"] = engine
     # Re-check before creating anything: photo files can be edited after intake.
     for image in references:
