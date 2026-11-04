@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import shutil
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -179,14 +180,42 @@ def main(argv: list[str] | None = None) -> int:
     for command in ("reference-audit", "reconstruct-photos"):
         photo_parser = subcommands.add_parser(
             command, help="Audit statue photo evidence or build a sparse COLMAP camera reconstruction")
-        photo_parser.add_argument("--manifest", type=Path, required=True,
-                                  help="Local reference-only image dossier JSON")
+        photo_input = photo_parser.add_mutually_exclusive_group(required=True)
+        photo_input.add_argument("--manifest", type=Path,
+                                 help="Local reference-only image dossier JSON")
         if command == "reconstruct-photos":
+            photo_input.add_argument("--photos", type=Path,
+                                     help="Folder of 8–256 local photos; skip dense meshing")
+            photo_parser.add_argument("--asset-id", help="Required with --photos")
             photo_parser.add_argument("--output", type=Path, required=True,
                                       help="New immutable reconstruction revision directory")
             photo_parser.add_argument("--colmap", default="colmap", help="Installed COLMAP executable")
             photo_parser.add_argument("--engine", choices=("colmap", "pycolmap"), default="colmap",
                                       help="COLMAP CLI (default) or pip-installed CPU PyCOLMAP")
+            photo_parser.add_argument("--matching-preset",
+                                      choices=("sift", "sift-lightglue", "aliked-lightglue", "loma", "loma128"),
+                                      default="sift", help="Learned matching requires ONNX-enabled COLMAP 4.2+")
+            photo_parser.add_argument("--matching-device", choices=("colmap-cpu", "mps"),
+                                      default="colmap-cpu",
+                                      help="COLMAP CPU matching or Apple Silicon PyTorch MPS LightGlue")
+            photo_parser.add_argument("--feature-threads", type=int,
+                                      help="CPU feature workers (learned default: 1)")
+            photo_parser.add_argument("--matching-threads", type=int,
+                                      help="CPU matching workers (learned default: 1)")
+            photo_parser.add_argument("--sift-first-octave", type=int, choices=(-1, 0),
+                                      help="SIFT pyramid start (learned SIFT default: 0, keeps input pixels)")
+            photo_parser.add_argument("--max-colmap-rss-mb", type=int,
+                                      help="Abort native COLMAP over RSS budget; 0 disables (learned default: 12288 MiB)")
+            photo_parser.add_argument("--matching-block-size", type=int,
+                                      help="Exhaustive pair-cache block size (learned default: 5)")
+            photo_parser.add_argument("--matching-max-features", type=int,
+                                      help="Limit actual SIFT keypoints per image without downscaling (learned default: 4096)")
+            photo_parser.add_argument("--matching-pairs-per-process", type=int,
+                                      help="Run this many image pairs per COLMAP worker, checkpoint each batch")
+            photo_parser.add_argument("--matching-pair-list", type=Path,
+                                      help="Optional file of staged image-name pairs, one per line; reduces pair count")
+            photo_parser.add_argument("--resume", action="store_true",
+                                      help="Resume matching in the same verified output after interruption")
             photo_parser.add_argument("--timeout-seconds", type=int, default=3600)
             photo_parser.add_argument("--undistort", action="store_true",
                                       help="Rectify camera intrinsics and image pixels for accurate Blender projection")
@@ -213,6 +242,26 @@ def main(argv: list[str] | None = None) -> int:
                                         default="auto", help="Torch device for --engine mapanything")
         photo_model_parser.add_argument("--mapanything-depth-tolerance", type=float, default=0.30,
                                         help="Relative depth agreement (0.01–1.0) for views to count as mutually consistent")
+        photo_model_parser.add_argument("--matching-preset",
+                                        choices=("sift", "sift-lightglue", "aliked-lightglue", "loma", "loma128"),
+                                        default="sift", help="Learned matching requires --engine colmap and COLMAP 4.2+")
+        photo_model_parser.add_argument("--matching-device", choices=("colmap-cpu", "mps"),
+                                        default="colmap-cpu",
+                                        help="COLMAP CPU matching or Apple Silicon PyTorch MPS LightGlue")
+        photo_model_parser.add_argument("--feature-threads", type=int,
+                                        help="CPU feature workers (learned default: 1)")
+        photo_model_parser.add_argument("--matching-threads", type=int,
+                                        help="CPU matching workers (learned default: 1)")
+        photo_model_parser.add_argument("--sift-first-octave", type=int, choices=(-1, 0),
+                                        help="SIFT pyramid start (learned SIFT default: 0)")
+        photo_model_parser.add_argument("--max-colmap-rss-mb", type=int,
+                                        help="Native COLMAP RSS limit, 0 disables (learned default: 12288 MiB)")
+        photo_model_parser.add_argument("--matching-block-size", type=int,
+                                        help="Exhaustive pair-cache block size (learned default: 5)")
+        photo_model_parser.add_argument("--matching-max-features", type=int,
+                                        help="Limit actual SIFT keypoints per image (learned default: 4096)")
+        photo_model_parser.add_argument("--matching-pairs-per-process", type=int,
+                                        help="Restart COLMAP after this many image pairs to bound memory")
         photo_model_parser.add_argument("--backend", choices=("openmvs", "colmap"),
                                         default="openmvs", help="Dense meshing backend")
         photo_model_parser.add_argument("--colmap", default="colmap")
@@ -224,6 +273,91 @@ def main(argv: list[str] | None = None) -> int:
         photo_model_parser.add_argument("--max-image-size", type=int, default=3200)
         photo_model_parser.add_argument("--no-texture", action="store_true")
         photo_model_parser.add_argument("--no-renders", action="store_true")
+    statue_glb = subcommands.add_parser(
+        "build-statue-glb", help="One-command MPS statue reconstruction with angle/mask QA gates and resumable GLB export")
+    statue_glb.add_argument("--photos", type=Path,
+                           help="Photo folder; reuse the last folder for this asset if omitted")
+    statue_glb.add_argument("--asset-id", required=True)
+    statue_glb.add_argument("--output", type=Path,
+                           help="Output revision; defaults to .review/ASSET/statue-hq-rNNN")
+    statue_glb.add_argument("--front-photo",
+                           help="Optional frontal image override; otherwise infer from registered image metadata")
+    statue_glb.add_argument("--openmvs-dir", type=Path, default=Path("/Applications/OpenMVS-2.4.0"))
+    statue_glb.add_argument("--blender", default="/Applications/Blender.app/Contents/MacOS/Blender")
+    statue_glb.add_argument("--sam2-checkpoint", type=Path,
+                           help="Optional SAM2.1 checkpoint (discover locally or download from Meta if omitted)")
+    statue_glb.add_argument("--no-auto-model-download", action="store_true",
+                           help="Never download missing model weights; search local caches only")
+    statue_glb.add_argument("--sam2-size", choices=("tiny", "small", "base_plus", "large"), default="small")
+    statue_glb.add_argument("--sam2-device", choices=("auto", "mps", "cpu"), default="mps")
+    statue_glb.add_argument("--mask-guides", type=Path,
+                           help="Optional manual overrides for automatically inferred segmentation prompts")
+    statue_glb.add_argument("--masks-dir", type=Path,
+                           help="Previously reviewed rectified masks; skips automatic SAM2 masking")
+    statue_glb.add_argument("--mask-cache-dir", type=Path,
+                           help="Persistent per-image mask cache (defaults to a sibling of the output revision)")
+    statue_glb.add_argument("--ai-bridges", action="store_true",
+                           help="Opt in to private synthetic previews; auto-build a local ComfyUI workflow if possible")
+    statue_glb.add_argument("--ai-bridge-workflow", type=Path,
+                           help="Optional local ComfyUI API workflow; otherwise discover installed checkpoint and generate one")
+    statue_glb.add_argument("--min-registered-fraction", type=float, default=0.80)
+    statue_glb.add_argument("--max-mixed-mask-fraction", type=float, default=0.12)
+    statue_glb.add_argument("--max-colmap-rss-mb", type=int, default=12288)
+    statue_glb.add_argument("--timeout-seconds", type=int, default=14400)
+    statue_glb.add_argument("--resume", action="store_true")
+    camera_compare_parser = subcommands.add_parser(
+        "compare-camera-registrations",
+        help="Read-only before/after registration coverage for two COLMAP revisions")
+    camera_compare_parser.add_argument("--baseline", type=Path, required=True)
+    camera_compare_parser.add_argument("--candidate", type=Path, required=True)
+    for command in ("plan-sfm-cohort-recovery", "recover-sfm-cohorts", "diagnose-sfm-coverage"):
+        cohort_parser = subcommands.add_parser(
+            command, help="Recover missed camera views as independent SfM cohorts with guarded alignment")
+        cohort_parser.add_argument("--revision", type=Path, required=True,
+                                   help="Existing sparse photo revision with original COLMAP database")
+        cohort_parser.add_argument("--model", type=int, default=0,
+                                   help="Baseline COLMAP sparse model index")
+        cohort_parser.add_argument("--targets", type=Path,
+                                   help="JSON list of staged filenames; default is all unregistered photos")
+        cohort_parser.add_argument("--anchor", action="append", default=[],
+                                   help="Already registered bridge filename (repeatable)")
+        cohort_parser.add_argument("--max-anchors", type=int, default=6)
+        cohort_parser.add_argument("--max-trials", type=int, default=5)
+        cohort_parser.add_argument("--min-inliers", type=int, default=25)
+        cohort_parser.add_argument("--min-new-cameras", type=int, default=2)
+        cohort_parser.add_argument("--min-seed-angle", type=float, default=1.0,
+                                   help="Exclude confidently near-zero-parallax calibrated seed pairs")
+        if command == "diagnose-sfm-coverage":
+            cohort_parser.add_argument("--prior-recovery", type=Path,
+                                       help="Optional existing cohort-recovery-report.json")
+            cohort_parser.add_argument("--format", choices=("json", "markdown"), default="json",
+                                       help="JSON for automation, Markdown for a readable missing-angle checklist")
+            cohort_parser.add_argument("--guide-dir", type=Path,
+                                       help="New folder for original-filename guide and side-by-side photo contact sheet")
+        if command == "recover-sfm-cohorts":
+            cohort_parser.add_argument("--output", type=Path, required=True,
+                                       help="New independent output; never alters source models")
+            cohort_parser.add_argument("--colmap", default="colmap")
+            cohort_parser.add_argument("--trial-timeout", type=int, default=1200)
+    bridge_parser = subcommands.add_parser(
+        "prepare-sfm-bridge-photos",
+        help="Stage new real overlapping photos with original staged images, privately and without modifying source")
+    bridge_parser.add_argument("--revision", type=Path, required=True)
+    bridge_parser.add_argument("--photos", type=Path, required=True,
+                               help="Folder of new real viewpoint photographs")
+    bridge_parser.add_argument("--output", type=Path, required=True,
+                               help="Unused directory for the new combined photo set")
+    bridge_parser.add_argument("--model", type=int, default=0)
+    bridge_parser.add_argument("--manifest", type=Path,
+                               help="Optional source attribution and license JSON for new photographs")
+    alignment_parser = subcommands.add_parser(
+        "inspect-sfm-cohort-alignment", help="Audit one solved cohort using shared cameras and optionally 3D object landmarks")
+    alignment_parser.add_argument("--revision", type=Path, required=True)
+    alignment_parser.add_argument("--model", type=int, default=0)
+    alignment_parser.add_argument("--candidate", type=Path, required=True,
+                                  help="Exact independent model directory (trial-NN/sparse/0)")
+    alignment_parser.add_argument("--landmarks", type=Path,
+                                  help="JSON object landmarks in the two specific sparse coordinate frames")
     for command in ("plan-dense-photos", "build-dense-photos"):
         dense_parser = subcommands.add_parser(
             command, help="Review or reconstruct a private dense statue mesh from registered cameras")
@@ -350,6 +484,8 @@ def main(argv: list[str] | None = None) -> int:
     photo_mask_parser.add_argument("--sam2-size", choices=("tiny", "small", "base_plus", "large"),
                                    default="small")
     photo_mask_parser.add_argument("--sam2-device", choices=("auto", "mps", "cpu"), default="auto")
+    photo_mask_parser.add_argument("--cache-dir", type=Path,
+                                   help="Optional content-addressed cache of masks for identical rectified photos")
     refine_mask_parser = subcommands.add_parser(
         "refine-dense-masks", help="Remove tiny mask islands/holes or apply camera-specific polygon cleanup")
     refine_mask_parser.add_argument("--reconstruction", type=Path, required=True)
@@ -677,7 +813,7 @@ def main(argv: list[str] | None = None) -> int:
                     center_box=tuple(args.center_box), max_side=args.max_side,
                     iterations=args.iterations, segmenter=args.segmenter,
                     sam2_checkpoint=args.sam2_checkpoint, sam2_size=args.sam2_size,
-                    sam2_device=args.sam2_device)
+                    sam2_device=args.sam2_device, cache_dir=args.cache_dir)
             except ReferenceError as error:
                 raise RecipeError(str(error)) from error
             print(json.dumps(report, indent=2))
@@ -1012,6 +1148,109 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(report, indent=2))
             return (0 if args.command == "plan-dense-photos" or
                     report["status"].startswith("dense-mesh-candidate") else 3)
+        if args.command == "compare-camera-registrations":
+            from .reconstruction.camera_compare import compare_camera_registrations
+            from .reconstruction.references import ReferenceError
+            try:
+                report = compare_camera_registrations(args.baseline, args.candidate)
+            except ReferenceError as error:
+                raise RecipeError(str(error)) from error
+            print(json.dumps(report, indent=2))
+            return 0
+        if args.command in ("plan-sfm-cohort-recovery", "recover-sfm-cohorts", "diagnose-sfm-coverage"):
+            from .reconstruction.sfm_cohort_recovery import (
+                CohortRecoverySettings, plan_cohort_recovery, recover_cohort,
+                annotate_failed_recovery)
+            settings = CohortRecoverySettings(
+                min_pair_inliers=args.min_inliers, max_anchors=args.max_anchors,
+                max_trials=args.max_trials, min_new_cameras=args.min_new_cameras,
+                min_seed_ray_angle_degrees=args.min_seed_angle,
+                max_seconds_per_trial=getattr(args, "trial_timeout", 1200))
+            try:
+                selected = None
+                if args.targets is not None:
+                    if args.targets.is_symlink() or not args.targets.is_file():
+                        raise ValueError("--targets must be an existing JSON file, not a symlink")
+                    selected = json.loads(args.targets.read_text(encoding="utf-8"))
+                    if not isinstance(selected, list) or not all(isinstance(s, str) for s in selected):
+                        raise ValueError("--targets must contain a JSON array of staged filenames")
+                common = dict(model=args.model, targets=selected,
+                              preferred_anchors=args.anchor, settings=settings)
+                report = (recover_cohort(args.revision, args.output, **common,
+                                         colmap=args.colmap)
+                          if args.command == "recover-sfm-cohorts" else
+                          plan_cohort_recovery(args.revision, **common))
+                if args.command == "diagnose-sfm-coverage":
+                    report = annotate_failed_recovery(report, args.prior_recovery)
+                    report = {"status": report["status"],
+                              "first_photos_to_find": report["first_photos_to_find"],
+                              "source_revision": report["source_revision"],
+                              "seed_pairs": report["seed_pairs"],
+                              "rejected_low_parallax_seed_pairs": report["rejected_low_parallax_seed_pairs"],
+                              "coverage_gaps": report["coverage_gaps"],
+                              "previous_recovery": report.get("previous_recovery")}
+                    if args.guide_dir is not None:
+                        from .reconstruction.sfm_gap_guide import write_gap_guide
+                        report["guide_files"] = write_gap_guide(report, args.revision, args.guide_dir)
+            except (OSError, ValueError, sqlite3.Error, ImportError) as error:
+                raise RecipeError(str(error)) from error
+            if args.command == "diagnose-sfm-coverage" and args.format == "markdown":
+                from .reconstruction.sfm_gap_guide import markdown_gap_guide
+                print(markdown_gap_guide(report))
+            else:
+                print(json.dumps(report, indent=2))
+            return (0 if args.command != "recover-sfm-cohorts" or
+                    report["status"].startswith("candidate / ") else 3)
+        if args.command == "prepare-sfm-bridge-photos":
+            from .reconstruction.sfm_bridge_photos import prepare_bridge_photos
+            try:
+                report = prepare_bridge_photos(
+                    args.revision, args.photos, args.output, model=args.model,
+                    source_manifest=args.manifest)
+            except (OSError, ValueError, sqlite3.Error) as error:
+                raise RecipeError(str(error)) from error
+            print(json.dumps(report, indent=2))
+            return 0
+        if args.command == "inspect-sfm-cohort-alignment":
+            from .reconstruction.sfm_cohort_recovery import inspect_cohort_alignment
+            try:
+                report = inspect_cohort_alignment(
+                    args.revision, args.candidate, model=args.model,
+                    landmarks_path=args.landmarks)
+            except (OSError, ValueError, sqlite3.Error, ImportError) as error:
+                raise RecipeError(str(error)) from error
+            print(json.dumps(report, indent=2))
+            return 0 if report["status"].startswith("alignment-evidence-passes") else 3
+        if args.command == "build-statue-glb":
+            from .reconstruction.statue_pipeline import StatuePipelineSettings, build_statue_glb
+            from .reconstruction.statue_asset_registry import (
+                remember_statue_inputs, resolve_statue_inputs,
+            )
+            from .reconstruction.references import ReferenceError
+            try:
+                photos, output = resolve_statue_inputs(
+                    args.asset_id, args.photos, args.output, resume=args.resume)
+                remember_statue_inputs(args.asset_id, photos, output)
+                report = build_statue_glb(
+                    photos, args.asset_id, output,
+                    StatuePipelineSettings(
+                        front_photo=args.front_photo, blender=args.blender,
+                        openmvs_dir=args.openmvs_dir,
+                        sam2_checkpoint=args.sam2_checkpoint,
+                        auto_download_model=not args.no_auto_model_download,
+                        sam2_size=args.sam2_size, sam2_device=args.sam2_device,
+                        mask_guides=args.mask_guides, masks_dir=args.masks_dir,
+                        mask_cache_dir=args.mask_cache_dir,
+                        ai_bridges=args.ai_bridges or args.ai_bridge_workflow is not None,
+                        ai_bridge_workflow=args.ai_bridge_workflow,
+                        min_registered_fraction=args.min_registered_fraction,
+                        max_mixed_mask_fraction=args.max_mixed_mask_fraction,
+                        max_colmap_rss_mb=args.max_colmap_rss_mb,
+                        timeout_seconds=args.timeout_seconds), resume=args.resume)
+            except (ReferenceError, ValueError, ImportError) as error:
+                raise RecipeError(str(error)) from error
+            print(json.dumps(report, indent=2))
+            return 0 if report["status"].startswith("private-GLB-candidate") else 3
         if args.command in ("plan-photo-model", "build-photo-model"):
             from .reconstruction.photo_model import (PhotoModelSettings, build_photo_model,
                                                      plan_photo_model)
@@ -1029,6 +1268,14 @@ def main(argv: list[str] | None = None) -> int:
                     mapanything_model=args.mapanything_model,
                     mapanything_device=args.mapanything_device,
                     mapanything_depth_tolerance=args.mapanything_depth_tolerance,
+                    matching_preset=args.matching_preset,
+                    matching_device=args.matching_device,
+                    feature_threads=args.feature_threads, matching_threads=args.matching_threads,
+                    sift_first_octave=args.sift_first_octave,
+                    max_colmap_rss_mb=args.max_colmap_rss_mb,
+                    matching_block_size=args.matching_block_size,
+                    matching_max_features=args.matching_max_features,
+                    matching_pairs_per_process=args.matching_pairs_per_process,
                     blender=args.blender, min_registered_images=args.min_registered_images,
                     min_registered_fraction=args.min_registered_fraction,
                     sparse_timeout_seconds=args.sparse_timeout_seconds,
@@ -1332,16 +1579,35 @@ def main(argv: list[str] | None = None) -> int:
         if args.command in ("reference-audit", "reconstruct-photos"):
             from .reconstruction.references import (ReferenceError, audit_reference_set,
                                                     load_reference_set)
+            from .reconstruction.splat_input import load_photo_folder
             from .reconstruction.colmap import build_sparse_reconstruction
             try:
-                references = load_reference_set(args.manifest)
+                if args.command == "reconstruct-photos":
+                    if args.photos and not args.asset_id:
+                        raise ReferenceError("--asset-id is required with --photos")
+                    if args.asset_id and not args.photos:
+                        raise ReferenceError("--asset-id is only used with --photos")
+                references = (load_photo_folder(args.photos, args.asset_id)
+                              if args.command == "reconstruct-photos" and args.photos else
+                              load_reference_set(args.manifest))
                 report = (audit_reference_set(references) if args.command == "reference-audit" else
                           build_sparse_reconstruction(references, args.output, colmap=args.colmap,
                                                       engine=args.engine,
                                                       timeout_seconds=args.timeout_seconds,
                                                       undistort=args.undistort,
                                                       max_image_size=args.max_image_size,
-                                                      registration_profile=args.registration_profile))
+                                                      registration_profile=args.registration_profile,
+                                                      matching_preset=args.matching_preset,
+                                                      matching_device=args.matching_device,
+                                                      matching_pair_list=args.matching_pair_list,
+                                                      feature_threads=args.feature_threads,
+                                                      matching_threads=args.matching_threads,
+                                                      sift_first_octave=args.sift_first_octave,
+                                                      max_colmap_rss_mb=args.max_colmap_rss_mb,
+                                                      matching_block_size=args.matching_block_size,
+                                                      matching_max_features=args.matching_max_features,
+                                                      matching_pairs_per_process=args.matching_pairs_per_process,
+                                                      resume=args.resume))
             except ReferenceError as error:
                 raise RecipeError(str(error)) from error
             print(json.dumps(report, indent=2))

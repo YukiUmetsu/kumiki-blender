@@ -5,6 +5,159 @@ Blender GLB-export workers into one command. This is **photogrammetry**, not a
 procedural reconstruction or Gaussian splat. It can use a private folder of
 8–256 overlapping photographs, including a 30-photo monument reference set.
 
+For mixed internet photos where left/right-side cameras remain disconnected,
+see [learned COLMAP matching and camera coverage comparisons](NEURAL_CAMERA_RECONSTRUCTION.md).
+
+## One-command, quality-gated statue reconstruction (Apple Silicon)
+
+`build-statue-glb` runs a fresh COLMAP SIFT-LightGlue/MPS camera solution,
+produces an annotated missing-angle report, prepares SAM2.1/MPS mask
+candidates, audits cross-view mask consistency, then runs **resolution-level 0**
+OpenMVS without geometry-destroying refinement. If all conservative gates pass,
+it exports an editable `.blend` and `model.glb` without rendering previews.
+
+```bash
+# First use: remember source photos and automatically choose a fresh output.
+kumiki-blender build-statue-glb \
+  --photos "$HOME/Pictures/sphinx-reconstruction-candidates/warren-2019/photos" \
+  --asset-id great-sphinx
+
+# Add real photos to the same folder, then rebuild with just an asset ID:
+kumiki-blender build-statue-glb --asset-id great-sphinx
+```
+
+Run from the same project directory each time. The local private registry
+`.review/great-sphinx/asset-state.json` remembers the last photo folder and
+allocates `.review/great-sphinx/statue-hq-r001`, `r002`, etc. It records the
+source even if quality gates stop the first build. You must specify `--photos`
+once per asset ID; older runs predating this registry also require that first
+invocation. Override it later with `--photos` or an explicit `--output`.
+`--resume` without `--output` uses the most recently saved output revision.
+The defaults for macOS binaries are `/Applications/OpenMVS-2.4.0` and
+`/Applications/Blender.app/Contents/MacOS/Blender`; override either if needed.
+
+Prerequisites: COLMAP, Blender, the OpenMVS executables, and the official
+`facebookresearch/sam2` Python package with PyTorch. If the SAM2.1 small
+checkpoint is not supplied, the command looks in local environment variables,
+the shared Kumiki cache, PyTorch's checkpoint cache, Downloads and a local
+`checkpoints/` folder. If absent, it downloads the official weights once over
+HTTPS from Meta into `~/.cache/kumiki-blender/models/`. Use
+`--no-auto-model-download` for fully offline mode or `--sam2-checkpoint` to
+choose another installed model. The checkpoint SHA-256 and origin are recorded.
+
+`--front-photo` is optional. The pipeline looks for a registered photo with an
+unambiguous front-facing filename hint and marks it **tentative**, never a
+verified anatomical orientation. If none can be identified, camera angles are
+reported relative to an arbitrary reference and anatomical left/right coverage
+is not claimed. Explicit `--front-photo` remains an override.
+
+If no guide file is supplied, SAM2 automatically samples conservative blue-sky
+negative points and starts with a broad subject prompt. Those mask candidates
+are reviewed by cross-view and contamination QA, not treated as hand-labeled
+statue parts. The output remains **private and unverified** even after automated
+gates pass. Optional `--mask-guides /private/guides.json` supplies head/headdress/torso/
+paws/tail boxes and positive/negative points (see
+[`examples/statue-mask-guides.example.json`](../examples/statue-mask-guides.example.json)).
+Guide keys identify the registered `photo-0001.png`-style rectified images in
+the camera revision, not necessarily their original downloaded filenames.
+Automatic guidance cannot guarantee correct anatomy; background leakage,
+incomplete silhouettes and weak geometric registration still stop the run.
+
+On a blocked run, inspect `statue-pipeline-report.json`, `coverage/photo-advice.md`,
+`masks/mask-contact-sheet.jpg`, and the SHA-named mask audit contact sheet.
+Additional real photos require a **fresh output revision**: the input hashes
+cannot change under `--resume`. To correct masks, run the existing
+`refine-dense-masks` command against the same `cameras/` revision, then
+reissue the same `build-statue-glb` invocation with `--resume --masks-dir
+/path/to/corrected-revision/masks`. The resumed run reuses the completed
+camera solution, verifies the corrected mask revision's camera provenance
+and per-image hashes, re-audits the new masks, then continues if its gates pass.
+
+When a reliable front reference exists, the gates require at least two registered
+side views on **each** side beyond ±65°. They also require two elevated cameras above
+12°, the configured registration fraction (80% by default), bounded mask
+foreground, no missing prompted anatomy or explicit background violations,
+under 12% cross-view label disagreement, and no obvious blue-sky leakage.
+Existing unregistered photos described as `needs-overlap-bridge` are **advice**,
+not an automatic failure: 2D–3D track support can be weak even when overlapping
+photos exist. The pipeline writes `coverage/cohort-recovery-plan.json` for
+unregistered views when the source match graph supports that diagnostic.
+Multiple verified neighbors now prioritize camera recovery, not another photo
+request. Try camera recovery and intrinsic diagnostics before acquiring
+additional images. AI-generated in-between photographs are **not independent
+geometric measurements** and must never be silently added as real COLMAP
+inputs; they are suitable only for separately labeled creative references.
+
+### Optional AI bridge previews (ComfyUI)
+
+```bash
+# Automatically discover a local checkpoint and generate a ComfyUI workflow:
+kumiki-blender build-statue-glb --asset-id great-sphinx --ai-bridges
+
+# With a locally installed ComfyUI API workflow, generate preview candidates:
+kumiki-blender build-statue-glb --asset-id great-sphinx \
+  --ai-bridge-workflow /path/to/comfyui-api-workflow.json
+```
+
+The existing `generate-completion-image` adapter can produce up to three
+private synthetic reference previews from **verified, real photos**. When
+`--ai-bridges` is enabled without a workflow, the command asks your **running
+local ComfyUI** for installed checkpoints and creates an API-format
+`auto-comfyui-workflow.json` using standard checkpoint, VAE, conditioning and
+image-to-image nodes. If ComfyUI is stopped, it also checks the usual
+`~/ComfyUI/models/checkpoints` and `~/Documents/ComfyUI/models/checkpoints`
+directories (and the optional `COMFYUI_DIR` or `KUMIKI_COMFYUI_DIR` root).
+You still need to start ComfyUI to perform inference. It selects a local model
+deterministically, preferring
+smaller SD 1.5 checkpoints on Apple Silicon. No model is downloaded or
+approved automatically. It never invents a checkpoint that is not installed.
+A configured workflow needs exactly one `LoadImage` and one `SaveImage`, with
+local-only approved ComfyUI nodes and already installed model checkpoints.
+ComfyUI must be running at `http://127.0.0.1:8188`; remote hosts and redirects
+are rejected. Set `KUMIKI_COMFYUI_BRIDGE_WORKFLOW` to discover a saved workflow
+without passing a path (still opt in via `--ai-bridges`).
+
+Candidates, source/anchor hashes and provenance are stored separately under
+`<output>/ai-bridge-previews/`. If ComfyUI is unavailable or no compatible
+checkpoint is listed, the command writes a **plan only** and a diagnostic,
+without claiming an AI model ran. Generated images are
+artistic guesses and **cannot** supply verified camera poses, independent
+overlapping photo evidence, or accurate unseen geometry. This pipeline never
+adds them to COLMAP or the final GLB.
+Camera azimuth directions are relative to the **front image**
+when known, not the Sphinx's verified anatomical axes. These are deliberately conservative
+indicators, not proof of a watertight mesh, a faithful face, or accurate scale.
+An unattended model with an incomplete left side is worse than a paused run
+with an actionable missing-photo checklist.
+
+The original `build-photo-model` command below remains available for a quick,
+unmasked diagnostic GLB and continues to use its unchanged defaults.
+
+### Incremental cache when adding photos
+
+Each new `build-statue-glb` output revision uses the persistent sibling folder
+`_statue_mask_cache/` (override with `--mask-cache-dir`). Automatic SAM2 mask
+results for **exactly unchanged rectified pixels** are reused, including the
+same model checkpoint, model size, image dimensions, processing resolution
+and per-image anatomy guidance. The report records `mask_cache.hits/misses`
+and each candidate mask's `cache_hit` and content key. Cache entries contain
+only binary masks and small provenance receipts, never the original photos.
+
+Adding a new photo can change estimated cameras and image undistortion. A
+changed rectified image correctly results in a cache miss; old masks are **not**
+resized into a different camera grid. COLMAP camera solving, new photo-pair
+matching and OpenMVS depth maps still need fresh work when the source set
+changes. A stopped run on the *same* images can instead use `--resume` to skip
+its completed stages. Neither mechanism fabricates missing viewpoints.
+
+To regenerate after adding photos, run
+`kumiki-blender build-statue-glb --asset-id great-sphinx`; it chooses the next
+unused output automatically. The cache from `r001` is discovered as long as
+both outputs share a parent directory.
+On an entirely cached re-mask, the official SAM2 model is not loaded at all;
+cache misses are recomputed with the installed model and a verified checkpoint
+hash. To inspect reuse, read `mask_cache` in `statue-pipeline-report.json`.
+
 ## Mac (Apple Silicon)
 
 Install Python with `pip install -e '.[photogrammetry,qa]'` and Blender separately.

@@ -67,7 +67,13 @@ class PhotoCoverageAdviceTests(unittest.TestCase):
             self.assertEqual(report["angle_reference"]["kind"], "annotated-front")
             images = {p["filename"]: p for p in report["images"]}
             self.assertEqual(images["photo-0001.png"]["estimated_view"]["relative_azimuth_deg"], 0)
-            self.assertEqual(images["photo-0002.png"]["estimated_view"]["label"], "right three-quarter")
+            self.assertEqual(images["photo-0002.png"]["estimated_view"]["label"],
+                             "front-image right three-quarter")
+            self.assertEqual(advice._view_label(-90, front_known=True),
+                             "front-image left profile")
+            self.assertIn("Not an object's anatomical left or right",
+                          report["angle_reference"]["azimuth_sign_convention"])
+            self.assertIn("**Azimuth sign:**", advice._markdown(report))
             self.assertGreater(images["photo-0002.png"]["estimated_view"]["relative_azimuth_deg"], 20)
             self.assertIsNone(images["photo-0003.png"]["estimated_view"])
             self.assertTrue(report["recommended_photos"])
@@ -250,6 +256,21 @@ class PhotoCoverageAdviceTests(unittest.TestCase):
             near_angle=2.0, contribution=contribution)
         self.assertEqual(status, "keep")
         self.assertTrue(any("12 two-view tracks" in reason for reason in reasons))
+
+    def test_existing_verified_neighbors_prioritize_camera_recovery_over_new_bridge(self):
+        photo = {"imported": True, "keypoints": 1850, "strong_neighbors": 4}
+        candidate = {"conservative_one_to_one_2d3d": 12,
+                     "one_to_one_4x4_image_coverage": 0.125}
+        status, _, reasons = advice._status(
+            photo, registered=False, alternate=False, candidate=candidate,
+            near_angle=None, contribution=None)
+        self.assertEqual(status, "recover-first")
+        self.assertTrue(any("before acquiring" in text for text in reasons))
+        photo["strong_neighbors"] = 1
+        status, _, _ = advice._status(
+            photo, registered=False, alternate=False, candidate=candidate,
+            near_angle=None, contribution=None)
+        self.assertEqual(status, "needs-overlap-bridge")
 
     def test_missing_import_and_invalid_annotation(self):
         with tempfile.TemporaryDirectory() as tmp:

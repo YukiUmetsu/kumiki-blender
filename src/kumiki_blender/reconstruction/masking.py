@@ -7,7 +7,11 @@ Source photos remain immutable. Every generated mask requires visual review.
 from __future__ import annotations
 
 import json
+import hashlib
 import math
+import os
+import shutil
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +23,79 @@ _DEFAULT_BOX = (0.12, 0.04, 0.88, 0.96)
 _ISNET_SHA256 = "60920e99c45464f2ba57bee2ad08c919a52bbf852739e96947fbb4358c0d964a"
 _SPHINX_PARTS = frozenset({"head", "headdress", "neck", "torso", "paws", "tail"})
 _SAM2_CONFIGS = {"tiny": "t", "small": "s", "base_plus": "b+", "large": "l"}
+_MASK_CACHE_SCHEMA = "rectified-mask-v1"
+
+
+def _cached_mask(cache_root: Path | None, key: str, dimensions: list[int]):
+    """Only reuse an exact-content mask with independently verified pixels."""
+    if cache_root is None:
+        return None
+    from PIL import Image
+
+    folder = cache_root / key[:2] / key
+    mask_file = folder / "mask.png"
+    metadata = folder / "receipt.json"
+    if any(path.is_symlink() for path in (folder.parent, folder, mask_file, metadata)):
+        raise ReferenceError("Mask cache contains a symbolic link; refusing unsafe reuse")
+    if not mask_file.is_file() or not metadata.is_file():
+        return None
+    try:
+        record = json.loads(metadata.read_text(encoding="utf-8"))
+        if record.get("schema") != _MASK_CACHE_SCHEMA or record.get("key") != key:
+            return None
+        if record.get("dimensions") != dimensions or record.get("sha256") != _sha256(mask_file):
+            return None
+        with Image.open(mask_file) as mask:
+            mask.load()
+            if mask.mode != "L" or list(mask.size) != dimensions:
+                return None
+            histogram = mask.histogram()
+            if sum(histogram[1:255]) or histogram[0] == 0 or histogram[255] == 0:
+                return None
+        details = record.get("details")
+        if not isinstance(details, dict):
+            return None
+        return mask_file, details
+    except (OSError, ValueError, TypeError, KeyError):
+        return None
+
+
+def _save_mask_cache(cache_root: Path | None, key: str, mask_file: Path,
+                     dimensions: list[int], details: dict) -> None:
+    if cache_root is None:
+        return
+    folder = cache_root / key[:2] / key
+    if folder.parent.is_symlink() or folder.is_symlink():
+        raise ReferenceError("Mask cache entry cannot be a symbolic link")
+    folder.mkdir(parents=True, exist_ok=True)
+    for filename in ("mask.png", "receipt.json"):
+        if (folder / filename).is_symlink():
+            raise ReferenceError("Mask cache entry contains a symbolic link")
+    # Atomic single-file replacements; the receipt is committed last. A crash
+    # between writes is treated as a cache miss, never as approved evidence.
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(dir=folder, prefix=".mask-", suffix=".png",
+                                         delete=False) as stream:
+            temporary = Path(stream.name)
+            with mask_file.open("rb") as source:
+                shutil.copyfileobj(source, stream)
+        os.replace(temporary, folder / "mask.png")
+        temporary = None
+        receipt = {"schema": _MASK_CACHE_SCHEMA, "key": key,
+                   "dimensions": dimensions, "sha256": _sha256(mask_file),
+                   "details": details}
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=folder,
+                                         prefix=".receipt-", suffix=".json",
+                                         delete=False) as stream:
+            temporary = Path(stream.name)
+            json.dump(receipt, stream, sort_keys=True)
+            stream.write("\n")
+        os.replace(temporary, folder / "receipt.json")
+        temporary = None
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
 
 
 def _normalized_pair(value: Any, label: str) -> tuple[float, float]:
@@ -84,6 +161,25 @@ def _guide(value: Any, *, default_box: tuple[float, ...]) -> dict[str, Any]:
     return {"box": list(box), **points,
             "component_boxes": checked_boxes, "part_points": checked_points,
             "part_visibility": dict(visibility)}
+
+
+def _auto_sam2_guide(photo: Any, default_box: tuple[float, ...]) -> dict[str, Any]:
+    """Conservative automatic blue-sky negative prompts, not anatomy claims.
+
+    An ambiguous view receives one broad subject box. The result is only a
+    candidate, checked against multi-view tracks and blue-sky pixels later.
+    """
+    from PIL import Image
+
+    tiny = photo.convert("RGB")
+    tiny.thumbnail((256, 256), Image.Resampling.BILINEAR)
+    negatives = []
+    for y in (0.05, 0.13, 0.21, 0.29, 0.37, 0.45):
+        for x in (0.04, 0.20, 0.36, 0.64, 0.80, 0.96):
+            r, g, b = tiny.getpixel((round(x * (tiny.width - 1)), round(y * (tiny.height - 1))))
+            if b > 120 and b > 1.15 * r and b > 1.06 * g:
+                negatives.append([x, y])
+    return _guide({"background_points": negatives[:24]}, default_box=default_box)
 
 
 def _load_sam2_predictor(checkpoint: Path, size: str, requested_device: str) -> tuple[Any, str]:
@@ -282,7 +378,8 @@ def generate_rectified_masks(reconstruction: str | Path, output: str | Path, *,
                              segmenter: str = "grabcut",
                              sam2_checkpoint: str | Path | None = None,
                              sam2_size: str = "small",
-                             sam2_device: str = "auto") -> dict[str, Any]:
+                             sam2_device: str = "auto",
+                             cache_dir: str | Path | None = None) -> dict[str, Any]:
     """Make immutable mask candidates, overlays and QA metrics for every photo."""
     if type(max_side) is not int or not 256 <= max_side <= 4096:
         raise ReferenceError("Mask max_side must be 256–4096")
@@ -294,6 +391,10 @@ def generate_rectified_masks(reconstruction: str | Path, output: str | Path, *,
         raise ReferenceError("Rembg uses semantic inference; use grabcut for manual per-photo box/point guides")
     if sam2_size not in _SAM2_CONFIGS or sam2_device not in ("auto", "cpu", "mps"):
         raise ReferenceError("SAM 2.1 size must be tiny/small/base_plus/large and device auto/cpu/mps")
+    cache_root = Path(cache_dir).resolve() if cache_dir is not None else None
+    if cache_root is not None and (Path(cache_dir).is_symlink() or
+                                   (cache_root.exists() and not cache_root.is_dir())):
+        raise ReferenceError("Mask cache must be a real directory, not a symlink or file")
     checkpoint = None
     if segmenter == "sam2":
         if sam2_checkpoint is None:
@@ -315,7 +416,9 @@ def generate_rectified_masks(reconstruction: str | Path, output: str | Path, *,
     if segmenter == "sam2":
         assert checkpoint is not None
         model_sha = _sha256(checkpoint)
-        predictor, device = _load_sam2_predictor(checkpoint, sam2_size, sam2_device)
+        # The checkpoint hash is enough to validate cache keys. Load the
+        # multi-GB model only when at least one image needs fresh inference.
+        device = sam2_device
     elif segmenter == "rembg":
         try:
             from rembg import new_session  # type: ignore[import-not-found]
@@ -340,7 +443,12 @@ def generate_rectified_masks(reconstruction: str | Path, output: str | Path, *,
     images = {item["filename"]: item for item in index["images"]}
     guide_map, guide_sha = _load_guides(guides, plan["undistorted_images"], default_box)
     target = Path(plan["output"])
+    if cache_root is not None and (cache_root == target or cache_root.is_relative_to(target)
+                                   or cache_root == source or cache_root.is_relative_to(source)):
+        raise ReferenceError("Shared mask cache must be outside source and output revisions")
     target.mkdir(parents=True, exist_ok=False)
+    if cache_root is not None:
+        cache_root.mkdir(parents=True, exist_ok=True)
     mask_dir, preview_dir = target / "masks", target / "review"
     mask_dir.mkdir()
     preview_dir.mkdir()
@@ -353,7 +461,10 @@ def generate_rectified_masks(reconstruction: str | Path, output: str | Path, *,
         "segmentation_model_sha256": model_sha,
         "segmentation_model_checkpoint": str(checkpoint) if checkpoint else None,
         "segmentation_device": device,
+        "automatic_guidance": segmenter == "sam2" and guides is None,
         "requires_anatomy_inventory": segmenter == "sam2",
+        "cache": {"directory": str(cache_root) if cache_root else None,
+                  "hits": 0, "misses": 0},
         "status": "incomplete / manual-mask-review-required", "images": [],
         "approved_for_reconstruction": False,
     }
@@ -371,24 +482,47 @@ def generate_rectified_masks(reconstruction: str | Path, output: str | Path, *,
                 expected = images[filename]["dimensions"]
                 if list(original.size) != expected:
                     raise ReferenceError(f"Rectified photo size changed: {filename}")
+                active_guide = (_auto_sam2_guide(original, default_box)
+                                if segmenter == "sam2" and guides is None
+                                else guide_map[filename])
+                fingerprint = hashlib.sha256(json.dumps({
+                    "schema": _MASK_CACHE_SCHEMA,
+                    "source_sha256": images[filename]["sha256"],
+                    "dimensions": expected, "segmenter": segmenter,
+                    "model_sha256": model_sha, "model_size": sam2_size if segmenter == "sam2" else None,
+                    "guide": active_guide if segmenter != "rembg" else None,
+                    "max_side": max_side, "iterations": iterations if segmenter == "grabcut" else None,
+                }, sort_keys=True).encode()).hexdigest()
+                cached = _cached_mask(cache_root, fingerprint, expected)
                 details: dict[str, Any] = {}
-                if segmenter == "rembg":
-                    binary = _rembg_mask(original, session)
-                elif segmenter == "sam2":
-                    binary, details = _sam2_mask(original, guide_map[filename], predictor, max_side)
+                if cached is not None:
+                    cached_file, details = cached
+                    with Image.open(cached_file) as cached_image:
+                        mask = cached_image.copy()
+                    report["cache"]["hits"] += 1
                 else:
-                    binary = _grabcut(original, guide_map[filename], max_side, iterations)
-                if not binary.any() or (binary == 255).all():
-                    raise ReferenceError(f"{segmenter} returned an empty or entirely foreground mask")
-                mask = Image.fromarray(binary, mode="L")
+                    if segmenter == "rembg":
+                        binary = _rembg_mask(original, session)
+                    elif segmenter == "sam2":
+                        if predictor is None:
+                            assert checkpoint is not None
+                            predictor, device = _load_sam2_predictor(checkpoint, sam2_size, sam2_device)
+                            report["segmentation_device"] = device
+                        binary, details = _sam2_mask(original, active_guide, predictor, max_side)
+                    else:
+                        binary = _grabcut(original, guide_map[filename], max_side, iterations)
+                    if not binary.any() or (binary == 255).all():
+                        raise ReferenceError(f"{segmenter} returned an empty or entirely foreground mask")
+                    mask = Image.fromarray(binary, mode="L")
+                    report["cache"]["misses"] += 1
                 occupancy = round(sum(mask.histogram()[128:])/ (mask.width*mask.height), 5)
                 warnings = []
                 if segmenter == "grabcut" and guides is None:
                     warnings.append("Unreviewed center-box guess; add per-photo guides for busy backgrounds")
-                if segmenter == "sam2" and not guide_map[filename]["part_points"]:
+                if segmenter == "sam2" and not active_guide["part_points"]:
                     warnings.append("No visible-anatomy landmarks: mark head/torso/paws/tail where visible")
                 if segmenter == "sam2" and guides is None:
-                    warnings.append("SAM 2.1 guessed one central object box; annotate separate anatomy components")
+                    warnings.append("SAM 2.1 used automatically generated background prompts and an unverified subject box")
                 for part in details.get("missing_parts", []):
                     warnings.append(f"Missing {part} landmark: correct the box, prompts, or include polygon")
                 if details.get("background_seed_violations", 0):
@@ -405,6 +539,8 @@ def generate_rectified_masks(reconstruction: str | Path, output: str | Path, *,
                     warnings.append("Foreground touches photo border; inspect cropped statue")
                 mask_path = mask_dir / (filename + ".mask.png")
                 mask.save(mask_path, format="PNG", optimize=True)
+                if cached is None:
+                    _save_mask_cache(cache_root, fingerprint, mask_path, expected, details)
                 original.thumbnail((900, 900))
                 base = original.convert("RGB")
                 cover = Image.new("RGB", base.size, (238, 58, 35))
@@ -416,12 +552,16 @@ def generate_rectified_masks(reconstruction: str | Path, output: str | Path, *,
                 report["images"].append({
                     "filename": filename, "source_photo_sha256": images[filename]["sha256"],
                     "mask": str(mask_path.relative_to(target)), "mask_sha256": _sha256(mask_path),
+                    "cache_hit": cached is not None, "cache_key": fingerprint if cache_root else None,
                     "preview": str(preview.relative_to(target)),
                     "foreground_fraction": occupancy,
-                    "guide": guide_map[filename], "warnings": warnings,
+                    "guide": active_guide, "warnings": warnings,
+                    "guide_source": ("auto-sky-negative-prompts / tentative"
+                                     if segmenter == "sam2" and guides is None else
+                                     "user-guides" if guides is not None else "default-box"),
                     "missing_parts": details.get("missing_parts", []),
                     "background_seed_violations": details.get("background_seed_violations", 0),
-                    "parts_verified": sorted(guide_map[filename]["part_points"]),
+                    "parts_verified": sorted(active_guide["part_points"]),
                     "segmented_components": details.get("components", []),
                 })
         except Exception as error:

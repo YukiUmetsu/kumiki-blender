@@ -39,8 +39,19 @@ class PhotoModelSettings:
     max_image_size: int = 3200
     texture: bool = True
     render_previews: bool = True
+    matching_preset: str = "sift"
+    matching_device: str = "colmap-cpu"
+    feature_threads: int | None = None
+    matching_threads: int | None = None
+    sift_first_octave: int | None = None
+    max_colmap_rss_mb: int | None = None
+    matching_block_size: int | None = None
+    matching_max_features: int | None = None
+    matching_pairs_per_process: int | None = None
 
     def validate(self) -> None:
+        from .colmap import _validate_matching_preset
+
         if self.engine not in ("pycolmap", "colmap", "mapanything"):
             raise ReferenceError("Sparse engine must be pycolmap, colmap or mapanything")
         if not is_valid_model_id(self.mapanything_model):
@@ -50,6 +61,42 @@ class PhotoModelSettings:
         if (type(self.mapanything_depth_tolerance) not in (int, float)
                 or not 0.01 <= self.mapanything_depth_tolerance <= 1.0):
             raise ReferenceError("mapanything_depth_tolerance must be in [0.01, 1.0]")
+        _validate_matching_preset(self.matching_preset, self.engine)
+        if self.matching_device not in ("colmap-cpu", "mps"):
+            raise ReferenceError("matching_device must be colmap-cpu or mps")
+        if self.matching_device == "mps" and (self.engine != "colmap" or self.matching_preset != "sift-lightglue"):
+            raise ReferenceError("MPS matching requires --engine colmap --matching-preset sift-lightglue")
+        if self.matching_device == "mps" and self.matching_pairs_per_process is None:
+            raise ReferenceError("MPS matching requires --matching-pairs-per-process")
+        for name in ("feature_threads", "matching_threads"):
+            count = getattr(self, name)
+            if count is not None and (type(count) is not int or not 1 <= count <= 64):
+                raise ReferenceError(f"{name} must be 1–64")
+        if self.sift_first_octave not in (None, -1, 0):
+            raise ReferenceError("sift_first_octave must be -1 or 0")
+        if (self.max_colmap_rss_mb is not None and
+                (type(self.max_colmap_rss_mb) is not int or
+                 (self.max_colmap_rss_mb != 0 and not 1024 <= self.max_colmap_rss_mb <= 131072))):
+            raise ReferenceError("max_colmap_rss_mb must be 0 or 1024–131072")
+        if (self.matching_block_size is not None and
+                (type(self.matching_block_size) is not int or not 1 <= self.matching_block_size <= 50)):
+            raise ReferenceError("matching_block_size must be 1–50")
+        if (self.matching_max_features is not None and
+                (type(self.matching_max_features) is not int or
+                 not 256 <= self.matching_max_features <= 32768)):
+            raise ReferenceError("matching_max_features must be 256–32768")
+        if (self.matching_pairs_per_process is not None and
+                (type(self.matching_pairs_per_process) is not int or
+                 not 1 <= self.matching_pairs_per_process <= 1024)):
+            raise ReferenceError("matching_pairs_per_process must be 1–1024")
+        if self.engine != "colmap" and any(value is not None for value in
+                                           (self.feature_threads, self.matching_threads,
+                                            self.sift_first_octave, self.max_colmap_rss_mb,
+                                            self.matching_block_size, self.matching_max_features,
+                                            self.matching_pairs_per_process)):
+            raise ReferenceError("COLMAP memory controls require --engine colmap")
+        if self.sift_first_octave is not None and self.matching_preset not in ("sift", "sift-lightglue"):
+            raise ReferenceError("SIFT first octave applies only to SIFT-based matching")
         if self.dense_backend not in ("openmvs", "colmap"):
             raise ReferenceError("Dense backend must be openmvs or colmap")
         if not isinstance(self.colmap, str) or not self.colmap.strip():
@@ -90,12 +137,18 @@ def _dependencies(settings: PhotoModelSettings) -> tuple[dict[str, str], list[st
             found["pycolmap"] = "python-module"
     elif settings.engine == "colmap":
         names.append(settings.colmap)
-    else:
+    elif settings.engine == "mapanything":
         for module in ("torch", "mapanything"):
             if importlib.util.find_spec(module) is None:
                 missing.append(f"{module} (pip install -e '.[mapanything]')")
             else:
                 found[module] = "python-module"
+    if settings.engine == "colmap" and settings.matching_device == "mps":
+        for name in ("numpy", "torch", "lightglue"):
+            if importlib.util.find_spec(name) is None:
+                missing.append(f"{name} (MPS matching dependency)")
+            else:
+                found[name] = "python-module"
     if settings.dense_backend == "openmvs":
         names.extend(("InterfaceCOLMAP", "DensifyPointCloud", "ReconstructMesh"))
         names.append("RefineMesh")
@@ -135,7 +188,16 @@ def plan_photo_model(references: ReferenceSet, output: str | Path,
         "source_manifest_sha256": references.manifest_sha256,
         "missing_photo_rights": any(image.source_url == "local-unattributed"
                                     for image in references.images),
-        "sparse_engine": settings.engine, "dense_backend": settings.dense_backend,
+        "sparse_engine": settings.engine, "matching_preset": settings.matching_preset,
+        "matching_device": settings.matching_device,
+        "memory_controls": {"feature_threads": settings.feature_threads,
+                            "matching_threads": settings.matching_threads,
+                            "sift_first_octave": settings.sift_first_octave,
+                            "max_colmap_rss_mb": settings.max_colmap_rss_mb,
+                            "matching_block_size": settings.matching_block_size,
+                            "matching_max_features": settings.matching_max_features,
+                            "matching_pairs_per_process": settings.matching_pairs_per_process},
+        "dense_backend": settings.dense_backend,
         "min_registered_images": settings.min_registered_images,
         "min_registered_fraction": settings.min_registered_fraction,
         "texture_requested": settings.texture,
@@ -202,7 +264,16 @@ def build_photo_model(
             sparse_fn = sparse_builder or build_sparse_reconstruction
             sparse = sparse_fn(references, target / "sparse", colmap=settings.colmap,
                                engine=settings.engine, timeout_seconds=settings.sparse_timeout_seconds,
-                               undistort=True, max_image_size=settings.max_image_size)
+                                undistort=True, max_image_size=settings.max_image_size,
+                                matching_preset=settings.matching_preset,
+                                matching_device=settings.matching_device,
+                                feature_threads=settings.feature_threads,
+                                matching_threads=settings.matching_threads,
+                                sift_first_octave=settings.sift_first_octave,
+                                max_colmap_rss_mb=settings.max_colmap_rss_mb,
+                                matching_block_size=settings.matching_block_size,
+                                matching_max_features=settings.matching_max_features,
+                                matching_pairs_per_process=settings.matching_pairs_per_process)
         report["sparse"] = {key: sparse.get(key) for key in
                             ("status", "registered_images", "staged_independent_images",
                              "failed_stage", "error")}

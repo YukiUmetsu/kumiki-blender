@@ -190,6 +190,87 @@ class PhotoModelTests(unittest.TestCase):
         self.assertIn("--asset-id", error.getvalue())
         self.assertFalse(target.exists())
 
+    def test_cli_preserves_mapanything_and_colmap_matching_options_after_merge(self):
+        for engine, options in (
+            ("mapanything", ["--mapanything-device", "cpu",
+                            "--mapanything-depth-tolerance", "0.25"]),
+            ("colmap", ["--matching-preset", "sift-lightglue",
+                        "--matching-device", "mps", "--matching-pairs-per-process", "4"]),
+        ):
+            with self.subTest(engine=engine):
+                output = io.StringIO()
+                target = self.root / f"plan-{engine}"
+                with contextlib.redirect_stdout(output):
+                    code = main(["plan-photo-model", "--photos", str(self.photos),
+                                 "--asset-id", "test-sphinx", "--output", str(target),
+                                 "--engine", engine, *options])
+                self.assertEqual(code, 0)
+                report = json.loads(output.getvalue())
+                self.assertEqual(report["sparse_engine"], engine)
+                self.assertFalse(target.exists())
+                if engine == "mapanything":
+                    self.assertEqual(report["matching_device"], "colmap-cpu")
+                    self.assertNotIn("lightglue (MPS matching dependency)", report["missing_dependencies"])
+                else:
+                    self.assertEqual(report["matching_device"], "mps")
+                    self.assertEqual(report["memory_controls"]["matching_pairs_per_process"], 4)
+
+    def test_sparse_only_cli_accepts_folder_and_learned_matching(self):
+        target = self.root / "sparse-learned"
+        captured = {}
+
+        def build(refs, output, **kwargs):
+            captured["count"] = len(refs.images)
+            captured["output"] = output
+            captured["kwargs"] = kwargs
+            return {"status": "candidate / visual-review-required", "registered_images": 8}
+
+        output = io.StringIO()
+        with patch("kumiki_blender.reconstruction.colmap.build_sparse_reconstruction", side_effect=build):
+            with contextlib.redirect_stdout(output):
+                result = main(["reconstruct-photos", "--photos", str(self.photos),
+                               "--asset-id", "sphinx-cameras", "--output", str(target),
+                               "--engine", "colmap", "--matching-preset", "loma", "--undistort",
+                               "--feature-threads", "1", "--matching-threads", "2",
+                               "--max-colmap-rss-mb", "10240",
+                               "--matching-block-size", "3",
+                               "--matching-max-features", "2048",
+                               "--matching-pairs-per-process", "5", "--resume",
+                               "--matching-device", "mps"])
+        self.assertEqual(result, 0)
+        self.assertEqual(captured["count"], 8)
+        self.assertEqual(captured["kwargs"]["matching_preset"], "loma")
+        self.assertTrue(captured["kwargs"]["undistort"])
+        self.assertEqual(captured["kwargs"]["feature_threads"], 1)
+        self.assertEqual(captured["kwargs"]["matching_threads"], 2)
+        self.assertEqual(captured["kwargs"]["max_colmap_rss_mb"], 10240)
+        self.assertEqual(captured["kwargs"]["matching_block_size"], 3)
+        self.assertEqual(captured["kwargs"]["matching_max_features"], 2048)
+        self.assertEqual(captured["kwargs"]["matching_pairs_per_process"], 5)
+        self.assertEqual(captured["kwargs"]["matching_device"], "mps")
+        self.assertTrue(captured["kwargs"]["resume"])
+        self.assertEqual(captured["output"], target)
+        self.assertEqual(json.loads(output.getvalue())["registered_images"], 8)
+
+    def test_learned_matching_validation_does_not_create_photo_model(self):
+        settings = PhotoModelSettings(engine="pycolmap", matching_preset="loma")
+        with self.assertRaisesRegex(ReferenceError, "requires --engine colmap"):
+            plan_photo_model(self.references, self.root / "bad", settings,
+                             dependencies=self.dependencies)
+        self.assertFalse((self.root / "bad").exists())
+
+    def test_mps_photo_model_requires_bounded_sift_lightglue(self):
+        for settings in (
+            PhotoModelSettings(engine="pycolmap", matching_device="mps"),
+            PhotoModelSettings(engine="colmap", matching_device="mps", matching_preset="sift"),
+            PhotoModelSettings(engine="colmap", matching_device="mps", matching_preset="sift-lightglue"),
+        ):
+            with self.subTest(settings=settings), self.assertRaises(ReferenceError):
+                settings.validate()
+        valid = PhotoModelSettings(engine="colmap", matching_device="mps",
+                                   matching_preset="sift-lightglue", matching_pairs_per_process=8)
+        valid.validate()
+
     def test_unrelated_web_photos_are_not_treated_as_sufficient_overlap(self):
         output = self.root / "inadequate-overlap"
 

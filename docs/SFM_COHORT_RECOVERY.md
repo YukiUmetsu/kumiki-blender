@@ -1,0 +1,267 @@
+# Reconstructing missing sides of any object
+
+Use this when an otherwise successful COLMAP reconstruction registers one view
+orbit but fails to register photos from another side. This is not specific to
+the Great Sphinx, statues, or a particular file naming convention.
+
+The existing `reconstruct-photos` run must have a `sparse-reconstruction/`
+directory containing `database.db`, original `images/`, `sparse/0`,
+`text-models/0/images.txt`, and `staged-reference-index.json`. Keep all those
+files together. The recovery tool never changes them.
+
+## 1. Inspect the proposed independent cohort
+
+```bash
+SOURCE="/absolute/path/to/previous/camera-revision"
+
+kumiki-blender plan-sfm-cohort-recovery \
+  --revision "$SOURCE" --max-anchors 6 --max-trials 5
+```
+
+By default, target photos are **all images absent from the selected registered
+model**. This applies to animals, architectural sites, vehicles, products,
+statues, or anything else reconstructed using the same image pipeline.
+
+If the failed images represent multiple unrelated viewpoints, specify a subset
+using a JSON file containing **staged filenames**, not original filenames:
+
+```json
+["photo-from-back.png", "photo-from-left.png", "photo-from-top.png"]
+```
+
+Use `--targets /path/to/targets.json`. Existing registered images included in
+the target list become alignment anchors automatically. Use repeated `--anchor
+STAGED_FILENAME` to explicitly favor useful registered bridge views. All anchors
+are required to be registered in the baseline; the rest are chosen from verified
+pair matches, prioritizing links to the missing side.
+
+The plan reports:
+
+- Verified seed pairs containing at least one missing-side image, ranked using
+  inlier distribution and estimated matched-ray separation when a valid
+  COLMAP two-view pose/intrinsics are available. Strongly near-zero calibrated
+  pairs are skipped by default (`--min-seed-angle 1.0` degrees).
+- Registered anchor images and exact COLMAP image IDs.
+- A bounded number of candidate initializations.
+- Whether enough registered anchors were selected for a potential merge.
+- `coverage_gaps`: disconnected missing-view groups, registered matching
+  neighbors, existing reconstructed 3D-track support and best bridge-photo
+  targets. No image viewpoint labels or object identities are guessed.
+
+The plan does not prove that 3D reconstruction will work. Strong 2D matches can
+lie on background terrain or repeat-pattern surfaces, and cannot independently
+establish depth, object identity, or camera geometry.
+
+For a compact failure-focused explanation, include the previous recovery report
+after the trial completes:
+
+```bash
+kumiki-blender diagnose-sfm-coverage \
+  --revision "$SOURCE" \
+  --prior-recovery /absolute/path/to/old/cohort-recovery-report.json
+```
+
+The diagnostic reports which specific old trials yielded only zero, one or two
+shared cameras, and the unregistered group each failed trial attempted.
+An existing 2D-to-3D track count is candidate support **only**, not PnP inliers.
+
+### Get a human-readable missing-angle shopping list (recommended)
+
+Before hunting for additional photos, run the same diagnostic with a new guide
+directory. This uses the **original file names** in `staged-reference-index.json`,
+not only the internal `photo-00XX.png` names:
+
+```bash
+GUIDE=".review/missing-angle-guide-r01"  # must not already exist
+kumiki-blender diagnose-sfm-coverage \
+  --revision "$SOURCE" \
+  --prior-recovery /absolute/path/to/old/cohort-recovery-report.json \
+  --guide-dir "$GUIDE" --format markdown
+```
+
+Results:
+
+- Terminal Markdown states **which registered original photo to connect to
+  which unregistered original photo**, with other missing photos in that group.
+- `$GUIDE/missing-angle-guide.md` is a step-by-step photo acquisition checklist.
+- `$GUIDE/missing-camera-angles.jpg` is a labeled side-by-side contact sheet of
+  the current registered reference and all missing photos for each gap, when
+  Pillow is installed (`pip install -e '.[qa]'`).
+- `$GUIDE/missing-angle-guide.json` provides structured data for other tools.
+
+For a single-file JSON output, omit `--guide-dir` and `--format markdown` (the
+default remains `json`). Every gap also contains `photo_request` with original
+file names and view hints, so other agents can use it without a manual lookup.
+
+**Important:** A name like `object-left-side.jpg` is a *filename clue*, not an
+image classification or measured camera position. The tool explicitly marks
+unregistered angles as unknown. See the contact sheet to inspect the actual
+views. When captions are supplied in the staged manifest, they are labeled as
+source annotations rather than measured geometry. A photograph between two
+appearances is only a hypothesis until COLMAP verifies common **object-surface**
+features and reconstructs coherent poses.
+
+## 2. Recover independent views, then attempt a guarded merge
+
+In the **same Python virtual environment as PyCOLMAP 4.x**, run:
+
+```bash
+OUT="/absolute/path/to/new/private/cohort-revision"
+
+kumiki-blender recover-sfm-cohorts \
+  --revision "$SOURCE" --output "$OUT" \
+  --max-anchors 6 --max-trials 5 --trial-timeout 1200
+```
+
+Optional: pass `--targets`, repeat `--anchor`, and set `--colmap /path/to/colmap`.
+An example for the existing Sphinx run is `--anchor photo-0033.png`, but the
+code has **no object-specific filenames**.
+
+Implementation:
+
+1. Validate original staged images against their SHA-256 manifest and ensure
+   the sparse text and binary models have the same image names.
+2. Copy the **existing** COLMAP database once. This preserves image IDs,
+   features, verified LightGlue/SIFT matches, and original source attribution.
+3. Use PyCOLMAP's `IncrementalPipelineOptions.image_names` to restrict
+   each independent mapping to missing-side photos plus a small number of
+   old registered anchors. Initialization seeds are always pairs containing a
+   previously missing photo, so the dominant old orbit does not win by default.
+4. Save every trial under `trial-NN/sparse/0` for later comparison, including
+   failed alignment candidates.
+5. Require at least **three shared registered cameras**, nondegenerate camera
+   spatial distribution, consistent IDs, a proper 3D similarity, bounded
+   camera-center residuals, bounded viewing-direction disagreements, and at
+   least two newly registered target views.
+6. Only after those tests, invoke COLMAP's native `model_merger`, which further
+   validates shared **2D/3D reprojection observations**. Reject native merge
+   errors, lost baseline cameras, lost new cameras, and unexpected movement of
+   the original camera positions/directions.
+
+The merger requires **shared registered images in a common database**. Two
+disconnected point clouds with no common camera observations cannot safely be
+merged merely because they visually resemble the same object.
+
+The result is deliberately named `merged-candidate/`, with report status
+`candidate / needs-object-and-camera-visual-review`. This is **not** an
+automatic approval for dense OpenMVS, Gaussian splatting, or GLB generation.
+If there is no valid alignment, inspect the independent candidate models and
+`cohort-recovery-report.json`, then add intermediate overlapping photos or
+verified survey/scan correspondences. Do not lower geometry thresholds just to
+raise camera counts.
+
+## 3. Add bridge photographs for any object
+
+Use the gap diagnostic to identify two views that still need a connected path:
+one registered view and one currently missing view. Find **real** intermediate
+photographs showing common, stable features on the object across successive
+angles. Repeated screenshots from the same camera position, feature matches on
+the background, or generated views cannot supply trustworthy missing depth.
+
+Put the new JPEG/PNG/WebP files in a local folder. Optionally create a JSON
+source-attribution manifest (all filenames refer to files in that folder):
+
+```json
+{
+  "images": [
+    {"filename": "bridge-left.jpg", "source_url": "https://example.org/source",
+     "license": "reference-only", "view": "oblique"}
+  ]
+}
+```
+
+Stage a **new** combined input directory without changing the original source:
+
+```bash
+BRIDGE_PHOTOS="/absolute/path/to/new-real-overlapping-photos"
+PREPARED="/absolute/path/to/unused/combined-bridge-input"
+
+kumiki-blender prepare-sfm-bridge-photos \
+  --revision "$SOURCE" \
+  --photos "$BRIDGE_PHOTOS" \
+  --output "$PREPARED"
+```
+
+You may supply `--manifest /absolute/path/to/photo-sources.json`. All source
+images are checked against the original hashes, the bridge files are decoded,
+duplicates are rejected, and the private `bridge-photo-manifest.json` records
+the photo/source mapping. This uses the same 8–256 image, format, dimensions,
+and 50 MiB limits as `reconstruct-photos`.
+
+Start a **new sparse reconstruction** using the existing Mac acceleration:
+
+```bash
+NEW_CAMERA_REVISION="/absolute/path/to/unused/cameras-with-bridges"
+
+kumiki-blender reconstruct-photos \
+  --photos "$PREPARED/photos" --asset-id example-object-with-bridges \
+  --output "$NEW_CAMERA_REVISION" --engine colmap \
+  --matching-preset sift-lightglue --matching-device mps \
+  --undistort --timeout-seconds 7200
+```
+
+This rebuilds feature extraction/matching and camera registration in a new
+revision. It **does not** splice matches from unrelated input revisions or
+silently change existing camera IDs; the source remains available for
+comparison by content hash. The new bridge files are always private,
+regardless of whether their rights metadata is present.
+
+## 4. Validate physical object landmarks on an existing candidate
+
+Camera agreement and native COLMAP reprojection checks are necessary but do
+not prove that matches lie on the intended object (rather than the background).
+For a particular trial, identify **three or more noncollinear physical features**
+that genuinely correspond across the two sparse models. Example landmark names
+for an arbitrary object might be `feature-A`, `feature-B`, and `feature-C`.
+
+Create a JSON file containing surveyed or verified 3D coordinates in **both**
+independent model coordinate frames:
+
+```json
+{
+  "landmarks": [
+    {"id": "feature-A", "baseline_xyz": [1.0, 2.0, 3.0], "cohort_xyz": [10.0, 20.0, 30.0]},
+    {"id": "feature-B", "baseline_xyz": [4.0, 2.0, 3.0], "cohort_xyz": [11.0, 20.0, 30.0]},
+    {"id": "feature-C", "baseline_xyz": [1.0, 6.0, 4.0], "cohort_xyz": [10.0, 21.0, 31.0]}
+  ]
+}
+```
+
+These are **illustrative values only**, not valid monument measurements. Use
+COLMAP model inspection to identify real corresponding 3D points or verified
+survey positions. Then run:
+
+```bash
+kumiki-blender inspect-sfm-cohort-alignment \
+  --revision "$SOURCE" \
+  --candidate "$OUT/trial-01/sparse/0" \
+  --landmarks /absolute/path/to/object-landmarks.json
+```
+
+Object landmarks must be evaluated against the **specific trial's** camera
+frame. They cannot be reused blindly across trial 01, trial 02, etc. The QA
+compares physical landmarks against the similarity fitted to shared camera
+poses, and fails on inconsistent scale, distribution or residuals. Passing
+these mathematical checks still requires visually comparing registered
+camera frustums and 3D geometry against the input photos.
+
+## Apple Silicon and performance
+
+Use the already verified LightGlue/MPS feature database from the source run;
+this recovery performs **no extraction or rematching**, so it does not download
+or request approval for another model. PyCOLMAP incremental mapping and Ceres
+bundle adjustment are CPU operations; `ba_use_gpu=False` is deliberate and
+compatible with Apple Silicon. Trials are bounded in number and runtime. The
+original MPS feature-matching acceleration is preserved in the match database.
+
+If `No module named 'pycolmap'` appears, install the existing optional
+photogrammetry dependency **into the active reconstruction venv**:
+
+```bash
+python -m pip install 'pycolmap>=4.0.2,<5'
+python -c 'import pycolmap; print(pycolmap.__version__)'
+```
+
+For upstream behavior and limitations, see
+[COLMAP PyCOLMAP options](https://colmap.github.io/pycolmap/pycolmap.html) and
+[COLMAP merging FAQ](https://colmap.github.io/faq.html#merge-disconnected-models).

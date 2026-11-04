@@ -138,7 +138,10 @@ def _view_label(yaw: float, front_known: bool) -> str:
     if not front_known:
         return "relative to reference camera (not a verified front/side label)"
     magnitude = abs(yaw)
-    side = "right" if yaw > 0 else "left"
+    # The sign is based on the nominated FRONT PHOTO'S image-right direction,
+    # not the object's anatomical left/right. A monument's named "left side"
+    # may be the opposite of screen-left from the front camera.
+    side = "front-image right" if yaw > 0 else "front-image left"
     if magnitude <= 12:
         return "front"
     if magnitude <= 65:
@@ -323,6 +326,10 @@ def _status(photo: dict, *, registered: bool, alternate: bool,
             return "recover-first", "medium", reasons
         if count >= 8:
             reasons.append("Some shared tracks exist, but spatial coverage or count may be insufficient for PnP.")
+            if photo["strong_neighbors"] >= 2:
+                reasons.append("Multiple verified photo neighbors exist: attempt camera registration "
+                               "or independent-cohort recovery before acquiring new bridge photos.")
+                return "recover-first", "medium", reasons
             return "needs-overlap-bridge", "medium", reasons
     reasons.append("Weak or missing connections to reconstructed 3D tracks; "
                    "its exact viewing angle is unknown until registration.")
@@ -385,8 +392,10 @@ def _photo_priorities(images: list[dict]) -> list[dict]:
             "recommendation": (
                 "Test camera PnP/track consistency and intrinsics before adding photos."
                 if kind == "try-registration-first" else
-                "Find intermediate views with shared head, neck and torso features "
-                "between this photo and the registered bridge photo; retry registration."),
+                "Existing verified photo matches already exist. Retry seeded PnP, "
+                "intrinsics, and independent-cohort registration before seeking new "
+                "real intermediate viewpoints; weak 2D-to-3D support is not proof "
+                "that a physical bridge photograph is missing."),
             "evidence": "verified 2D matches touching estimated 3D tracks; not PnP inliers",
         })
     if separate:
@@ -676,6 +685,10 @@ def analyze(revision: Path, *, source_index: Path | None = None,
                                        "not-registered-in-best-model" if front_photo else
                                        "not-supplied"),
             "centroid_basis": "median of reconstructed 3D points; not verified object center",
+            "azimuth_sign_convention": (
+                "Positive: front photograph's image-right; negative: front photograph's "
+                "image-left. Not an object's anatomical left or right."
+            ),
             "limitations": "Relative azimuth/elevation come from estimated cameras in ONE sparse model. "
                            "Camera-image-up defines vertical; roll, focal length, incomplete surface "
                            "coverage and incorrect poses can bias these angles. "
@@ -722,6 +735,7 @@ def _markdown(report: dict) -> str:
         "",
         f"**Angle basis:** {report['angle_reference']['kind']} "
         f"({report['angle_reference']['original_filename'] or 'none'}).",
+        f"**Azimuth sign:** {report['angle_reference']['azimuth_sign_convention']}",
         "",
         "## Photos to review first",
         "",
