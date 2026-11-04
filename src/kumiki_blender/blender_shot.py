@@ -187,14 +187,17 @@ def build_shot(bpy: Any, plan: ShotPlan, spec_path: Path, output: Path, *, save_
     scene = bpy.context.scene
     # Measure every contact before rendering, so a miss costs seconds, not a full render.
     errors: dict[str, float] = {}
+    worst: dict[str, int] = {}
     for index in range(plan.bake.duration_frames):
         scene.frame_set(index + 1)
         for actor_id, channels in plan.bake.actors.items():
             for effector, track in (channels.get("effectors") or {}).items():
                 if track["influence"][index] > .99:
                     key = f"{actor_id}.{effector}"
-                    errors[key] = max(errors.get(key, 0), _contact_error(bpy, rigs[actor_id], effector))
-    failures = {key: value for key, value in errors.items() if value > CONTACT_TOLERANCE_M}
+                    error = _contact_error(bpy, rigs[actor_id], effector)
+                    if error > errors.get(key, 0):
+                        errors[key], worst[key] = error, index
+    failures = {key: f"{value * 1000:.1f} mm at frame {worst[key]}" for key, value in errors.items() if value > CONTACT_TOLERANCE_M}
     if failures:
         raise ShotPlanError(f"Contact missed its target: {failures}")
     rendered = 0
