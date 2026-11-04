@@ -3,6 +3,7 @@
 import sqlite3
 import struct
 import math
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -10,7 +11,8 @@ from unittest.mock import patch
 
 from kumiki_blender.reconstruction.colmap import _cap_colmap_sift_features
 from kumiki_blender.reconstruction.mps_lightglue_worker import (
-    MAX_IMAGE_ID, _load_features, main, pair_id, read_pairs, select_spatial_keypoints,
+    MAX_IMAGE_ID, _load_features, _load_lightglue_matcher, main, pair_id, read_pairs,
+    select_spatial_keypoints,
     write_matches,
 )
 from kumiki_blender.reconstruction.references import ReferenceError
@@ -158,6 +160,31 @@ class MPSLightGlueFeatureTests(unittest.TestCase):
         with patch("kumiki_blender.reconstruction.mps_lightglue_worker._check_dependencies",
                    side_effect=RuntimeError("PyTorch MPS is unavailable")):
             self.assertEqual(main(["check", "--device", "mps"]), 1)
+
+    def test_matcher_import_does_not_execute_package_initializer_or_opencv(self):
+        package = self.root / "lightglue"
+        package.mkdir()
+        (package / "__init__.py").write_text(
+            "import cv2\nraise AssertionError('eager initializer imported')\n",
+            encoding="utf-8")
+        (package / "lightglue.py").write_text(
+            "class LightGlue:\n    marker = 'standalone matcher'\n",
+            encoding="utf-8")
+        with patch("sys.path", [str(self.root), *sys.path]), patch.dict(sys.modules):
+            sys.modules.pop("lightglue", None)
+            matcher = _load_lightglue_matcher()
+            self.assertEqual(matcher.marker, "standalone matcher")
+            self.assertNotIn("lightglue", sys.modules)
+
+    def test_matcher_import_fails_closed_when_upstream_layout_changes(self):
+        package = self.root / "lightglue"
+        package.mkdir()
+        (package / "__init__.py").write_text(
+            "raise AssertionError('eager initializer imported')\n", encoding="utf-8")
+        with patch("sys.path", [str(self.root), *sys.path]), patch.dict(sys.modules):
+            sys.modules.pop("lightglue", None)
+            with self.assertRaisesRegex(ImportError, "standalone.*missing"):
+                _load_lightglue_matcher()
 
 
 if __name__ == "__main__":

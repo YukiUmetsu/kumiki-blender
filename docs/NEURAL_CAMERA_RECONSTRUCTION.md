@@ -122,25 +122,40 @@ Install the optional worker dependencies in the Python environment containing
 python -m pip install numpy torch
 python -m pip install git+https://github.com/cvg/LightGlue.git
 python -c 'import torch; print("MPS available:", torch.backends.mps.is_available())'
+python -m kumiki_blender.reconstruction.mps_lightglue_worker check --device mps
 ```
 
 #### macOS OpenMP Error #15 during MPS preflight
 
 `OMP: Error #15` indicates conflicting native OpenMP libraries, **not** a GPU
-memory limit or photo-matching failure. Never use the suggested
+memory limit or photo-matching failure. Upstream `from lightglue import
+LightGlue` eagerly imports feature extractors, including OpenCV, even though
+this worker already gets its SIFT keypoints from COLMAP. On affected macOS
+environments, this can load a second `libomp.dylib` after PyTorch and abort.
+The MPS worker therefore imports only LightGlue's standalone PyTorch matcher
+module, without executing that package initializer or importing OpenCV. This
+is compatible with upstream cvg/LightGlue's current module layout; an upstream
+layout change fails explicitly rather than silently changing matchers.
+
+Never use the suggested
 `KMP_DUPLICATE_LIB_OK=TRUE` workaround: loading two OpenMP runtimes can cause
 deadlocks, crashes, or silently invalid results. The preflight now preserves
 the actual `OMP: Error #15` line rather than only the trailing workaround hint.
 
 Run the following in **separate shell commands** inside the active virtualenv
-to isolate which dependency combination causes the conflict:
+to isolate the environment issue and test the worker path:
 
 ```bash
 python -c 'import torch; print("torch:", torch.__version__, torch.__file__); print("MPS:", torch.backends.mps.is_available())'
 python -c 'import numpy; import torch; print("NumPy + Torch OK")'
-python -c 'import numpy; import torch; from lightglue import LightGlue; print("LightGlue OK")'
+python -m kumiki_blender.reconstruction.mps_lightglue_worker check --device mps
 python -m pip list | rg -i 'numpy|torch|lightglue|opencv|scikit|mkl'
 ```
+
+The upstream `from lightglue import LightGlue` import **can still abort** in
+affected environments because it unnecessarily loads OpenCV. It is not the
+preflight used by `kumiki-blender`. Do not repeatedly run that import to test
+the MPS worker.
 
 If Torch alone fails, repair its binary installation. If only combined
 imports fail, identify the native dependency that supplies a second OpenMP

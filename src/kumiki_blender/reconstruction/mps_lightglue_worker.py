@@ -8,6 +8,7 @@ This optional worker needs numpy, torch and the upstream cvg/LightGlue package.
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import math
 import sqlite3
 import struct
@@ -16,6 +17,43 @@ from collections import defaultdict
 from pathlib import Path
 
 MAX_IMAGE_ID = 2147483647
+
+
+def _load_lightglue_matcher():
+    """Load the pure-PyTorch matcher without LightGlue's eager OpenCV imports.
+
+    Upstream ``lightglue.__init__`` imports all extractors, including its SIFT
+    extractor (and cv2). This worker uses *COLMAP's existing SIFT features*, so
+    loading those extractors is unnecessary. On some macOS installations,
+    importing cv2 after torch aborts the process with duplicate libomp (OMP
+    Error #15), which cannot be caught by Python. Load the standalone upstream
+    matcher module directly, before any package ``__init__`` is executed.
+
+    This intentionally requires upstream's self-contained ``lightglue.py``
+    layout. If the library changes, fail closed rather than importing OpenCV or
+    enabling the unsafe KMP_DUPLICATE_LIB_OK workaround.
+    """
+    package = importlib.util.find_spec("lightglue")
+    if package is None or not package.submodule_search_locations:
+        raise ImportError("cvg/LightGlue package is not installed")
+    for directory in package.submodule_search_locations:
+        matcher_file = Path(directory) / "lightglue.py"
+        if not matcher_file.is_file():
+            continue
+        spec = importlib.util.spec_from_file_location(
+            "_kumiki_lightglue_matcher", matcher_file)
+        if spec is None or spec.loader is None:
+            break
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        matcher = getattr(module, "LightGlue", None)
+        if matcher is None:
+            break
+        return matcher
+    raise ImportError(
+        "cvg/LightGlue's standalone lightglue/lightglue.py matcher is missing "
+        "or incompatible; install a supported upstream version"
+    )
 
 
 def select_spatial_keypoints(points: list[tuple[float, float, float]],
@@ -155,12 +193,13 @@ def _check_dependencies(device: str):
     try:
         import numpy  # noqa: F401  (required by feature loading)
         import torch
-        from lightglue import LightGlue
+        LightGlue = _load_lightglue_matcher()
     except (ImportError, OSError, RuntimeError) as error:
         raise RuntimeError(
             "MPS LightGlue requires working numpy, torch and cvg/LightGlue: "
             "pip install numpy torch && "
-            "pip install git+https://github.com/cvg/LightGlue.git"
+            "pip install git+https://github.com/cvg/LightGlue.git "
+            f"(dependency detail: {error})"
         ) from error
     if device == "mps" and not torch.backends.mps.is_available():
         raise RuntimeError("PyTorch MPS is unavailable; check Apple Silicon and torch installation")
