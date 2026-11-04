@@ -18,9 +18,10 @@ import shutil
 import statistics
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from .references import ReferenceError, ReferenceImage, ReferenceSet, audit_reference_set
 
@@ -106,7 +107,20 @@ def _probe_colmap(executable: str | list[str]) -> tuple[dict[str, str], tuple[st
 
 
 def _write_json(path: Path, content: dict[str, Any]) -> None:
-    path.write_text(json.dumps(content, indent=2) + "\n", encoding="utf-8")
+    # A hard stop during matching must not leave a half-written resume file.
+    temporary: str | None = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent,
+                                         prefix=f".{path.name}.", suffix=".tmp",
+                                         delete=False) as stream:
+            temporary = stream.name
+            stream.write(json.dumps(content, indent=2) + "\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+    finally:
+        if temporary is not None and os.path.exists(temporary):
+            os.unlink(temporary)
 
 
 def _staged_images(reference_set: ReferenceSet, report: dict[str, Any]) -> list[ReferenceImage]:
@@ -395,6 +409,109 @@ def _memory_guard_reason(log: Path) -> str:
     return "details unavailable"
 
 
+def _next_stage_number(target: Path, commands: list[list[str]]) -> int:
+    """Avoid overwriting a native log after an unexpected process interruption."""
+    numbers = [len(commands)]
+    for path in (target / "logs").glob("*-*.log"):
+        prefix = path.name.split("-", 1)[0]
+        if prefix.isdecimal():
+            numbers.append(int(prefix))
+    for path in (target / "pairs").glob("*-pairs.txt"):
+        prefix = path.name.split("-", 1)[0]
+        if prefix.isdecimal():
+            numbers.append(int(prefix))
+    return max(numbers) + 1
+
+
+def _match_in_bounded_processes(
+    executable: str | list[str], target: Path, database: Path,
+    match_args: list[str], timeout_seconds: int, max_rss_mb: int | None,
+    staged_names: list[str], pairs_per_process: int,
+    report: dict[str, Any], checkpoint: Callable[[], dict[str, Any]],
+) -> bool:
+    """Persist pair-matching progress across independent COLMAP workers.
+
+    A failed group is safe to retry: COLMAP skips previously verified pairs in
+    the shared database. Chunk boundaries and progress are saved after every
+    completed group, allowing --resume after an interrupted process.
+    """
+    names = sorted(staged_names)
+    if len(names) != len(set(names)):
+        raise ReferenceError("Duplicate staged image names cannot be matched safely")
+    pairs = [(first, second) for i, first in enumerate(names)
+             for second in names[i + 1:]]
+    progress = report.setdefault("matching_progress", {
+        "total_pairs": len(pairs), "next_pair_index": 0,
+        "completed_pairs": 0, "completed_batches": 0,
+        "batch_size": pairs_per_process, "status": "in-progress",
+    })
+    if (type(progress) is not dict or progress.get("total_pairs") != len(pairs) or
+            type(progress.get("next_pair_index")) is not int or
+            not 0 <= progress["next_pair_index"] <= len(pairs) or
+            type(progress.get("batch_size")) is not int or
+            not 1 <= progress["batch_size"] <= 1024):
+        raise ReferenceError("Invalid or incompatible matching checkpoint; refusing resume")
+    # On resume, allow the caller to tighten (but not silently loosen) a
+    # previously established safe batch-size ceiling.
+    progress["batch_size"] = min(progress["batch_size"], pairs_per_process)
+    pairs_dir = target / "pairs"
+    if pairs_dir.is_symlink():
+        raise ReferenceError("Pair-list directory cannot be a symlink")
+    pairs_dir.mkdir(exist_ok=True)
+    checkpoint()
+    while progress["next_pair_index"] < len(pairs):
+        start = progress["next_pair_index"]
+        count = min(progress["batch_size"], len(pairs) - start)
+        number = _next_stage_number(target, report["commands"])
+        pair_file = pairs_dir / f"{number:04d}-pairs.txt"
+        if pair_file.exists() or pair_file.is_symlink():
+            raise ReferenceError(f"Pair list already exists: {pair_file}")
+        pair_file.write_text("".join(f"{a} {b}\n" for a, b in pairs[start:start + count]),
+                             encoding="utf-8")
+        arguments = (["--database_path", str(database), "--match_list_path", str(pair_file),
+                      "--match_type", "pairs"] + match_args)
+        code, command = _run(executable, "matches_importer", arguments, target, number,
+                             timeout_seconds, max_rss_mb=max_rss_mb)
+        report["commands"].append(command)
+        progress["last_log"] = f"logs/{number:02d}-matches_importer.log"
+        if code == 0:
+            progress["next_pair_index"] += count
+            progress["completed_pairs"] = progress["next_pair_index"]
+            progress["completed_batches"] += 1
+            checkpoint()
+            if (progress["completed_batches"] == 1 or
+                    progress["completed_batches"] % 10 == 0 or
+                    progress["completed_pairs"] == len(pairs)):
+                print(f"COLMAP matching: {progress['completed_pairs']}/{len(pairs)} pairs "
+                      f"completed (up to {progress['batch_size']} per worker)",
+                      file=sys.stderr, flush=True)
+            continue
+        reason = (_memory_guard_reason(target / progress["last_log"])
+                  if code == 125 else None)
+        progress["last_failure"] = {"code": code, "pair_index": start,
+                                    "pairs_in_batch": count, "reason": reason}
+        if code == 125 and count > 1 and reason and reason.startswith("RSS "):
+            progress["batch_size"] = max(1, count // 2)
+            checkpoint()
+            print(f"COLMAP matching: {reason}; retrying with "
+                  f"{progress['batch_size']} pair(s) per worker",
+                  file=sys.stderr, flush=True)
+            continue
+        report["failed_stage"], report["exit_code"] = "matches_importer", code
+        if code == 125:
+            report["memory_guard_reason"] = reason
+            report["error"] = (f"Matching stopped at pair {start + 1}/{len(pairs)}: {reason}. "
+                               f"See {progress['last_log']}")
+        else:
+            report["error"] = (f"Matching failed at pair {start + 1}/{len(pairs)} "
+                               f"(exit {code}); see {progress['last_log']}")
+        checkpoint()
+        return False
+    progress["status"] = "complete"
+    checkpoint()
+    return True
+
+
 def _registered_image_count(text_model: Path) -> int:
     """Parse COLMAP's alternating pose/observations lines, not numeric points."""
     images = text_model / "images.txt"
@@ -490,7 +607,9 @@ def build_sparse_reconstruction(reference_set: ReferenceSet, output: str | Path,
                                 sift_first_octave: int | None = None,
                                 max_colmap_rss_mb: int | None = None,
                                 matching_block_size: int | None = None,
-                                matching_max_features: int | None = None) -> dict[str, Any]:
+                                matching_max_features: int | None = None,
+                                matching_pairs_per_process: int | None = None,
+                                resume: bool = False) -> dict[str, Any]:
     """Produce auditable camera/sparse data using a locally installed COLMAP.
 
     External tools may fail on historical or unrelated internet photos. Their
@@ -498,7 +617,11 @@ def build_sparse_reconstruction(reference_set: ReferenceSet, output: str | Path,
     Preflight errors never create an output directory.
     """
     target = Path(output).resolve()
-    if Path(output).is_symlink() or target.exists():
+    if Path(output).is_symlink():
+        raise ReferenceError("Reconstruction output cannot be a symlink")
+    if resume and not target.is_dir():
+        raise ReferenceError(f"Cannot resume missing reconstruction: {target}")
+    if not resume and target.exists():
         raise ReferenceError(f"Output already exists: {target}. Choose an unused revision directory")
     if type(timeout_seconds) is not int or not 30 <= timeout_seconds <= 86400:
         raise ReferenceError("COLMAP timeout_seconds must be 30–86400")
@@ -527,10 +650,16 @@ def build_sparse_reconstruction(reference_set: ReferenceSet, output: str | Path,
     if (matching_max_features is not None and
             (type(matching_max_features) is not int or not 256 <= matching_max_features <= 32768)):
         raise ReferenceError("matching_max_features must be 256–32768")
+    if (matching_pairs_per_process is not None and
+            (type(matching_pairs_per_process) is not int or
+             not 1 <= matching_pairs_per_process <= 1024)):
+        raise ReferenceError("matching_pairs_per_process must be 1–1024")
+    if type(resume) is not bool or (resume and matching_pairs_per_process is None):
+        raise ReferenceError("--resume requires --matching-pairs-per-process")
     if engine != "colmap" and any(value is not None for value in
                                   (feature_threads, matching_threads, sift_first_octave,
                                    max_colmap_rss_mb, matching_block_size,
-                                   matching_max_features)):
+                                   matching_max_features, matching_pairs_per_process)):
         raise ReferenceError("COLMAP memory controls require --engine colmap")
     if sift_first_octave is not None and matching_preset not in ("sift", "sift-lightglue"):
         raise ReferenceError("SIFT first octave applies only to SIFT-based matching")
@@ -576,21 +705,21 @@ def build_sparse_reconstruction(reference_set: ReferenceSet, output: str | Path,
         if image.mask is not None and (
                 not image.mask.is_file() or _sha256(image.mask) != image.mask_sha256):
             raise ReferenceError(f"Reference {image.image_id} mask changed since validation")
-    target.mkdir(parents=True, exist_ok=False)
-    (target / "logs").mkdir()
-    report: dict[str, Any] = {
+    initial_report: dict[str, Any] = {
         "schema_version": 1, "asset_id": reference_set.asset_id,
         "manifest_sha256": reference_set.manifest_sha256,
         "source_images": len(reference_set.images),
         "staged_independent_images": len(references),
         "registration_profile": registration_profile,
         "matching_preset": matching_preset,
+        "max_image_size": max_image_size,
         "memory_controls": {"feature_threads": effective_feature_threads,
                             "matching_threads": effective_matching_threads,
                             "sift_first_octave": effective_sift_octave,
                             "max_colmap_rss_mb": effective_rss_mb,
                             "matching_block_size": effective_block_size,
-                            "matching_max_features": effective_match_features},
+                            "matching_max_features": effective_match_features,
+                            "matching_pairs_per_process": matching_pairs_per_process},
         "registered_images": 0,
         "undistortion_requested": undistort,
         "colmap_info": colmap_info,
@@ -598,23 +727,90 @@ def build_sparse_reconstruction(reference_set: ReferenceSet, output: str | Path,
         "status": "review-required", "historical_fidelity_verified": False,
         "limitations": "Sparse camera reconstruction is not a face/mesh scan or a historical likeness certificate.",
     }
+    if resume:
+        report_path = target / "reconstruction-report.json"
+        index_path = target / "staged-reference-index.json"
+        database_path = target / "database.db"
+        for path in (report_path, index_path, database_path):
+            if path.is_symlink() or not path.is_file():
+                raise ReferenceError(f"Cannot resume: missing or unsafe {path.name}")
+        for folder in (target / "images", target / "logs", target / "sparse"):
+            if folder.is_symlink() or not folder.is_dir():
+                raise ReferenceError(f"Cannot resume: missing or unsafe {folder.name}")
+        try:
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+            stored_index = json.loads(index_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as error:
+            raise ReferenceError(f"Cannot resume invalid reconstruction metadata: {error}") from error
+        for key in ("asset_id", "manifest_sha256", "registration_profile",
+                    "matching_preset", "undistortion_requested"):
+            if report.get(key) != initial_report[key]:
+                raise ReferenceError(f"Cannot resume: {key} differs from source revision")
+        # Older interrupted revisions recorded the extraction image size only
+        # in the command; preserve that validation while supporting upgrades.
+        recorded_size = report.get("max_image_size")
+        if recorded_size is None:
+            commands = report.get("commands", [])
+            extract = next((command for command in commands
+                            if command and command[0] == "feature_extractor"), [])
+            if "--FeatureExtraction.max_image_size" in extract:
+                recorded_size = int(extract[extract.index("--FeatureExtraction.max_image_size") + 1])
+        if recorded_size != max_image_size:
+            raise ReferenceError("Cannot resume: input image resolution has changed")
+        if (report.get("feature_import", {}).get("status") != "complete" or
+                report.get("failed_stage") not in ("exhaustive_matcher", "matches_importer", None)):
+            raise ReferenceError("Cannot resume: feature extraction is incomplete or stage is incompatible")
+        entries = stored_index.get("images", [])
+        expected = {image.image_id + ".png": image.sha256 for image in references}
+        if (type(entries) is not list or len(entries) != len(expected) or
+                {entry.get("filename"): entry.get("original_sha256")
+                 for entry in entries} != expected):
+            raise ReferenceError("Cannot resume: staged image provenance differs")
+        for entry in entries:
+            staged = target / "images" / entry["filename"]
+            if (staged.is_symlink() or not staged.is_file() or
+                    _sha256(staged) != entry["sha256"]):
+                raise ReferenceError(f"Cannot resume: staged image changed ({entry['filename']})")
+        if (report.get("matching_progress", {}).get("status") == "complete" or
+                any((target / "sparse").iterdir())):
+            raise ReferenceError("Cannot resume a completed matching or mapping stage")
+        previous_error = report.get("error")
+        if previous_error:
+            report.setdefault("prior_failures", []).append({
+                "stage": report.get("failed_stage"), "error": previous_error,
+                "exit_code": report.get("exit_code"),
+            })
+        report.update(failed_stage=None, exit_code=None, status="review-required")
+        report.pop("error", None)
+        report.pop("memory_guard_reason", None)
+        report["memory_controls"] = initial_report["memory_controls"]
+        report["max_image_size"] = max_image_size
+        report["resume_count"] = report.get("resume_count", 0) + 1
+    else:
+        target.mkdir(parents=True, exist_ok=False)
+        (target / "logs").mkdir()
+        report = initial_report
 
     def checkpoint() -> dict[str, Any]:
         _write_json(target / "reconstruction-report.json", report)
         return report
 
     checkpoint()
-    try:
-        _write_json(target / "reference-audit.json", audit)
-        has_masks = _prepare_images(references, target, normalize_for_colmap=True)
-    except (ReferenceError, OSError, ValueError) as error:
-        report["failed_stage"], report["exit_code"] = "staging", 2
-        report["error"] = str(error)
-        return checkpoint()
+    if resume:
+        has_masks = (target / "masks").is_dir()
+    else:
+        try:
+            _write_json(target / "reference-audit.json", audit)
+            has_masks = _prepare_images(references, target, normalize_for_colmap=True)
+        except (ReferenceError, OSError, ValueError) as error:
+            report["failed_stage"], report["exit_code"] = "staging", 2
+            report["error"] = str(error)
+            return checkpoint()
     database = target / "database.db"
     images = target / "images"
     sparse = target / "sparse"
-    sparse.mkdir()
+    if not resume:
+        sparse.mkdir()
     profile_args = (["--registration-profile", "high-recall"]
                     if registration_profile == "high-recall" else [])
     extractor, matcher = MATCHING_PRESETS[matching_preset]
@@ -634,19 +830,8 @@ def build_sparse_reconstruction(reference_set: ReferenceSet, output: str | Path,
         extract_args += ["--FeatureExtraction.max_image_size", str(max_image_size)]
     match_args = (["--FeatureMatching.type", matcher]
                   if matching_preset != "sift" else [])
-    stages = [
-        ("feature_extractor", ["--database_path", str(database), "--image_path", str(images)] +
-         (["--ImageReader.mask_path", str(target / "masks")] if has_masks else []) +
-         [cpu_flags[0], "0"] +
-         (["--max_image_size", str(max_image_size)] if engine == "pycolmap" else []) +
-         profile_args + extract_resource_args + extract_args),
-        ("exhaustive_matcher", ["--database_path", str(database), cpu_flags[1], "0"] +
-         profile_args + match_resource_args + match_args),
-        ("mapper", ["--database_path", str(database), "--image_path", str(images),
-                    "--output_path", str(sparse)]),
-    ]
-
-    for number, (stage, args) in enumerate(stages, start=1):
+    def run_stage(stage: str, args: list[str]) -> bool:
+        number = _next_stage_number(target, report["commands"])
         code, command = _run(executable, stage, args, target, number, timeout_seconds,
                              max_rss_mb=effective_rss_mb or None)
         report["commands"].append(command)
@@ -659,7 +844,8 @@ def build_sparse_reconstruction(reference_set: ReferenceSet, output: str | Path,
                                    f"see logs/{number:02d}-{stage}.log")
             elif code == -9:
                 report["error"] = "COLMAP received SIGKILL; inspect macOS memory pressure and the stage log"
-            return checkpoint()
+            checkpoint()
+            return False
         if stage == "feature_extractor":
             report["feature_import"] = _feature_import_report(
                 database, target / "staged-reference-index.json")
@@ -667,8 +853,44 @@ def build_sparse_reconstruction(reference_set: ReferenceSet, output: str | Path,
                 report.update(
                     failed_stage="feature_extraction_incomplete", exit_code=2,
                     error="COLMAP could not import every staged photo; inspect feature_import.missing_images")
-                return checkpoint()
+                checkpoint()
+                return False
         checkpoint()
+        return True
+
+    if not resume:
+        extract_command = (["--database_path", str(database), "--image_path", str(images)] +
+                           (["--ImageReader.mask_path", str(target / "masks")]
+                            if has_masks else []) +
+                           [cpu_flags[0], "0"] +
+                           (["--max_image_size", str(max_image_size)] if engine == "pycolmap" else []) +
+                           profile_args + extract_resource_args + extract_args)
+        if not run_stage("feature_extractor", extract_command):
+            return report
+    if matching_pairs_per_process is None:
+        args = (["--database_path", str(database), cpu_flags[1], "0"] +
+                profile_args + match_resource_args + match_args)
+        if not run_stage("exhaustive_matcher", args):
+            return report
+    else:
+        staged = json.loads((target / "staged-reference-index.json").read_text(encoding="utf-8"))
+        # Only exhaustive_matcher accepts ExhaustiveMatching.block_size.
+        # matches_importer instead consumes exactly the supplied pair list.
+        bounded_match_args = [cpu_flags[1], "0"] + profile_args
+        if effective_matching_threads is not None:
+            bounded_match_args += ["--FeatureMatching.num_threads", str(effective_matching_threads)]
+        if effective_match_features is not None:
+            bounded_match_args += ["--FeatureMatching.max_num_matches", str(effective_match_features)]
+        bounded_match_args += match_args
+        if not _match_in_bounded_processes(
+                executable, target, database, bounded_match_args,
+                timeout_seconds, effective_rss_mb or None,
+                [entry["filename"] for entry in staged["images"]],
+                matching_pairs_per_process, report, checkpoint):
+            return report
+    if not run_stage("mapper", ["--database_path", str(database),
+                                "--image_path", str(images), "--output_path", str(sparse)]):
+        return report
     models = sorted((directory for directory in sparse.iterdir() if directory.is_dir()),
                     key=lambda entry: entry.name)
     if not models:
@@ -682,7 +904,8 @@ def build_sparse_reconstruction(reference_set: ReferenceSet, output: str | Path,
         text_model.mkdir(parents=True, exist_ok=False)
         args = ["--input_path", str(model), "--output_path", str(text_model),
                 "--output_type", "TXT"]
-        code, command = _run(executable, "model_converter", args, target, index + 4,
+        code, command = _run(executable, "model_converter", args, target,
+                             _next_stage_number(target, report["commands"]),
                              timeout_seconds, max_rss_mb=effective_rss_mb or None)
         report["commands"].append(command)
         if code:

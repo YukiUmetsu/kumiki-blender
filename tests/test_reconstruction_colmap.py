@@ -21,6 +21,7 @@ from kumiki_blender.reconstruction.references import ReferenceError, load_refere
 
 FAKE_COLMAP = '''#!/usr/bin/env python3
 import os
+import sqlite3
 import sys
 from pathlib import Path
 
@@ -57,13 +58,35 @@ if task == "feature_extractor":
     masks = argument("--ImageReader.mask_path")
     if not (masks / "front.png.png").is_file():
         sys.exit(12)
-    argument("--database_path").write_text("sample data")
+    with sqlite3.connect(argument("--database_path")) as db:
+        db.execute("CREATE TABLE images (image_id INTEGER PRIMARY KEY, name TEXT)")
+        db.executemany("INSERT INTO images (name) VALUES (?)",
+                       [(path.name,) for path in sorted(images.iterdir())])
 elif task == "exhaustive_matcher":
     if ("--SiftMatching.use_gpu" if legacy else "--FeatureMatching.use_gpu") not in params:
         sys.exit(42)
     if "FAKE_FAIL_MATCHER" in __import__("os").environ:
         print("simulated incompatible feature matching")
         sys.exit(7)
+elif task == "matches_importer":
+    if "--match_type" not in params or params[params.index("--match_type") + 1] != "pairs":
+        sys.exit(43)
+    if "--FeatureMatching.type" not in params or "--ExhaustiveMatching.block_size" in params:
+        sys.exit(44)
+    pairs = argument("--match_list_path").read_text().splitlines()
+    if not pairs or len(pairs) > 5:
+        sys.exit(45)
+    progress = argument("--database_path").parent / "fake-matched-pairs.txt"
+    if ("FAKE_CHUNK_OOM" in os.environ and len(pairs) > 1 or
+            "FAKE_SINGLE_PAIR_OOM" in os.environ):
+        print("Memory guard stopped COLMAP: RSS 13000 MiB >= 12288 MiB")
+        sys.exit(125)
+    if "FAKE_CHUNK_FAIL_AFTER_FIRST" in os.environ and progress.exists():
+        print("simulated native matching failure")
+        sys.exit(7)
+    with progress.open("a") as stream:
+        for pair in pairs:
+            stream.write(pair + "\\n")
 elif task == "mapper":
     model = argument("--output_path") / "0"
     model.mkdir(parents=True)
@@ -277,6 +300,105 @@ class ColmapWorkflowTests(unittest.TestCase):
         self.assertEqual(args[args.index("--FeatureMatching.max_num_matches") + 1], "2048")
         self.assertEqual(report["memory_controls"]["matching_block_size"], 3)
         self.assertEqual(report["memory_controls"]["matching_max_features"], 2048)
+
+    def test_learned_matching_runs_in_separate_checkpointed_colmap_processes(self):
+        output = self.root / "chunked"
+        with patch.dict(os.environ, {"FAKE_LEARNED_COLMAP": "1"}):
+            report = build_sparse_reconstruction(self.references(), output,
+                                                 colmap=str(self.fake),
+                                                 matching_preset="sift-lightglue",
+                                                 matching_pairs_per_process=2)
+        self.assertEqual(report["status"], "candidate / visual-review-required")
+        self.assertEqual(report["matching_progress"]["total_pairs"], 3)
+        self.assertEqual(report["matching_progress"]["completed_pairs"], 3)
+        self.assertEqual(report["matching_progress"]["completed_batches"], 2)
+        self.assertEqual(report["matching_progress"]["status"], "complete")
+        self.assertEqual([c[0] for c in report["commands"]].count("matches_importer"), 2)
+        self.assertNotIn("exhaustive_matcher", [c[0] for c in report["commands"]])
+        self.assertEqual(len((output / "fake-matched-pairs.txt").read_text().splitlines()), 3)
+        self.assertEqual(len(list((output / "pairs").glob("*.txt"))), 2)
+        self.assertEqual(len(list((output / "logs").glob("*-matches_importer.log"))), 2)
+
+    def test_memory_exceeded_batch_halves_until_single_pair_succeeds(self):
+        output = self.root / "adaptive-chunked"
+        with patch.dict(os.environ, {"FAKE_LEARNED_COLMAP": "1", "FAKE_CHUNK_OOM": "1"}):
+            report = build_sparse_reconstruction(self.references(), output,
+                                                 colmap=str(self.fake),
+                                                 matching_preset="sift-lightglue",
+                                                 matching_pairs_per_process=3)
+        self.assertEqual(report["matching_progress"]["completed_pairs"], 3)
+        self.assertEqual(report["matching_progress"]["batch_size"], 1)
+        self.assertEqual(report["matching_progress"]["completed_batches"], 3)
+        self.assertEqual(report["matching_progress"]["last_failure"]["code"], 125)
+        self.assertEqual(report["status"], "candidate / visual-review-required")
+        self.assertEqual(len((output / "fake-matched-pairs.txt").read_text().splitlines()), 3)
+
+    def test_single_pair_out_of_memory_stops_without_an_unbounded_retry_loop(self):
+        output = self.root / "single-pair-limit"
+        with patch.dict(os.environ, {"FAKE_LEARNED_COLMAP": "1", "FAKE_SINGLE_PAIR_OOM": "1"}):
+            report = build_sparse_reconstruction(self.references(), output,
+                                                 colmap=str(self.fake),
+                                                 matching_preset="sift-lightglue",
+                                                 matching_pairs_per_process=2)
+        self.assertEqual(report["failed_stage"], "matches_importer")
+        self.assertEqual(report["exit_code"], 125)
+        self.assertEqual(report["matching_progress"]["next_pair_index"], 0)
+        self.assertEqual(report["matching_progress"]["batch_size"], 1)
+        self.assertEqual(len([c for c in report["commands"] if c[0] == "matches_importer"]), 2)
+
+    def test_resume_reuses_successful_batches_and_skips_extraction(self):
+        output = self.root / "resumed-matching"
+        with patch.dict(os.environ, {"FAKE_LEARNED_COLMAP": "1", "FAKE_CHUNK_FAIL_AFTER_FIRST": "1"}):
+            failed = build_sparse_reconstruction(self.references(), output,
+                                                 colmap=str(self.fake),
+                                                 matching_preset="sift-lightglue",
+                                                 matching_pairs_per_process=2)
+        self.assertEqual(failed["matching_progress"]["next_pair_index"], 2)
+        self.assertEqual(failed["failed_stage"], "matches_importer")
+        # Simulate interruption after writing the next pair list but before
+        # launching its worker. Resume must allocate a fresh filename.
+        (output / "pairs" / "0004-pairs.txt").write_text("orphaned file\n")
+        with patch.dict(os.environ, {"FAKE_LEARNED_COLMAP": "1"}):
+            recovered = build_sparse_reconstruction(self.references(), output,
+                                                    colmap=str(self.fake),
+                                                    matching_preset="sift-lightglue",
+                                                    matching_pairs_per_process=1, resume=True)
+        self.assertEqual(recovered["status"], "candidate / visual-review-required")
+        self.assertEqual(recovered["resume_count"], 1)
+        self.assertEqual(recovered["matching_progress"]["completed_pairs"], 3)
+        self.assertEqual(recovered["matching_progress"]["batch_size"], 1)
+        self.assertEqual([c[0] for c in recovered["commands"]].count("feature_extractor"), 1)
+        self.assertEqual(len((output / "fake-matched-pairs.txt").read_text().splitlines()), 3)
+        self.assertEqual(len(list((output / "logs").glob("*-matches_importer.log"))), 3)
+        self.assertTrue((output / "pairs" / "0005-pairs.txt").is_file())
+
+    def test_resume_existing_legacy_matcher_failure_without_reextracting(self):
+        output = self.root / "legacy-failure"
+        with patch.dict(os.environ, {"FAKE_LEARNED_COLMAP": "1", "FAKE_FAIL_MATCHER": "1"}):
+            failed = build_sparse_reconstruction(self.references(), output,
+                                                 colmap=str(self.fake),
+                                                 matching_preset="sift-lightglue")
+        self.assertEqual(failed["failed_stage"], "exhaustive_matcher")
+        with patch.dict(os.environ, {"FAKE_LEARNED_COLMAP": "1"}):
+            recovered = build_sparse_reconstruction(self.references(), output,
+                                                    colmap=str(self.fake),
+                                                    matching_preset="sift-lightglue",
+                                                    matching_pairs_per_process=2, resume=True)
+        self.assertEqual(recovered["status"], "candidate / visual-review-required")
+        self.assertEqual(recovered["matching_progress"]["total_pairs"], 3)
+        self.assertEqual([c[0] for c in recovered["commands"]].count("feature_extractor"), 1)
+
+    def test_resume_rejects_incompatible_input_resolution_without_modifying_report(self):
+        output = self.root / "unsafe-resume"
+        with patch.dict(os.environ, {"FAKE_LEARNED_COLMAP": "1", "FAKE_FAIL_MATCHER": "1"}):
+            build_sparse_reconstruction(self.references(), output, colmap=str(self.fake),
+                                        matching_preset="sift-lightglue")
+            before = (output / "reconstruction-report.json").read_bytes()
+            with self.assertRaisesRegex(ReferenceError, "resolution has changed"):
+                build_sparse_reconstruction(self.references(), output, colmap=str(self.fake),
+                                            matching_preset="sift-lightglue", max_image_size=2048,
+                                            matching_pairs_per_process=2, resume=True)
+            self.assertEqual((output / "reconstruction-report.json").read_bytes(), before)
 
     def test_registration_names_use_normalized_staged_filenames_not_original_jpeg_extensions(self):
         self.references()

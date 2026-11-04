@@ -209,7 +209,8 @@ class PhotoModelTests(unittest.TestCase):
                                "--feature-threads", "1", "--matching-threads", "2",
                                "--max-colmap-rss-mb", "10240",
                                "--matching-block-size", "3",
-                               "--matching-max-features", "2048"])
+                               "--matching-max-features", "2048",
+                               "--matching-pairs-per-process", "5", "--resume"])
         self.assertEqual(result, 0)
         self.assertEqual(captured["count"], 8)
         self.assertEqual(captured["kwargs"]["matching_preset"], "loma")
@@ -219,6 +220,8 @@ class PhotoModelTests(unittest.TestCase):
         self.assertEqual(captured["kwargs"]["max_colmap_rss_mb"], 10240)
         self.assertEqual(captured["kwargs"]["matching_block_size"], 3)
         self.assertEqual(captured["kwargs"]["matching_max_features"], 2048)
+        self.assertEqual(captured["kwargs"]["matching_pairs_per_process"], 5)
+        self.assertTrue(captured["kwargs"]["resume"])
         self.assertEqual(captured["output"], target)
         self.assertEqual(json.loads(output.getvalue())["registered_images"], 8)
 

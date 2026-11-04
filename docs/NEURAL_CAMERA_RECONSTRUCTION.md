@@ -79,6 +79,50 @@ pressure can still trigger SIGKILL. Keep additional free RAM and inspect
 the report if the guard stops the job. The detailed reason (actual RSS limit or
 monitoring failure) is in `logs/02-exhaustive_matcher.log` when matching stops.
 
+### Small-process matching with durable resume
+
+For LightGlue on a 24 GB Mac, matching can still reach 12 GB even when the
+exhaustive block cache contains only five images. Use independent groups of
+image **pairs**, which release the native model's RAM between workers:
+
+```bash
+kumiki-blender reconstruct-photos \
+  --photos "$PHOTOS" --asset-id great-sphinx-multiview \
+  --output "$LEARNED" --engine colmap --colmap /opt/homebrew/bin/colmap \
+  --matching-preset sift-lightglue --max-image-size 4000 \
+  --feature-threads 1 --matching-threads 1 --sift-first-octave 0 \
+  --matching-max-features 4096 --matching-pairs-per-process 5 \
+  --max-colmap-rss-mb 12288 --undistort --timeout-seconds 7200
+```
+
+The CLI extracts features **once**, enumerates distinct image pairs in a
+deterministic order, and runs `matches_importer --match_type pairs` against the
+same database for each group of five. It checkpoints `matching_progress` in
+`reconstruction-report.json` after every group. A group that exceeds the RSS
+budget is retried with progressively smaller groups (5 -> 2 -> 1); a single
+pair that exceeds the budget stops with a clear error instead of looping.
+Only the failed group is retried, and COLMAP skips already-verified pairs.
+
+To continue a failed **matching** stage, including earlier attempts that used
+`exhaustive_matcher`, use the *existing* revision directory with `--resume`
+and the same source photos, asset ID, matcher, and image size:
+
+```bash
+kumiki-blender reconstruct-photos \
+  --photos "$PHOTOS" --asset-id great-sphinx-multiview \
+  --output "$LEARNED" --engine colmap --colmap /opt/homebrew/bin/colmap \
+  --matching-preset sift-lightglue --max-image-size 4000 \
+  --feature-threads 1 --matching-threads 1 --sift-first-octave 0 \
+  --matching-max-features 4096 --matching-pairs-per-process 5 \
+  --max-colmap-rss-mb 12288 --undistort --timeout-seconds 7200 --resume
+```
+
+Resume verifies the original manifest and staged photo checksums, and refuses
+changed inputs, altered image resolution, a missing or incomplete feature
+database, or a completed mapping stage. This avoids repeating expensive
+full-resolution feature extraction. `--matching-pairs-per-process` is opt-in:
+legacy runs keep their original exhaustive matching behavior.
+
 ## Great Sphinx: compare actual registered views
 
 Use the same original 36-photo folder for the baseline and each experiment.

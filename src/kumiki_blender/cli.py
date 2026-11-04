@@ -203,6 +203,10 @@ def main(argv: list[str] | None = None) -> int:
                                       help="Exhaustive pair-cache block size (learned default: 5)")
             photo_parser.add_argument("--matching-max-features", type=int,
                                       help="Cap features per matching pair without downscaling (learned default: 4096)")
+            photo_parser.add_argument("--matching-pairs-per-process", type=int,
+                                      help="Run this many image pairs per COLMAP worker, checkpoint each batch")
+            photo_parser.add_argument("--resume", action="store_true",
+                                      help="Resume matching in the same verified output after interruption")
             photo_parser.add_argument("--timeout-seconds", type=int, default=3600)
             photo_parser.add_argument("--undistort", action="store_true",
                                       help="Rectify camera intrinsics and image pixels for accurate Blender projection")
@@ -237,6 +241,8 @@ def main(argv: list[str] | None = None) -> int:
                                         help="Exhaustive pair-cache block size (learned default: 5)")
         photo_model_parser.add_argument("--matching-max-features", type=int,
                                         help="Maximum features per matching pair (learned default: 4096)")
+        photo_model_parser.add_argument("--matching-pairs-per-process", type=int,
+                                        help="Restart COLMAP after this many image pairs to bound memory")
         photo_model_parser.add_argument("--backend", choices=("openmvs", "colmap"),
                                         default="openmvs", help="Dense meshing backend")
         photo_model_parser.add_argument("--colmap", default="colmap")
@@ -1033,6 +1039,7 @@ def main(argv: list[str] | None = None) -> int:
                     max_colmap_rss_mb=args.max_colmap_rss_mb,
                     matching_block_size=args.matching_block_size,
                     matching_max_features=args.matching_max_features,
+                    matching_pairs_per_process=args.matching_pairs_per_process,
                     dense_backend=args.backend, colmap=args.colmap,
                     blender=args.blender, min_registered_images=args.min_registered_images,
                     min_registered_fraction=args.min_registered_fraction,
@@ -1305,7 +1312,9 @@ def main(argv: list[str] | None = None) -> int:
                                                       sift_first_octave=args.sift_first_octave,
                                                       max_colmap_rss_mb=args.max_colmap_rss_mb,
                                                       matching_block_size=args.matching_block_size,
-                                                      matching_max_features=args.matching_max_features))
+                                                      matching_max_features=args.matching_max_features,
+                                                      matching_pairs_per_process=args.matching_pairs_per_process,
+                                                      resume=args.resume))
             except ReferenceError as error:
                 raise RecipeError(str(error)) from error
             print(json.dumps(report, indent=2))
