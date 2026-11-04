@@ -46,12 +46,14 @@ class BuildShot(unittest.TestCase):
         (pack / "layers").mkdir(parents=True)
         png(pack / "layers/body.png", 40, 60, lambda x, y: (120, 90, 60, 255) if 6 < x < 34 else (0, 0, 0, 0))
         png(pack / "layers/arm.png", 60, 12, lambda x, y: (200, 180, 120, 255) if 2 <= y <= 9 else (0, 0, 0, 0))
+        png(pack / "layers/body-wink.png", 40, 60, lambda x, y: (120, 90, 60, 255) if 4 < x < 36 else (0, 0, 0, 0))
         asset = {"kind": "image", "mediaType": "image/png"}
         (pack / "character.json").write_text(json.dumps({
             "characterId": "generic", "revision": "r1",
             "assets": {"body": {**asset, "uri": "layers/body.png", "width": 40, "height": 60},
+                       "body-wink": {**asset, "uri": "layers/body-wink.png", "width": 40, "height": 60},
                        "arm": {**asset, "uri": "layers/arm.png", "width": 60, "height": 12}},
-            "parts": [{"id": "root", "asset": "body", "pivot": {"x": 20, "y": 30}, "z": 0},
+            "parts": [{"id": "root", "asset": "body", "variants": {"wink": "body-wink"}, "pivot": {"x": 20, "y": 30}, "z": 0},
                       {"id": "arm", "parent": "root", "asset": "arm", "pivot": {"x": 2, "y": 6}, "rest": {"x": 18, "y": 10, "scaleX": 1.4, "scaleY": 1.4}, "z": 1}]}))
         (self.root / "profile.json").write_text(json.dumps({
             "schema_version": 1, "height_m": .2, "grid_step": 2,
@@ -72,7 +74,7 @@ class BuildShot(unittest.TestCase):
                                       "orientation": repeat([0, 0, 0, 1], frames), "bend": [index * .1 for index in range(frames)]}},
                 "lights": {"key": [1 - index * .1 / frames for index in range(frames)]}, "contacts": [{"frame": 1, "kind": "grasp", "actor": "a", "effector": "hand", "object": "paper"}],
                 "actors": {"a": {"root": {"position": repeat([0, 0, 0], frames), "yaw": repeat(0, frames)},
-                                 "parts": repeat({}, frames),
+                                 "parts": [{}, {"root": {"variant": "wink"}}, {"root": {"variant": "wink", "variantFrom": None, "variantMix": .5}}][:frames] + repeat({}, max(0, frames - 3)),
                                  "effectors": {"hand": {"position": repeat(list(reach), frames), "influence": [0, *repeat(1, frames - 1)], "holding": [False, *repeat(True, frames - 1)]}}}}}
         (self.root / "bake.json").write_text(json.dumps(bake))
         path = self.root / "shot.json"

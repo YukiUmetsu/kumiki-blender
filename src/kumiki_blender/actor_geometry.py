@@ -64,6 +64,23 @@ def inflate_mask(mask: np.ndarray, *, plateau: float = .8, smooth: int = 2) -> n
     return (height / peak).astype(np.float32) if peak > 0 else height.astype(np.float32)
 
 
+def variant_union(masks: dict[str, np.ndarray]) -> tuple[np.ndarray, tuple[int, int]]:
+    """One silhouette for every drawing of a part, so swapping a drawing never changes the shape.
+
+    Empty drawings (a hidden state) are skipped. Drawn variants must share one size.
+    """
+    drawn = {key: np.asarray(mask, bool) for key, mask in masks.items() if np.asarray(mask).any()}
+    if not drawn:
+        raise ValueError("A part needs at least one drawn variant")
+    sizes = {mask.shape for mask in drawn.values()}
+    if len(sizes) != 1:
+        raise ValueError(f"Variants of one part must be the same size, got {sorted(sizes)}")
+    union = np.zeros(next(iter(sizes)), bool)
+    for mask in drawn.values():
+        union |= mask
+    return union, union.shape
+
+
 @dataclass(frozen=True)
 class HeightMesh:
     """Grid vertices for both faces of a layer. `sides` is -1 front, +1 back."""

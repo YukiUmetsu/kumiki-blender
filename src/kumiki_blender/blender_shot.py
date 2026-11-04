@@ -16,7 +16,7 @@ import time
 from typing import Any
 
 from .actor_plan import load_actor
-from .blender_actor import ActorRig, apply_state, build_actor
+from .blender_actor import ActorRig, apply_state, build_actor, hold_variants
 from .blender_set import build_set
 from .shot_plan import (
     RENDER_PROFILES, ShotPlan, ShotPlanError, to_blender_object_quaternion, to_blender_position, to_blender_quaternion,
@@ -107,6 +107,7 @@ def _key_actor(rig: ActorRig, channels: dict[str, Any], frames: int) -> None:
         root.keyframe_insert("location", frame=frame)
         root.keyframe_insert("rotation_euler", frame=frame)
         apply_state(rig, channels["parts"][index], frame)
+    hold_variants(rig)
     for effector, track in (channels.get("effectors") or {}).items():
         if effector not in rig.targets:
             raise ShotPlanError(f"Actor {rig.plan.actor_id} has no effector {effector}")

@@ -8,7 +8,7 @@ import unittest
 import numpy as np
 
 from kumiki_blender.actor_geometry import (
-    chain_weights, heightfield_mesh, inflate_mask, local_matrix, part_transform, trace_chain,
+    chain_weights, heightfield_mesh, inflate_mask, local_matrix, part_transform, trace_chain, variant_union,
 )
 
 
@@ -43,6 +43,27 @@ class Inflation(unittest.TestCase):
     def test_empty_mask_is_rejected(self):
         with self.assertRaises(ValueError):
             inflate_mask(np.zeros((8, 8), bool))
+
+
+class VariantUnion(unittest.TestCase):
+    def test_unions_same_size_masks_and_skips_empty_drawings(self):
+        a = np.zeros((10, 10), bool); a[2:6, 2:6] = True
+        b = np.zeros((10, 10), bool); b[4:9, 4:9] = True
+        empty = np.zeros((1, 1), bool)
+        union, size = variant_union({"a": a, "b": b, "hidden": empty})
+        self.assertEqual(size, (10, 10))
+        self.assertTrue(union[2, 2] and union[8, 8])
+        self.assertFalse(union[0, 0])
+
+    def test_rejects_drawings_of_different_sizes(self):
+        a = np.ones((10, 10), bool)
+        b = np.ones((12, 10), bool)
+        with self.assertRaisesRegex(ValueError, "same size"):
+            variant_union({"a": a, "b": b})
+
+    def test_rejects_all_empty(self):
+        with self.assertRaises(ValueError):
+            variant_union({"a": np.zeros((4, 4), bool)})
 
 
 class Mesh(unittest.TestCase):
