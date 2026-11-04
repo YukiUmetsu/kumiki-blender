@@ -19,7 +19,7 @@ jobs:
         with:
           python-version: "3.11"
       - name: Install optional composer and visual QA dependencies
-        run: python -m pip install -e '.[composer,qa,masks]'
+        run: python -m pip install -e '.[composer,qa,masks,photogrammetry]'
       - name: Test declarative composer, product details and compiled handoff
         env:
           PYTHONPATH: src

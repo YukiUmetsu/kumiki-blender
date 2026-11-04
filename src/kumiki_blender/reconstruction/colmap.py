@@ -368,7 +368,7 @@ def _prepare_images(references: list[ReferenceImage], output: Path, *,
     return has_masks
 
 
-def _stage_subject_qa_index(qa_report: Path, reconstruction: Path) -> dict:
+def _stage_subject_qa_index(qa_report: Path, reconstruction: Path, *, write: bool = True) -> dict:
     """Bind immutable per-photo confidence to COLMAP's exact staged pixels.
 
     Filenames may change as photographs are added, so join by source digest,
@@ -381,11 +381,21 @@ def _stage_subject_qa_index(qa_report: Path, reconstruction: Path) -> dict:
     if (metadata.get("status") != "candidate / cached-photo-preparation"
             or not isinstance(metadata.get("images"), list)):
         raise ReferenceError("Source QA is not a completed cached-photo report")
-    by_source = {entry["source_sha256"]: entry for entry in metadata["images"]}
-    if len(by_source) != len(metadata["images"]):
-        raise ReferenceError("Duplicate content hashes in subject QA report")
-    result = {"schema": "subject-feature-index-v1", "images": {},
-              "source_qa_report_sha256": _sha256(qa_report)}
+    by_source: dict[str, dict] = {}
+    for entry in metadata["images"]:
+        source_hash = entry["source_sha256"]
+        earlier = by_source.get(source_hash)
+        if earlier is not None:
+            # A byte-identical photograph can appear under another filename.
+            # Camera staging keeps only one representative, and matching QA
+            # must make the same choice without accepting conflicting masks.
+            values = ("normalized_sha256", "qa_confidence_sha256", "qa_key",
+                      "qa_confidence_path")
+            if any(earlier.get(field) != entry.get(field) for field in values):
+                raise ReferenceError("Conflicting QA receipts for identical source photograph")
+        else:
+            by_source[source_hash] = entry
+    result = {"schema": "subject-feature-index-v1", "images": {}}
     for staged in index["images"]:
         source = by_source.get(staged["original_sha256"])
         if (not source or source.get("normalized_sha256") != staged["sha256"] or
@@ -402,9 +412,23 @@ def _stage_subject_qa_index(qa_report: Path, reconstruction: Path) -> dict:
         result["images"][staged["filename"]] = {
             "confidence_path": str(confidence.resolve()),
             "confidence_sha256": source["qa_confidence_sha256"],
-            "normalized_sha256": staged["sha256"], "qa_key": source["qa_key"]}
-    _write_json(reconstruction / "subject-feature-index.json", result)
+            "normalized_sha256": staged["sha256"], "qa_key": source["qa_key"],
+            "dimensions": staged["dimensions"]}
+    if write:
+        _write_json(reconstruction / "subject-feature-index.json", result)
     return result
+
+
+def _verify_subject_qa_resume(qa_report: Path, reconstruction: Path, expected_sha: str) -> dict:
+    """Read-only QA lease check: incompatible resume must not damage a revision."""
+    existing = reconstruction / "subject-feature-index.json"
+    if (existing.is_symlink() or not existing.is_file() or
+            _sha256(existing) != expected_sha):
+        raise ReferenceError("Cannot resume: subject QA index missing or changed")
+    candidate = _stage_subject_qa_index(qa_report, reconstruction, write=False)
+    if json.loads(existing.read_text(encoding="utf-8")) != candidate:
+        raise ReferenceError("Cannot resume: subject QA evidence changed")
+    return candidate
 
 
 def _feature_import_report(database: Path, staged_index: Path) -> dict:
@@ -1042,6 +1066,8 @@ def build_sparse_reconstruction(reference_set: ReferenceSet, output: str | Path,
             raise ReferenceError("Cannot apply subject QA retroactively to already extracted/matched features")
         if source_qa_report is None and report.get("source_qa_index_sha256") is not None:
             raise ReferenceError("Cannot resume subject matching without its QA report")
+        if source_qa_report is not None:
+            _verify_subject_qa_resume(source_qa_report, target, report["source_qa_index_sha256"])
         matching_complete = report.get("matching_progress", {}).get("status") == "complete"
         if ((matching_complete and report.get("failed_stage") != "geometric_verifier" and
              report.get("pending_stage") != "geometric_verifier") or
@@ -1087,13 +1113,11 @@ def build_sparse_reconstruction(reference_set: ReferenceSet, output: str | Path,
             report["failed_stage"], report["exit_code"] = "staging", 2
             report["error"] = str(error)
             return checkpoint()
-    if source_qa_report is not None:
+    if source_qa_report is not None and not resume:
         try:
             subject_index = _stage_subject_qa_index(source_qa_report, target)
             qa_index_file = target / "subject-feature-index.json"
             current_index_sha = _sha256(qa_index_file)
-            if resume and report.get("source_qa_index_sha256") != current_index_sha:
-                raise ReferenceError("Cannot resume: subject QA index changed")
             report["source_qa_index_sha256"] = current_index_sha
             report["source_qa_images"] = len(subject_index["images"])
             checkpoint()

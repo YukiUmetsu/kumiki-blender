@@ -10,7 +10,7 @@ import numpy as np
 
 from kumiki_blender.reconstruction.sfm_point_alignment import (
     estimate_point_alignment, extract_verified_3d_matches, fuse_disjoint_models,
-    validate_cross_reprojection,
+    validate_cross_reprojection, _subject_lookup,
 )
 
 
@@ -60,6 +60,28 @@ def synthetic_pairs(*, outliers=0):
 
 
 class DisconnectedAlignmentTests(unittest.TestCase):
+    def test_subject_lookup_lazily_loads_only_participating_images(self):
+        from PIL import Image as PILImage
+        import hashlib
+        import json
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            mask = root / "small.png"
+            PILImage.new("L", (20, 20), 255).save(mask)
+            good = {"confidence_path": str(mask),
+                    "confidence_sha256": hashlib.sha256(mask.read_bytes()).hexdigest(),
+                    "dimensions": [20, 20]}
+            irrelevant = {f"irrelevant-{n}.png": {
+                "confidence_path": str(root / f"missing-{n}.png"),
+                "confidence_sha256": "bad"} for n in range(256)}
+            index = root / "index.json"
+            index.write_text(json.dumps({"schema": "subject-feature-index-v1",
+                                         "images": {"used.png": good, **irrelevant}}))
+            lookup = _subject_lookup(index)
+            self.assertTrue(lookup("used.png", (5., 5.)))
+            self.assertFalse(lookup("not-staged.png", (5., 5.)))
+            with self.assertRaisesRegex(ValueError, "subject|confidence"):
+                lookup("irrelevant-0.png", (5., 5.))
     def test_native_pycolmap_merger_preserves_disjoint_tracks_and_camera_ids(self):
         try:
             import pycolmap
@@ -134,8 +156,10 @@ class DisconnectedAlignmentTests(unittest.TestCase):
                 # A misleading watermark/background pair must never count as
                 # statue-surface evidence even with many verified keypoints.
                 blob = b"".join(struct.pack("<II", i, i) for i in range(15))
-                db.execute("INSERT INTO two_view_geometries VALUES (?,?,?,?,?)",
-                           (1 * 2147483647 + 11, 15, 2, 8, blob))
+                for left, right, geometry in ((1, 11, 4), (2, 10, 5), (2, 12, 6),
+                                              (3, 10, 7), (3, 11, 8)):
+                    db.execute("INSERT INTO two_view_geometries VALUES (?,?,?,?,?)",
+                               (left * 2147483647 + right, 15, 2, geometry, blob))
             positions = {i: (i * 2., i % 4 * 3., i % 3 * 5.) for i in range(15)}
             baseline = Model([Image(i, f"base-{i}.png", list(range(15))) for i in (1, 2, 3)], positions)
             alternate = Model([Image(i, f"new-{i}.png", list(range(15))) for i in (10, 11, 12)], positions)

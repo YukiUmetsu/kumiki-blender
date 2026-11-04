@@ -10,10 +10,14 @@ import hashlib
 import json
 import math
 import sqlite3
-from collections import defaultdict
+from collections import OrderedDict, defaultdict
 from pathlib import Path
 
 MAX_IMAGE_ID = 2_147_483_647
+NONPLANAR_GEOMETRY_CONFIGS = frozenset((2, 3))  # COLMAP CALIBRATED, UNCALIBRATED
+MAX_QA_MAP_PIXELS = 40_000_000
+MAX_QA_MAPS_IN_MEMORY = 2
+MAX_CROSS_VIEW_MATCHES = 500_000
 
 
 def _subject_lookup(path: Path | None):
@@ -27,22 +31,41 @@ def _subject_lookup(path: Path | None):
     records = json.loads(path.read_text(encoding="utf-8"))
     if records.get("schema") != "subject-feature-index-v1":
         raise ValueError("Unrecognized source confidence index")
-    arrays = {}
-    for name, entry in records["images"].items():
+    if not isinstance(records.get("images"), dict):
+        raise ValueError("Invalid source confidence index image records")
+    arrays = OrderedDict()
+
+    def load(name):
+        cached = arrays.get(name)
+        if cached is not None:
+            arrays.move_to_end(name)
+            return cached
+        entry = records["images"].get(name)
+        if entry is None:
+            return None
+        if not isinstance(entry, dict):
+            raise ValueError("Invalid subject confidence entry")
         confidence = Path(entry["confidence_path"])
         if confidence.is_symlink() or not confidence.is_file():
-            raise ValueError("Unsafe subject raster")
+            raise ValueError("Unsafe subject confidence raster")
         with confidence.open("rb") as data:
             sha = hashlib.file_digest(data, "sha256").hexdigest()
         if sha != entry["confidence_sha256"]:
             raise ValueError("Subject confidence cache hash mismatch")
         with Image.open(confidence) as img:
-            if img.mode != "L":
-                raise ValueError("Invalid subject confidence mode")
-            arrays[name] = np.asarray(img).copy()
+            if (img.mode != "L" or img.width * img.height > MAX_QA_MAP_PIXELS or
+                    ("dimensions" in entry and list(img.size) != entry["dimensions"])):
+                raise ValueError("Invalid subject confidence raster grid or size")
+            image_data = np.asarray(img).copy()
+        if not np.isin(image_data, (0, 128, 255)).all():
+            raise ValueError("Subject confidence raster has unexpected labels")
+        arrays[name] = image_data
+        if len(arrays) > MAX_QA_MAPS_IN_MEMORY:
+            arrays.popitem(last=False)
+        return image_data
 
     def verified(name, xy):
-        data = arrays.get(name)
+        data = load(name)
         if data is None:
             return False
         x, y = (int(round(float(coordinate) - 0.5)) for coordinate in xy)
@@ -70,17 +93,21 @@ def extract_verified_3d_matches(database: Path, baseline, cohort, *,
     subject = _subject_lookup(qa_index)
     matches = defaultdict(lambda: {"image_pairs": set(), "verified_subject_pairs": 0,
                                     "observations": 0, "sample": None})
+    processed = 0
     with sqlite3.connect(database.as_uri() + "?mode=ro", uri=True) as db:
         for pair_id, count, columns, config, blob in db.execute(
                 "SELECT pair_id, rows, cols, config, data FROM two_view_geometries WHERE rows>=12"):
             left, right = divmod(pair_id, MAX_IMAGE_ID)
             # Exclude planar-only, panoramic, watermark and degenerate
             # geometries: their inliers can describe background billboards.
-            if config not in (2, 3, 4) or not ((left in baseline_ids and right in cohort_ids) or
+            if config not in NONPLANAR_GEOMETRY_CONFIGS or not ((left in baseline_ids and right in cohort_ids) or
                                          (right in baseline_ids and left in cohort_ids)):
                 continue
             if columns != 2 or not isinstance(blob, bytes) or len(blob) != count * 8:
                 continue
+            processed += count
+            if processed > MAX_CROSS_VIEW_MATCHES:
+                raise ValueError("Cross-model evidence exceeds bounded feature-match budget")
             import struct
             for left_idx, right_idx in struct.iter_unpack("<II", blob):
                 base_id, co_id = ((left, right) if left in baseline_ids else (right, left))

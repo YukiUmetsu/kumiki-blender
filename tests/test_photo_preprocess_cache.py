@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import shutil
 import tempfile
 import unittest
 from pathlib import Path
@@ -10,7 +11,10 @@ from unittest.mock import patch
 import numpy as np
 from PIL import Image
 
-from kumiki_blender.reconstruction.colmap import _prepare_images, _stage_subject_qa_index
+from kumiki_blender.reconstruction.colmap import (
+    _prepare_images, _stage_subject_qa_index, _verify_subject_qa_resume, _staged_images,
+)
+from kumiki_blender.reconstruction.references import audit_reference_set
 from kumiki_blender.reconstruction.photo_preprocess_cache import (
     prepare_statue_photo_cache, read_normalized_photo,
 )
@@ -175,6 +179,48 @@ class PhotoPreprocessCacheTests(unittest.TestCase):
         first.write_bytes(b"corrupted")
         with self.assertRaisesRegex(Exception, "confidence.*hash|confidence.*changed"):
             _stage_subject_qa_index(report_path, stage)
+
+    def test_duplicate_source_receipts_match_one_independent_camera(self):
+        shutil.copyfile(self.photos / "photo-01.jpg", self.photos / "photo-copy.jpg")
+        report = self.build(1)
+        self.assertEqual(len(report["images"]), 9)
+        sources = load_photo_folder(self.photos, "great-sphinx")
+        selected = _staged_images(sources, audit_reference_set(sources))
+        self.assertEqual(len(selected), 8)
+        stage = self.root / "deduplicated-staging"
+        stage.mkdir()
+        _prepare_images(selected, stage, normalize_for_colmap=True,
+                        normalized_cache_dir=self.cache)
+        result = _stage_subject_qa_index(
+            self.root / "run-1/photo-preprocess-report.json", stage)
+        self.assertEqual(len(result["images"]), 8)
+
+    def test_resume_qa_incompatibility_does_not_change_either_original_receipt(self):
+        self.build(1)
+        sources = load_photo_folder(self.photos, "great-sphinx")
+        stage = self.root / "resume-source-qa"
+        stage.mkdir()
+        _prepare_images(list(sources.images), stage, normalize_for_colmap=True,
+                        normalized_cache_dir=self.cache)
+        receipt = self.root / "run-1/photo-preprocess-report.json"
+        _stage_subject_qa_index(receipt, stage)
+        baseline = (stage / "subject-feature-index.json").read_bytes()
+        checksum = hashlib.sha256(baseline).hexdigest()
+        data = json.loads(receipt.read_text())
+        # Cache-hit counters are not semantic evidence and may change on rerun.
+        data["qa_hits"] = 8
+        data["qa_misses"] = 0
+        receipt.write_text(json.dumps(data))
+        _verify_subject_qa_resume(receipt, stage, checksum)
+        data["images"][0]["qa_key"] = "different-setting"
+        receipt.write_text(json.dumps(data))
+        with self.assertRaisesRegex(Exception, "Cannot resume.*subject QA"):
+            _verify_subject_qa_resume(receipt, stage, checksum)
+        self.assertEqual((stage / "subject-feature-index.json").read_bytes(), baseline)
+        data["images"][0]["qa_key"] = json.loads(baseline)["images"][
+            list(json.loads(baseline)["images"])[0]]["qa_key"]
+        receipt.write_text(json.dumps(data))
+        _verify_subject_qa_resume(receipt, stage, checksum)
 
 
 if __name__ == "__main__":

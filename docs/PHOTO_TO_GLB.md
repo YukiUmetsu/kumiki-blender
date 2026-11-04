@@ -308,9 +308,10 @@ The independent 3-camera/119-point Great Sphinx result has **not** been shown
 to satisfy these new correspondence, reprojection or coverage gates. A passing
 synthetic unit test is not a validation of the actual Sphinx photographs.
 
-For an existing blocked reconstruction, use the usual `--resume`. It prepares
-the new source cache and can run a second recovery pass from the already
-verified camera revision without repeating completed original matching.
+For a blocked reconstruction **that already has a subject QA index**, use
+`--resume` to retry camera recovery without repeating completed matching.
+Older revisions without this index require a fresh sparse reconstruction;
+`--resume` deliberately refuses to retroactively change their feature weights.
 
 ### Rectified segmentation cache
 
