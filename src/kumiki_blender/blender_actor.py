@@ -216,6 +216,22 @@ def build_actor(bpy: Any, plan: ActorPlan) -> ActorRig:
     return rig
 
 
+def describe_actor(rig: ActorRig) -> dict[str, Any]:
+    """Rest geometry Kumiki needs to plan reaches. Y-up metres, relative to the actor root."""
+    rig.root.users_scene[0].view_layers[0].update()
+    effectors = {}
+    for effector, tips in rig.tips.items():
+        armature, bone = tips[0]
+        pose = armature.pose.bones
+        names = [item.name for item in pose]
+        head = armature.matrix_world @ pose[names[0]].head
+        tail = armature.matrix_world @ pose[bone].tail
+        reach = sum(item.length for item in armature.data.bones)
+        effectors[effector] = {"rest": [tail.x, tail.z, -tail.y], "shoulder": [head.x, head.z, -head.y], "reach_m": reach}
+    return {"actor_id": rig.plan.actor_id, "revision": rig.plan.revision, "height_m": rig.plan.height_m,
+            "effectors": effectors, "parts": [part.id for part in rig.plan.parts]}
+
+
 def _matrix_channels(rig: ActorRig, part: ActorPart, state: dict[str, float]) -> tuple[tuple[float, float, float], float, tuple[float, float, float]]:
     rest = part.rest
     x, y = state.get("x", rest.get("x", 0)), state.get("y", rest.get("y", 0))
@@ -236,7 +252,7 @@ def apply_state(rig: ActorRig, parts: dict[str, dict[str, Any]], frame: int | No
         location, angle, scale = _matrix_channels(rig, part, state)
         empty = rig.empties[part.id]
         empty.location = location
-        empty.rotation_euler = (0, angle, 0)
+        empty.rotation_euler = (math.radians(state.get("pitch", 0)), angle, math.radians(state.get("yaw", 0)))
         empty.scale = scale
         if frame is not None:
             for path in ("location", "rotation_euler", "scale"):

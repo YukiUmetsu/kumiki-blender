@@ -108,6 +108,19 @@ class BuildShot(unittest.TestCase):
         self.assertIn("Contact missed its target", result.stdout + result.stderr)
         self.assertFalse(output.exists())
 
+    def test_describe_actor_reports_reach_in_y_up_metres(self):
+        self.spec()
+        result = subprocess.run([BLENDER, "--background", "--factory-startup", "--python-exit-code", "1",
+                                 "--python", str(ROOT / "scripts/blender_entry.py"), "--", "describe-actor",
+                                 "--pack", str(self.root / "pack"), "--profile", str(self.root / "profile.json")],
+                                capture_output=True, text=True, timeout=120)
+        self.assertEqual(result.returncode, 0, result.stdout[-800:] + result.stderr[-800:])
+        line = next(item for item in result.stdout.splitlines() if item.startswith("{"))
+        report = json.loads(line)
+        hand = report["effectors"]["hand"]
+        self.assertGreater(hand["reach_m"], .05)
+        self.assertGreater(hand["rest"][1], .05, "Y must be height above the actor's feet")
+
     def test_existing_output_is_never_overwritten(self):
         output = self.root / "out"
         output.mkdir()
