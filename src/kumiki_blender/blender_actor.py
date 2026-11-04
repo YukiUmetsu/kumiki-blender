@@ -114,7 +114,7 @@ def _part_material(bpy: Any, name: str, variants: list[tuple[str, Any]], roughne
 def _part_mesh(bpy: Any, plan: ActorPlan, name: str, material: Any, mask: np.ndarray, *,
                logical: tuple[float, float], scale: float, layer: float, inflate: float,
                back: float, footprint: np.ndarray | None = None, profile: str = "dome",
-               surface: np.ndarray | None = None) -> tuple[Any, np.ndarray, np.ndarray]:
+               surface: np.ndarray | None = None, fringe: float = 0.0) -> tuple[Any, np.ndarray, np.ndarray]:
     step = plan.grid_step
     # The dome comes from the main drawing alone. Other drawings only widen the flat footprint,
     # so a rare big-tufted face cannot swell the head every other face sits on.
@@ -125,7 +125,7 @@ def _part_mesh(bpy: Any, plan: ActorPlan, name: str, material: Any, mask: np.nda
             raise ActorPlanError(f"Decal {name} must be drawn in the same frame as its parent")
         height = surface * own
     else:
-        height = inflate_mask(own, profile=profile)
+        height = inflate_mask(own, profile=profile, fringe=int(round(fringe / step)))
     mesh = heightfield_mesh(height, step, None if footprint is None else _downsample(footprint, step))
     art_height, art_width = mask.shape
     sx, sy = logical[0] / art_width, logical[1] / art_height
@@ -289,7 +289,8 @@ def build_actor(bpy: Any, plan: ActorPlan) -> ActorRig:
             layer -= .0006 * parent_depth  # just proud of the surface, never inside it
         obj, design, heights = _part_mesh(bpy, plan, name, material, masks[reference], logical=logical, scale=scale, layer=layer / parent_depth,
                                           inflate=inflate / parent_depth, back=back, footprint=union,
-                                          profile=stage.profile if stage else "dome", surface=surface)
+                                          profile=stage.profile if stage else "dome", surface=surface,
+                                          fringe=stage.fringe if stage else 0.0)
         rig.surfaces[part.id] = (heights if surface is None else surface, layer, inflate, back)
         obj.parent = rig.empties[part.id]
         rig.meshes[part.id] = obj

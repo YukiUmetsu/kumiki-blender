@@ -48,22 +48,46 @@ def _box_blur(values: np.ndarray, radius: int) -> np.ndarray:
     return out
 
 
-def inflate_mask(mask: np.ndarray, *, plateau: float = .8, smooth: int = 2, profile: str = "dome") -> np.ndarray:
+def _dilate(mask: np.ndarray, radius: int) -> np.ndarray:
+    out = mask.copy()
+    for _ in range(radius):
+        padded = np.pad(out, 1)
+        out = padded[1:-1, 1:-1] | padded[:-2, 1:-1] | padded[2:, 1:-1] | padded[1:-1, :-2] | padded[1:-1, 2:] \
+            | padded[:-2, :-2] | padded[:-2, 2:] | padded[2:, :-2] | padded[2:, 2:]
+    return out
+
+
+FRINGE_HEIGHT = .12
+
+
+def inflate_mask(mask: np.ndarray, *, plateau: float = .8, smooth: int = 2, profile: str = "dome",
+                 fringe: int = 0) -> np.ndarray:
     """Normalised height for a filled mask, 0 outside.
 
     `dome` is a round cross-section with a steep rim, for bodies and heads.
-    `cushion` rises gently from the rim, so thin feathers, fur tips and fingers stay
-    nearly flat instead of becoming narrow ridges with hard shading.
+    `cushion` rises gently from the rim, for parts that are thin all over.
+    `fringe` keeps the dome for the mass of the drawing but flattens features
+    narrower than about twice that many cells (feather tips, fur, whiskers) to a
+    low card, so they do not become narrow ridges with hard shading.
     """
     mask = np.asarray(mask, bool)
     if not mask.any():
         raise ValueError("Cannot inflate an empty layer")
     if profile not in ("dome", "cushion"):
         raise ValueError(f"Unknown inflation profile {profile}")
-    distance = _erosion_distance(mask)
+    if fringe < 0:
+        raise ValueError("fringe cannot be negative")
+    core = mask
+    if fringe:
+        core = _dilate(_erosion_distance(mask) > fringe, fringe) & mask
+        if not core.any():
+            core = mask
+    distance = _erosion_distance(core)
     reach = max(float(distance.max()) * plateau, 1.0)
     unit = np.clip(distance / reach, 0, 1)
     height = np.sqrt(1 - (1 - unit) ** 2) if profile == "dome" else unit * unit * (3 - 2 * unit)
+    if fringe:
+        height = np.where(mask & ~core, FRINGE_HEIGHT, height)
     if smooth:
         height = _box_blur(height, smooth)
         height *= mask

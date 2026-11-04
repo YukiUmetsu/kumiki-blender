@@ -35,6 +35,7 @@ class PartStage:
     back: float = .55
     profile: str = "dome"
     surface: str = "own"
+    fringe: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -122,7 +123,7 @@ def parse_actor(pack: Path, character: Any, profile: Any) -> ActorPlan:
     for part_id, raw in (profile.get("parts") or {}).items():
         if part_id not in ids:
             raise ActorPlanError(f"Profile staged an unknown part {part_id}")
-        extra = raw.keys() - {"layer", "inflate", "back", "profile", "surface"}
+        extra = raw.keys() - {"layer", "inflate", "back", "profile", "surface", "fringe"}
         if extra:
             raise ActorPlanError(f"Part stage has unknown fields: {sorted(extra)}")
         if raw.get("profile", "dome") not in ("dome", "cushion"):
@@ -132,7 +133,10 @@ def parse_actor(pack: Path, character: Any, profile: Any) -> ActorPlan:
             raise ActorPlanError(f"Part {part_id} surface must be own or parent")
         if surface == "parent" and next(part.parent for part in parts if part.id == part_id) is None:
             raise ActorPlanError(f"Part {part_id} has no parent to share a surface with")
-        stage[part_id] = PartStage(raw.get("layer"), raw.get("inflate"), raw.get("back", .55), raw.get("profile", "dome"), surface)
+        fringe = raw.get("fringe", 0)
+        if isinstance(fringe, bool) or not isinstance(fringe, (int, float)) or not 0 <= fringe <= 200:
+            raise ActorPlanError(f"Part {part_id} fringe must be 0 to 200 art pixels")
+        stage[part_id] = PartStage(raw.get("layer"), raw.get("inflate"), raw.get("back", .55), raw.get("profile", "dome"), surface, float(fringe))
     effectors = []
     for effector_id, raw in (profile.get("effectors") or {}).items():
         if raw.get("part") not in ids:

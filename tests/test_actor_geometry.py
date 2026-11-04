@@ -40,6 +40,18 @@ class Inflation(unittest.TestCase):
         quarter = rim + (centre - rim) // 4
         self.assertGreater(float(height[40, quarter]), .5)
 
+    def test_fringe_flattens_thin_spikes_and_keeps_the_dome(self):
+        body = disc()
+        spiked = body.copy()
+        spiked[2:12, 38:42] = True  # a thin feather tip above the disc
+        plain = inflate_mask(body, smooth=0)
+        fringed = inflate_mask(spiked, smooth=0, fringe=3)
+        self.assertAlmostEqual(float(fringed[40, 40]), float(plain[40, 40]), places=3)
+        self.assertLess(float(fringed[4, 40]), .2)
+        self.assertGreater(float(fringed[4, 40]), 0)
+        with self.assertRaises(ValueError):
+            inflate_mask(body, fringe=-1)
+
     def test_cushion_rises_gently_at_the_rim(self):
         dome = inflate_mask(disc(), smooth=0)
         cushion = inflate_mask(disc(), smooth=0, profile="cushion")
