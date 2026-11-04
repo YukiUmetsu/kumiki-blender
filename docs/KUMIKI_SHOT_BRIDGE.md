@@ -25,6 +25,7 @@ An actor is a Character Studio pack (`character.json` + `layers/`) plus a stagin
 - `layer` is depth in metres. Negative is toward the camera.
 - `inflate` is how far the layer domes.
 - `ground_parts` names the parts that stand on the ground. Use it when a tail or cape hangs below the feet.
+- Each part is one mesh built from the union of all its drawings, so a blink, an expression or a mouth shape changes the texture, never the shape. Drawings of one part must share one image size. Kumiki `variantFrom` and `variantMix` crossfade two drawings by premultiplied blend.
 - An effector adds a bone chain that follows the drawn limb, so the limb bends under IK.
 
 `describe-actor` reports each effector's rest position, shoulder and reach.
