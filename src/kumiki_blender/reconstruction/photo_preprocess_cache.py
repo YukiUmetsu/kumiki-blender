@@ -138,7 +138,12 @@ def normalize_cached_photo(photo: ReferenceImage, cache: Path) -> tuple[Path, di
 
 
 def _offline_isnet_model() -> tuple[Path | None, str]:
-    """Only discover an already-installed verified IS-Net; never download it."""
+    """Probe an optional local model without allowing import failure to block SAM2.
+
+    Importing rembg can initialize ONNXRuntime, so third-party import failures
+    may occur even before a session exists, occasionally without a message.
+    This optional probe must fail closed to SAM2-only with a useful status.
+    """
     try:
         from rembg.sessions.base import BaseSession  # type: ignore[import-not-found]
         from .masking import _ISNET_SHA256
@@ -148,8 +153,10 @@ def _offline_isnet_model() -> tuple[Path | None, str]:
         if _digest(path) != _ISNET_SHA256:
             return None, "unavailable / isnet-checkpoint-hash-mismatch"
         return path, "ready / verified-cached-isnet"
-    except (ImportError, OSError, AttributeError, TypeError):
-        return None, "unavailable / rembg-not-installed"
+    except Exception as error:
+        # An optional background model must never prevent the verified RGB
+        # source workflow from beginning or force users to approve a download.
+        return None, f"unavailable / rembg-probe-{type(error).__name__}"
 
 
 def _foreground_key(normalized_sha: str, checkpoint_sha: str, size: str,

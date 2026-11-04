@@ -265,7 +265,17 @@ On a machine with a previously downloaded, verified IS-Net model, install the
 optional library with `pip install -e '.[mask-ai]'` to enable offline
 model-consensus refinement. The normal SAM2-only path remains supported when
 this extra is absent. The project checks the weight hash *before* creating a
-rembg session and does not download model weights implicitly.
+rembg session and does not download model weights implicitly. If importing the
+optional runtime fails (including an exception without an error message), the
+probe records `auxiliary_model_status: unavailable / rembg-probe-<ExceptionType>`
+and preprocessing proceeds with SAM2 alone. This intentionally preserves
+photos and the old cache instead of aborting the reconstruction.
+
+If a fresh `build-statue-glb` revision stops during `photo_preprocess`, inspect
+`statue-pipeline-report.json` under `failed_worker` for the stage's exit code
+and diagnostic. Retry that incomplete revision with `--resume`; completed
+per-photo content-hash cache entries are reused. Do not delete the source
+photo cache or change the model while resuming a partial run.
 
 With `build-statue-glb`, LightGlue reads these hash-verified confidence maps:
 it reserves most feature capacity for likely statue surfaces while keeping a

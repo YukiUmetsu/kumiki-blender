@@ -1,6 +1,7 @@
 """Per-photo content reuse must survive new images and filename renumbering."""
 
 import hashlib
+import builtins
 import json
 import shutil
 import tempfile
@@ -16,7 +17,7 @@ from kumiki_blender.reconstruction.colmap import (
 )
 from kumiki_blender.reconstruction.references import ReferenceError, audit_reference_set
 from kumiki_blender.reconstruction.photo_preprocess_cache import (
-    prepare_statue_photo_cache, read_normalized_photo,
+    _offline_isnet_model, prepare_statue_photo_cache, read_normalized_photo,
 )
 from kumiki_blender.reconstruction.photo_early_qa import analyze_cached_photo
 from kumiki_blender.reconstruction.splat_input import load_photo_folder
@@ -49,6 +50,23 @@ class PhotoPreprocessCacheTests(unittest.TestCase):
             return prepare_statue_photo_cache(
                 source, self.cache, self.root / f"run-{ordinal}", checkpoint=self.checkpoint,
                 predictor_loader=lambda *_: (object(), "mps"))
+
+    def test_blank_optional_rembg_import_error_falls_back_without_blocking_photo_cache(self):
+        original_import = builtins.__import__
+
+        def import_with_broken_rembg(name, *args, **kwargs):
+            if name == "rembg.sessions.base":
+                raise RuntimeError()  # Reproduces an eight-byte "error: \n" CLI log.
+            return original_import(name, *args, **kwargs)
+
+        with patch("builtins.__import__", side_effect=import_with_broken_rembg):
+            path, status = _offline_isnet_model()
+            self.assertIsNone(path)
+            self.assertEqual(status, "unavailable / rembg-probe-RuntimeError")
+            result = self.build(1)
+        self.assertEqual(result["auxiliary_model_status"], status)
+        self.assertEqual(result["normalized_misses"], 8)
+        self.assertEqual(result["foreground_misses"], 8)
 
     def test_new_photo_only_misses_its_own_preprocessing_keys(self):
         initial = self.build(1)

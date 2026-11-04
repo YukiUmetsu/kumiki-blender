@@ -435,7 +435,21 @@ def build_statue_glb(
         active_phase = phase
         code = runner(argv, target / "logs" / f"{name}.log", environment)
         if code:
-            checkpoint("blocked / worker-failed", name, [f"Stage exited {code}; inspect logs/{name}.log"])
+            log_path = target / "logs" / f"{name}.log"
+            try:
+                with log_path.open("rb") as logfile:
+                    logfile.seek(max(0, log_path.stat().st_size - 4096))
+                    tail = logfile.read(4096).decode("utf-8", "replace")
+                lines = [line.strip() for line in tail.splitlines() if line.strip()]
+                diagnostic = lines[-1] if lines else ""
+            except OSError:
+                diagnostic = ""
+            if not diagnostic or diagnostic == "error:":
+                diagnostic = "Worker returned no exception details; retry this stage directly with Python -X faulthandler"
+            report["failed_worker"] = {"stage": name, "exit_code": code,
+                                       "diagnostic": diagnostic[:500]}
+            checkpoint("blocked / worker-failed", name,
+                       [f"Stage exited {code}: {diagnostic[:250]}; inspect logs/{name}.log"])
             raise ReferenceError(f"{name} failed; inspect {target / 'logs' / (name + '.log')}")
         record = _read_report(receipt)
         report["completed_stages"].append(name)

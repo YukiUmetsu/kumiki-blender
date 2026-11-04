@@ -1266,7 +1266,8 @@ def main(argv: list[str] | None = None) -> int:
                         file=sys.stderr, flush=True),
                     resume=args.resume)
             except (ReferenceError, ValueError, OSError, ImportError) as error:
-                raise RecipeError(str(error)) from error
+                raise RecipeError(str(error) or
+                                  f"{type(error).__name__} occurred during photo preprocessing without details") from error
             print(json.dumps(report, indent=2))
             return 0
         if args.command == "build-statue-glb":

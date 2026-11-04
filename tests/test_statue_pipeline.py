@@ -169,6 +169,18 @@ class StatuePipelineTests(unittest.TestCase):
         self.assertEqual(events[-1]["kind"], "blocked")
         self.assertEqual(events[-1]["phase"], "coverage")
 
+    def test_blank_preprocessing_error_is_preserved_as_actionable_worker_failure(self):
+        def failed_preprocess(argv, log, environment):
+            log.write_text("error: \n")  # Eight-byte real-world diagnostic.
+            return 2
+
+        with self.assertRaisesRegex(ReferenceError, "photo_preprocess failed"):
+            self.build(failed_preprocess)
+        report = json.loads((self.output / "statue-pipeline-report.json").read_text())
+        self.assertEqual(report["status"], "blocked / worker-failed")
+        self.assertEqual(report["failed_worker"]["exit_code"], 2)
+        self.assertIn("no exception details", report["failed_worker"]["diagnostic"])
+
     def test_one_command_runs_every_stage_and_copies_audited_glb(self):
         run, calls = self.runner()
         report = self.build(run)
