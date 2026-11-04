@@ -45,7 +45,8 @@ class StatuePipelineTests(unittest.TestCase):
                                                "relative_elevation_deg": (20 if index > 5 else 0)}}
                            for index, angle in enumerate(poses)]}
 
-    def runner(self, *, mask_bad=False, coverage_bad=False):
+    def runner(self, *, mask_bad=False, coverage_bad=False,
+               recovery_works=False, recovery_rejected=False):
         calls = []
 
         def run(argv, log, _environment):
@@ -55,8 +56,10 @@ class StatuePipelineTests(unittest.TestCase):
                 folder = self.output / "cameras"
                 folder.mkdir()
                 (folder / "reconstruction-report.json").write_text(json.dumps({
-                    "status": "candidate / review-required", "registered_images": 8,
-                    "staged_independent_images": 8, "undistorted_images": 8}))
+                    "status": "candidate / review-required", "registered_images": (7 if (recovery_works or recovery_rejected) else 8),
+                    "staged_independent_images": 8,
+                    "undistorted_images": (7 if (recovery_works or recovery_rejected) else 8),
+                    "unregistered_filenames": (["photo-0007.png"] if (recovery_works or recovery_rejected) else [])}))
             elif stage == "coverage":
                 folder = self.output / "coverage"
                 folder.mkdir()
@@ -64,6 +67,21 @@ class StatuePipelineTests(unittest.TestCase):
                 if coverage_bad:
                     info["images"] = info["images"][:2]
                 (folder / "photo-advice.json").write_text(json.dumps(info))
+            elif stage == "camera_recovery":
+                folder = self.output / "camera-recovery"
+                folder.mkdir()
+                (folder / "camera-recovery-report.json").write_text(json.dumps({
+                    "status": ("no-verified-camera-recovery" if recovery_rejected else
+                               "candidate / verified-real-photo-cameras"),
+                    "candidate_accepted": not recovery_rejected,
+                    "new_cameras": 0 if recovery_rejected else 1}))
+                (folder / "reconstruction-report.json").write_text(json.dumps({
+                    "status": "candidate / visual-review-required", "registered_images": 8,
+                    "staged_independent_images": 8, "undistorted_images": 8}))
+            elif stage == "recovery_coverage":
+                folder = self.output / "recovered-coverage"
+                folder.mkdir()
+                (folder / "photo-advice.json").write_text(json.dumps(self.coverage()))
             elif stage == "masks":
                 folder = self.output / "masks"
                 (folder / "masks").mkdir(parents=True)
@@ -144,6 +162,27 @@ class StatuePipelineTests(unittest.TestCase):
         report = self.build(run)
         self.assertEqual(calls, ["cameras", "coverage"])
         self.assertEqual(report["status"], "blocked / missing-photo-coverage")
+        self.assertFalse((self.output / "model.glb").exists())
+
+    def test_automatically_uses_only_verified_recovered_camera_revision(self):
+        run, calls = self.runner(coverage_bad=True, recovery_works=True)
+        with patch("kumiki_blender.reconstruction.statue_pipeline.shutil.which", return_value="/bin/true"), \
+             patch("kumiki_blender.reconstruction.statue_pipeline.importlib.util.find_spec", return_value=True), \
+             patch("kumiki_blender.reconstruction.statue_pipeline._possible_blue_sky_leaks", return_value=[]), \
+             patch("kumiki_blender.reconstruction.statue_pipeline.audit_glb", return_value={"meshes": 1}):
+            report = build_statue_glb(self.photos, "great-sphinx-test", self.output,
+                                      self.settings, runner=run)
+        self.assertIn("camera_recovery", calls)
+        self.assertIn("recovery_coverage", calls)
+        self.assertIn("camera-recovery", report["active_camera_revision"])
+        self.assertTrue(report["status"].startswith("private-GLB-candidate"))
+
+    def test_rejected_ai_pose_never_bypasses_elevation_gate(self):
+        run, calls = self.runner(coverage_bad=True, recovery_rejected=True)
+        report = self.build(run)
+        self.assertEqual(report["status"], "blocked / missing-photo-coverage")
+        self.assertEqual(report["automatic_camera_recovery_status"], "no-verified-camera-recovery")
+        self.assertEqual(calls, ["cameras", "coverage", "camera_recovery"])
         self.assertFalse((self.output / "model.glb").exists())
 
     def test_bad_masks_block_mesh_and_resume_with_corrected_revision(self):

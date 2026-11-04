@@ -13,7 +13,9 @@ see [learned COLMAP matching and camera coverage comparisons](NEURAL_CAMERA_RECO
 `build-statue-glb` runs a fresh COLMAP SIFT-LightGlue/MPS camera solution,
 produces an annotated missing-angle report, prepares SAM2.1/MPS mask
 candidates, audits cross-view mask consistency, then runs **resolution-level 0**
-OpenMVS without geometry-destroying refinement. If all conservative gates pass,
+OpenMVS without geometry-destroying refinement. When measured elevated or side
+coverage is weak, it automatically tries to register missing real cameras
+before stopping. If all conservative gates pass,
 it exports an editable `.blend` and `model.glb` without rendering previews.
 
 ```bash
@@ -34,7 +36,7 @@ OpenMVS dense geometry or Blender export), elapsed time, recent worker activity,
 and a bar counting **completed workflow phases**. For example:
 
 ```text
-KUMIKI great-sphinx [━━━━············] 25% phases · 3/8 Checking camera coverage · 00:27 · Worker running
+KUMIKI great-sphinx [━━━·············] 20% phases · 3/10 Checking camera coverage · 00:27 · Worker running
 ```
 
 The overall percentage counts completed phases; it **does not estimate time
@@ -76,6 +78,42 @@ unambiguous front-facing filename hint and marks it **tentative**, never a
 verified anatomical orientation. If none can be identified, camera angles are
 reported relative to an arbitrary reference and anatomical left/right coverage
 is not claimed. Explicit `--front-photo` remains an override.
+
+### Automatic camera recovery from existing real photographs
+
+When the initial camera coverage gate fails and unregistered real photographs
+remain, `build-statue-glb` automatically attempts an independent recovery
+under `<output>/camera-recovery/`:
+
+1. COLMAP `image_registrator` solves new PnP cameras using existing verified
+   2D-to-3D correspondences. Original registered cameras and source photos are
+   never overwritten.
+2. If that cannot yield validated new cameras, an isolated COLMAP cohort is
+   attempted using verified feature pairs and three bounded reconstruction
+   trials, with similarity-alignment, model-merging, and camera-drift checks.
+3. If both geometry-based attempts fail, an installed MapAnything model can
+   estimate camera/depth hypotheses on an **8-photo MPS batch** emphasizing
+   missing elevated views. These hypotheses are kept as private diagnostics;
+   they never count as registered cameras without verified photo tracks.
+4. When a new COLMAP camera solution passes the real-track, camera-ID and
+   baseline stability checks, the system builds a new undistorted/rectified
+   camera revision, reruns the coverage audit and, **only if the quality gate
+   passes**, uses it for SAM2 masking and OpenMVS geometry.
+
+This can recover photographs that had enough visual overlap but no original
+camera pose. It cannot guarantee recovery from non-overlapping images and it
+never silently substitutes AI-generated intermediate images for real evidence.
+MapAnything is optional (`pip install -e '.[mapanything]'`); the COLMAP recovery
+strategies run without it. It uses Apple MPS and a bounded group rather than
+all 57 photos in one neural forward pass. Initial model weights may still need
+to be downloaded from the model provider. Disable automatic recovery with
+`--no-camera-recovery`, or inspect its standalone result with:
+
+```bash
+kumiki-blender recover-registered-cameras \
+  --reconstruction .review/great-sphinx/statue-hq-r001/cameras \
+  --output .review/great-sphinx/manual-camera-recovery-r01
+```
 
 If no guide file is supplied, SAM2 automatically samples conservative blue-sky
 negative points and starts with a broad subject prompt. Those mask candidates

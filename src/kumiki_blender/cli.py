@@ -298,6 +298,8 @@ def main(argv: list[str] | None = None) -> int:
                            help="Persistent per-image mask cache (defaults to a sibling of the output revision)")
     statue_glb.add_argument("--ai-bridges", action="store_true",
                            help="Opt in to private synthetic previews; auto-build a local ComfyUI workflow if possible")
+    statue_glb.add_argument("--no-camera-recovery", action="store_true",
+                           help="Skip automatic verified PnP recovery of unregistered real photographs")
     statue_glb.add_argument("--ai-bridge-workflow", type=Path,
                            help="Optional local ComfyUI API workflow; otherwise discover installed checkpoint and generate one")
     statue_glb.add_argument("--min-registered-fraction", type=float, default=0.80)
@@ -307,6 +309,13 @@ def main(argv: list[str] | None = None) -> int:
     statue_glb.add_argument("--resume", action="store_true")
     statue_glb.add_argument("--no-progress", action="store_true",
                            help="Disable live phase dashboard on stderr (stdout remains JSON)")
+    recovery_parser = subcommands.add_parser(
+        "recover-registered-cameras",
+        help="Use real COLMAP feature tracks to recover missing cameras and validate a new rectified revision")
+    recovery_parser.add_argument("--reconstruction", type=Path, required=True)
+    recovery_parser.add_argument("--output", type=Path, required=True)
+    recovery_parser.add_argument("--colmap", default="colmap")
+    recovery_parser.add_argument("--timeout-seconds", type=int, default=1800)
     camera_compare_parser = subcommands.add_parser(
         "compare-camera-registrations",
         help="Read-only before/after registration coverage for two COLMAP revisions")
@@ -1247,6 +1256,7 @@ def main(argv: list[str] | None = None) -> int:
                         mask_guides=args.mask_guides, masks_dir=args.masks_dir,
                         mask_cache_dir=args.mask_cache_dir,
                         ai_bridges=args.ai_bridges or args.ai_bridge_workflow is not None,
+                        auto_recover_cameras=not args.no_camera_recovery,
                         ai_bridge_workflow=args.ai_bridge_workflow,
                         min_registered_fraction=args.min_registered_fraction,
                         max_mixed_mask_fraction=args.max_mixed_mask_fraction,
@@ -1259,6 +1269,17 @@ def main(argv: list[str] | None = None) -> int:
                 raise RecipeError(str(error)) from error
             print(json.dumps(report, indent=2))
             return 0 if report["status"].startswith("private-GLB-candidate") else 3
+        if args.command == "recover-registered-cameras":
+            from .reconstruction.registered_camera_recovery import recover_registered_cameras
+            from .reconstruction.references import ReferenceError
+            try:
+                report = recover_registered_cameras(
+                    args.reconstruction, args.output, colmap=args.colmap,
+                    timeout_seconds=args.timeout_seconds)
+            except (ReferenceError, ValueError, ImportError, OSError) as error:
+                raise RecipeError(str(error)) from error
+            print(json.dumps(report, indent=2))
+            return 0
         if args.command in ("plan-photo-model", "build-photo-model"):
             from .reconstruction.photo_model import (PhotoModelSettings, build_photo_model,
                                                      plan_photo_model)

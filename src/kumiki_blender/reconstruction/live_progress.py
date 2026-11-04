@@ -22,6 +22,8 @@ _PHASES = (
     ("preflight", "Checking dependencies"),
     ("cameras", "Matching photos and solving cameras"),
     ("coverage", "Checking camera coverage"),
+    ("camera_recovery", "Recovering cameras from verified photo tracks"),
+    ("recovery_coverage", "Rechecking camera coverage"),
     ("ai_bridges", "AI bridge reference previews"),
     ("masks", "Segmenting statue with SAM2"),
     ("mask_audit", "Checking mask consistency"),
@@ -30,6 +32,7 @@ _PHASES = (
     ("export", "Verifying and exporting GLB"),
 )
 _SHORT_NAMES = {"preflight": "Prep", "cameras": "Cameras", "coverage": "Coverage",
+                "camera_recovery": "Recover", "recovery_coverage": "Recheck",
                 "ai_bridges": "AI Bridges", "masks": "SAM2 Masks",
                 "mask_audit": "Mask QA", "dense": "OpenMVS", "review": "Blender",
                 "export": "GLB Export"}

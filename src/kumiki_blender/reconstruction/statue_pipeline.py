@@ -37,6 +37,7 @@ class StatuePipelineSettings:
     mask_cache_dir: Path | None = None
     auto_download_model: bool = True
     ai_bridges: bool = False
+    auto_recover_cameras: bool = True
     ai_bridge_workflow: Path | None = None
     min_registered_fraction: float = 0.80
     max_mixed_mask_fraction: float = 0.12
@@ -317,7 +318,7 @@ def build_statue_glb(
         raise ReferenceError("Output must be a real directory outside source photographs")
     report_path = target / "statue-pipeline-report.json"
     source_fingerprint = refs.manifest_sha256
-    settings_fingerprint = hashlib.sha256(json.dumps({
+    settings_payload = {
         "front_photo": settings.front_photo,
         "sam2_checkpoint": str(checkpoint_file) if checkpoint_file else None,
         "sam2_checkpoint_sha256": (_sha256_file(checkpoint_file) if checkpoint_file else None),
@@ -329,17 +330,32 @@ def build_statue_glb(
         "max_mixed_mask_fraction": settings.max_mixed_mask_fraction,
         "max_colmap_rss_mb": settings.max_colmap_rss_mb,
         "ai_bridges": settings.ai_bridges,
+        "auto_recover_cameras": settings.auto_recover_cameras,
         "ai_bridge_workflow": (str(settings.ai_bridge_workflow.resolve())
                                if settings.ai_bridge_workflow else None),
         "ai_bridge_workflow_sha256": (_sha256_file(settings.ai_bridge_workflow)
                                       if settings.ai_bridge_workflow else None),
-    }, sort_keys=True).encode()).hexdigest()
+    }
+    settings_fingerprint = hashlib.sha256(json.dumps(
+        settings_payload, sort_keys=True).encode()).hexdigest()
+    # Older, blocked revisions can resume camera recovery after upgrading the
+    # CLI without replaying their completed multi-hour COLMAP matching stage.
+    previous_settings = {key: value for key, value in settings_payload.items()
+                         if key != "auto_recover_cameras"}
+    previous_fingerprint = hashlib.sha256(json.dumps(
+        previous_settings, sort_keys=True).encode()).hexdigest()
     if resume:
         report = _read_report(report_path)
+        compatible_upgrade = (settings.auto_recover_cameras
+            and str(report.get("status", "")).startswith("blocked")
+            and report.get("settings_sha256") == previous_fingerprint)
         if (report.get("source_manifest_sha256") != source_fingerprint
-                or report.get("settings_sha256") != settings_fingerprint
+                or (report.get("settings_sha256") != settings_fingerprint and not compatible_upgrade)
                 or report.get("asset_id") != asset_id):
             raise ReferenceError("Resume refused: source photos or quality settings changed; create a new output")
+        if compatible_upgrade:
+            report["settings_sha256"] = settings_fingerprint
+            report["resume_upgrade"] = "enabled verified camera recovery without rerunning photos"
         if report.get("status") == "private-GLB-candidate / review-required":
             final = target / "model.glb"
             if final.is_symlink() or not final.is_file():
@@ -453,6 +469,47 @@ def build_statue_glb(
     report["registered_images"] = registered
     report["source_images"] = total
     report["unregistered_photo_advice"] = coverage.get("existing_photo_priorities", [])
+    if issues and camera.get("unregistered_filenames") and settings.auto_recover_cameras:
+        recovery = target / "camera-recovery"
+        recovered = run_stage("camera_recovery", executable + [
+            "recover-registered-cameras", "--reconstruction", str(sparse),
+            "--output", str(recovery), "--timeout-seconds", str(settings.timeout_seconds)],
+            recovery / "camera-recovery-report.json")
+        report["camera_recovery_report"] = "camera-recovery/camera-recovery-report.json"
+        report["automatic_camera_recovery_status"] = recovered.get("status", "unknown")
+        report["camera_recovery_new_cameras"] = recovered.get("new_cameras", 0)
+        if recovered.get("candidate_accepted") is True:
+            recovered_camera = _read_report(recovery / "reconstruction-report.json")
+            candidate_registered = recovered_camera.get("registered_images", 0)
+            candidate_total = recovered_camera.get("staged_independent_images", 0)
+            if (isinstance(candidate_registered, int) and isinstance(candidate_total, int)
+                    and candidate_total > 0 and candidate_registered > registered
+                    and recovered_camera.get("undistorted_images") == candidate_registered):
+                new_coverage_dir = target / "recovered-coverage"
+                run_stage("recovery_coverage", [sys.executable, str(script), str(recovery),
+                    "--output", str(new_coverage_dir), "--subject-type", "statue"]
+                    + (["--front-photo", front["filename"]] if front["filename"] else []),
+                    new_coverage_dir / "photo-advice.json")
+                proposed = _read_report(new_coverage_dir / "photo-advice.json")
+                revised_issues = _coverage_warnings(
+                    proposed, candidate_registered / candidate_total, settings.min_registered_fraction)
+                report["camera_recovery_coverage_warnings"] = revised_issues
+                if not revised_issues:
+                    sparse = recovery
+                    camera = recovered_camera
+                    coverage = proposed
+                    coverage_dir = new_coverage_dir
+                    registered, total = candidate_registered, candidate_total
+                    issues = []
+                    report["registered_images"] = registered
+                    report["source_images"] = total
+                    report["coverage_report"] = "recovered-coverage/photo-advice.md"
+                    report["unregistered_photo_advice"] = coverage.get("existing_photo_priorities", [])
+                    report["active_camera_revision"] = str(recovery)
+    else:
+        emit("skip", "camera_recovery")
+    if "active_camera_revision" not in report:
+        emit("skip", "recovery_coverage")
     if settings.ai_bridges:
         emit("start", "ai_bridges", "Generating private synthetic reference previews")
         from .ai_bridge_previews import build_ai_bridge_previews
