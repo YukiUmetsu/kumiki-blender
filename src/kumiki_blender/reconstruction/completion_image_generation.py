@@ -89,6 +89,10 @@ class _LocalComfyClient:
     def system_stats(self) -> Any:
         return self._json("GET", "/system_stats")
 
+    def checkpoint_node_info(self) -> Any:
+        """Read only the local checkpoint-loader schema, including installed names."""
+        return self._json("GET", "/object_info/CheckpointLoaderSimple")
+
     def upload_image(self, path: Path) -> str:
         boundary = "kumiki" + uuid.uuid4().hex
         name = "kumiki-" + uuid.uuid4().hex + path.suffix.lower()

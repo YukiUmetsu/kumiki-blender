@@ -439,6 +439,7 @@ def build_statue_glb(
                          build_ai_bridge_previews(
                              sparse, coverage, bridge_output,
                              workflow=settings.ai_bridge_workflow,
+                             asset_id=asset_id,
                              require_mps=settings.sam2_device != "cpu"))
         report["ai_bridge_previews"] = "ai-bridge-previews/bridge-preview-report.json"
         report["ai_bridge_preview_status"] = bridge_report["status"]

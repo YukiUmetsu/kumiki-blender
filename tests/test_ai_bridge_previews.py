@@ -33,7 +33,8 @@ class AIBridgePreviewTests(unittest.TestCase):
             "existing_2d3d_candidates": 15}]}
 
     def test_without_workflow_generates_safe_plan_only(self):
-        report = build_ai_bridge_previews(self.sparse, self.coverage, self.root / "candidate")
+        report = build_ai_bridge_previews(
+            self.sparse, self.coverage, self.root / "candidate", auto_workflow=False)
         self.assertEqual(report["status"], "plan-only / no-workflow")
         self.assertEqual(len(report["requests"]), 1)
         self.assertFalse(report["usable_as_sfm_input"])
@@ -62,6 +63,31 @@ class AIBridgePreviewTests(unittest.TestCase):
         self.assertEqual(calls[0][2]["image_node"], "1")
         self.assertEqual(calls[0][2]["output_node"], "9")
         self.assertEqual(calls[0][2]["require_mps"], True)
+
+    def test_automatically_generated_workflow_runs_same_local_adapter(self):
+        calls = []
+
+        def mock_factory(destination, *, asset_id, server):
+            self.assertEqual(asset_id, "great-sphinx")
+            self.assertEqual(server, "http://127.0.0.1:8188")
+            destination.write_text(json.dumps({
+                "1": {"class_type": "LoadImage", "inputs": {}},
+                "8": {"class_type": "SaveImage", "inputs": {}}}))
+            return {"checkpoint": "local-model.safetensors"}
+
+        def mock_generator(image, graph, destination, **kwargs):
+            calls.append(graph)
+            destination.mkdir()
+            Image.new("RGB", (16, 16), "white").save(destination / "candidate.png")
+            return {"origin": "generated"}
+
+        report = build_ai_bridge_previews(
+            self.sparse, self.coverage, self.root / "auto", asset_id="great-sphinx",
+            workflow_factory=mock_factory, generator=mock_generator)
+        self.assertEqual(report["status"], "synthetic-previews-created / artist-review-required")
+        self.assertEqual(report["auto_workflow"]["checkpoint"], "local-model.safetensors")
+        self.assertEqual(calls[0].name, "auto-comfyui-workflow.json")
+        self.assertFalse(report["usable_as_sfm_input"])
 
     def test_missing_pairs_produce_no_fake_bridges(self):
         report = build_ai_bridge_previews(

@@ -36,6 +36,10 @@ jobs:
         env:
           PYTHONPATH: src
         run: python -m unittest tests.test_head_base tests.test_head_base_cli tests.test_makehuman_source tests.test_makehuman_cli -v
+      - name: Test completion, remembered statue inputs and optional AI bridge generation
+        env:
+          PYTHONPATH: src
+        run: python -m unittest tests.test_completion tests.test_completion_cli tests.test_completion_blender_contract tests.test_completion_generation tests.test_completion_image_generation tests.test_statue_pipeline tests.test_statue_asset_registry tests.test_ai_bridge_previews tests.test_comfyui_auto_workflow -v
       - name: Test Blender physics and deformable-shot plans, export and headless worker boundary
         env:
           PYTHONPATH: src:tests
@@ -62,6 +66,23 @@ jobs:
         run: bash -n scripts/mac_splat_test.sh
       - name: Compile Python sources
         run: python -m compileall -q src scripts
+
+  mac-metal-completion:
+    name: Apple Silicon completion compatibility (MPS when exposed)
+    if: github.event_name == 'pull_request'
+    runs-on: macos-15
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install MPS and portable marching-cubes dependencies
+        run: python -m pip install 'torch>=2.5.1,<3' 'scikit-image>=0.24,<1'
+      - name: Probe MPS availability and verify CPU isosurface fallback
+        env:
+          PYTHONPATH: src
+        run: python scripts/smoke_completion_mps.py
 
   egypt-map-render:
     name: Egypt relief atlas Blender + GLB QA
@@ -107,6 +128,14 @@ jobs:
           blender --background --factory-startup --threads 4 --python-exit-code 1 \
             --python scripts/blender_entry.py -- \
             build-egypt-map --output .review/ci/egypt-map
+      - name: Import and align actual GLB completion parts in Blender
+        env:
+          KUMIKI_RENDER_PROFILE: smoke
+          PYTHONPATH: src
+        run: |
+          blender --background --factory-startup --threads 2 --python-exit-code 1 \
+            --python scripts/smoke_completion_blender.py -- .review/ci/completion-smoke
+          python -m kumiki_blender audit --model .review/ci/completion-smoke/revision/model.glb
       - name: Bake real two-body Blender simulation and verify PM2 motion
         env:
           PYTHONPATH: src

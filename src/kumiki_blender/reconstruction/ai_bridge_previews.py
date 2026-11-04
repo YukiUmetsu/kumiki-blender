@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 from typing import Any, Callable
 
+from .comfyui_auto_workflow import create_auto_bridge_workflow
 from .completion_image_generation import generate_comfyui_image
 from .references import ReferenceError
 
@@ -54,8 +55,10 @@ def _verified_staged_photo(sparse: Path, item: dict[str, Any]) -> tuple[str, str
 def build_ai_bridge_previews(
     sparse: Path, coverage: dict[str, Any], output: Path, *,
     workflow: Path | None = None, server: str = "http://127.0.0.1:8188",
-    require_mps: bool = True, limit: int = 3,
+    require_mps: bool = True, limit: int = 3, asset_id: str = "unknown-asset",
+    auto_workflow: bool = True,
     generator: Callable[..., dict[str, Any]] = generate_comfyui_image,
+    workflow_factory: Callable[..., dict[str, Any]] = create_auto_bridge_workflow,
 ) -> dict[str, Any]:
     """Propose or generate private artist-only images from real source views."""
     if not 1 <= limit <= 10:
@@ -101,8 +104,13 @@ def build_ai_bridge_previews(
                           "limitations": "One-source AI image is a visual hypothesis, not calibrated intermediate camera evidence."})
         if len(suggested) >= limit:
             break
-    configured = workflow or (Path(value) if (value := os.environ.get(
-        "KUMIKI_COMFYUI_BRIDGE_WORKFLOW")) else None)
+    saved_workflow = os.environ.get("KUMIKI_COMFYUI_BRIDGE_WORKFLOW")
+    configured = workflow or (Path(saved_workflow) if saved_workflow else None)
+    ignored_saved_workflow = None
+    if workflow is None and configured is not None and (
+            configured.is_symlink() or not configured.is_file()):
+        ignored_saved_workflow = str(configured)
+        configured = None
     output.mkdir(parents=True, exist_ok=False)
     report = {"schema_version": 1, "status": "plan-only / no-workflow",
               "source_revision": str(sparse.resolve()),
@@ -111,6 +119,18 @@ def build_ai_bridge_previews(
               "inputs_are_real_photographs": True, "requests": suggested,
               "generated": [], "workflow": str(configured) if configured else None,
               "limitations": "AI images may hallucinate geometry and cannot increase verified camera coverage."}
+    if ignored_saved_workflow:
+        report["warning"] = "Saved workflow is unavailable; trying local auto-discovery"
+    if suggested and configured is None and auto_workflow:
+        try:
+            auto = workflow_factory(output / "auto-comfyui-workflow.json",
+                                    asset_id=asset_id, server=server)
+            configured = output / "auto-comfyui-workflow.json"
+            report["workflow"] = str(configured)
+            report["auto_workflow"] = auto
+        except (OSError, ValueError) as error:
+            report["status"] = "plan-only / automatic-workflow-unavailable"
+            report["auto_workflow_error"] = str(error)[:250]
 
     def write_report():
         (output / "bridge-preview-report.json").write_text(
@@ -126,8 +146,15 @@ def build_ai_bridge_previews(
                 filename = suggestion["staged_photo"]
                 raw = sparse / "images" / filename
                 with Image.open(raw) as source:
+                    if source.width * source.height > 32_000_000:
+                        raise ValueError("Synthetic preview source exceeds the 32-megapixel budget")
                     preview = ImageOps.exif_transpose(source).convert("RGB")
                     preview.thumbnail((960, 960))
+                    # Conservative 64-pixel dimensions work with standard VAE
+                    # downsampling and reduce peak MPS memory requirements.
+                    width = max(64, preview.width // 64 * 64)
+                    height = max(64, preview.height // 64 * 64)
+                    preview = preview.resize((width, height), Image.Resampling.LANCZOS)
                     normalized = output / f"real-source-{index:02}.png"
                     preview.save(normalized, "PNG")
                 result = generator(normalized, configured, output / f"synthetic-{index:02}",

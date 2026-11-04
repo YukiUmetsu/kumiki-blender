@@ -1,5 +1,14 @@
 # Kumiki Blender
 
+**New: historical or cinematic 3D completion:**
+[`suggest-completion`, `generate-completion-image`, `generate-completion-part`,
+`plan-completion`, and `build-completion`](docs/EVIDENCE_GUIDED_COMPLETION.md)
+suggest photo-coverage gaps, create local AI image/GLB candidates (ComfyUI or
+ungated TripoSR with Apple MPS acceleration), and assemble evidence-pinned
+parts with measured 3D landmarks. Historical mode excludes inferred geometry;
+cinematic mode includes it with provenance. Seam welding, automatic candidate
+placement, and photographic likeness certification still require artist review.
+
 **New: Blender physics → Kumiki motion:** [export baked GLB rigid-body clips to portable PM2 actions](docs/KUMIKI_MOTION_BRIDGE.md) with `kumiki-blender export-motion --model model.glb --output baked-actions.json`. No extra Python dependencies, manual coordinate conversion or per-model browser animation code.
 
 **Deforming meshes → Kumiki:** [bake Blender Cloth/Soft Body or topology-stable modifier motion into a native animated glTF morph GLB](docs/KUMIKI_DEFORMATION_BRIDGE.md) using `plan-deformation` and `build-deformation`. One JSON plan; no custom browser vertex-cache player or runtime solver.

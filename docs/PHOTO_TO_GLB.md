@@ -91,7 +91,7 @@ inputs; they are suitable only for separately labeled creative references.
 ### Optional AI bridge previews (ComfyUI)
 
 ```bash
-# Make an evidence-backed plan for unregistered real photo pairs:
+# Automatically discover a local checkpoint and generate a ComfyUI workflow:
 kumiki-blender build-statue-glb --asset-id great-sphinx --ai-bridges
 
 # With a locally installed ComfyUI API workflow, generate preview candidates:
@@ -100,16 +100,27 @@ kumiki-blender build-statue-glb --asset-id great-sphinx \
 ```
 
 The existing `generate-completion-image` adapter can produce up to three
-private synthetic reference previews from **verified, real photos**. A
-configured workflow needs exactly one `LoadImage` and one `SaveImage`, with
+private synthetic reference previews from **verified, real photos**. When
+`--ai-bridges` is enabled without a workflow, the command asks your **running
+local ComfyUI** for installed checkpoints and creates an API-format
+`auto-comfyui-workflow.json` using standard checkpoint, VAE, conditioning and
+image-to-image nodes. If ComfyUI is stopped, it also checks the usual
+`~/ComfyUI/models/checkpoints` and `~/Documents/ComfyUI/models/checkpoints`
+directories (and the optional `COMFYUI_DIR` or `KUMIKI_COMFYUI_DIR` root).
+You still need to start ComfyUI to perform inference. It selects a local model
+deterministically, preferring
+smaller SD 1.5 checkpoints on Apple Silicon. No model is downloaded or
+approved automatically. It never invents a checkpoint that is not installed.
+A configured workflow needs exactly one `LoadImage` and one `SaveImage`, with
 local-only approved ComfyUI nodes and already installed model checkpoints.
 ComfyUI must be running at `http://127.0.0.1:8188`; remote hosts and redirects
 are rejected. Set `KUMIKI_COMFYUI_BRIDGE_WORKFLOW` to discover a saved workflow
 without passing a path (still opt in via `--ai-bridges`).
 
 Candidates, source/anchor hashes and provenance are stored separately under
-`<output>/ai-bridge-previews/`. If no workflow is configured, the command
-writes a **plan only**, without claiming an AI model ran. Generated images are
+`<output>/ai-bridge-previews/`. If ComfyUI is unavailable or no compatible
+checkpoint is listed, the command writes a **plan only** and a diagnostic,
+without claiming an AI model ran. Generated images are
 artistic guesses and **cannot** supply verified camera poses, independent
 overlapping photo evidence, or accurate unseen geometry. This pipeline never
 adds them to COLMAP or the final GLB.
