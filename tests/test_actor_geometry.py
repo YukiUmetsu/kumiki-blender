@@ -8,7 +8,7 @@ import unittest
 import numpy as np
 
 from kumiki_blender.actor_geometry import (
-    chain_weights, heightfield_mesh, inflate_mask, local_matrix, trace_chain,
+    chain_weights, heightfield_mesh, inflate_mask, local_matrix, part_transform, trace_chain,
 )
 
 
@@ -104,6 +104,36 @@ class Weights(unittest.TestCase):
         self.assertGreater(weights[0, 0], .99)
         self.assertGreater(weights[2, 1], .99)
         self.assertAlmostEqual(float(weights[1, 0]), .5, delta=.1)
+
+
+class PartTransform(unittest.TestCase):
+    def transform(self, **turn):
+        return part_transform(pivot=(100, 200), x=10, y=20, rotation=15, scale_x=1.2, scale_y=1.2, metres_per_px=.001, **turn)
+
+    @staticmethod
+    def apply(transform, u, v):
+        location, rotation, scale = transform
+        point = np.array((u * .001 * scale[0], 0, -v * .001 * scale[2]))
+        return np.array(location) + rotation @ point
+
+    def test_pivot_stays_fixed_under_a_3d_turn(self):
+        still = self.apply(self.transform(), 100, 200)
+        turned = self.apply(self.transform(yaw=20, pitch=-15), 100, 200)
+        np.testing.assert_allclose(turned, still, atol=1e-12)
+
+    def test_matches_the_flat_matrix_without_a_turn(self):
+        matrix = local_matrix(pivot=(100, 200), x=10, y=20, rotation=15, scale_x=1.2, scale_y=1.2)
+        flat = matrix @ np.array((140, 260, 1.))
+        placed = self.apply(self.transform(), 140, 260)
+        np.testing.assert_allclose(placed, (flat[0] * .001, 0, -flat[1] * .001), atol=1e-12)
+
+    def test_positive_yaw_turns_the_face_toward_screen_right(self):
+        _, rotation, _ = self.transform(yaw=30)
+        self.assertGreater((rotation @ np.array((0, -1, 0)))[0], 0)
+
+    def test_positive_pitch_looks_up(self):
+        _, rotation, _ = part_transform(pivot=(0, 0), x=0, y=0, rotation=0, scale_x=1, scale_y=1, metres_per_px=.001, pitch=30)
+        self.assertGreater((rotation @ np.array((0, -1, 0)))[2], 0)
 
 
 class KumikiMatrixParity(unittest.TestCase):

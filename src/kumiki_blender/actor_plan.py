@@ -58,6 +58,7 @@ class ActorPlan:
     grid_step: int = 4
     roughness: float = .62
     logical_sizes: dict[str, tuple[float, float]] = field(default_factory=dict)
+    ground_parts: tuple[str, ...] = ()
 
     @property
     def by_id(self) -> dict[str, ActorPart]:
@@ -89,7 +90,7 @@ def parse_actor(pack: Path, character: Any, profile: Any) -> ActorPlan:
         raise ActorPlanError("character.json has no parts")
     if not isinstance(profile, dict) or profile.get("schema_version") != 1:
         raise ActorPlanError("Only actor profile schema_version 1 is supported")
-    unknown = profile.keys() - {"schema_version", "height_m", "parts", "effectors", "grid_step", "roughness"}
+    unknown = profile.keys() - {"schema_version", "height_m", "parts", "effectors", "grid_step", "roughness", "ground_parts"}
     if unknown:
         raise ActorPlanError(f"Actor profile has unknown fields: {sorted(unknown)}")
     height = profile.get("height_m")
@@ -133,11 +134,15 @@ def parse_actor(pack: Path, character: Any, profile: Any) -> ActorPlan:
         effectors.append(Effector(effector_id, raw["part"], raw.get("variant"), joints,
                                   _point(raw["start"], "start") if "start" in raw else None,
                                   _point(raw["tip"], "tip") if "tip" in raw else None))
+    ground = tuple(profile.get("ground_parts") or ())
+    for part_id in ground:
+        if part_id not in ids:
+            raise ActorPlanError(f"ground_parts names an unknown part {part_id}")
     step = profile.get("grid_step", 4)
     if type(step) is not int or not 1 <= step <= 16:
         raise ActorPlanError("grid_step must be 1 to 16")
     return ActorPlan(str(character.get("characterId")), str(character.get("revision")), pack, float(height),
-                     tuple(parts), assets, stage, tuple(effectors), step, float(profile.get("roughness", .62)), logical)
+                     tuple(parts), assets, stage, tuple(effectors), step, float(profile.get("roughness", .62)), logical, ground)
 
 
 def load_actor(pack: Path, profile_path: Path) -> ActorPlan:

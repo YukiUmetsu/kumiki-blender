@@ -8,12 +8,11 @@ named by an effector also carry an armature with an IK target.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-import math
 from typing import Any
 
 import numpy as np
 
-from .actor_geometry import chain_weights, heightfield_mesh, inflate_mask, local_matrix, trace_chain
+from .actor_geometry import chain_weights, heightfield_mesh, inflate_mask, local_matrix, part_transform, trace_chain
 from .actor_plan import ActorPart, ActorPlan, Effector
 
 _CACHE: dict[int, tuple[np.ndarray, int, int]] = {}
@@ -86,8 +85,11 @@ def _part_mesh(bpy: Any, plan: ActorPlan, name: str, image: Any, mask: np.ndarra
     return obj, design
 
 
-def _rest_bounds(plan: ActorPlan, images: dict[str, Any]) -> tuple[float, float, float, float]:
-    """Design-space bounds of the rest pose, from drawn alpha, including nested parts."""
+def _rest_bounds(plan: ActorPlan, images: dict[str, Any]) -> tuple[float, float, float, float, float]:
+    """Design-space rest bounds from drawn alpha, plus the ground line.
+
+    The ground comes from `ground_parts` when named, because a tail can hang below the feet.
+    """
     parts = plan.by_id
     matrices: dict[str, np.ndarray] = {}
 
@@ -99,7 +101,7 @@ def _rest_bounds(plan: ActorPlan, images: dict[str, Any]) -> tuple[float, float,
             matrices[part.id] = world(parts[part.parent]) @ local if part.parent else local
         return matrices[part.id]
 
-    xs, ys = [], []
+    xs, ys, ground = [], [], []
     for part in plan.parts:
         image = images[part.asset]
         mask, width, height = _CACHE[id(image)]
@@ -113,7 +115,9 @@ def _rest_bounds(plan: ActorPlan, images: dict[str, Any]) -> tuple[float, float,
         placed = (world(part) @ corners.T).T
         xs += placed[:, 0].tolist()
         ys += placed[:, 1].tolist()
-    return min(xs), min(ys), max(xs), max(ys)
+        if part.id in plan.ground_parts:
+            ground += placed[:, 1].tolist()
+    return min(xs), min(ys), max(xs), max(ys), max(ground or ys)
 
 
 def _logical_size(plan: ActorPlan, key: str, image: Any) -> tuple[float, float]:
@@ -176,16 +180,16 @@ def build_actor(bpy: Any, plan: ActorPlan) -> ActorRig:
         images[key] = image
         if id(image) not in _CACHE:
             _CACHE[id(image)] = (image_alpha(image), image.size[0], image.size[1])
-    left, top, right, bottom = _rest_bounds(plan, images)
+    left, top, right, bottom, ground = _rest_bounds(plan, images)
     scale = plan.height_m / (bottom - top)
     root = bpy.data.objects.new(f"actor-{plan.actor_id}", None)
     bpy.context.collection.objects.link(root)
-    rig = ActorRig(plan, root, scale, ((left + right) / 2, bottom))
+    rig = ActorRig(plan, root, scale, ((left + right) / 2, ground))
     ordered = sorted(plan.parts, key=lambda part: part.z)
     for part in plan.parts:
         empty = bpy.data.objects.new(f"{plan.actor_id}-{part.id}", None)
         bpy.context.collection.objects.link(empty)
-        empty.rotation_mode = "XYZ"
+        empty.rotation_mode = "QUATERNION"
         rig.empties[part.id] = empty
     for part in plan.parts:
         rig.empties[part.id].parent = rig.empties[part.parent] if part.parent else root
@@ -235,30 +239,31 @@ def describe_actor(rig: ActorRig) -> dict[str, Any]:
             "effectors": effectors, "parts": [part.id for part in rig.plan.parts]}
 
 
-def _matrix_channels(rig: ActorRig, part: ActorPart, state: dict[str, float]) -> tuple[tuple[float, float, float], float, tuple[float, float, float]]:
+def _matrix_channels(rig: ActorRig, part: ActorPart, state: dict[str, float]) -> tuple[Any, Any, tuple[float, float, float]]:
+    from mathutils import Matrix, Vector
+
     rest = part.rest
-    x, y = state.get("x", rest.get("x", 0)), state.get("y", rest.get("y", 0))
-    rotation = state.get("rotation", rest.get("rotation", 0))
-    sx, sy = state.get("scaleX", rest.get("scaleX", 1)), state.get("scaleY", rest.get("scaleY", 1))
-    matrix = local_matrix(pivot=part.pivot, x=x, y=y, rotation=rotation, scale_x=sx, scale_y=sy)
-    tx, ty = matrix[0, 2], matrix[1, 2]
+    location, rotation, scale = part_transform(
+        pivot=part.pivot, x=state.get("x", rest.get("x", 0)), y=state.get("y", rest.get("y", 0)),
+        rotation=state.get("rotation", rest.get("rotation", 0)),
+        scale_x=state.get("scaleX", rest.get("scaleX", 1)), scale_y=state.get("scaleY", rest.get("scaleY", 1)),
+        metres_per_px=rig.scale, yaw=state.get("yaw", 0), pitch=state.get("pitch", 0))
     if part.parent is None:
-        tx -= rig.origin[0]
-        ty -= rig.origin[1]
-    return (tx * rig.scale, 0.0, -ty * rig.scale), math.radians(rotation), (sx, 1.0, sy)
+        location = location - np.array((rig.origin[0] * rig.scale, 0.0, -rig.origin[1] * rig.scale))
+    return Vector(location.tolist()), Matrix(rotation.tolist()).to_quaternion(), scale
 
 
 def apply_state(rig: ActorRig, parts: dict[str, dict[str, Any]], frame: int | None) -> None:
     """Pose every part from one Kumiki frame state. Keyframes it when `frame` is given."""
     for part in rig.plan.parts:
         state = parts.get(part.id, {})
-        location, angle, scale = _matrix_channels(rig, part, state)
+        location, rotation, scale = _matrix_channels(rig, part, state)
         empty = rig.empties[part.id]
         empty.location = location
-        empty.rotation_euler = (math.radians(state.get("pitch", 0)), angle, math.radians(state.get("yaw", 0)))
+        empty.rotation_quaternion = rotation
         empty.scale = scale
         if frame is not None:
-            for path in ("location", "rotation_euler", "scale"):
+            for path in ("location", "rotation_quaternion", "scale"):
                 empty.keyframe_insert(path, frame=frame)
         shown = rig.plan.asset_of(part, state.get("variant"))
         for (owner, key), obj in rig.meshes.items():
