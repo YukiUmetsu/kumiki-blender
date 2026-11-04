@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import shutil
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -274,6 +275,34 @@ def main(argv: list[str] | None = None) -> int:
         help="Read-only before/after registration coverage for two COLMAP revisions")
     camera_compare_parser.add_argument("--baseline", type=Path, required=True)
     camera_compare_parser.add_argument("--candidate", type=Path, required=True)
+    for command in ("plan-sfm-cohort-recovery", "recover-sfm-cohorts"):
+        cohort_parser = subcommands.add_parser(
+            command, help="Recover missed camera views as independent SfM cohorts with guarded alignment")
+        cohort_parser.add_argument("--revision", type=Path, required=True,
+                                   help="Existing sparse photo revision with original COLMAP database")
+        cohort_parser.add_argument("--model", type=int, default=0,
+                                   help="Baseline COLMAP sparse model index")
+        cohort_parser.add_argument("--targets", type=Path,
+                                   help="JSON list of staged filenames; default is all unregistered photos")
+        cohort_parser.add_argument("--anchor", action="append", default=[],
+                                   help="Already registered bridge filename (repeatable)")
+        cohort_parser.add_argument("--max-anchors", type=int, default=6)
+        cohort_parser.add_argument("--max-trials", type=int, default=5)
+        cohort_parser.add_argument("--min-inliers", type=int, default=25)
+        cohort_parser.add_argument("--min-new-cameras", type=int, default=2)
+        if command == "recover-sfm-cohorts":
+            cohort_parser.add_argument("--output", type=Path, required=True,
+                                       help="New independent output; never alters source models")
+            cohort_parser.add_argument("--colmap", default="colmap")
+            cohort_parser.add_argument("--trial-timeout", type=int, default=1200)
+    alignment_parser = subcommands.add_parser(
+        "inspect-sfm-cohort-alignment", help="Audit one solved cohort using shared cameras and optionally 3D object landmarks")
+    alignment_parser.add_argument("--revision", type=Path, required=True)
+    alignment_parser.add_argument("--model", type=int, default=0)
+    alignment_parser.add_argument("--candidate", type=Path, required=True,
+                                  help="Exact independent model directory (trial-NN/sparse/0)")
+    alignment_parser.add_argument("--landmarks", type=Path,
+                                  help="JSON object landmarks in the two specific sparse coordinate frames")
     for command in ("plan-dense-photos", "build-dense-photos"):
         dense_parser = subcommands.add_parser(
             command, help="Review or reconstruct a private dense statue mesh from registered cameras")
@@ -1035,6 +1064,42 @@ def main(argv: list[str] | None = None) -> int:
                 raise RecipeError(str(error)) from error
             print(json.dumps(report, indent=2))
             return 0
+        if args.command in ("plan-sfm-cohort-recovery", "recover-sfm-cohorts"):
+            from .reconstruction.sfm_cohort_recovery import (
+                CohortRecoverySettings, plan_cohort_recovery, recover_cohort)
+            settings = CohortRecoverySettings(
+                min_pair_inliers=args.min_inliers, max_anchors=args.max_anchors,
+                max_trials=args.max_trials, min_new_cameras=args.min_new_cameras,
+                max_seconds_per_trial=getattr(args, "trial_timeout", 1200))
+            try:
+                selected = None
+                if args.targets is not None:
+                    if args.targets.is_symlink() or not args.targets.is_file():
+                        raise ValueError("--targets must be an existing JSON file, not a symlink")
+                    selected = json.loads(args.targets.read_text(encoding="utf-8"))
+                    if not isinstance(selected, list) or not all(isinstance(s, str) for s in selected):
+                        raise ValueError("--targets must contain a JSON array of staged filenames")
+                common = dict(model=args.model, targets=selected,
+                              preferred_anchors=args.anchor, settings=settings)
+                report = (plan_cohort_recovery(args.revision, **common)
+                          if args.command == "plan-sfm-cohort-recovery" else
+                          recover_cohort(args.revision, args.output, **common,
+                                         colmap=args.colmap))
+            except (OSError, ValueError, sqlite3.Error, ImportError) as error:
+                raise RecipeError(str(error)) from error
+            print(json.dumps(report, indent=2))
+            return (0 if args.command == "plan-sfm-cohort-recovery" or
+                    report["status"].startswith("candidate / ") else 3)
+        if args.command == "inspect-sfm-cohort-alignment":
+            from .reconstruction.sfm_cohort_recovery import inspect_cohort_alignment
+            try:
+                report = inspect_cohort_alignment(
+                    args.revision, args.candidate, model=args.model,
+                    landmarks_path=args.landmarks)
+            except (OSError, ValueError, sqlite3.Error, ImportError) as error:
+                raise RecipeError(str(error)) from error
+            print(json.dumps(report, indent=2))
+            return 0 if report["status"].startswith("alignment-evidence-passes") else 3
         if args.command in ("plan-photo-model", "build-photo-model"):
             from .reconstruction.photo_model import (PhotoModelSettings, build_photo_model,
                                                      plan_photo_model)

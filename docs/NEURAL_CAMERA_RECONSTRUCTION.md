@@ -248,6 +248,12 @@ check left/right silhouettes before running a costly mesh.
 
 ## Next steps and limitations
 
+For cases where the original photo orbit registers but the opposite-side
+photos do not, use the reusable [SfM cohort-recovery pipeline](SFM_COHORT_RECOVERY.md).
+It reuses one match database, seeds independent missing-side models, and
+validates shared-camera geometry and reprojections before proposing a merge.
+It supports arbitrary objects and optional verified 3D physical landmarks.
+
 Once a candidate visibly improves opposite-side coverage, use that
 `reconstruct-photos --undistort` revision as input to `plan-dense-photos`
 and `build-dense-photos` (or the registered-camera reuse workflow when
