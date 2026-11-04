@@ -39,7 +39,7 @@ jobs:
       - name: Test evidence-guided completion policies, geometry, CLI and import contracts
         env:
           PYTHONPATH: src
-        run: python -m unittest tests.test_completion tests.test_completion_cli tests.test_completion_blender_contract -v
+        run: python -m unittest tests.test_completion tests.test_completion_cli tests.test_completion_blender_contract tests.test_completion_generation tests.test_completion_image_generation -v
       - name: Test Blender physics and deformable-shot plans, export and headless worker boundary
         env:
           PYTHONPATH: src:tests

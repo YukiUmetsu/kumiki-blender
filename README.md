@@ -1,12 +1,13 @@
 # Kumiki Blender
 
 **New: historical or cinematic 3D completion:**
-[`plan-completion` / `build-completion`](docs/EVIDENCE_GUIDED_COMPLETION.md)
-accept evidence-pinned GLB parts created from scans, artists, or external AI
-generators, align them against measured 3D landmarks, and output a separately
-editable `.blend` and `.glb` revision. Historical mode excludes inferred
-geometry; cinematic mode allows it with explicit provenance. This initial
-integration does **not** execute AI models, weld seams, or certify likeness.
+[`suggest-completion`, `generate-completion-image`, `generate-completion-part`,
+`plan-completion`, and `build-completion`](docs/EVIDENCE_GUIDED_COMPLETION.md)
+suggest photo-coverage gaps, create local AI image/GLB candidates (ComfyUI or
+ungated TripoSR with Apple MPS acceleration), and assemble evidence-pinned
+parts with measured 3D landmarks. Historical mode excludes inferred geometry;
+cinematic mode includes it with provenance. Seam welding, automatic candidate
+placement, and photographic likeness certification still require artist review.
 
 **New: Blender physics → Kumiki motion:** [export baked GLB rigid-body clips to portable PM2 actions](docs/KUMIKI_MOTION_BRIDGE.md) with `kumiki-blender export-motion --model model.glb --output baked-actions.json`. No extra Python dependencies, manual coordinate conversion or per-model browser animation code.
 
