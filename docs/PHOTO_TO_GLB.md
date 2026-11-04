@@ -11,6 +11,7 @@ see [learned COLMAP matching and camera coverage comparisons](NEURAL_CAMERA_RECO
 ## One-command, quality-gated statue reconstruction (Apple Silicon)
 
 `build-statue-glb` runs a fresh COLMAP SIFT-LightGlue/MPS camera solution,
+first prepares an incremental, private normalization/foreground-preview cache,
 produces an annotated missing-angle report, prepares SAM2.1/MPS mask
 candidates, audits cross-view mask consistency, then runs **resolution-level 0**
 OpenMVS without geometry-destroying refinement. When measured elevated or side
@@ -36,7 +37,7 @@ OpenMVS dense geometry or Blender export), elapsed time, recent worker activity,
 and a bar counting **completed workflow phases**. For example:
 
 ```text
-KUMIKI great-sphinx [━━━·············] 20% phases · 3/10 Checking camera coverage · 00:27 · Worker running
+KUMIKI great-sphinx [━━━·············] 25% phases · 3/12 Matching photos and solving cameras · 00:27 · Worker running
 ```
 
 The overall percentage counts completed phases; it **does not estimate time
@@ -88,17 +89,21 @@ under `<output>/camera-recovery/`:
 1. COLMAP `image_registrator` solves new PnP cameras using existing verified
    2D-to-3D correspondences. Original registered cameras and source photos are
    never overwritten.
-2. If that cannot yield validated new cameras, an isolated COLMAP cohort is
-   attempted using verified feature pairs and three bounded reconstruction
+2. If some camera poses register but elevated photographs remain missing,
+   COLMAP triangulates new **real 3D tracks** and retries registration (at most
+   two more rounds). The first successful registration does not stop the search.
+3. Isolated, targeted COLMAP cohorts are attempted for still-missing elevated
+   source photos, using verified feature pairs and bounded reconstruction
    trials, with similarity-alignment, model-merging, and camera-drift checks.
-3. If both geometry-based attempts fail, an installed MapAnything model can
+4. If those geometric attempts fail to recover the elevated candidates, an installed MapAnything model can
    estimate camera/depth hypotheses on an **8-photo MPS batch** emphasizing
    missing elevated views. These hypotheses are kept as private diagnostics;
    they never count as registered cameras without verified photo tracks.
-4. When a new COLMAP camera solution passes the real-track, camera-ID and
+5. When a new COLMAP camera solution passes the real-track, camera-ID and
    baseline stability checks, the system builds a new undistorted/rectified
-   camera revision, reruns the coverage audit and, **only if the quality gate
-   passes**, uses it for SAM2 masking and OpenMVS geometry.
+   camera revision, reruns the coverage audit and can retry once more from that
+   larger verified camera set. **Only if the quality gate passes** does the
+   workflow use it for SAM2 masking and OpenMVS geometry.
 
 This can recover photographs that had enough visual overlap but no original
 camera pose. It cannot guarantee recovery from non-overlapping images and it
@@ -198,6 +203,35 @@ The original `build-photo-model` command below remains available for a quick,
 unmasked diagnostic GLB and continues to use its unchanged defaults.
 
 ### Incremental cache when adding photos
+
+Before matching cameras, every original photo is processed into a persistent
+private `<asset-output-parent>/_statue_photo_cache/` directory (override with
+`--photo-cache-dir`). It stores:
+
+- A byte-verified, EXIF-corrected RGB `normalized.png` used for COLMAP matching.
+- A SAM2.1 subject-mask **candidate** and transparent `isolated-*.png`
+  foreground preview, with model hashes and quality warnings. These are not
+  approved geometry masks and **are never substituted for original photographic
+  evidence during SfM**. The camera-derived rectified masks are generated and
+  verified separately downstream.
+- `normalized.json` / `foreground-*.json` integrity receipts and a per-run
+  `photo-preprocess/photo-preprocess-report.json` index linking originals to
+  cached pixels and recording cache hits/misses.
+
+The cache uses **original image SHA-256, normalization version, checkpoint
+SHA-256 and SAM2 settings**, not filenames or ordinal `photo-XXXX` identifiers.
+When a new photo is added, only the new photo incurs normalization and SAM2
+preprocessing; unchanged images are verified and reused, even when adding a
+file shifts their staged names. Editing a photo or changing the SAM2 model
+invalidates the affected cache keys. Interrupted preprocessing can resume
+without recomputing completed, valid entries. The existing new-photo camera
+matching still needs to solve correspondences with the updated photo set.
+
+For an existing blocked reconstruction, use the usual `--resume`. It prepares
+the new source cache and can run a second recovery pass from the already
+verified camera revision without repeating completed original matching.
+
+### Rectified segmentation cache
 
 Each new `build-statue-glb` output revision uses the persistent sibling folder
 `_statue_mask_cache/` (override with `--mask-cache-dir`). Automatic SAM2 mask

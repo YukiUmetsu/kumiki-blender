@@ -35,6 +35,7 @@ class StatuePipelineSettings:
     mask_guides: Path | None = None
     masks_dir: Path | None = None
     mask_cache_dir: Path | None = None
+    photo_cache_dir: Path | None = None
     auto_download_model: bool = True
     ai_bridges: bool = False
     auto_recover_cameras: bool = True
@@ -70,6 +71,10 @@ class StatuePipelineSettings:
                 (self.mask_cache_dir.is_symlink() or
                  (self.mask_cache_dir.exists() and not self.mask_cache_dir.is_dir()))):
             raise ReferenceError("--mask-cache-dir must not be a symlink or file")
+        if (self.photo_cache_dir is not None and
+                (self.photo_cache_dir.is_symlink() or
+                 (self.photo_cache_dir.exists() and not self.photo_cache_dir.is_dir()))):
+            raise ReferenceError("--photo-cache-dir must not be a symlink or file")
         if self.ai_bridge_workflow is not None and (
                 self.ai_bridge_workflow.is_symlink() or not self.ai_bridge_workflow.is_file()):
             raise ReferenceError("AI bridge workflow must be an existing regular file")
@@ -411,7 +416,9 @@ def build_statue_glb(
 
     def run_stage(name: str, argv: list[str], receipt: Path) -> dict[str, Any]:
         nonlocal active_phase
-        phase = "mask_audit" if name.startswith("mask-audit-") else name
+        phase = ("mask_audit" if name.startswith("mask-audit-") else
+                 "camera_recovery" if name.startswith("camera_recovery") else
+                 "recovery_coverage" if name.startswith("recovery_coverage") else name)
         emit("start", phase, f"Log: {target / 'logs' / (name + '.log')}")
         if name in report["completed_stages"]:
             emit("skip", phase)
@@ -428,17 +435,38 @@ def build_statue_glb(
         return record
 
     sparse = target / "cameras"
+    prepared = target / "photo-preprocess"
     coverage_dir = target / "coverage"
     mask_dir = target / "masks"
     mask_source = settings.masks_dir.resolve() if settings.masks_dir else mask_dir / "masks"
     shared_cache = settings.mask_cache_dir.resolve() if settings.mask_cache_dir else target.parent / "_statue_mask_cache"
+    photo_cache = settings.photo_cache_dir.resolve() if settings.photo_cache_dir else target.parent / "_statue_photo_cache"
     dense = target / "dense"
     review = target / "review"
 
     checkpoint("running")
     emit("done", "preflight")
+    prep_argv = executable + ["prepare-statue-photos", "--photos", str(photos.resolve()),
+        "--asset-id", asset_id, "--output", str(prepared), "--cache-dir", str(photo_cache),
+        "--sam2-size", settings.sam2_size, "--sam2-device", settings.sam2_device]
+    if settings.masks_dir is not None:
+        prep_argv.append("--no-foreground")
+    elif checkpoint_file is not None:
+        prep_argv += ["--sam2-checkpoint", str(checkpoint_file)]
+    if resume and prepared.exists() and "photo_preprocess" not in report["completed_stages"]:
+        prep_argv.append("--resume")
+    prepared_report = run_stage("photo_preprocess", prep_argv,
+                                prepared / "photo-preprocess-report.json")
+    if not str(prepared_report.get("status", "")).startswith("candidate"):
+        return checkpoint("blocked / photo-preprocess-required", "photo_preprocess",
+                          ["No valid source-photo preprocessing cache"])
+    report["photo_cache"] = {"normalized_hits": prepared_report.get("normalized_hits"),
+                             "normalized_misses": prepared_report.get("normalized_misses"),
+                             "foreground_hits": prepared_report.get("foreground_hits"),
+                             "foreground_misses": prepared_report.get("foreground_misses")}
     camera_argv = executable + ["reconstruct-photos", "--photos", str(photos.resolve()),
         "--asset-id", asset_id, "--output", str(sparse), "--engine", "colmap",
+        "--normalized-cache-dir", str(photo_cache),
         "--matching-preset", "sift-lightglue", "--matching-device", "mps",
         "--matching-pairs-per-process", "8", "--max-colmap-rss-mb", str(settings.max_colmap_rss_mb),
         "--undistort", "--timeout-seconds", str(settings.timeout_seconds)]
@@ -470,42 +498,64 @@ def build_statue_glb(
     report["source_images"] = total
     report["unregistered_photo_advice"] = coverage.get("existing_photo_priorities", [])
     if issues and camera.get("unregistered_filenames") and settings.auto_recover_cameras:
-        recovery = target / "camera-recovery"
-        recovered = run_stage("camera_recovery", executable + [
-            "recover-registered-cameras", "--reconstruction", str(sparse),
-            "--output", str(recovery), "--timeout-seconds", str(settings.timeout_seconds)],
-            recovery / "camera-recovery-report.json")
-        report["camera_recovery_report"] = "camera-recovery/camera-recovery-report.json"
-        report["automatic_camera_recovery_status"] = recovered.get("status", "unknown")
-        report["camera_recovery_new_cameras"] = recovered.get("new_cameras", 0)
-        if recovered.get("candidate_accepted") is True:
+        candidate_source = sparse
+        initial_registered = registered
+        recovery_rounds = []
+        for round_number in range(1, 3):
+            stage = "camera_recovery" if round_number == 1 else "camera_recovery_followup"
+            coverage_stage = "recovery_coverage" if round_number == 1 else "recovery_coverage_followup"
+            recovery = target / ("camera-recovery" if round_number == 1 else "camera-recovery-followup")
+            new_coverage_dir = target / ("recovered-coverage" if round_number == 1 else
+                                         "recovered-coverage-followup")
+            recovered = run_stage(stage, executable + [
+                "recover-registered-cameras", "--reconstruction", str(candidate_source),
+                "--output", str(recovery), "--timeout-seconds", str(settings.timeout_seconds)],
+                recovery / "camera-recovery-report.json")
+            report["camera_recovery_report"] = str(recovery.relative_to(target) /
+                                                  "camera-recovery-report.json")
+            report["automatic_camera_recovery_status"] = recovered.get("status", "unknown")
+            recovery_rounds.append({"stage": stage, "source": str(candidate_source),
+                                    "status": recovered.get("status"),
+                                    "new_cameras": recovered.get("new_cameras", 0)})
+            report["camera_recovery_rounds"] = recovery_rounds
+            if recovered.get("candidate_accepted") is not True:
+                break
             recovered_camera = _read_report(recovery / "reconstruction-report.json")
             candidate_registered = recovered_camera.get("registered_images", 0)
             candidate_total = recovered_camera.get("staged_independent_images", 0)
-            if (isinstance(candidate_registered, int) and isinstance(candidate_total, int)
-                    and candidate_total > 0 and candidate_registered > registered
-                    and recovered_camera.get("undistorted_images") == candidate_registered):
-                new_coverage_dir = target / "recovered-coverage"
-                run_stage("recovery_coverage", [sys.executable, str(script), str(recovery),
-                    "--output", str(new_coverage_dir), "--subject-type", "statue"]
-                    + (["--front-photo", front["filename"]] if front["filename"] else []),
-                    new_coverage_dir / "photo-advice.json")
-                proposed = _read_report(new_coverage_dir / "photo-advice.json")
-                revised_issues = _coverage_warnings(
-                    proposed, candidate_registered / candidate_total, settings.min_registered_fraction)
-                report["camera_recovery_coverage_warnings"] = revised_issues
-                if not revised_issues:
-                    sparse = recovery
-                    camera = recovered_camera
-                    coverage = proposed
-                    coverage_dir = new_coverage_dir
-                    registered, total = candidate_registered, candidate_total
-                    issues = []
-                    report["registered_images"] = registered
-                    report["source_images"] = total
-                    report["coverage_report"] = "recovered-coverage/photo-advice.md"
-                    report["unregistered_photo_advice"] = coverage.get("existing_photo_priorities", [])
-                    report["active_camera_revision"] = str(recovery)
+            if (not isinstance(candidate_registered, int) or not isinstance(candidate_total, int)
+                    or candidate_total <= 0 or candidate_registered <= (initial_registered if round_number == 1
+                                                                          else previous_registered)
+                    or recovered_camera.get("undistorted_images") != candidate_registered):
+                break
+            previous_registered = candidate_registered
+            report["camera_recovery_new_cameras"] = candidate_registered - initial_registered
+            run_stage(coverage_stage, [sys.executable, str(script), str(recovery),
+                "--output", str(new_coverage_dir), "--subject-type", "statue"]
+                + (["--front-photo", front["filename"]] if front["filename"] else []),
+                new_coverage_dir / "photo-advice.json")
+            proposed = _read_report(new_coverage_dir / "photo-advice.json")
+            revised_issues = _coverage_warnings(
+                proposed, candidate_registered / candidate_total, settings.min_registered_fraction)
+            report["camera_recovery_coverage_warnings"] = revised_issues
+            report["verified_camera_candidate"] = str(recovery)
+            report["verified_camera_candidate_registered"] = candidate_registered
+            if not revised_issues:
+                sparse = recovery
+                camera = recovered_camera
+                coverage = proposed
+                coverage_dir = new_coverage_dir
+                registered, total = candidate_registered, candidate_total
+                issues = []
+                report["registered_images"] = registered
+                report["source_images"] = total
+                report["coverage_report"] = str(new_coverage_dir.relative_to(target) / "photo-advice.md")
+                report["unregistered_photo_advice"] = coverage.get("existing_photo_priorities", [])
+                report["active_camera_revision"] = str(recovery)
+                break
+            if not recovered_camera.get("unregistered_filenames"):
+                break
+            candidate_source = recovery
     else:
         emit("skip", "camera_recovery")
     if "active_camera_revision" not in report:

@@ -1,0 +1,113 @@
+"""Per-photo content reuse must survive new images and filename renumbering."""
+
+import hashlib
+import json
+import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+import numpy as np
+from PIL import Image
+
+from kumiki_blender.reconstruction.colmap import _prepare_images
+from kumiki_blender.reconstruction.photo_preprocess_cache import (
+    prepare_statue_photo_cache, read_normalized_photo,
+)
+from kumiki_blender.reconstruction.splat_input import load_photo_folder
+
+
+class PhotoPreprocessCacheTests(unittest.TestCase):
+    def setUp(self):
+        root = tempfile.TemporaryDirectory()
+        self.addCleanup(root.cleanup)
+        self.root = Path(root.name)
+        self.photos = self.root / "photos"
+        self.photos.mkdir()
+        self.cache = self.root / "source-cache"
+        self.checkpoint = self.root / "sam2.pt"
+        self.checkpoint.write_bytes(b"fake-checkpoint-v1")
+        for i in range(8):
+            Image.new("RGB", (96, 80), (10 * i, 40, 190 - i)).save(
+                self.photos / f"photo-{i + 1:02}.jpg")
+
+    @staticmethod
+    def fake_mask(photo, _guide, _predictor):
+        pixels = np.zeros((photo.height, photo.width), dtype=np.uint8)
+        pixels[4:-4, 4:-4] = 255
+        return pixels, {"components": ["subject"], "missing_parts": [],
+                        "background_seed_violations": 0}
+
+    def build(self, ordinal):
+        source = load_photo_folder(self.photos, "great-sphinx")
+        with patch("kumiki_blender.reconstruction.masking._sam2_mask", side_effect=self.fake_mask):
+            return prepare_statue_photo_cache(
+                source, self.cache, self.root / f"run-{ordinal}", checkpoint=self.checkpoint,
+                predictor_loader=lambda *_: (object(), "mps"))
+
+    def test_new_photo_only_misses_its_own_preprocessing_keys(self):
+        initial = self.build(1)
+        self.assertEqual((initial["normalized_misses"], initial["foreground_misses"]), (8, 8))
+        old_sha = hashlib.sha256((self.photos / "photo-01.jpg").read_bytes()).hexdigest()
+        Image.new("RGB", (96, 80), (150, 80, 30)).save(self.photos / "photo-00.jpg")
+        second = self.build(2)
+        self.assertEqual((second["normalized_hits"], second["normalized_misses"]), (8, 1))
+        self.assertEqual((second["foreground_hits"], second["foreground_misses"]), (8, 1))
+        photo = next(item for item in load_photo_folder(self.photos, "great-sphinx").images
+                     if item.path.name == "photo-01.jpg")
+        normalized, metadata = read_normalized_photo(self.cache, photo)
+        self.assertEqual(metadata["source_sha256"], old_sha)
+        with Image.open(normalized) as cached_image:
+            self.assertEqual(cached_image.mode, "RGB")
+        first = initial["images"][0]
+        self.assertNotEqual(first["original_filename"], second["images"][0]["original_filename"])
+        self.assertEqual(first["source_sha256"], second["images"][1]["source_sha256"])
+
+        # COLMAP uses the exact cached RGB pixels, NOT candidate background cutouts.
+        stage = self.root / "colmap-staging"
+        stage.mkdir()
+        self.assertFalse(_prepare_images(list(load_photo_folder(self.photos, "great-sphinx").images),
+                                         stage, normalize_for_colmap=True,
+                                         normalized_cache_dir=self.cache))
+        index = json.loads((stage / "staged-reference-index.json").read_text())["images"]
+        self.assertEqual(sum(bool(item["normalization_cache_hit"]) for item in index), 9)
+        self.assertTrue(all(item["normalized_for_colmap"] for item in index))
+        for item in index:
+            with Image.open(stage / "images" / item["filename"]) as staged:
+                self.assertEqual(staged.mode, "RGB")
+
+    def test_changed_bytes_and_corruption_trigger_only_necessary_work(self):
+        self.build(1)
+        Image.new("RGB", (96, 80), (10, 20, 25)).save(self.photos / "photo-05.jpg")
+        updated = self.build(2)
+        self.assertEqual((updated["normalized_hits"], updated["normalized_misses"]), (7, 1))
+        self.assertEqual((updated["foreground_hits"], updated["foreground_misses"]), (7, 1))
+        photo = next(item for item in load_photo_folder(self.photos, "great-sphinx").images
+                     if item.path.name == "photo-05.jpg")
+        normalized, _ = read_normalized_photo(self.cache, photo)
+        normalized.write_bytes(b"corrupt")
+        refreshed = self.build(3)
+        self.assertEqual((refreshed["normalized_hits"], refreshed["normalized_misses"]), (7, 1))
+        # The normalized RGB recomputes to identical bytes, so its still-valid
+        # foreground mask remains reusable without another neural inference.
+        self.assertEqual((refreshed["foreground_hits"], refreshed["foreground_misses"]), (8, 0))
+
+    def test_checkpoint_change_only_recomputes_foreground(self):
+        self.build(1)
+        self.checkpoint.write_bytes(b"fake-checkpoint-v2")
+        updated = self.build(2)
+        self.assertEqual((updated["normalized_hits"], updated["normalized_misses"]), (8, 0))
+        self.assertEqual((updated["foreground_hits"], updated["foreground_misses"]), (0, 8))
+
+    def test_resume_reuses_already_finished_source_image_work(self):
+        self.build(1)
+        source = load_photo_folder(self.photos, "great-sphinx")
+        with patch("kumiki_blender.reconstruction.masking._sam2_mask", side_effect=self.fake_mask):
+            result = prepare_statue_photo_cache(
+                source, self.cache, self.root / "run-1", checkpoint=self.checkpoint,
+                predictor_loader=lambda *_: (object(), "mps"), resume=True)
+        self.assertEqual((result["normalized_hits"], result["foreground_hits"]), (8, 8))
+
+
+if __name__ == "__main__":
+    unittest.main()

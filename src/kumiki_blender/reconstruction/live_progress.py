@@ -20,6 +20,7 @@ from typing import Any, Callable, TextIO
 
 _PHASES = (
     ("preflight", "Checking dependencies"),
+    ("photo_preprocess", "Preparing and caching source photographs"),
     ("cameras", "Matching photos and solving cameras"),
     ("coverage", "Checking camera coverage"),
     ("camera_recovery", "Recovering cameras from verified photo tracks"),
@@ -31,7 +32,7 @@ _PHASES = (
     ("review", "Preparing Blender review"),
     ("export", "Verifying and exporting GLB"),
 )
-_SHORT_NAMES = {"preflight": "Prep", "cameras": "Cameras", "coverage": "Coverage",
+_SHORT_NAMES = {"preflight": "Prep", "photo_preprocess": "Photo Cache", "cameras": "Cameras", "coverage": "Coverage",
                 "camera_recovery": "Recover", "recovery_coverage": "Recheck",
                 "ai_bridges": "AI Bridges", "masks": "SAM2 Masks",
                 "mask_audit": "Mask QA", "dense": "OpenMVS", "review": "Blender",
@@ -57,6 +58,16 @@ def _read_receipt(path: Path) -> dict[str, Any]:
 
 def _stage_detail(root: Path, stage: str) -> str | None:
     """Read partial receipts written by existing workers; never invent a %."""
+    if stage == "photo_preprocess":
+        report = _read_receipt(root / "photo-preprocess/photo-preprocess-report.json")
+        entries = report.get("images")
+        if isinstance(entries, list):
+            done = len(entries)
+            hits = report.get("normalized_hits", 0)
+            total = report.get("source_images")
+            count = f"{done}/{total} ({done * 100 // total}%)" if (
+                type(total) is int and total > 0 and done <= total) else str(done)
+            return f"Source photos: {count} · {hits} normalization cache hits"
     if stage == "cameras":
         report = _read_receipt(root / "cameras/reconstruction-report.json")
         pairs = report.get("matching_progress") or {}

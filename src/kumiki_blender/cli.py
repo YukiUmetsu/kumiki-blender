@@ -189,6 +189,8 @@ def main(argv: list[str] | None = None) -> int:
             photo_parser.add_argument("--asset-id", help="Required with --photos")
             photo_parser.add_argument("--output", type=Path, required=True,
                                       help="New immutable reconstruction revision directory")
+            photo_parser.add_argument("--normalized-cache-dir", type=Path,
+                                      help="Reuse byte-verified RGB normalizations of unchanged original photos")
             photo_parser.add_argument("--colmap", default="colmap", help="Installed COLMAP executable")
             photo_parser.add_argument("--engine", choices=("colmap", "pycolmap"), default="colmap",
                                       help="COLMAP CLI (default) or pip-installed CPU PyCOLMAP")
@@ -296,6 +298,8 @@ def main(argv: list[str] | None = None) -> int:
                            help="Previously reviewed rectified masks; skips automatic SAM2 masking")
     statue_glb.add_argument("--mask-cache-dir", type=Path,
                            help="Persistent per-image mask cache (defaults to a sibling of the output revision)")
+    statue_glb.add_argument("--photo-cache-dir", type=Path,
+                           help="Persistent per-source-photo normalization and SAM2 foreground cache")
     statue_glb.add_argument("--ai-bridges", action="store_true",
                            help="Opt in to private synthetic previews; auto-build a local ComfyUI workflow if possible")
     statue_glb.add_argument("--no-camera-recovery", action="store_true",
@@ -309,6 +313,17 @@ def main(argv: list[str] | None = None) -> int:
     statue_glb.add_argument("--resume", action="store_true")
     statue_glb.add_argument("--no-progress", action="store_true",
                            help="Disable live phase dashboard on stderr (stdout remains JSON)")
+    photo_cache_parser = subcommands.add_parser(
+        "prepare-statue-photos", help="Incrementally normalize and cache private foreground previews")
+    photo_cache_parser.add_argument("--photos", type=Path, required=True)
+    photo_cache_parser.add_argument("--asset-id", required=True)
+    photo_cache_parser.add_argument("--output", type=Path, required=True)
+    photo_cache_parser.add_argument("--cache-dir", type=Path, required=True)
+    photo_cache_parser.add_argument("--sam2-checkpoint", type=Path)
+    photo_cache_parser.add_argument("--sam2-size", choices=("tiny", "small", "base_plus", "large"), default="small")
+    photo_cache_parser.add_argument("--sam2-device", choices=("auto", "mps", "cpu"), default="mps")
+    photo_cache_parser.add_argument("--no-foreground", action="store_true")
+    photo_cache_parser.add_argument("--resume", action="store_true")
     recovery_parser = subcommands.add_parser(
         "recover-registered-cameras",
         help="Use real COLMAP feature tracks to recover missing cameras and validate a new rectified revision")
@@ -1232,6 +1247,20 @@ def main(argv: list[str] | None = None) -> int:
                 raise RecipeError(str(error)) from error
             print(json.dumps(report, indent=2))
             return 0 if report["status"].startswith("alignment-evidence-passes") else 3
+        if args.command == "prepare-statue-photos":
+            from .reconstruction.splat_input import load_photo_folder
+            from .reconstruction.photo_preprocess_cache import prepare_statue_photo_cache
+            from .reconstruction.references import ReferenceError
+            try:
+                report = prepare_statue_photo_cache(
+                    load_photo_folder(args.photos, args.asset_id), args.cache_dir, args.output,
+                    checkpoint=args.sam2_checkpoint, sam2_size=args.sam2_size,
+                    sam2_device=args.sam2_device, foreground=not args.no_foreground,
+                    resume=args.resume)
+            except (ReferenceError, ValueError, OSError, ImportError) as error:
+                raise RecipeError(str(error)) from error
+            print(json.dumps(report, indent=2))
+            return 0
         if args.command == "build-statue-glb":
             from .reconstruction.statue_pipeline import StatuePipelineSettings, build_statue_glb
             from .reconstruction.live_progress import LiveProgress
@@ -1254,7 +1283,7 @@ def main(argv: list[str] | None = None) -> int:
                         auto_download_model=not args.no_auto_model_download,
                         sam2_size=args.sam2_size, sam2_device=args.sam2_device,
                         mask_guides=args.mask_guides, masks_dir=args.masks_dir,
-                        mask_cache_dir=args.mask_cache_dir,
+                        mask_cache_dir=args.mask_cache_dir, photo_cache_dir=args.photo_cache_dir,
                         ai_bridges=args.ai_bridges or args.ai_bridge_workflow is not None,
                         auto_recover_cameras=not args.no_camera_recovery,
                         ai_bridge_workflow=args.ai_bridge_workflow,
@@ -1629,6 +1658,7 @@ def main(argv: list[str] | None = None) -> int:
                                                       matching_preset=args.matching_preset,
                                                       matching_device=args.matching_device,
                                                       matching_pair_list=args.matching_pair_list,
+                                                      normalized_cache_dir=args.normalized_cache_dir,
                                                       feature_threads=args.feature_threads,
                                                       matching_threads=args.matching_threads,
                                                       sift_first_octave=args.sift_first_octave,

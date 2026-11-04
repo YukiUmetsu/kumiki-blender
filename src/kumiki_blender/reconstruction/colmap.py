@@ -241,7 +241,8 @@ def _orient_mask(mask, orientation: int):
 
 
 def _prepare_images(references: list[ReferenceImage], output: Path, *,
-                    normalize_for_colmap: bool = False) -> bool:
+                    normalize_for_colmap: bool = False,
+                    normalized_cache_dir: Path | None = None) -> bool:
     """Stage immutable photos and masks; optionally normalize to RGB PNG.
 
     PyCOLMAP's image decoder cannot reliably import WebP or some JPEG variants
@@ -268,29 +269,48 @@ def _prepare_images(references: list[ReferenceImage], output: Path, *,
         source_format = None
         source_mode = None
         alpha_composited = False
+        normalized_cache_hit = False
         if normalize_for_colmap:
-            # Decode the same exact bytes that were validated during intake.
-            data = image.path.read_bytes()
-            if hashlib.sha256(data).hexdigest() != image.sha256:
-                raise ReferenceError(f"Reference {image.image_id} changed during image staging")
-            try:
-                with Image.open(io.BytesIO(data)) as source:
-                    source.load()
-                    source_format, source_mode = source.format, source.mode
-                    orientation = source.getexif().get(274, 1)
-                    orientation = orientation if orientation in range(1, 9) else 1
-                    upright = ImageOps.exif_transpose(source)
-                    if "A" in upright.getbands() or "transparency" in upright.info:
-                        rgba = upright.convert("RGBA")
-                        normalized = Image.new("RGB", rgba.size, (255, 255, 255))
-                        normalized.paste(rgba, mask=rgba.getchannel("A"))
-                        alpha_composited = True
-                    else:
-                        normalized = upright.convert("RGB")
-                    dimensions = normalized.size
-                    normalized.save(staged, format="PNG")
-            except (OSError, ValueError, Image.DecompressionBombError) as error:
-                raise ReferenceError(f"Cannot normalize reference {image.image_id} for COLMAP: {error}") from error
+            cached = None
+            if normalized_cache_dir is not None:
+                from .photo_preprocess_cache import read_normalized_photo
+                cached = read_normalized_photo(normalized_cache_dir, image)
+            if cached is not None:
+                cache_file, receipt = cached
+                if _sha256(image.path) != image.sha256:
+                    raise ReferenceError("Source photo changed before cached COLMAP staging")
+                shutil.copyfile(cache_file, staged)
+                if _sha256(staged) != receipt["normalized_sha256"]:
+                    raise ReferenceError("Cached photo changed during COLMAP staging")
+                dimensions = tuple(receipt["dimensions"])
+                orientation = receipt["exif_orientation_applied"]
+                source_format = receipt["source_format"]
+                source_mode = receipt["source_mode"]
+                alpha_composited = receipt["alpha_composited_on_white"]
+                normalized_cache_hit = True
+            else:
+                # Decode the same exact bytes that were validated during intake.
+                data = image.path.read_bytes()
+                if hashlib.sha256(data).hexdigest() != image.sha256:
+                    raise ReferenceError(f"Reference {image.image_id} changed during image staging")
+                try:
+                    with Image.open(io.BytesIO(data)) as source:
+                        source.load()
+                        source_format, source_mode = source.format, source.mode
+                        orientation = source.getexif().get(274, 1)
+                        orientation = orientation if orientation in range(1, 9) else 1
+                        upright = ImageOps.exif_transpose(source)
+                        if "A" in upright.getbands() or "transparency" in upright.info:
+                            rgba = upright.convert("RGBA")
+                            normalized = Image.new("RGB", rgba.size, (255, 255, 255))
+                            normalized.paste(rgba, mask=rgba.getchannel("A"))
+                            alpha_composited = True
+                        else:
+                            normalized = upright.convert("RGB")
+                        dimensions = normalized.size
+                        normalized.save(staged, format="PNG")
+                except (OSError, ValueError, Image.DecompressionBombError) as error:
+                    raise ReferenceError(f"Cannot normalize reference {image.image_id} for COLMAP: {error}") from error
         else:
             shutil.copyfile(image.path, staged)
             if _sha256(staged) != image.sha256:
@@ -319,6 +339,7 @@ def _prepare_images(references: list[ReferenceImage], output: Path, *,
                       "regions": image.regions, "sha256": _sha256(staged),
                       "original_sha256": image.sha256,
                       "normalized_for_colmap": normalize_for_colmap,
+                      "normalization_cache_hit": normalized_cache_hit,
                       "source_format": source_format, "source_mode": source_mode,
                       "alpha_composited_on_white": alpha_composited,
                       "exif_orientation_applied": orientation if normalize_for_colmap else None,
@@ -754,6 +775,7 @@ def build_sparse_reconstruction(reference_set: ReferenceSet, output: str | Path,
                                 matching_pairs_per_process: int | None = None,
                                 matching_device: str = "colmap-cpu",
                                 matching_pair_list: Path | None = None,
+                                normalized_cache_dir: Path | None = None,
                                 resume: bool = False) -> dict[str, Any]:
     """Produce auditable camera/sparse data using a locally installed COLMAP.
 
@@ -992,7 +1014,8 @@ def build_sparse_reconstruction(reference_set: ReferenceSet, output: str | Path,
     else:
         try:
             _write_json(target / "reference-audit.json", audit)
-            has_masks = _prepare_images(references, target, normalize_for_colmap=True)
+            has_masks = _prepare_images(references, target, normalize_for_colmap=True,
+                                        normalized_cache_dir=normalized_cache_dir)
         except (ReferenceError, OSError, ValueError) as error:
             report["failed_stage"], report["exit_code"] = "staging", 2
             report["error"] = str(error)

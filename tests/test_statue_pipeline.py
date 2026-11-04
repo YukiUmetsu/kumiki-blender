@@ -46,20 +46,29 @@ class StatuePipelineTests(unittest.TestCase):
                            for index, angle in enumerate(poses)]}
 
     def runner(self, *, mask_bad=False, coverage_bad=False,
-               recovery_works=False, recovery_rejected=False):
+               recovery_works=False, recovery_rejected=False,
+               recovery_followup=False):
         calls = []
 
         def run(argv, log, _environment):
             stage = log.stem
             calls.append(stage)
-            if stage == "cameras":
+            if stage == "photo_preprocess":
+                folder = self.output / "photo-preprocess"
+                folder.mkdir()
+                (folder / "photo-preprocess-report.json").write_text(json.dumps({
+                    "status": "candidate / cached-photo-preparation",
+                    "normalized_hits": 0, "normalized_misses": 8,
+                    "foreground_hits": 0, "foreground_misses": 8,
+                    "images": [{"original_filename": f"image-{i}.png"} for i in range(8)]}))
+            elif stage == "cameras":
                 folder = self.output / "cameras"
                 folder.mkdir()
                 (folder / "reconstruction-report.json").write_text(json.dumps({
-                    "status": "candidate / review-required", "registered_images": (7 if (recovery_works or recovery_rejected) else 8),
-                    "staged_independent_images": 8,
-                    "undistorted_images": (7 if (recovery_works or recovery_rejected) else 8),
-                    "unregistered_filenames": (["photo-0007.png"] if (recovery_works or recovery_rejected) else [])}))
+                    "status": "candidate / review-required", "registered_images": (7 if (recovery_works or recovery_rejected or recovery_followup) else 8),
+                    "staged_independent_images": 10 if recovery_followup else 8,
+                    "undistorted_images": (7 if (recovery_works or recovery_rejected or recovery_followup) else 8),
+                    "unregistered_filenames": (["photo-0007.png"] if (recovery_works or recovery_rejected or recovery_followup) else [])}))
             elif stage == "coverage":
                 folder = self.output / "coverage"
                 folder.mkdir()
@@ -67,8 +76,9 @@ class StatuePipelineTests(unittest.TestCase):
                 if coverage_bad:
                     info["images"] = info["images"][:2]
                 (folder / "photo-advice.json").write_text(json.dumps(info))
-            elif stage == "camera_recovery":
-                folder = self.output / "camera-recovery"
+            elif stage in ("camera_recovery", "camera_recovery_followup"):
+                followup = stage == "camera_recovery_followup"
+                folder = self.output / ("camera-recovery-followup" if followup else "camera-recovery")
                 folder.mkdir()
                 (folder / "camera-recovery-report.json").write_text(json.dumps({
                     "status": ("no-verified-camera-recovery" if recovery_rejected else
@@ -76,12 +86,18 @@ class StatuePipelineTests(unittest.TestCase):
                     "candidate_accepted": not recovery_rejected,
                     "new_cameras": 0 if recovery_rejected else 1}))
                 (folder / "reconstruction-report.json").write_text(json.dumps({
-                    "status": "candidate / visual-review-required", "registered_images": 8,
-                    "staged_independent_images": 8, "undistorted_images": 8}))
-            elif stage == "recovery_coverage":
-                folder = self.output / "recovered-coverage"
+                    "status": "candidate / visual-review-required", "registered_images": 9 if followup else 8,
+                    "staged_independent_images": 10 if recovery_followup else 8,
+                    "undistorted_images": 9 if followup else 8,
+                    "unregistered_filenames": ["photo-0009.png"] if recovery_followup else []}))
+            elif stage in ("recovery_coverage", "recovery_coverage_followup"):
+                followup = stage == "recovery_coverage_followup"
+                folder = self.output / ("recovered-coverage-followup" if followup else "recovered-coverage")
                 folder.mkdir()
-                (folder / "photo-advice.json").write_text(json.dumps(self.coverage()))
+                info = self.coverage()
+                if recovery_followup and not followup:
+                    info["images"] = info["images"][:2]
+                (folder / "photo-advice.json").write_text(json.dumps(info))
             elif stage == "masks":
                 folder = self.output / "masks"
                 (folder / "masks").mkdir(parents=True)
@@ -135,7 +151,7 @@ class StatuePipelineTests(unittest.TestCase):
         events = []
         self.build(run, progress_callback=events.append)
         started = [item["phase"] for item in events if item["kind"] == "start"]
-        self.assertEqual(started, ["preflight", "cameras", "coverage", "masks",
+        self.assertEqual(started, ["preflight", "photo_preprocess", "cameras", "coverage", "masks",
                                    "mask_audit", "dense", "review", "export"])
         self.assertEqual([item["phase"] for item in events if item["kind"] == "done"],
                          started)
@@ -151,7 +167,7 @@ class StatuePipelineTests(unittest.TestCase):
     def test_one_command_runs_every_stage_and_copies_audited_glb(self):
         run, calls = self.runner()
         report = self.build(run)
-        self.assertEqual(calls[:3], ["cameras", "coverage", "masks"])
+        self.assertEqual(calls[:4], ["photo_preprocess", "cameras", "coverage", "masks"])
         self.assertEqual(calls[-2:], ["dense", "review"])
         self.assertEqual((self.output / "model.glb").read_bytes(), b"fake-audited-glb")
         self.assertTrue(report["status"].startswith("private-GLB-candidate"))
@@ -160,7 +176,7 @@ class StatuePipelineTests(unittest.TestCase):
     def test_missing_profiles_stop_before_masks_and_mesh(self):
         run, calls = self.runner(coverage_bad=True)
         report = self.build(run)
-        self.assertEqual(calls, ["cameras", "coverage"])
+        self.assertEqual(calls, ["photo_preprocess", "cameras", "coverage"])
         self.assertEqual(report["status"], "blocked / missing-photo-coverage")
         self.assertFalse((self.output / "model.glb").exists())
 
@@ -177,12 +193,21 @@ class StatuePipelineTests(unittest.TestCase):
         self.assertIn("camera-recovery", report["active_camera_revision"])
         self.assertTrue(report["status"].startswith("private-GLB-candidate"))
 
+    def test_recovery_continues_after_non_elevated_registration(self):
+        run, calls = self.runner(coverage_bad=True, recovery_followup=True)
+        report = self.build(run)
+        self.assertEqual(report["camera_recovery_new_cameras"], 2)
+        self.assertIn("camera_recovery_followup", calls)
+        self.assertIn("recovery_coverage_followup", calls)
+        self.assertTrue(report["active_camera_revision"].endswith("camera-recovery-followup"))
+        self.assertTrue(report["status"].startswith("private-GLB-candidate"))
+
     def test_rejected_ai_pose_never_bypasses_elevation_gate(self):
         run, calls = self.runner(coverage_bad=True, recovery_rejected=True)
         report = self.build(run)
         self.assertEqual(report["status"], "blocked / missing-photo-coverage")
         self.assertEqual(report["automatic_camera_recovery_status"], "no-verified-camera-recovery")
-        self.assertEqual(calls, ["cameras", "coverage", "camera_recovery"])
+        self.assertEqual(calls, ["photo_preprocess", "cameras", "coverage", "camera_recovery"])
         self.assertFalse((self.output / "model.glb").exists())
 
     def test_bad_masks_block_mesh_and_resume_with_corrected_revision(self):

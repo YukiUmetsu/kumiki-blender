@@ -37,6 +37,27 @@ def _registered(model) -> dict[str, tuple[int, Any]]:
             for image_id in model.reg_image_ids()}
 
 
+def prioritize_missing_camera_views(staged: list[dict], registered: set[str]) -> list[str]:
+    """Rank existing unregistered elevated source photos before requesting bridges.
+
+    These names are *hints*, never evidence of elevation or a reconstructed pose.
+    The downstream measured coverage audit remains the production gate.
+    """
+    elevated = ("elevated", "overhead", "aerial", "drone", "above", "top", "bird")
+    missing = []
+    for item in staged:
+        if not isinstance(item, dict):
+            continue
+        name = item.get("filename")
+        if not isinstance(name, str) or name in registered:
+            continue
+        original = str(item.get("original_filename") or name).lower()
+        score = sum(3 for word in elevated if word in original)
+        score += sum(word in original for word in ("left", "right", "rear", "back"))
+        missing.append((-score, name))
+    return [name for _, name in sorted(missing)]
+
+
 def validate_camera_recovery(baseline, candidate, *,
                              min_new_track_points: int = 10,
                              max_baseline_drift: float = 0.01,
@@ -196,6 +217,69 @@ def recover_registered_cameras(
                     "reasons": [f"{label}-invalid-model"],
                     "error": f"{type(error).__name__}: {error}"[:240]}
 
+    original_names = set(_registered(baseline))
+    priority = prioritize_missing_camera_views(staged["images"], original_names)
+    elevated_words = ("elevated", "overhead", "aerial", "drone", "above", "top", "bird")
+    elevated_targets = {item["filename"] for item in staged["images"]
+                        if isinstance(item, dict) and isinstance(item.get("filename"), str)
+                        and any(word in str(item.get("original_filename") or "").lower()
+                                for word in elevated_words)}
+    report["priority_camera_targets"] = priority
+    report["elevated_filename_hints"] = sorted(elevated_targets)
+
+    best: Path | None = None
+
+    def current_names() -> set[str]:
+        return set(_registered(model_loader(best))) if best is not None else original_names
+
+    def remaining_elevated() -> list[str]:
+        return sorted(elevated_targets - current_names())
+
+    def remaining_targets() -> list[str]:
+        return [name for name in priority if name not in current_names()]
+
+    def try_promote(candidate: Path, label: str) -> bool:
+        """Merge independent verified models without dropping an accepted pose."""
+        nonlocal best
+        checked = check_candidate(candidate, label)
+        report[f"{label}_validation"] = checked
+        if not checked["accepted"]:
+            return False
+        if best is None:
+            best = candidate
+            return True
+        before = current_names()
+        after = set(_registered(model_loader(candidate)))
+        if not after - before:
+            return False
+        if before <= after:
+            incremental = validate_camera_recovery(model_loader(best), model_loader(candidate))
+            report[f"{label}_incremental_validation"] = incremental
+            if not incremental["accepted"]:
+                return False
+            best = candidate
+            return True
+        merged = target / f"combined-{label}"
+        merged.mkdir()
+        if not execute("model_merger", ["--input_path1", str(best),
+                                        "--input_path2", str(candidate),
+                                        "--output_path", str(merged),
+                                        "--max_reproj_error", "4.0"]):
+            return False
+        validation = check_candidate(merged, f"combined-{label}")
+        report[f"combined_{label}_validation"] = validation
+        if not validation["accepted"]:
+            return False
+        combined_names = set(_registered(model_loader(merged)))
+        if not before <= combined_names or not combined_names - before:
+            return False
+        incremental = validate_camera_recovery(model_loader(best), model_loader(merged))
+        report[f"combined_{label}_incremental_validation"] = incremental
+        if not incremental["accepted"]:
+            return False
+        best = merged
+        return True
+
     registered = target / "registered"
     registered.mkdir()
     if not execute("image_registrator", ["--database_path", str(database),
@@ -204,69 +288,98 @@ def recover_registered_cameras(
         report["direct_registration_warning"] = "image-registrator-command-failed"
     evidence = check_candidate(registered, "image-registrator")
     report["initial_validation"] = evidence
+    if evidence["accepted"]:
+        best = registered
     save()
-    if not evidence["accepted"]:
-        # The second recovery strategy uses existing verified LightGlue/COLMAP
-        # matches to solve an independent cohort. Its merged model must pass
-        # all the same camera/track checks before we consume any of its poses.
+
+    # Newly verified photographs can triangulate additional REAL 3D tracks,
+    # enabling PnP for elevated views that were impossible in the first pass.
+    # Bound the loop on both work and new evidence; never accept triangulation
+    # itself as proof of another registered camera.
+    for round_no in range(1, 3):
+        if best is None or not remaining_targets():
+            break
+        triangulated = target / f"triangulated-{round_no:02d}"
+        triangulated.mkdir()
+        if not execute("point_triangulator", ["--database_path", str(database),
+                                               "--image_path", str(images),
+                                               "--input_path", str(best),
+                                               "--output_path", str(triangulated)]):
+            break
+        if not candidate_model(triangulated):
+            break
+        improved = target / f"registered-{round_no + 1:02d}"
+        improved.mkdir()
+        if not execute("image_registrator", ["--database_path", str(database),
+                                              "--input_path", str(triangulated),
+                                              "--output_path", str(improved)]):
+            break
+        accepted = try_promote(improved, f"iterated_pnp_{round_no}")
+        report.setdefault("iterative_registration", []).append({
+            "round": round_no, "accepted": accepted,
+            "remaining_elevated_hints": remaining_elevated()})
+        save()
+        if not accepted:
+            break
+
+    # A successful but non-elevated PnP pass must *not* terminate recovery.
+    # Target missing overhead views explicitly and also try the remaining real
+    # photos when no filename hints are available.
+    if best is None or remaining_targets():
         try:
             from .sfm_cohort_recovery import CohortRecoverySettings, recover_cohort
+            targets = remaining_elevated() or remaining_targets()
             alternate = recover_cohort(
-                source, target / "cohorts", model=int(best_model_name),
+                source, target / "cohorts", model=int(best_model_name), targets=targets,
                 settings=CohortRecoverySettings(
-                    max_trials=3, max_seconds_per_trial=min(timeout_seconds, 1200)))
+                    max_trials=4, min_new_cameras=1,
+                    max_seconds_per_trial=min(timeout_seconds, 1200)))
             report["cohort_status"] = alternate.get("status")
             report["cohort_report"] = "cohorts/cohort-recovery-report.json"
             if alternate.get("status") == "candidate / needs-object-and-camera-visual-review":
-                alternate_path = target / "cohorts/merged-candidate"
-                checked = check_candidate(alternate_path, "cohort")
-                report["cohort_validation"] = checked
-                if checked["accepted"]:
-                    registered = alternate_path
-                    evidence = checked
-        except (ValueError, OSError, RuntimeError, ImportError) as error:
+                try_promote(target / "cohorts/merged-candidate", "cohort")
+        except (ValueError, OSError, RuntimeError, ImportError, TypeError) as error:
             report["cohort_error"] = f"{type(error).__name__}: {error}"[:250]
         save()
-        if not evidence["accepted"]:
-            learned: dict[str, Any] = {}
+
+    if best is None or remaining_targets():
+        learned: dict[str, Any] = {}
+        try:
+            from .learned_camera_hypotheses import build_learned_camera_hypotheses
+            learned = build_learned_camera_hypotheses(
+                source, target / "learned-priors", device="mps",
+                timeout_seconds=min(timeout_seconds, 1800))
+            report["learned_camera_status"] = learned.get("status")
+            report["learned_camera_report"] = "learned-camera-hypotheses.json"
+            (target / "learned-camera-hypotheses.json").write_text(
+                json.dumps(learned, indent=2) + "\n", encoding="utf-8")
+        except (ValueError, OSError, RuntimeError, ImportError, KeyError) as error:
+            report["learned_camera_status"] = "inference-unavailable"
+            report["learned_camera_error"] = str(error)[:250]
+        hypotheses = learned.get("pose_hypotheses") or []
+        guided_targets = [item["filename"] for item in hypotheses
+                          if isinstance(item, dict) and isinstance(item.get("filename"), str)
+                          and item["filename"] not in current_names()]
+        if guided_targets:
             try:
-                from .learned_camera_hypotheses import build_learned_camera_hypotheses
-                learned = build_learned_camera_hypotheses(
-                    source, target / "learned-priors", device="mps",
-                    timeout_seconds=min(timeout_seconds, 1800))
-                report["learned_camera_status"] = learned.get("status")
-                report["learned_camera_report"] = "learned-camera-hypotheses.json"
-                (target / "learned-camera-hypotheses.json").write_text(
-                    json.dumps(learned, indent=2) + "\n", encoding="utf-8")
-            except (ValueError, OSError, RuntimeError, ImportError, KeyError) as error:
-                report["learned_camera_status"] = "inference-unavailable"
-                report["learned_camera_error"] = str(error)[:250]
-            # A second *real-image* cohort trial can prioritize the elevated
-            # views suggested by MapAnything. Predictions guide target choice,
-            # but only fresh COLMAP 2D/3D tracks can make a pose acceptable.
-            hypotheses = learned.get("pose_hypotheses") or []
-            guided_targets = [item["filename"] for item in hypotheses
-                              if isinstance(item, dict) and isinstance(item.get("filename"), str)]
-            if len(guided_targets) >= 2:
-                try:
-                    from .sfm_cohort_recovery import CohortRecoverySettings, recover_cohort
-                    guided = recover_cohort(
-                        source, target / "learned-guided-cohorts", model=int(best_model_name),
-                        targets=guided_targets, settings=CohortRecoverySettings(
-                            max_trials=2, max_seconds_per_trial=min(timeout_seconds, 1200)))
-                    report["learned_guided_cohort_status"] = guided.get("status")
-                    if guided.get("status") == "candidate / needs-object-and-camera-visual-review":
-                        guided_path = target / "learned-guided-cohorts/merged-candidate"
-                        checked = check_candidate(guided_path, "learned-guided-cohort")
-                        report["learned_guided_validation"] = checked
-                        if checked["accepted"]:
-                            registered = guided_path
-                            evidence = checked
-                except (ValueError, OSError, RuntimeError, ImportError, TypeError) as error:
-                    report["learned_guided_cohort_error"] = str(error)[:250]
-            save()
-        if not evidence["accepted"]:
-            return fail("no-geometrically-validated-new-cameras")
+                from .sfm_cohort_recovery import CohortRecoverySettings, recover_cohort
+                guided = recover_cohort(
+                    source, target / "learned-guided-cohorts", model=int(best_model_name),
+                    targets=guided_targets, settings=CohortRecoverySettings(
+                        max_trials=3, min_new_cameras=1,
+                        max_seconds_per_trial=min(timeout_seconds, 1200)))
+                report["learned_guided_cohort_status"] = guided.get("status")
+                if guided.get("status") == "candidate / needs-object-and-camera-visual-review":
+                    try_promote(target / "learned-guided-cohorts/merged-candidate",
+                                "learned_guided_cohort")
+            except (ValueError, OSError, RuntimeError, ImportError, TypeError) as error:
+                report["learned_guided_cohort_error"] = str(error)[:250]
+        save()
+    if best is None:
+        return fail("no-geometrically-validated-new-cameras")
+    report["remaining_elevated_filename_hints"] = remaining_elevated()
+    report["remaining_unregistered_photo_targets"] = remaining_targets()
+    registered = best
 
     # Global BA refines real-image poses. If original cameras drift excessively,
     # reject BA and retain only the independently validated PnP model.

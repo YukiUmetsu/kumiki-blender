@@ -1,5 +1,6 @@
 """Real-camera recovery must not silently promote learned or invalid poses."""
 
+import hashlib
 import json
 import tempfile
 import unittest
@@ -7,7 +8,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from kumiki_blender.reconstruction.registered_camera_recovery import (
-    recover_registered_cameras, validate_camera_recovery,
+    prioritize_missing_camera_views, recover_registered_cameras, validate_camera_recovery,
 )
 from kumiki_blender.reconstruction.learned_camera_hypotheses import (
     align_learned_camera_hypotheses, select_learned_views,
@@ -108,6 +109,65 @@ class RecoveryTests(unittest.TestCase):
             self.assertIn("image-registrator-produced-no-model",
                           result["initial_validation"]["reasons"])
             self.assertFalse((target / "reconstruction-report.json").exists())
+
+    def test_existing_pnp_success_does_not_skip_missing_elevated_cohort(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            source, target = Path(temporary) / "source", Path(temporary) / "recovered"
+            model = source / "sparse" / "0"
+            model.mkdir(parents=True)
+            (source / "images").mkdir()
+            (source / "database.db").write_bytes(b"database")
+            index = []
+            for i in range(6):
+                name = f"photo-{i:04d}.png"
+                photo = source / "images" / name
+                photo.write_bytes(f"photo{i}".encode())
+                index.append({"filename": name, "original_filename":
+                              "sphinx-top-elevated.jpg" if i == 5 else f"photo{i}.jpg",
+                              "sha256": hashlib.sha256(photo.read_bytes()).hexdigest()})
+            (source / "staged-reference-index.json").write_text(json.dumps({"images": index}))
+            (source / "reconstruction-report.json").write_text(json.dumps({
+                "status": "candidate / visual-review-required", "engine": "colmap",
+                "source_sparse_model": "0"}))
+            # Source names and selected elevated candidate are distinct; the
+            # fake model intentionally leaves that elevated photo unregistered.
+            source_names = {"photo-0000.png", "photo-0001.png", "photo-0002.png", "photo-0003.png"}
+            originals = FakeModel([(name, center, tracks) for name, (_, center, tracks)
+                                   in zip(sorted(source_names), self.original)])
+            recovered = FakeModel([(name, center, tracks) for name, (_, center, tracks)
+                                   in zip(sorted(source_names), self.original)] +
+                                  [("photo-0004.png", (0.5, 0.5, 1), 38)])
+            calls = []
+
+            def runner(argv, _log, _timeout):
+                calls.append(argv[1])
+                if argv[1] == "image_registrator":
+                    for suffix in ("cameras.bin", "images.bin", "points3D.bin"):
+                        (target / "registered" / suffix).write_bytes(b"fake-model")
+                    return 0
+                return 1
+
+            def model_loader(path):
+                return recovered if path == target / "registered" else originals
+
+            with patch("kumiki_blender.reconstruction.registered_camera_recovery.shutil.which",
+                       return_value="/usr/bin/colmap"), \
+                 patch("kumiki_blender.reconstruction.sfm_cohort_recovery.recover_cohort",
+                       side_effect=ValueError("no valid independent cohort")), \
+                 patch("kumiki_blender.reconstruction.learned_camera_hypotheses.build_learned_camera_hypotheses",
+                       return_value={"status": "unavailable / model-not-installed"}):
+                result = recover_registered_cameras(
+                    source, target, runner=runner, model_loader=model_loader)
+            self.assertTrue(result["initial_validation"]["accepted"])
+            self.assertIn("point_triangulator", calls)
+            self.assertIn("cohort_error", result)
+            self.assertEqual(result["remaining_elevated_filename_hints"], ["photo-0005.png"])
+            self.assertIn("photo-0005.png", result["elevated_filename_hints"])
+
+    def test_elevated_photos_rank_before_generic_missing_views(self):
+        staged = [{"filename": "generic.png", "original_filename": "sphinx-side.jpg"},
+                  {"filename": "top.png", "original_filename": "sphinx-top-right.jpg"}]
+        self.assertEqual(prioritize_missing_camera_views(staged, set())[0], "top.png")
 
     def test_learned_view_selection_prioritizes_existing_elevated_photos(self):
         index = [{"filename": f"photo-{i:04}.png", "original_filename":
