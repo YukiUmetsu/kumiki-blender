@@ -37,14 +37,33 @@ pair matches, prioritizing links to the missing side.
 
 The plan reports:
 
-- Verified seed pairs containing at least one missing-side image.
+- Verified seed pairs containing at least one missing-side image, ranked using
+  inlier distribution and estimated matched-ray separation when a valid
+  COLMAP two-view pose/intrinsics are available. Strongly near-zero calibrated
+  pairs are skipped by default (`--min-seed-angle 1.0` degrees).
 - Registered anchor images and exact COLMAP image IDs.
 - A bounded number of candidate initializations.
 - Whether enough registered anchors were selected for a potential merge.
+- `coverage_gaps`: disconnected missing-view groups, registered matching
+  neighbors, existing reconstructed 3D-track support and best bridge-photo
+  targets. No image viewpoint labels or object identities are guessed.
 
 The plan does not prove that 3D reconstruction will work. Strong 2D matches can
 lie on background terrain or repeat-pattern surfaces, and cannot independently
 establish depth, object identity, or camera geometry.
+
+For a compact failure-focused explanation, include the previous recovery report
+after the trial completes:
+
+```bash
+kumiki-blender diagnose-sfm-coverage \
+  --revision "$SOURCE" \
+  --prior-recovery /absolute/path/to/old/cohort-recovery-report.json
+```
+
+The diagnostic reports which specific old trials yielded only zero, one or two
+shared cameras, and the unregistered group each failed trial attempted.
+An existing 2D-to-3D track count is candidate support **only**, not PnP inliers.
 
 ## 2. Recover independent views, then attempt a guarded merge
 
@@ -95,7 +114,63 @@ If there is no valid alignment, inspect the independent candidate models and
 verified survey/scan correspondences. Do not lower geometry thresholds just to
 raise camera counts.
 
-## 3. Validate physical object landmarks on an existing candidate
+## 3. Add bridge photographs for any object
+
+Use the gap diagnostic to identify two views that still need a connected path:
+one registered view and one currently missing view. Find **real** intermediate
+photographs showing common, stable features on the object across successive
+angles. Repeated screenshots from the same camera position, feature matches on
+the background, or generated views cannot supply trustworthy missing depth.
+
+Put the new JPEG/PNG/WebP files in a local folder. Optionally create a JSON
+source-attribution manifest (all filenames refer to files in that folder):
+
+```json
+{
+  "images": [
+    {"filename": "bridge-left.jpg", "source_url": "https://example.org/source",
+     "license": "reference-only", "view": "oblique"}
+  ]
+}
+```
+
+Stage a **new** combined input directory without changing the original source:
+
+```bash
+BRIDGE_PHOTOS="/absolute/path/to/new-real-overlapping-photos"
+PREPARED="/absolute/path/to/unused/combined-bridge-input"
+
+kumiki-blender prepare-sfm-bridge-photos \
+  --revision "$SOURCE" \
+  --photos "$BRIDGE_PHOTOS" \
+  --output "$PREPARED"
+```
+
+You may supply `--manifest /absolute/path/to/photo-sources.json`. All source
+images are checked against the original hashes, the bridge files are decoded,
+duplicates are rejected, and the private `bridge-photo-manifest.json` records
+the photo/source mapping. This uses the same 8–256 image, format, dimensions,
+and 50 MiB limits as `reconstruct-photos`.
+
+Start a **new sparse reconstruction** using the existing Mac acceleration:
+
+```bash
+NEW_CAMERA_REVISION="/absolute/path/to/unused/cameras-with-bridges"
+
+kumiki-blender reconstruct-photos \
+  --photos "$PREPARED/photos" --asset-id example-object-with-bridges \
+  --output "$NEW_CAMERA_REVISION" --engine colmap \
+  --matching-preset sift-lightglue --matching-device mps \
+  --undistort --timeout-seconds 7200
+```
+
+This rebuilds feature extraction/matching and camera registration in a new
+revision. It **does not** splice matches from unrelated input revisions or
+silently change existing camera IDs; the source remains available for
+comparison by content hash. The new bridge files are always private,
+regardless of whether their rights metadata is present.
+
+## 4. Validate physical object landmarks on an existing candidate
 
 Camera agreement and native COLMAP reprojection checks are necessary but do
 not prove that matches lie on the intended object (rather than the background).

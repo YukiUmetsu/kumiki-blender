@@ -15,6 +15,9 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
+from .sfm_pair_quality import assess_verified_pairs
+from .sfm_track_support import audit_2d3d_support
+
 MAX_IMAGE_ID = 2_147_483_647
 
 
@@ -31,6 +34,7 @@ class CohortRecoverySettings:
     max_landmark_residual_ratio: float = 0.05
     max_seconds_per_trial: int = 1200
     merge_max_reproj_error: float = 4.0
+    min_seed_ray_angle_degrees: float = 1.0
 
     def validate(self) -> None:
         if (self.min_pair_inliers < 15 or not 3 <= self.max_anchors <= 100 or
@@ -42,7 +46,8 @@ class CohortRecoverySettings:
                 not 0 < self.max_view_angle_degrees < 90 or
                 not 0 < self.max_landmark_residual_ratio < 1 or
                 not 30 <= self.max_seconds_per_trial <= 86400 or
-                not 0.5 <= self.merge_max_reproj_error <= 20):
+                not 0.5 <= self.merge_max_reproj_error <= 20 or
+                not 0 <= self.min_seed_ray_angle_degrees <= 10):
             raise ValueError("Invalid cohort settings; check bounds and alignment thresholds")
 
 
@@ -103,8 +108,99 @@ def _read_database(database: Path, min_inliers: int) -> tuple[dict[str, int], li
                 continue
             left, right = divmod(pair_id, MAX_IMAGE_ID)
             if left in by_id and right in by_id and left != right:
-                edges.append({"a": by_id[left], "b": by_id[right], "inliers": count})
+                edges.append({"a": by_id[left], "b": by_id[right],
+                              "inliers": count, "geometry_config": config})
     return names, edges
+
+
+def _coverage_gaps(missing: set[str], registered: set[str],
+                   anchors: set[str], edges: list[dict],
+                   track_support: dict[str, dict]) -> list[dict]:
+    """Find missing-view groups and rank evidence-based bridge-shot targets.
+
+    Graph connectivity alone cannot establish camera geometry. Recommendations
+    intentionally avoid claiming an inferred camera direction or surface.
+    """
+    neighbors = {name: set() for name in missing}
+    for edge in edges:
+        a, b = edge["a"], edge["b"]
+        if a in missing and b in missing:
+            neighbors[a].add(b)
+            neighbors[b].add(a)
+    groups = []
+    visited = set()
+    for name in sorted(missing):
+        if name in visited:
+            continue
+        group = {name}
+        todo = [name]
+        visited.add(name)
+        while todo:
+            for adjacent in neighbors[todo.pop()]:
+                if adjacent not in visited:
+                    visited.add(adjacent)
+                    group.add(adjacent)
+                    todo.append(adjacent)
+        bridge_edges = []
+        within = []
+        for edge in edges:
+            a, b = edge["a"], edge["b"]
+            if a in group and b in group:
+                within.append(edge)
+            elif (a in group and b in registered) or (b in group and a in registered):
+                bridge_edges.append(edge)
+        bridge_edges.sort(key=lambda pair: (-pair["seed_score"], -pair["inliers"],
+                                           pair["a"], pair["b"]))
+        registered_neighbors = sorted({
+            edge["b"] if edge["a"] in group else edge["a"]
+            for edge in bridge_edges})
+        best = bridge_edges[0] if bridge_edges else None
+        best_missing = (best["a"] if best["a"] in group else best["b"]) if best else sorted(group)[0]
+        best_registered = (best["b"] if best["a"] in group else best["a"]) if best else None
+        support = {name: track_support.get(name, {"status": "unavailable"})
+                   for name in sorted(group)}
+        supported = [name for name in sorted(group) if any(
+            edge["a"] == name or edge["b"] == name for edge in bridge_edges)]
+        if supported:
+            best_missing = sorted(supported, key=lambda name: (
+                -(support[name].get("conservative_one_to_one_2d3d") or 0), name))[0]
+            connecting = [edge for edge in bridge_edges if best_missing in (edge["a"], edge["b"])]
+            if connecting:
+                best_registered = (connecting[0]["b"] if connecting[0]["a"] == best_missing
+                                   else connecting[0]["a"])
+        available_counts = [entry.get("conservative_one_to_one_2d3d") for entry in support.values()
+                            if isinstance(entry.get("conservative_one_to_one_2d3d"), int)]
+        groups.append({
+            "unregistered_filenames": sorted(group),
+            "missing_cameras": len(group),
+            "missing_to_missing_verified_pairs": len(within),
+            "verified_pairs_to_registered": len(bridge_edges),
+            "registered_2d_match_neighbors": registered_neighbors,
+            "selected_anchor_neighbors": sorted(set(registered_neighbors) & anchors),
+            "existing_3d_track_support": support,
+            "best_verified_bridge_pair": best,
+            "bridge_photo_targets": {"registered_reference": best_registered,
+                                     "missing_reference": best_missing},
+            "assessment": ("no-verified-registered-bridge" if not bridge_edges else
+                           "single-registered-image-bridge" if len(registered_neighbors) < 2 else
+                           "multiple-2d-bridges / camera-support-unverified"),
+            "pnp_support_warning": ("existing-3d-tracks-insufficient-for-default-pnp"
+                                    if available_counts and max(available_counts) < 30 else
+                                    "existing-3d-track-support-unavailable" if not available_counts
+                                    else None),
+            "acquisition_guidance": (
+                "Find additional real intermediate viewpoints with shared, stable OBJECT "
+                "features visible in both the registered-reference and missing-reference "
+                "views. Capture a sequence with overlapping views and meaningful baseline; "
+                "repeated angles or background-only matches cannot recover missing depth."
+            ),
+        })
+    groups.sort(key=lambda item: (item["verified_pairs_to_registered"],
+                                  item["missing_to_missing_verified_pairs"],
+                                  item["unregistered_filenames"]))
+    for index, item in enumerate(groups, 1):
+        item["group"] = f"gap-{index:02d}"
+    return groups
 
 
 def _verify_staged_images(paths: dict[str, Path], db_names: set[str]) -> None:
@@ -172,9 +268,17 @@ def plan_cohort_recovery(revision: Path, *, model: int = 0,
         anchors.add(sorted(ranked, key=lambda item: (-item[0], -item[1], -item[2], -item[3], item[4]))[0][-1])
 
     cohort = missing | anchors
-    seed_pairs = [edge for edge in edges if edge["a"] in cohort and
+    evidence = assess_verified_pairs(paths["database"], edges)
+    track_support = audit_2d3d_support(paths["sparse"], model, registered, missing)
+    coverage_gaps = _coverage_gaps(missing, registered, anchors, evidence, track_support)
+    seed_pairs = [edge for edge in evidence if edge["a"] in cohort and
                   edge["b"] in cohort and ({edge["a"], edge["b"]} & missing)]
-    seed_pairs.sort(key=lambda edge: (-edge["inliers"], edge["a"], edge["b"]))
+    unsuitable = [edge for edge in seed_pairs if (
+        edge["quality"]["median_ray_angle_degrees"] is not None and
+        not edge["quality"].get("approximate_distortion", False) and
+        edge["quality"]["median_ray_angle_degrees"] < settings.min_seed_ray_angle_degrees)]
+    seed_pairs = [edge for edge in seed_pairs if edge not in unsuitable]
+    seed_pairs.sort(key=lambda edge: (-edge["seed_score"], -edge["inliers"], edge["a"], edge["b"]))
     # Diverse seeds avoid spending all trial time on near-duplicate screenshots.
     diverse = []
     seen = set()
@@ -202,10 +306,59 @@ def plan_cohort_recovery(revision: Path, *, model: int = 0,
             "target_filenames": sorted(chosen), "missing_target_filenames": sorted(missing),
             "anchor_filenames": sorted(anchors), "cohort_filenames": sorted(cohort),
             "verified_pair_count": len(edges), "seed_pairs": diverse,
+            "rejected_low_parallax_seed_pairs": unsuitable,
+            "coverage_gaps": coverage_gaps,
             "source_image_ids": {name: image_ids[name] for name in sorted(cohort)},
             "settings": vars(settings),
-            "warning": "Verified 2D matches do not prove a consistent camera solution. "
-                       "Independent models and merged outputs require object-surface review."}
+            "warning": "Even estimated ray angles and 2D match coverage cannot prove a "
+                       "consistent camera solve or subject-surface overlap; independently "
+                       "reconstructed/merged models still require object-surface review."}
+
+
+def annotate_failed_recovery(plan: dict, prior_report: Path | None) -> dict:
+    """Correlate read-only camera/point outcomes with gaps for targeted acquisition."""
+    if prior_report is None:
+        return plan
+    if (prior_report.is_symlink() or not prior_report.is_file() or
+            prior_report.stat().st_size > 5_000_000):
+        raise ValueError("Previous recovery must be a regular JSON report under 5 MB")
+    previous = json.loads(prior_report.read_text(encoding="utf-8"))
+    if (not isinstance(previous, dict) or
+            previous.get("source_database_sha256") != plan["source_database_sha256"] or
+            previous.get("source_model_index") != plan["source_model_index"]):
+        raise ValueError("Previous recovery report does not match this source database/model")
+    trials = previous.get("trials", [])
+    if not isinstance(trials, list):
+        raise ValueError("Previous recovery has invalid trials")
+    for gap in plan["coverage_gaps"]:
+        filenames = set(gap["unregistered_filenames"])
+        outcomes = []
+        for trial in trials:
+            if not isinstance(trial, dict) or not isinstance(trial.get("seed_pair"), dict):
+                continue
+            pair = trial["seed_pair"]
+            if not {pair.get("a"), pair.get("b")} & filenames:
+                continue
+            models = trial.get("models", [])
+            if not isinstance(models, list):
+                continue
+            outcomes.append({"trial": trial.get("trial"),
+                             "seed_pair": {"a": pair.get("a"), "b": pair.get("b")},
+                             "model_registered_cameras": [m.get("registered_cameras")
+                                                         for m in models if isinstance(m, dict)],
+                             "model_sparse_points": [m.get("points3D") for m in models
+                                                     if isinstance(m, dict)],
+                             "shared_camera_counts": [m.get("alignment", {}).get("shared_cameras")
+                                                      for m in models if isinstance(m, dict) and
+                                                      isinstance(m.get("alignment"), dict)]})
+        gap["previous_trial_results"] = outcomes
+        if outcomes and not any(max((value or 0 for value in item["shared_camera_counts"]), default=0) >= 3
+                                for item in outcomes):
+            gap["previous_failure_evidence"] = "no-prior-trial-formed-3-shared-camera-anchors"
+    plan["previous_recovery"] = {"status": previous.get("status"),
+                                 "trials": len(trials),
+                                 "report": str(prior_report.resolve())}
+    return plan
 
 
 def _registered_images(reconstruction) -> dict[str, tuple[int, object]]:

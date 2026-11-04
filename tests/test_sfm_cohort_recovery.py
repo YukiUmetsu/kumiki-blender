@@ -5,6 +5,7 @@ import hashlib
 import io
 import json
 import sqlite3
+import struct
 import tempfile
 import unittest
 from contextlib import redirect_stdout
@@ -167,6 +168,123 @@ class CohortRecoveryTests(unittest.TestCase):
             self.assertEqual(plan["missing_target_filenames"], ["u.png", "v.png"])
             self.assertIn("a.png", plan["anchor_filenames"])
             self.assertEqual(plan["registered_seed_image_ids"]["d.png"], 4)
+
+    def test_geometry_aware_seeds_deprioritize_duplicate_views(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            revision = fixture(Path(tmp))
+            database = revision / "sparse-reconstruction" / "database.db"
+            points = 250
+            with sqlite3.connect(database) as db:
+                db.executescript("""
+                    ALTER TABLE images ADD camera_id INTEGER;
+                    CREATE TABLE cameras (camera_id INTEGER, model INTEGER, width INTEGER,
+                                          height INTEGER, params BLOB);
+                    CREATE TABLE keypoints (image_id INTEGER, rows INTEGER, cols INTEGER, data BLOB);
+                    ALTER TABLE two_view_geometries ADD cols INTEGER;
+                    ALTER TABLE two_view_geometries ADD data BLOB;
+                    ALTER TABLE two_view_geometries ADD qvec BLOB;
+                    ALTER TABLE two_view_geometries ADD tvec BLOB;
+                """)
+                db.execute("INSERT INTO cameras VALUES (1,0,1000,800,?)",
+                           (struct.pack("<3d", 1000, 500, 400),))
+                db.execute("UPDATE images SET camera_id=1")
+                for image_id in range(1, 8):
+                    x_offset = 80 if image_id == 6 else 0
+                    keypoints = b"".join(struct.pack("<ff", 200 + i * 2.0 + x_offset,
+                                                        100 + (i * 7) % 600)
+                                        for i in range(points))
+                    db.execute("INSERT INTO keypoints VALUES (?,?,?,?)",
+                               (image_id, points, 2, keypoints))
+                # Both pairs have hundreds of verified matches, but a/u uses
+                # the same bearings (zero triangulation-angle evidence).
+                for first, second, count in ((1, 5, 250), (5, 6, 220)):
+                    pair_id = first * sfm.MAX_IMAGE_ID + second
+                    matches = b"".join(struct.pack("<II", i, i) for i in range(count))
+                    db.execute("UPDATE two_view_geometries SET cols=2, data=?, "
+                               "qvec=?, tvec=? WHERE pair_id=?",
+                               (matches, struct.pack("<4d", 1, 0, 0, 0),
+                                struct.pack("<3d", 1, 0, 0), pair_id))
+            plan = sfm.plan_cohort_recovery(revision)
+            self.assertTrue(any({edge["a"], edge["b"]} == {"a.png", "u.png"}
+                                for edge in plan["rejected_low_parallax_seed_pairs"]))
+            useful = next(edge for edge in plan["seed_pairs"]
+                          if {edge["a"], edge["b"]} == {"u.png", "v.png"})
+            self.assertGreater(useful["quality"]["median_ray_angle_degrees"], 1.5)
+            self.assertGreater(useful["seed_score"], 0)
+            self.assertTrue(plan["coverage_gaps"])
+
+    def test_coverage_gaps_recommend_photographic_bridges_without_inventing_geometry(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            report = sfm.plan_cohort_recovery(fixture(Path(tmp)))
+            groups = report["coverage_gaps"]
+            self.assertGreaterEqual(len(groups), 1)
+            self.assertEqual(sorted(name for item in groups for name in
+                                    item["unregistered_filenames"]),
+                             ["u.png", "v.png", "w.png"])
+            self.assertTrue(all("intermediate" in item["acquisition_guidance"]
+                                for item in groups))
+            self.assertTrue(any(item["verified_pairs_to_registered"] > 0
+                                for item in groups))
+
+    def test_coverage_report_counts_conservative_existing_3d_tracks(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            revision = fixture(Path(tmp))
+            sparse = revision / "sparse-reconstruction"
+            (sparse / "text-models" / "0" / "points3D.txt").write_text(
+                "42 1 2 3 255 255 255 1.0 1 0 3 999\n")
+            with sqlite3.connect(sparse / "database.db") as db:
+                db.execute("ALTER TABLE two_view_geometries ADD cols INTEGER")
+                db.execute("ALTER TABLE two_view_geometries ADD data BLOB")
+                for pair_id, count in db.execute(
+                        "SELECT pair_id, rows FROM two_view_geometries").fetchall():
+                    db.execute("UPDATE two_view_geometries SET cols=2, data=? "
+                               "WHERE pair_id=?", (b"".join(struct.pack("<II", i, i)
+                               for i in range(count)), pair_id))
+            plan = sfm.plan_cohort_recovery(revision)
+            group = next(group for group in plan["coverage_gaps"]
+                         if "u.png" in group["unregistered_filenames"])
+            self.assertEqual(group["existing_3d_track_support"]["u.png"][
+                "conservative_one_to_one_2d3d"], 1)
+            self.assertEqual(group["pnp_support_warning"],
+                             "existing-3d-tracks-insufficient-for-default-pnp")
+
+    def test_read_only_failed_run_correlation_tracks_camera_and_point_failures(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            revision = fixture(root)
+            plan = sfm.plan_cohort_recovery(revision)
+            past = root / "previous.json"
+            past.write_text(json.dumps({
+                "source_database_sha256": plan["source_database_sha256"],
+                "source_model_index": 0,
+                "status": "independent-models-only / alignment-not-validated",
+                "trials": [{"trial": 1, "seed_pair": {"a": "u.png", "b": "v.png"},
+                            "models": [{"registered_cameras": 2, "points3D": 41,
+                                        "alignment": {"shared_cameras": 1}}]}],
+            }))
+            result = sfm.annotate_failed_recovery(plan, past)
+            group = next(group for group in result["coverage_gaps"]
+                         if "u.png" in group["unregistered_filenames"])
+            self.assertEqual(group["previous_trial_results"][0]["model_sparse_points"], [41])
+            self.assertEqual(group["previous_failure_evidence"],
+                             "no-prior-trial-formed-3-shared-camera-anchors")
+            self.assertEqual(result["previous_recovery"]["trials"], 1)
+            with self.assertRaisesRegex(ValueError, "does not match"):
+                past.write_text(json.dumps({"source_database_sha256": "wrong",
+                                           "source_model_index": 0}))
+                sfm.annotate_failed_recovery(plan, past)
+
+    def test_public_coverage_diagnostic_works_without_pycolmap(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            revision = fixture(Path(tmp))
+            out = io.StringIO()
+            with redirect_stdout(out):
+                rc = cli_main(["diagnose-sfm-coverage", "--revision", str(revision)])
+            self.assertEqual(rc, 0)
+            report = json.loads(out.getvalue())
+            self.assertIn("coverage_gaps", report)
+            self.assertIn("seed_pairs", report)
+            self.assertTrue(report["coverage_gaps"])
 
     def test_readonly_alignment_inspection_uses_specific_camera_frame(self):
         with tempfile.TemporaryDirectory() as tmp:

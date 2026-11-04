@@ -275,7 +275,7 @@ def main(argv: list[str] | None = None) -> int:
         help="Read-only before/after registration coverage for two COLMAP revisions")
     camera_compare_parser.add_argument("--baseline", type=Path, required=True)
     camera_compare_parser.add_argument("--candidate", type=Path, required=True)
-    for command in ("plan-sfm-cohort-recovery", "recover-sfm-cohorts"):
+    for command in ("plan-sfm-cohort-recovery", "recover-sfm-cohorts", "diagnose-sfm-coverage"):
         cohort_parser = subcommands.add_parser(
             command, help="Recover missed camera views as independent SfM cohorts with guarded alignment")
         cohort_parser.add_argument("--revision", type=Path, required=True,
@@ -290,11 +290,27 @@ def main(argv: list[str] | None = None) -> int:
         cohort_parser.add_argument("--max-trials", type=int, default=5)
         cohort_parser.add_argument("--min-inliers", type=int, default=25)
         cohort_parser.add_argument("--min-new-cameras", type=int, default=2)
+        cohort_parser.add_argument("--min-seed-angle", type=float, default=1.0,
+                                   help="Exclude confidently near-zero-parallax calibrated seed pairs")
+        if command == "diagnose-sfm-coverage":
+            cohort_parser.add_argument("--prior-recovery", type=Path,
+                                       help="Optional existing cohort-recovery-report.json")
         if command == "recover-sfm-cohorts":
             cohort_parser.add_argument("--output", type=Path, required=True,
                                        help="New independent output; never alters source models")
             cohort_parser.add_argument("--colmap", default="colmap")
             cohort_parser.add_argument("--trial-timeout", type=int, default=1200)
+    bridge_parser = subcommands.add_parser(
+        "prepare-sfm-bridge-photos",
+        help="Stage new real overlapping photos with original staged images, privately and without modifying source")
+    bridge_parser.add_argument("--revision", type=Path, required=True)
+    bridge_parser.add_argument("--photos", type=Path, required=True,
+                               help="Folder of new real viewpoint photographs")
+    bridge_parser.add_argument("--output", type=Path, required=True,
+                               help="Unused directory for the new combined photo set")
+    bridge_parser.add_argument("--model", type=int, default=0)
+    bridge_parser.add_argument("--manifest", type=Path,
+                               help="Optional source attribution and license JSON for new photographs")
     alignment_parser = subcommands.add_parser(
         "inspect-sfm-cohort-alignment", help="Audit one solved cohort using shared cameras and optionally 3D object landmarks")
     alignment_parser.add_argument("--revision", type=Path, required=True)
@@ -1064,12 +1080,14 @@ def main(argv: list[str] | None = None) -> int:
                 raise RecipeError(str(error)) from error
             print(json.dumps(report, indent=2))
             return 0
-        if args.command in ("plan-sfm-cohort-recovery", "recover-sfm-cohorts"):
+        if args.command in ("plan-sfm-cohort-recovery", "recover-sfm-cohorts", "diagnose-sfm-coverage"):
             from .reconstruction.sfm_cohort_recovery import (
-                CohortRecoverySettings, plan_cohort_recovery, recover_cohort)
+                CohortRecoverySettings, plan_cohort_recovery, recover_cohort,
+                annotate_failed_recovery)
             settings = CohortRecoverySettings(
                 min_pair_inliers=args.min_inliers, max_anchors=args.max_anchors,
                 max_trials=args.max_trials, min_new_cameras=args.min_new_cameras,
+                min_seed_ray_angle_degrees=args.min_seed_angle,
                 max_seconds_per_trial=getattr(args, "trial_timeout", 1200))
             try:
                 selected = None
@@ -1081,15 +1099,33 @@ def main(argv: list[str] | None = None) -> int:
                         raise ValueError("--targets must contain a JSON array of staged filenames")
                 common = dict(model=args.model, targets=selected,
                               preferred_anchors=args.anchor, settings=settings)
-                report = (plan_cohort_recovery(args.revision, **common)
-                          if args.command == "plan-sfm-cohort-recovery" else
-                          recover_cohort(args.revision, args.output, **common,
-                                         colmap=args.colmap))
+                report = (recover_cohort(args.revision, args.output, **common,
+                                         colmap=args.colmap)
+                          if args.command == "recover-sfm-cohorts" else
+                          plan_cohort_recovery(args.revision, **common))
+                if args.command == "diagnose-sfm-coverage":
+                    report = annotate_failed_recovery(report, args.prior_recovery)
+                    report = {"status": report["status"],
+                              "source_revision": report["source_revision"],
+                              "seed_pairs": report["seed_pairs"],
+                              "rejected_low_parallax_seed_pairs": report["rejected_low_parallax_seed_pairs"],
+                              "coverage_gaps": report["coverage_gaps"],
+                              "previous_recovery": report.get("previous_recovery")}
             except (OSError, ValueError, sqlite3.Error, ImportError) as error:
                 raise RecipeError(str(error)) from error
             print(json.dumps(report, indent=2))
-            return (0 if args.command == "plan-sfm-cohort-recovery" or
+            return (0 if args.command != "recover-sfm-cohorts" or
                     report["status"].startswith("candidate / ") else 3)
+        if args.command == "prepare-sfm-bridge-photos":
+            from .reconstruction.sfm_bridge_photos import prepare_bridge_photos
+            try:
+                report = prepare_bridge_photos(
+                    args.revision, args.photos, args.output, model=args.model,
+                    source_manifest=args.manifest)
+            except (OSError, ValueError, sqlite3.Error) as error:
+                raise RecipeError(str(error)) from error
+            print(json.dumps(report, indent=2))
+            return 0
         if args.command == "inspect-sfm-cohort-alignment":
             from .reconstruction.sfm_cohort_recovery import inspect_cohort_alignment
             try:
