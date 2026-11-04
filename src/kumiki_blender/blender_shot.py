@@ -185,19 +185,24 @@ def build_shot(bpy: Any, plan: ShotPlan, spec_path: Path, output: Path, *, save_
             _key_actor(rigs[actor_id], channels, plan.bake.duration_frames)
     _configure(bpy, plan)
     scene = bpy.context.scene
+    # Measure every contact before rendering, so a miss costs seconds, not a full render.
     errors: dict[str, float] = {}
-    rendered = 0
     for index in range(plan.bake.duration_frames):
-        frame = index + 1
-        scene.frame_set(frame)
+        scene.frame_set(index + 1)
         for actor_id, channels in plan.bake.actors.items():
             for effector, track in (channels.get("effectors") or {}).items():
                 if track["influence"][index] > .99:
                     key = f"{actor_id}.{effector}"
                     errors[key] = max(errors.get(key, 0), _contact_error(bpy, rigs[actor_id], effector))
+    failures = {key: value for key, value in errors.items() if value > CONTACT_TOLERANCE_M}
+    if failures:
+        raise ShotPlanError(f"Contact missed its target: {failures}")
+    rendered = 0
+    for index in range(plan.bake.duration_frames):
+        frame = index + 1
         path = work / f"frame-{frame:05d}.png"
         if not path.exists():
-            scene.render.filepath = str(path)
+            scene.frame_set(frame)
             temporary = path.with_suffix(".tmp.png")
             scene.render.filepath = str(temporary)
             bpy.ops.render.render(write_still=True)
@@ -205,9 +210,6 @@ def build_shot(bpy: Any, plan: ShotPlan, spec_path: Path, output: Path, *, save_
             rendered += 1
         print(json.dumps({"event": "frame", "done": frame, "total": plan.bake.duration_frames}), flush=True)
     render_seconds = time.monotonic() - started
-    failures = {key: value for key, value in errors.items() if value > CONTACT_TOLERANCE_M}
-    if failures:
-        raise ShotPlanError(f"Contact missed its target: {failures}")
     bundle = output.parent / f".{output.name}.bundle"
     if bundle.exists():
         shutil.rmtree(bundle)
