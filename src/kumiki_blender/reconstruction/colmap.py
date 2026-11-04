@@ -88,7 +88,20 @@ def _preflight_mps_worker() -> None:
         raise ReferenceError(f"MPS LightGlue preflight failed: {error}") from error
     if result.returncode:
         details = (result.stderr or result.stdout).strip().splitlines()
-        reason = details[-1][:400] if details else f"worker exited {result.returncode}"
+        omp_error = next((line.strip() for line in details
+                          if "OMP: Error #15" in line), None)
+        if omp_error or any("multiple copies of the OpenMP runtime" in line
+                            for line in details):
+            reason = ((omp_error or "Duplicate OpenMP runtimes detected")[:240]
+                      + ". This is a conflicting native-library installation, not a "
+                        "GPU memory problem. Do NOT set KMP_DUPLICATE_LIB_OK=TRUE. "
+                        "In the active venv, test `python -c 'import torch'`, then "
+                        "`python -c 'import numpy; import torch'`, then "
+                        "`python -c 'import numpy; import torch; from lightglue import LightGlue'` "
+                        "in separate processes; reinstall conflicting packages from "
+                        "a consistent toolchain or use an isolated matching venv.")
+        else:
+            reason = details[-1][:400] if details else f"worker exited {result.returncode}"
         raise ReferenceError(f"MPS LightGlue preflight failed: {reason}")
 
 

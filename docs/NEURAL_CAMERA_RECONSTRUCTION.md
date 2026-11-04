@@ -124,6 +124,30 @@ python -m pip install git+https://github.com/cvg/LightGlue.git
 python -c 'import torch; print("MPS available:", torch.backends.mps.is_available())'
 ```
 
+#### macOS OpenMP Error #15 during MPS preflight
+
+`OMP: Error #15` indicates conflicting native OpenMP libraries, **not** a GPU
+memory limit or photo-matching failure. Never use the suggested
+`KMP_DUPLICATE_LIB_OK=TRUE` workaround: loading two OpenMP runtimes can cause
+deadlocks, crashes, or silently invalid results. The preflight now preserves
+the actual `OMP: Error #15` line rather than only the trailing workaround hint.
+
+Run the following in **separate shell commands** inside the active virtualenv
+to isolate which dependency combination causes the conflict:
+
+```bash
+python -c 'import torch; print("torch:", torch.__version__, torch.__file__); print("MPS:", torch.backends.mps.is_available())'
+python -c 'import numpy; import torch; print("NumPy + Torch OK")'
+python -c 'import numpy; import torch; from lightglue import LightGlue; print("LightGlue OK")'
+python -m pip list | rg -i 'numpy|torch|lightglue|opencv|scikit|mkl'
+```
+
+If Torch alone fails, repair its binary installation. If only combined
+imports fail, identify the native dependency that supplies a second OpenMP
+library; use compatible wheels from a consistent toolchain or a clean dedicated
+matching environment. Avoid deleting or replacing libraries in an existing
+working photogrammetry environment until the conflict is identified.
+
 To resume the **existing interrupted Sphinx revision**, with checkpointed
 completed pairs and extracted SIFT features intact, **stop the old CPU matcher
 first** (do not run two matching processes against the same SQLite database):

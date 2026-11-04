@@ -6,6 +6,7 @@ import os
 import shutil
 import sqlite3
 import struct
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -548,6 +549,27 @@ class ColmapWorkflowTests(unittest.TestCase):
             with self.subTest(values=values), self.assertRaises(ReferenceError):
                 build_sparse_reconstruction(self.references(), output, colmap=str(self.fake), **values)
             self.assertFalse(output.exists())
+
+    def test_mps_openmp_preflight_preserves_actual_error_and_warns_against_override(self):
+        from kumiki_blender.reconstruction import colmap
+
+        stderr = ("OMP: Error #15: Initializing libomp.dylib, but found libomp.dylib "
+                  "already initialized.\nOMP: Hint This means that multiple copies of "
+                  "the OpenMP runtime have been linked into the program.\n"
+                  "As an unsafe, unsupported, undocumented workaround you...")
+        result = subprocess.CompletedProcess([], 134, stdout="", stderr=stderr)
+        with patch.object(colmap.subprocess, "run", return_value=result):
+            with self.assertRaises(ReferenceError) as error:
+                colmap._preflight_mps_worker()
+        message = str(error.exception)
+        self.assertIn("OMP: Error #15", message)
+        self.assertIn("Do NOT set KMP_DUPLICATE_LIB_OK", message)
+        self.assertIn("separate processes", message)
+
+        result = subprocess.CompletedProcess([], 1, stdout="", stderr="missing torch dependency")
+        with patch.object(colmap.subprocess, "run", return_value=result):
+            with self.assertRaisesRegex(ReferenceError, "missing torch dependency"):
+                colmap._preflight_mps_worker()
 
     def test_curated_pairs_reduce_number_of_workers_and_preserve_checkpoint_identity(self):
         chosen = self.root / "pairs.txt"
