@@ -26,6 +26,7 @@ An actor is a Character Studio pack (`character.json` + `layers/`) plus a stagin
 
 - `layer` is depth in metres. Negative is toward the camera.
 - `inflate` is how far the layer domes. `profile` is `dome` (round, steep rim) for bodies and heads, or `cushion` (gentle rim) for parts with thin feathers, fur tips or fingers, which would otherwise become narrow shaded ridges.
+- `surface: "parent"` makes a decal part (lids, mouths, spectacles) share its parent's dome heights, so it shades exactly like the surface under it. The decal must be drawn in the parent's frame.
 - `ground_parts` names the parts that stand on the ground. Use it when a tail or cape hangs below the feet.
 - Each part is one mesh built from the union of all its drawings, so a blink, an expression or a mouth shape changes the texture, never the shape. Drawings of one part must share one image size. Kumiki `variantFrom` and `variantMix` crossfade two drawings by premultiplied blend.
 - An effector adds a bone chain that follows the drawn limb, so the limb bends under IK.

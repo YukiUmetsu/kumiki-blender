@@ -43,6 +43,7 @@ class ActorRig:
     targets: dict[str, Any] = field(default_factory=dict)
     constraints: dict[str, list[Any]] = field(default_factory=dict)
     tips: dict[str, list[tuple[Any, str]]] = field(default_factory=dict)
+    surfaces: dict[str, tuple[np.ndarray, float, float, float]] = field(default_factory=dict)
 
 
 def _socket(node: Any, identifier: str, outputs: bool = False) -> Any:
@@ -112,11 +113,19 @@ def _part_material(bpy: Any, name: str, variants: list[tuple[str, Any]], roughne
 
 def _part_mesh(bpy: Any, plan: ActorPlan, name: str, material: Any, mask: np.ndarray, *,
                logical: tuple[float, float], scale: float, layer: float, inflate: float,
-               back: float, footprint: np.ndarray | None = None, profile: str = "dome") -> tuple[Any, np.ndarray]:
+               back: float, footprint: np.ndarray | None = None, profile: str = "dome",
+               surface: np.ndarray | None = None) -> tuple[Any, np.ndarray, np.ndarray]:
     step = plan.grid_step
     # The dome comes from the main drawing alone. Other drawings only widen the flat footprint,
     # so a rare big-tufted face cannot swell the head every other face sits on.
-    height = inflate_mask(_downsample(mask, step), profile=profile)
+    # A decal takes its parent's heights instead, so it shades exactly like the surface under it.
+    own = _downsample(mask, step)
+    if surface is not None:
+        if surface.shape != own.shape:
+            raise ActorPlanError(f"Decal {name} must be drawn in the same frame as its parent")
+        height = surface * own
+    else:
+        height = inflate_mask(own, profile=profile)
     mesh = heightfield_mesh(height, step, None if footprint is None else _downsample(footprint, step))
     art_height, art_width = mask.shape
     sx, sy = logical[0] / art_width, logical[1] / art_height
@@ -136,7 +145,7 @@ def _part_mesh(bpy: Any, plan: ActorPlan, name: str, material: Any, mask: np.nda
     data.materials.append(material)
     obj = bpy.data.objects.new(name, data)
     bpy.context.collection.objects.link(obj)
-    return obj, design
+    return obj, design, height
 
 
 def _rest_bounds(plan: ActorPlan, images: dict[str, Any]) -> tuple[float, float, float, float, float]:
@@ -272,9 +281,16 @@ def build_actor(bpy: Any, plan: ActorPlan) -> ActorRig:
         parent_depth = depth_scale(part)
         name = f"{plan.actor_id}-{part.id}"
         material, weights = _part_material(bpy, name, drawings, plan.roughness)
-        obj, design = _part_mesh(bpy, plan, name, material, masks[reference], logical=logical, scale=scale, layer=layer / parent_depth,
-                                 inflate=inflate / parent_depth, back=back, footprint=union,
-                                 profile=stage.profile if stage else "dome")
+        surface = None
+        if stage and stage.surface == "parent":
+            if part.parent not in rig.surfaces:
+                raise ActorPlanError(f"Part {part.id} shares a surface with {part.parent}, which has no mesh")
+            surface, layer, inflate, back = rig.surfaces[part.parent]
+            layer -= .0006 * parent_depth  # just proud of the surface, never inside it
+        obj, design, heights = _part_mesh(bpy, plan, name, material, masks[reference], logical=logical, scale=scale, layer=layer / parent_depth,
+                                          inflate=inflate / parent_depth, back=back, footprint=union,
+                                          profile=stage.profile if stage else "dome", surface=surface)
+        rig.surfaces[part.id] = (heights if surface is None else surface, layer, inflate, back)
         obj.parent = rig.empties[part.id]
         rig.meshes[part.id] = obj
         rig.weights[part.id] = weights

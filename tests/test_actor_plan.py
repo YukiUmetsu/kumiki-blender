@@ -57,6 +57,13 @@ class ParseActor(unittest.TestCase):
         with self.assertRaisesRegex(ActorPlanError, "profile"):
             parse_actor(PACK, CHARACTER, {**PROFILE, "parts": {"arm": {"profile": "pillow"}}})
 
+    def test_decal_surface_needs_a_parent(self):
+        self.assertEqual(parse_actor(PACK, CHARACTER, {**PROFILE, "parts": {"arm": {"surface": "parent"}}}).stage["arm"].surface, "parent")
+        with self.assertRaisesRegex(ActorPlanError, "no parent"):
+            parse_actor(PACK, CHARACTER, {**PROFILE, "parts": {"root": {"surface": "parent"}}})
+        with self.assertRaisesRegex(ActorPlanError, "surface"):
+            parse_actor(PACK, CHARACTER, {**PROFILE, "parts": {"arm": {"surface": "sky"}}})
+
     def test_rejects_bad_height(self):
         with self.assertRaisesRegex(ActorPlanError, "height_m"):
             parse_actor(PACK, CHARACTER, {**PROFILE, "height_m": 40})
