@@ -50,7 +50,7 @@ class BuildShot(unittest.TestCase):
             "assets": {"body": {**asset, "uri": "layers/body.png", "width": 40, "height": 60},
                        "arm": {**asset, "uri": "layers/arm.png", "width": 60, "height": 12}},
             "parts": [{"id": "root", "asset": "body", "pivot": {"x": 20, "y": 30}, "z": 0},
-                      {"id": "arm", "parent": "root", "asset": "arm", "pivot": {"x": 2, "y": 6}, "rest": {"x": 18, "y": 10}, "z": 1}]}))
+                      {"id": "arm", "parent": "root", "asset": "arm", "pivot": {"x": 2, "y": 6}, "rest": {"x": 18, "y": 10, "scaleX": 1.4, "scaleY": 1.4}, "z": 1}]}))
         (self.root / "profile.json").write_text(json.dumps({
             "schema_version": 1, "height_m": .2, "grid_step": 2,
             "effectors": {"hand": {"part": "arm", "joints": 2, "start": [2, 6], "tip": [58, 6]}}}))
@@ -120,6 +120,8 @@ class BuildShot(unittest.TestCase):
         hand = report["effectors"]["hand"]
         self.assertGreater(hand["reach_m"], .05)
         self.assertGreater(hand["rest"][1], .05, "Y must be height above the actor's feet")
+        straight = sum((a - b) ** 2 for a, b in zip(hand["rest"], hand["shoulder"])) ** .5
+        self.assertGreaterEqual(hand["reach_m"], straight * .98, "reach must include part scale")
 
     def test_existing_output_is_never_overwritten(self):
         output = self.root / "out"
