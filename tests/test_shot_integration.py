@@ -6,10 +6,12 @@ import json
 import os
 from pathlib import Path
 import shutil
+import signal
 import struct
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 import zlib
 
@@ -66,12 +68,12 @@ class BuildShot(unittest.TestCase):
         bake = {"schema_version": 1, "fps": {"num": 30, "den": 1}, "duration_frames": frames,
                 "camera": {"position": repeat([0, .12, .8], frames), "orientation": repeat([0, 0, 0, 1], frames),
                            "fov": repeat(28, frames), "focus_distance": repeat(.8, frames)},
-                "objects": {"paper": {"position": [[.1, 0, 0], [.11, .01, 0], [.12, .02, 0]],
-                                      "orientation": repeat([0, 0, 0, 1], frames), "bend": [0, .1, .2]}},
-                "lights": {"key": [1, .9, .8]}, "contacts": [{"frame": 1, "kind": "grasp", "actor": "a", "effector": "hand", "object": "paper"}],
+                "objects": {"paper": {"position": [[.1 + index * .01, index * .01, 0] for index in range(frames)],
+                                      "orientation": repeat([0, 0, 0, 1], frames), "bend": [index * .1 for index in range(frames)]}},
+                "lights": {"key": [1 - index * .1 / frames for index in range(frames)]}, "contacts": [{"frame": 1, "kind": "grasp", "actor": "a", "effector": "hand", "object": "paper"}],
                 "actors": {"a": {"root": {"position": repeat([0, 0, 0], frames), "yaw": repeat(0, frames)},
                                  "parts": repeat({}, frames),
-                                 "effectors": {"hand": {"position": repeat(list(reach), frames), "influence": [0, 1, 1], "holding": [False, True, True]}}}}}
+                                 "effectors": {"hand": {"position": repeat(list(reach), frames), "influence": [0, *repeat(1, frames - 1)], "holding": [False, *repeat(True, frames - 1)]}}}}}
         (self.root / "bake.json").write_text(json.dumps(bake))
         path = self.root / "shot.json"
         path.write_text(json.dumps({"schema_version": 1, "shot_id": "tiny", "set": "set.json", "bake": "bake.json",
@@ -123,6 +125,37 @@ class BuildShot(unittest.TestCase):
         self.assertGreater(hand["rest"][1], .05, "Y must be height above the actor's feet")
         straight = sum((a - b) ** 2 for a, b in zip(hand["rest"], hand["shoulder"])) ** .5
         self.assertGreaterEqual(hand["reach_m"], straight * .98, "reach must include part scale")
+
+    def test_cancel_stops_blender_and_leaves_no_bundle(self):
+        """Cancelling the wrapper must stop Blender too, or a cancelled render keeps running."""
+        self.FRAMES = 400
+        spec = self.spec()
+        output = self.root / "out"
+        env = {**os.environ, "PYTHONPATH": str(ROOT / "src"), "KUMIKI_BLENDER": BLENDER}
+        wrapper = subprocess.Popen([sys.executable, "-m", "kumiki_blender", "build-shot", "--spec", str(spec), "--output", str(output)],
+                                   env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        rendering = False
+        try:
+            for line in wrapper.stdout:
+                if '"event": "frame"' in line:
+                    rendering = True
+                    break
+            self.assertTrue(rendering, "the render never started, so cancel proved nothing")
+            wrapper.send_signal(signal.SIGTERM)
+            wrapper.wait(timeout=30)
+        finally:
+            if wrapper.poll() is None:
+                wrapper.kill()
+        self.assertNotEqual(wrapper.returncode, 0)
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline and self.blender_running(spec):
+            time.sleep(.2)
+        self.assertFalse(self.blender_running(spec), "Blender kept rendering after cancel")
+        self.assertFalse(output.exists())
+
+    @staticmethod
+    def blender_running(spec: Path) -> bool:
+        return subprocess.run(["pgrep", "-f", str(spec)], capture_output=True).returncode == 0
 
     def test_existing_output_is_never_overwritten(self):
         output = self.root / "out"

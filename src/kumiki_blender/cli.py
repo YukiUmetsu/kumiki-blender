@@ -6,6 +6,7 @@ import argparse
 import json
 import os
 import shutil
+import signal
 import sqlite3
 import subprocess
 import sys
@@ -44,6 +45,21 @@ from .reconstruction.completion_generation import GenerationError
 from .reconstruction.completion_image_generation import ImageGenerationError
 from .head_sources.makehuman import MakeHumanSourceError
 from .vintage_biplane import make_biplane
+
+
+def _run_cancellable(command: list[str]) -> int:
+    """Run a child and pass cancellation to it, so a cancelled render does not keep running."""
+    process = subprocess.Popen(command)
+
+    def forward(signum: int, _frame: object) -> None:
+        process.send_signal(signum)
+
+    previous = {name: signal.signal(name, forward) for name in (signal.SIGTERM, signal.SIGINT)}
+    try:
+        return process.wait()
+    finally:
+        for name, handler in previous.items():
+            signal.signal(name, handler)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -865,7 +881,7 @@ def main(argv: list[str] | None = None) -> int:
                            "--output", str(args.output.resolve())]
                 if args.no_blend:
                     command.append("--no-blend")
-                return subprocess.run(command, check=False).returncode
+                return _run_cancellable(command)
             from .blender_shot import build_shot
             print(json.dumps(build_shot(bpy, shot, args.spec, args.output, save_blend=not args.no_blend), indent=2))
             return 0
