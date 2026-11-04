@@ -101,6 +101,10 @@ elif task == "matches_importer":
         for pair in pairs:
             stream.write(pair + "\\n")
 elif task == "geometric_verifier":
+    if ("--FeatureMatching.num_threads" in params or "--num_threads" not in params or
+            params[params.index("--num_threads") + 1] != "1"):
+        print("geometric_verifier requires --num_threads 1, not FeatureMatching.num_threads")
+        sys.exit(46)
     if "FAKE_FAIL_GEOMETRIC" in os.environ:
         sys.exit(7)
 elif task == "mapper":
@@ -364,6 +368,10 @@ class ColmapWorkflowTests(unittest.TestCase):
         self.assertEqual([command[0] for command in report["commands"]],
                          ["feature_extractor", "match", "match", "geometric_verifier",
                           "mapper", "model_converter"])
+        verifier = next(command for command in report["commands"]
+                        if command[0] == "geometric_verifier")
+        self.assertEqual(verifier[-2:], ["--num_threads", "1"])
+        self.assertNotIn("--FeatureMatching.num_threads", verifier)
 
     def test_resume_existing_cpu_batch_progress_with_new_mps_backend(self):
         from kumiki_blender.reconstruction import colmap

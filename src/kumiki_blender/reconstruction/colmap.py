@@ -1072,8 +1072,10 @@ def build_sparse_reconstruction(reference_set: ReferenceSet, output: str | Path,
         # geometric verification the mapper will silently see zero matches.
         # This also applies when switching to CPU while resuming MPS-produced
         # raw matches (including a previous failed verification attempt).
+        # Unlike the feature matchers, COLMAP's geometric_verifier exposes
+        # its thread count as the unprefixed --num_threads option (4.2.1).
         if not run_stage("geometric_verifier", ["--database_path", str(database),
-                                                "--FeatureMatching.num_threads",
+                                                "--num_threads",
                                                 str(effective_matching_threads or 1)]):
             return report
     if not run_stage("mapper", ["--database_path", str(database),
