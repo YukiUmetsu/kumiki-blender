@@ -393,7 +393,8 @@ def generate_rectified_masks(reconstruction: str | Path, output: str | Path, *,
                              sam2_checkpoint: str | Path | None = None,
                              sam2_size: str = "small",
                              sam2_device: str = "auto",
-                             cache_dir: str | Path | None = None) -> dict[str, Any]:
+                             cache_dir: str | Path | None = None,
+                             resume: bool = False) -> dict[str, Any]:
     """Make immutable mask candidates, overlays and QA metrics for every photo."""
     if type(max_side) is not int or not 256 <= max_side <= 4096:
         raise ReferenceError("Mask max_side must be 256–4096")
@@ -447,7 +448,15 @@ def generate_rectified_masks(reconstruction: str | Path, output: str | Path, *,
             import cv2  # noqa: F401  # type: ignore[import-not-found]
         except ImportError as error:
             raise ReferenceError("GrabCut masking requires pip install -e '.[masks]'") from error
-    plan = plan_dense_reconstruction(reconstruction, output,
+    if Path(output).is_symlink():
+        raise ReferenceError("Mask output must not be a symbolic link")
+    target = Path(output).resolve()
+    existing = target.is_dir()
+    # Dense preflight normally rejects existing outputs. For an interrupted
+    # masks revision, check the same immutable sparse evidence against a
+    # hypothetical unused child path; the actual target is separately audited.
+    preflight_output = target / "__resume_preflight_only__" if resume and existing else target
+    plan = plan_dense_reconstruction(reconstruction, preflight_output,
                                      DenseSettings(min_registered_images=3,
                                                    min_registered_fraction=0.25,
                                                    refine=False, texture=False),
@@ -456,16 +465,36 @@ def generate_rectified_masks(reconstruction: str | Path, output: str | Path, *,
     index = _json(source / "undistorted-reference-index.json")
     images = {item["filename"]: item for item in index["images"]}
     guide_map, guide_sha = _load_guides(guides, plan["undistorted_images"], default_box)
-    target = Path(plan["output"])
+    target = Path(output).resolve()
     if cache_root is not None and (cache_root == target or cache_root.is_relative_to(target)
                                    or cache_root == source or cache_root.is_relative_to(source)):
         raise ReferenceError("Shared mask cache must be outside source and output revisions")
-    target.mkdir(parents=True, exist_ok=False)
+    if resume:
+        if not existing or (target / "mask-report.json").is_symlink():
+            raise ReferenceError("Mask resume requires an existing partial mask-report.json")
+        prior = _json(target / "mask-report.json")
+        expected_model = ("isnet-general-use" if segmenter == "rembg" else
+                          f"sam2.1_hiera_{sam2_size}" if segmenter == "sam2" else None)
+        if (not isinstance(prior.get("cache"), dict) or
+                prior.get("status") != "incomplete / manual-mask-review-required" or
+                prior.get("source_revision") != str(source) or
+                prior.get("guide_sha256") != guide_sha or
+                prior.get("segmenter") != segmenter or
+                prior.get("segmentation_model") != expected_model or
+                prior.get("segmentation_model_sha256") != model_sha or
+                prior.get("max_side") != max_side or prior.get("iterations") != iterations or
+                prior.get("cache", {}).get("directory") !=
+                (str(cache_root) if cache_root else None)):
+            raise ReferenceError("Cannot resume masks with changed photos, model, or settings")
+    else:
+        target.mkdir(parents=True, exist_ok=False)
     if cache_root is not None:
         cache_root.mkdir(parents=True, exist_ok=True)
     mask_dir, preview_dir = target / "masks", target / "review"
-    mask_dir.mkdir()
-    preview_dir.mkdir()
+    if mask_dir.is_symlink() or preview_dir.is_symlink():
+        raise ReferenceError("Mask output folders cannot be symbolic links")
+    mask_dir.mkdir(exist_ok=resume)
+    preview_dir.mkdir(exist_ok=resume)
     report: dict[str, Any] = {
         "schema_version": 1, "source_revision": str(source),
         "guide_sha256": guide_sha, "max_side": max_side, "iterations": iterations,
@@ -483,11 +512,11 @@ def generate_rectified_masks(reconstruction: str | Path, output: str | Path, *,
         "approved_for_reconstruction": False,
     }
 
-    def checkpoint() -> None:
+    def save_progress_report() -> None:
         (target / "mask-report.json").write_text(json.dumps(report, indent=2) + "\n",
                                                  encoding="utf-8")
 
-    checkpoint()
+    save_progress_report()
     for filename in plan["undistorted_images"]:
         image_path = source / "undistorted/images" / filename
         try:
@@ -580,9 +609,9 @@ def generate_rectified_masks(reconstruction: str | Path, output: str | Path, *,
                 })
         except Exception as error:
             report.update(failed_image=filename, error=str(error))
-            checkpoint()
+            save_progress_report()
             raise
-        checkpoint()
+        save_progress_report()
     columns, cell_width, cell_height = 4, 288, 238
     rows = (len(report["images"]) + columns - 1) // columns
     contact = Image.new("RGB", (columns * cell_width, rows * cell_height), (28, 31, 34))
@@ -597,5 +626,5 @@ def generate_rectified_masks(reconstruction: str | Path, output: str | Path, *,
     contact.save(target / "mask-contact-sheet.jpg", "JPEG", quality=85)
     report["contact_sheet"] = "mask-contact-sheet.jpg"
     report["status"] = "candidate / inspect-every-mask-before-dense-reconstruction"
-    checkpoint()
+    save_progress_report()
     return report

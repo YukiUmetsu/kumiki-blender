@@ -517,6 +517,8 @@ def main(argv: list[str] | None = None) -> int:
     photo_mask_parser.add_argument("--sam2-device", choices=("auto", "mps", "cpu"), default="auto")
     photo_mask_parser.add_argument("--cache-dir", type=Path,
                                    help="Optional content-addressed cache of masks for identical rectified photos")
+    photo_mask_parser.add_argument("--resume", action="store_true",
+                                   help="Resume an incomplete masks revision with identical inputs")
     refine_mask_parser = subcommands.add_parser(
         "refine-dense-masks", help="Remove tiny mask islands/holes or apply camera-specific polygon cleanup")
     refine_mask_parser.add_argument("--reconstruction", type=Path, required=True)
@@ -844,7 +846,8 @@ def main(argv: list[str] | None = None) -> int:
                     center_box=tuple(args.center_box), max_side=args.max_side,
                     iterations=args.iterations, segmenter=args.segmenter,
                     sam2_checkpoint=args.sam2_checkpoint, sam2_size=args.sam2_size,
-                    sam2_device=args.sam2_device, cache_dir=args.cache_dir)
+                    sam2_device=args.sam2_device, cache_dir=args.cache_dir,
+                    resume=args.resume)
             except ReferenceError as error:
                 raise RecipeError(str(error)) from error
             print(json.dumps(report, indent=2))

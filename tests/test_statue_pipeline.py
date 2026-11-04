@@ -205,6 +205,32 @@ class StatuePipelineTests(unittest.TestCase):
         resumed = self.build(runner, resume=True)
         self.assertNotIn("failed_worker", resumed)
 
+    def test_resume_retries_incomplete_mask_directory_with_resume_flag(self):
+        normal, _calls = self.runner()
+
+        def fail_masks(argv, log, env):
+            if log.stem == "masks":
+                directory = self.output / "masks"
+                directory.mkdir()
+                (directory / "mask-report.json").write_text(json.dumps({
+                    "status": "incomplete / manual-mask-review-required", "images": []}))
+                return 2
+            return normal(argv, log, env)
+
+        with self.assertRaisesRegex(ReferenceError, "masks failed"):
+            self.build(fail_masks)
+        retried = []
+
+        def check_resume(argv, log, env):
+            if log.stem == "masks":
+                retried.extend(argv)
+                return 2
+            return normal(argv, log, env)
+
+        with self.assertRaisesRegex(ReferenceError, "masks failed"):
+            self.build(check_resume, resume=True)
+        self.assertIn("--resume", retried)
+
     def test_one_command_runs_every_stage_and_copies_audited_glb(self):
         run, calls = self.runner()
         report = self.build(run)

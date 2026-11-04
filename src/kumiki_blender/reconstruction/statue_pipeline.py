@@ -659,13 +659,16 @@ def build_statue_glb(
         return checkpoint("blocked / missing-photo-coverage", "coverage", issues)
 
     if settings.masks_dir is None:
-        run_stage("masks", executable + ["prepare-dense-masks", "--reconstruction", str(sparse),
+        mask_args = executable + ["prepare-dense-masks", "--reconstruction", str(sparse),
             "--output", str(mask_dir), "--segmenter", "sam2",
             "--sam2-size", settings.sam2_size, "--sam2-device", settings.sam2_device,
             "--sam2-checkpoint", str(checkpoint_file),
             "--cache-dir", str(shared_cache)]
-            + (["--guides", str(settings.mask_guides.resolve())] if settings.mask_guides else []),
-            mask_dir / "mask-report.json")
+        if settings.mask_guides:
+            mask_args += ["--guides", str(settings.mask_guides.resolve())]
+        if resume and mask_dir.exists() and "masks" not in report["completed_stages"]:
+            mask_args.append("--resume")
+        run_stage("masks", mask_args, mask_dir / "mask-report.json")
         mask_record = _read_report(mask_dir / "mask-report.json")
         report["mask_cache"] = mask_record.get("cache")
     else:

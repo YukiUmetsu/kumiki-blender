@@ -401,6 +401,16 @@ matching and OpenMVS depth maps still need fresh work when the source set
 changes. A stopped run on the *same* images can instead use `--resume` to skip
 its completed stages. Neither mechanism fabricates missing viewpoints.
 
+If `prepare-dense-masks` fails **after creating a partial mask directory**,
+`build-statue-glb --resume` now passes the same `--resume` option to the mask
+worker. The worker checks that the sparse reconstruction, model hash, guides,
+settings and cache location still match its incomplete receipt before
+continuing. Valid completed per-photo masks are reused without rerunning
+SAM2; neither the partial revision nor its source photos need deletion.
+The SAM2 checkpoint path is distinct from the report-saving helper, avoiding
+an earlier `FileNotFoundError` that printed a Python function instead of a
+checkpoint filename.
+
 To regenerate after adding photos, run
 `kumiki-blender build-statue-glb --asset-id great-sphinx`; it chooses the next
 unused output automatically. The cache from `r001` is discovered as long as
