@@ -35,6 +35,7 @@ from .render_profiles import RenderProfileError
 from .revision_audit import RevisionAuditError, audit_revision
 from .surfaces import SurfaceError
 from .reconstruction.head_base import HeadFitError
+from .reconstruction.completion_image_generation import ImageGenerationError
 from .head_sources.makehuman import MakeHumanSourceError
 from .vintage_biplane import make_biplane
 
@@ -272,9 +273,11 @@ def main(argv: list[str] | None = None) -> int:
         photo_model_parser.add_argument("--no-renders", action="store_true")
     statue_glb = subcommands.add_parser(
         "build-statue-glb", help="One-command MPS statue reconstruction with angle/mask QA gates and resumable GLB export")
-    statue_glb.add_argument("--photos", type=Path, required=True)
+    statue_glb.add_argument("--photos", type=Path,
+                           help="Photo folder; reuse the last folder for this asset if omitted")
     statue_glb.add_argument("--asset-id", required=True)
-    statue_glb.add_argument("--output", type=Path, required=True)
+    statue_glb.add_argument("--output", type=Path,
+                           help="Output revision; defaults to .review/ASSET/statue-hq-rNNN")
     statue_glb.add_argument("--front-photo",
                            help="Optional frontal image override; otherwise infer from registered image metadata")
     statue_glb.add_argument("--openmvs-dir", type=Path, default=Path("/Applications/OpenMVS-2.4.0"))
@@ -291,11 +294,26 @@ def main(argv: list[str] | None = None) -> int:
                            help="Previously reviewed rectified masks; skips automatic SAM2 masking")
     statue_glb.add_argument("--mask-cache-dir", type=Path,
                            help="Persistent per-image mask cache (defaults to a sibling of the output revision)")
+    statue_glb.add_argument("--ai-bridges", action="store_true",
+                           help="Opt in to synthetic ComfyUI reference previews for unregistered photo pairs")
+    statue_glb.add_argument("--ai-bridge-workflow", type=Path,
+                           help="Optional local ComfyUI API workflow; otherwise plan previews only")
     statue_glb.add_argument("--min-registered-fraction", type=float, default=0.80)
     statue_glb.add_argument("--max-mixed-mask-fraction", type=float, default=0.12)
     statue_glb.add_argument("--max-colmap-rss-mb", type=int, default=12288)
     statue_glb.add_argument("--timeout-seconds", type=int, default=14400)
     statue_glb.add_argument("--resume", action="store_true")
+    completion_image_parser = subcommands.add_parser(
+        "generate-completion-image",
+        help="Generate a private ComfyUI image candidate with an existing local API workflow")
+    completion_image_parser.add_argument("--image", type=Path, required=True)
+    completion_image_parser.add_argument("--workflow", type=Path, required=True)
+    completion_image_parser.add_argument("--image-node", required=True)
+    completion_image_parser.add_argument("--output-node", required=True)
+    completion_image_parser.add_argument("--output", type=Path, required=True)
+    completion_image_parser.add_argument("--server", default="http://127.0.0.1:8188")
+    completion_image_parser.add_argument("--require-mps", action="store_true")
+    completion_image_parser.add_argument("--timeout-seconds", type=int, default=360)
     camera_compare_parser = subcommands.add_parser(
         "compare-camera-registrations",
         help="Read-only before/after registration coverage for two COLMAP revisions")
@@ -1178,10 +1196,16 @@ def main(argv: list[str] | None = None) -> int:
             return 0 if report["status"].startswith("alignment-evidence-passes") else 3
         if args.command == "build-statue-glb":
             from .reconstruction.statue_pipeline import StatuePipelineSettings, build_statue_glb
+            from .reconstruction.statue_asset_registry import (
+                remember_statue_inputs, resolve_statue_inputs,
+            )
             from .reconstruction.references import ReferenceError
             try:
+                photos, output = resolve_statue_inputs(
+                    args.asset_id, args.photos, args.output, resume=args.resume)
+                remember_statue_inputs(args.asset_id, photos, output)
                 report = build_statue_glb(
-                    args.photos, args.asset_id, args.output,
+                    photos, args.asset_id, output,
                     StatuePipelineSettings(
                         front_photo=args.front_photo, blender=args.blender,
                         openmvs_dir=args.openmvs_dir,
@@ -1190,6 +1214,8 @@ def main(argv: list[str] | None = None) -> int:
                         sam2_size=args.sam2_size, sam2_device=args.sam2_device,
                         mask_guides=args.mask_guides, masks_dir=args.masks_dir,
                         mask_cache_dir=args.mask_cache_dir,
+                        ai_bridges=args.ai_bridges or args.ai_bridge_workflow is not None,
+                        ai_bridge_workflow=args.ai_bridge_workflow,
                         min_registered_fraction=args.min_registered_fraction,
                         max_mixed_mask_fraction=args.max_mixed_mask_fraction,
                         max_colmap_rss_mb=args.max_colmap_rss_mb,
@@ -1198,6 +1224,15 @@ def main(argv: list[str] | None = None) -> int:
                 raise RecipeError(str(error)) from error
             print(json.dumps(report, indent=2))
             return 0 if report["status"].startswith("private-GLB-candidate") else 3
+        if args.command == "generate-completion-image":
+            from .reconstruction.completion_image_generation import generate_comfyui_image
+            result = generate_comfyui_image(
+                args.image, args.workflow, args.output,
+                image_node=args.image_node, output_node=args.output_node,
+                server=args.server, require_mps=args.require_mps,
+                timeout_seconds=args.timeout_seconds)
+            print(json.dumps(result, indent=2))
+            return 0
         if args.command in ("plan-photo-model", "build-photo-model"):
             from .reconstruction.photo_model import (PhotoModelSettings, build_photo_model,
                                                      plan_photo_model)
@@ -1927,7 +1962,7 @@ def main(argv: list[str] | None = None) -> int:
         manifest = build_scene(recipe, plan, output, bpy_module=bpy)
         print(json.dumps(manifest, indent=2))
         return 0
-    except (CatalogError, RecipeError, PorticoError, FacadeError, MonumentError, GeometryError, AssetImportError, HeadFitError, MakeHumanSourceError, RenderProfileError, RevisionAuditError, AuditError, ExportAuditError, MotionExportError, PhysicsPlanError, DeformationPlanError,
+    except (CatalogError, RecipeError, PorticoError, FacadeError, MonumentError, GeometryError, AssetImportError, HeadFitError, ImageGenerationError, MakeHumanSourceError, RenderProfileError, RevisionAuditError, AuditError, ExportAuditError, MotionExportError, PhysicsPlanError, DeformationPlanError,
             SurfaceError, RuntimeError, OSError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 2

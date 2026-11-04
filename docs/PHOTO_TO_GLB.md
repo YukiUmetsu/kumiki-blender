@@ -17,13 +17,24 @@ OpenMVS without geometry-destroying refinement. If all conservative gates pass,
 it exports an editable `.blend` and `model.glb` without rendering previews.
 
 ```bash
+# First use: remember source photos and automatically choose a fresh output.
 kumiki-blender build-statue-glb \
   --photos "$HOME/Pictures/sphinx-reconstruction-candidates/warren-2019/photos" \
-  --asset-id great-sphinx \
-  --output .review/great-sphinx/statue-hq-r01 \
-  --openmvs-dir /Applications/OpenMVS-2.4.0 \
-  --blender /Applications/Blender.app/Contents/MacOS/Blender
+  --asset-id great-sphinx
+
+# Add real photos to the same folder, then rebuild with just an asset ID:
+kumiki-blender build-statue-glb --asset-id great-sphinx
 ```
+
+Run from the same project directory each time. The local private registry
+`.review/great-sphinx/asset-state.json` remembers the last photo folder and
+allocates `.review/great-sphinx/statue-hq-r001`, `r002`, etc. It records the
+source even if quality gates stop the first build. You must specify `--photos`
+once per asset ID; older runs predating this registry also require that first
+invocation. Override it later with `--photos` or an explicit `--output`.
+`--resume` without `--output` uses the most recently saved output revision.
+The defaults for macOS binaries are `/Applications/OpenMVS-2.4.0` and
+`/Applications/Blender.app/Contents/MacOS/Blender`; override either if needed.
 
 Prerequisites: COLMAP, Blender, the OpenMVS executables, and the official
 `facebookresearch/sam2` Python package with PyTorch. If the SAM2.1 small
@@ -76,6 +87,32 @@ request. Try camera recovery and intrinsic diagnostics before acquiring
 additional images. AI-generated in-between photographs are **not independent
 geometric measurements** and must never be silently added as real COLMAP
 inputs; they are suitable only for separately labeled creative references.
+
+### Optional AI bridge previews (ComfyUI)
+
+```bash
+# Make an evidence-backed plan for unregistered real photo pairs:
+kumiki-blender build-statue-glb --asset-id great-sphinx --ai-bridges
+
+# With a locally installed ComfyUI API workflow, generate preview candidates:
+kumiki-blender build-statue-glb --asset-id great-sphinx \
+  --ai-bridge-workflow /path/to/comfyui-api-workflow.json
+```
+
+The existing `generate-completion-image` adapter can produce up to three
+private synthetic reference previews from **verified, real photos**. A
+configured workflow needs exactly one `LoadImage` and one `SaveImage`, with
+local-only approved ComfyUI nodes and already installed model checkpoints.
+ComfyUI must be running at `http://127.0.0.1:8188`; remote hosts and redirects
+are rejected. Set `KUMIKI_COMFYUI_BRIDGE_WORKFLOW` to discover a saved workflow
+without passing a path (still opt in via `--ai-bridges`).
+
+Candidates, source/anchor hashes and provenance are stored separately under
+`<output>/ai-bridge-previews/`. If no workflow is configured, the command
+writes a **plan only**, without claiming an AI model ran. Generated images are
+artistic guesses and **cannot** supply verified camera poses, independent
+overlapping photo evidence, or accurate unseen geometry. This pipeline never
+adds them to COLMAP or the final GLB.
 Camera azimuth directions are relative to the **front image**
 when known, not the Sphinx's verified anatomical axes. These are deliberately conservative
 indicators, not proof of a watertight mesh, a faithful face, or accurate scale.
@@ -102,9 +139,10 @@ matching and OpenMVS depth maps still need fresh work when the source set
 changes. A stopped run on the *same* images can instead use `--resume` to skip
 its completed stages. Neither mechanism fabricates missing viewpoints.
 
-To regenerate after adding photos, run the same command with an unused output
-such as `--output .review/great-sphinx/statue-hq-r02`. The cache from `r01`
-is discovered automatically as long as both outputs share a parent directory.
+To regenerate after adding photos, run
+`kumiki-blender build-statue-glb --asset-id great-sphinx`; it chooses the next
+unused output automatically. The cache from `r001` is discovered as long as
+both outputs share a parent directory.
 On an entirely cached re-mask, the official SAM2 model is not loaded at all;
 cache misses are recomputed with the installed model and a verified checkpoint
 hash. To inspect reuse, read `mask_cache` in `statue-pipeline-report.json`.

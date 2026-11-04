@@ -37,6 +37,8 @@ class StatuePipelineSettings:
     masks_dir: Path | None = None
     mask_cache_dir: Path | None = None
     auto_download_model: bool = True
+    ai_bridges: bool = False
+    ai_bridge_workflow: Path | None = None
     min_registered_fraction: float = 0.80
     max_mixed_mask_fraction: float = 0.12
     max_colmap_rss_mb: int = 12288
@@ -68,6 +70,9 @@ class StatuePipelineSettings:
                 (self.mask_cache_dir.is_symlink() or
                  (self.mask_cache_dir.exists() and not self.mask_cache_dir.is_dir()))):
             raise ReferenceError("--mask-cache-dir must not be a symlink or file")
+        if self.ai_bridge_workflow is not None and (
+                self.ai_bridge_workflow.is_symlink() or not self.ai_bridge_workflow.is_file()):
+            raise ReferenceError("AI bridge workflow must be an existing regular file")
 
 
 _SAM2_FILES = {size: f"sam2.1_hiera_{size}.pt"
@@ -308,6 +313,11 @@ def build_statue_glb(
         "min_registered_fraction": settings.min_registered_fraction,
         "max_mixed_mask_fraction": settings.max_mixed_mask_fraction,
         "max_colmap_rss_mb": settings.max_colmap_rss_mb,
+        "ai_bridges": settings.ai_bridges,
+        "ai_bridge_workflow": (str(settings.ai_bridge_workflow.resolve())
+                               if settings.ai_bridge_workflow else None),
+        "ai_bridge_workflow_sha256": (_sha256_file(settings.ai_bridge_workflow)
+                                      if settings.ai_bridge_workflow else None),
     }, sort_keys=True).encode()).hexdigest()
     if resume:
         report = _read_report(report_path)
@@ -421,6 +431,17 @@ def build_statue_glb(
     report["registered_images"] = registered
     report["source_images"] = total
     report["unregistered_photo_advice"] = coverage.get("existing_photo_priorities", [])
+    if settings.ai_bridges:
+        from .ai_bridge_previews import build_ai_bridge_previews
+        bridge_output = target / "ai-bridge-previews"
+        bridge_report = (_read_report(bridge_output / "bridge-preview-report.json")
+                         if resume and bridge_output.exists() else
+                         build_ai_bridge_previews(
+                             sparse, coverage, bridge_output,
+                             workflow=settings.ai_bridge_workflow,
+                             require_mps=settings.sam2_device != "cpu"))
+        report["ai_bridge_previews"] = "ai-bridge-previews/bridge-preview-report.json"
+        report["ai_bridge_preview_status"] = bridge_report["status"]
     if camera.get("unregistered_filenames"):
         # Before asking for more pictures, analyze existing verified match
         # graphs for independent-cohort and seeded-camera recovery.

@@ -189,6 +189,7 @@ class StatuePipelineTests(unittest.TestCase):
     def test_cli_fails_before_creating_anything_without_checkpoint(self):
         stderr = io.StringIO()
         with contextlib.redirect_stderr(stderr), patch(
+                "kumiki_blender.reconstruction.statue_asset_registry.remember_statue_inputs"), patch(
                 "kumiki_blender.reconstruction.statue_pipeline.importlib.util.find_spec",
                 return_value=None):
             code = main(["build-statue-glb", "--photos", str(self.photos),
