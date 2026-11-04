@@ -107,9 +107,12 @@ unaccelerated execution unless you explicitly select `--device cpu`.
 Run `kumiki-blender completion-doctor` first. It checks the optional imports
 and visible MPS/CUDA devices without downloading weights or submitting a job.
 
-CI includes an Apple Silicon MPS tensor and CPU marching-cubes smoke test,
-but **full TripoSR inference has not been exercised on the user's M4**; upstream
-model operators may still require compatibility fixes. Start at
+CI runs an arm64 macOS tensor and CPU marching-cubes compatibility smoke test;
+standard GitHub macOS VMs may not expose a GPU, in which case the Metal portion
+is clearly skipped. On your actual Mac, run
+`PYTHONPATH=src python scripts/smoke_completion_mps.py --require-mps`
+to demand real MPS execution. **Full TripoSR inference has not been exercised
+on your M4**; upstream model operators may still require compatibility fixes. Start at
 resolution 128 on a 24 GB Mac and use `--resolution 64` if memory is tight.
 The input image stays private; generated outputs are `candidate.glb` and
 `provenance.json`, not a completed monument. TripoSR was trained for single-
