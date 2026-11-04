@@ -61,7 +61,11 @@ allocates `.review/great-sphinx/statue-hq-r001`, `r002`, etc. It records the
 source even if quality gates stop the first build. You must specify `--photos`
 once per asset ID; older runs predating this registry also require that first
 invocation. Override it later with `--photos` or an explicit `--output`.
-`--resume` without `--output` uses the most recently saved output revision.
+`--resume` without `--output` first tries the most recently saved revision.
+If photos or quality settings changed, it automatically allocates the next
+unused revision (such as `r002`), preserves the old result, and starts fresh
+while reusing the shared per-photo preprocessing cache. An explicit `--output`
+with `--resume` always refuses incompatible inputs instead of switching paths.
 The defaults for macOS binaries are `/Applications/OpenMVS-2.4.0` and
 `/Applications/Blender.app/Contents/MacOS/Blender`; override either if needed.
 
@@ -135,7 +139,8 @@ incomplete silhouettes and weak geometric registration still stop the run.
 On a blocked run, inspect `statue-pipeline-report.json`, `coverage/photo-advice.md`,
 `masks/mask-contact-sheet.jpg`, and the SHA-named mask audit contact sheet.
 Additional real photos require a **fresh output revision**: the input hashes
-cannot change under `--resume`. To correct masks, run the existing
+cannot change within a revision. Omit `--output` and the CLI allocates the
+next one automatically, even if `--resume` is present. To correct masks, run the existing
 `refine-dense-masks` command against the same `cameras/` revision, then
 reissue the same `build-statue-glb` invocation with `--resume --masks-dir
 /path/to/corrected-revision/masks`. The resumed run reuses the completed

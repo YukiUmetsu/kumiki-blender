@@ -310,7 +310,8 @@ def main(argv: list[str] | None = None) -> int:
     statue_glb.add_argument("--max-mixed-mask-fraction", type=float, default=0.12)
     statue_glb.add_argument("--max-colmap-rss-mb", type=int, default=12288)
     statue_glb.add_argument("--timeout-seconds", type=int, default=14400)
-    statue_glb.add_argument("--resume", action="store_true")
+    statue_glb.add_argument("--resume", action="store_true",
+                           help="Resume last output; without --output, start a new revision if inputs changed")
     statue_glb.add_argument("--no-progress", action="store_true",
                            help="Disable live phase dashboard on stderr (stdout remains JSON)")
     photo_cache_parser = subcommands.add_parser(
@@ -1262,7 +1263,9 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(report, indent=2))
             return 0
         if args.command == "build-statue-glb":
-            from .reconstruction.statue_pipeline import StatuePipelineSettings, build_statue_glb
+            from .reconstruction.statue_pipeline import (
+                RESUME_INPUTS_CHANGED_ERROR, StatuePipelineSettings, build_statue_glb,
+            )
             from .reconstruction.live_progress import LiveProgress
             from .reconstruction.statue_asset_registry import (
                 remember_statue_inputs, resolve_statue_inputs,
@@ -1274,24 +1277,42 @@ def main(argv: list[str] | None = None) -> int:
                 photos, output = resolve_statue_inputs(
                     args.asset_id, args.photos, args.output, resume=args.resume)
                 remember_statue_inputs(args.asset_id, photos, output)
-                report = build_statue_glb(
-                    photos, args.asset_id, output,
-                    StatuePipelineSettings(
-                        front_photo=args.front_photo, blender=args.blender,
-                        openmvs_dir=args.openmvs_dir,
-                        sam2_checkpoint=args.sam2_checkpoint,
-                        auto_download_model=not args.no_auto_model_download,
-                        sam2_size=args.sam2_size, sam2_device=args.sam2_device,
-                        mask_guides=args.mask_guides, masks_dir=args.masks_dir,
-                        mask_cache_dir=args.mask_cache_dir, photo_cache_dir=args.photo_cache_dir,
-                        ai_bridges=args.ai_bridges or args.ai_bridge_workflow is not None,
-                        auto_recover_cameras=not args.no_camera_recovery,
-                        ai_bridge_workflow=args.ai_bridge_workflow,
-                        min_registered_fraction=args.min_registered_fraction,
-                        max_mixed_mask_fraction=args.max_mixed_mask_fraction,
-                        max_colmap_rss_mb=args.max_colmap_rss_mb,
-                        timeout_seconds=args.timeout_seconds), resume=args.resume,
-                    progress_callback=progress.emit if progress is not None else None)
+                settings = StatuePipelineSettings(
+                    front_photo=args.front_photo, blender=args.blender,
+                    openmvs_dir=args.openmvs_dir,
+                    sam2_checkpoint=args.sam2_checkpoint,
+                    auto_download_model=not args.no_auto_model_download,
+                    sam2_size=args.sam2_size, sam2_device=args.sam2_device,
+                    mask_guides=args.mask_guides, masks_dir=args.masks_dir,
+                    mask_cache_dir=args.mask_cache_dir, photo_cache_dir=args.photo_cache_dir,
+                    ai_bridges=args.ai_bridges or args.ai_bridge_workflow is not None,
+                    auto_recover_cameras=not args.no_camera_recovery,
+                    ai_bridge_workflow=args.ai_bridge_workflow,
+                    min_registered_fraction=args.min_registered_fraction,
+                    max_mixed_mask_fraction=args.max_mixed_mask_fraction,
+                    max_colmap_rss_mb=args.max_colmap_rss_mb,
+                    timeout_seconds=args.timeout_seconds)
+                try:
+                    report = build_statue_glb(
+                        photos, args.asset_id, output, settings, resume=args.resume,
+                        progress_callback=progress.emit if progress is not None else None)
+                except ReferenceError as error:
+                    # An implicit --resume is a convenience, not a request to
+                    # overwrite incompatible work. Preserve the prior revision
+                    # and allocate the next unused one when photos or quality
+                    # settings changed. Explicit --output keeps strict behavior.
+                    if (args.output is not None or not args.resume or
+                            str(error) != RESUME_INPUTS_CHANGED_ERROR):
+                        raise
+                    if progress is not None:
+                        progress.emit({"kind": "tick", "phase": "preflight",
+                                       "detail": "Inputs changed; starting a new revision (shared photo cache retained)"})
+                    photos, output = resolve_statue_inputs(
+                        args.asset_id, photos, None, resume=False)
+                    remember_statue_inputs(args.asset_id, photos, output)
+                    report = build_statue_glb(
+                        photos, args.asset_id, output, settings, resume=False,
+                        progress_callback=progress.emit if progress is not None else None)
             except (ReferenceError, ValueError, ImportError) as error:
                 if progress is not None:
                     progress.emit({"kind": "failed", "detail": str(error)})

@@ -292,6 +292,9 @@ def _possible_blue_sky_leaks(sparse: Path, masks: Path,
     return warnings
 
 
+RESUME_INPUTS_CHANGED_ERROR = "Resume refused: source photos or quality settings changed; create a new output"
+
+
 def build_statue_glb(
     photos: Path, asset_id: str, output: Path, settings: StatuePipelineSettings,
     *, resume: bool = False,
@@ -357,7 +360,7 @@ def build_statue_glb(
         if (report.get("source_manifest_sha256") != source_fingerprint
                 or (report.get("settings_sha256") != settings_fingerprint and not compatible_upgrade)
                 or report.get("asset_id") != asset_id):
-            raise ReferenceError("Resume refused: source photos or quality settings changed; create a new output")
+            raise ReferenceError(RESUME_INPUTS_CHANGED_ERROR)
         if compatible_upgrade:
             report["settings_sha256"] = settings_fingerprint
             report["resume_upgrade"] = "enabled verified camera recovery without rerunning photos"

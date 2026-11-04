@@ -10,6 +10,7 @@ from unittest.mock import patch
 
 from kumiki_blender.cli import main
 from kumiki_blender.reconstruction.references import ReferenceError
+from kumiki_blender.reconstruction.statue_pipeline import RESUME_INPUTS_CHANGED_ERROR
 from kumiki_blender.reconstruction.statue_asset_registry import (
     remember_statue_inputs, resolve_statue_inputs,
 )
@@ -84,6 +85,60 @@ class StatueAssetRegistryTests(unittest.TestCase):
         self.assertEqual(captured[0][2].name, "statue-hq-r001")
         self.assertEqual(captured[1][2].name, "statue-hq-r002")
         self.assertEqual(captured[0][0], captured[1][0])
+
+    def test_implicit_resume_starts_new_revision_when_inputs_change(self):
+        calls = []
+
+        def mock_build(photos, asset_id, output, settings, *, resume=False, **kwargs):
+            calls.append((output.name, resume))
+            if resume and any(self.photos.iterdir()):
+                raise ReferenceError(RESUME_INPUTS_CHANGED_ERROR)
+            if not resume:
+                output.mkdir(parents=True)
+            return {"status": "private-GLB-candidate / review-required",
+                    "output": str(output)}
+
+        with patch("pathlib.Path.cwd", return_value=self.root), patch(
+                "kumiki_blender.reconstruction.statue_pipeline.build_statue_glb",
+                side_effect=mock_build), contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(main(["build-statue-glb", "--asset-id", "sphinx",
+                                   "--photos", str(self.photos), "--no-progress"]), 0)
+            # Unchanged sources genuinely resume the existing revision.
+            self.assertEqual(main(["build-statue-glb", "--asset-id", "sphinx",
+                                   "--resume", "--no-progress"]), 0)
+            (self.photos / "new-elevated-view.jpg").write_bytes(b"new photo")
+            self.assertEqual(main(["build-statue-glb", "--asset-id", "sphinx",
+                                   "--resume", "--no-progress"]), 0)
+
+        self.assertEqual(calls, [("statue-hq-r001", False),
+                                 ("statue-hq-r001", True),
+                                 ("statue-hq-r001", True),
+                                 ("statue-hq-r002", False)])
+        root = self.root / ".review/sphinx"
+        self.assertTrue((root / "statue-hq-r001").is_dir())
+        self.assertTrue((root / "statue-hq-r002").is_dir())
+        state = json.loads((root / "asset-state.json").read_text())
+        self.assertEqual(Path(state["last_output"]), root / "statue-hq-r002")
+        self.assertEqual(Path(state["photos_dir"]), self.photos.resolve())
+
+    def test_explicit_output_still_refuses_incompatible_resume(self):
+        old = self.root / "manual-revision"
+        old.mkdir()
+        calls = []
+
+        def mock_build(photos, asset_id, output, settings, *, resume=False, **kwargs):
+            calls.append((output, resume))
+            raise ReferenceError(RESUME_INPUTS_CHANGED_ERROR)
+
+        with patch("pathlib.Path.cwd", return_value=self.root), patch(
+                "kumiki_blender.reconstruction.statue_pipeline.build_statue_glb",
+                side_effect=mock_build), contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(main(["build-statue-glb", "--asset-id", "sphinx",
+                                   "--photos", str(self.photos), "--output", str(old),
+                                   "--resume", "--no-progress"]), 2)
+
+        self.assertEqual(calls, [(old, True)])
+        self.assertFalse((self.root / ".review/sphinx/statue-hq-r001").exists())
 
 
 if __name__ == "__main__":
