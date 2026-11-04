@@ -229,8 +229,15 @@ def _check_spread(points: list[Vec3], label: str) -> None:
 
 def fit_head_landmarks(plan: HeadFitPlan) -> HeadFitResult:
     """Least-squares proper 3D rotation + positive uniform scale + translation."""
-    source = [item.source_xyz_m for item in plan.landmarks]
-    target = [item.target_xyz_m for item in plan.landmarks]
+    return fit_landmark_pairs(plan.landmarks, asset_id=plan.asset_id,
+                              input_sha256=plan.input_sha256)
+
+
+def fit_landmark_pairs(landmarks: tuple[HeadLandmark, ...], *, asset_id: str,
+                       input_sha256: str) -> HeadFitResult:
+    """Reusable proper similarity fit without an anatomical GLB/provenance plan."""
+    source = [item.source_xyz_m for item in landmarks]
+    target = [item.target_xyz_m for item in landmarks]
     _check_spread(source, "Source")
     _check_spread(target, "Target")
     sc, tc = _centroid(source), _centroid(target)
@@ -266,7 +273,7 @@ def fit_head_landmarks(plan: HeadFitPlan) -> HeadFitResult:
         if abs(original) > 1e-5 * scale_range**3 and original*fitted < 0:
             raise HeadFitError("Target landmark ordering mirrors the anatomical head")
     errors = []
-    for item in plan.landmarks:
+    for item in landmarks:
         point = tuple(scale*v + translation[i] for i, v in enumerate(_rotated(item.source_xyz_m, rotation)))
         distance = math.dist(point, item.target_xyz_m)
         errors.append({"id": item.name, "region": item.region,
@@ -274,8 +281,8 @@ def fit_head_landmarks(plan: HeadFitPlan) -> HeadFitResult:
                        "target_xyz_m": list(item.target_xyz_m),
                        "error_m": round(distance, 8)})
     distances = [math.dist(tuple(scale*v + translation[i] for i, v in enumerate(_rotated(item.source_xyz_m, rotation))),
-                           item.target_xyz_m) for item in plan.landmarks]
-    return HeadFitResult(plan.asset_id, plan.input_sha256, rotation, translation,
+                           item.target_xyz_m) for item in landmarks]
+    return HeadFitResult(asset_id, input_sha256, rotation, translation,
                          scale, math.sqrt(sum(d*d for d in distances)/len(distances)),
                          max(distances), tuple(errors))
 

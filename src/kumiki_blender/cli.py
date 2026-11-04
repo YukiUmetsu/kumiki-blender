@@ -34,6 +34,9 @@ from .render_profiles import RenderProfileError
 from .revision_audit import RevisionAuditError, audit_revision
 from .surfaces import SurfaceError
 from .reconstruction.head_base import HeadFitError
+from .reconstruction.completion import CompletionError
+from .reconstruction.completion_generation import GenerationError
+from .reconstruction.completion_image_generation import ImageGenerationError
 from .head_sources.makehuman import MakeHumanSourceError
 from .vintage_biplane import make_biplane
 
@@ -567,6 +570,42 @@ def main(argv: list[str] | None = None) -> int:
         if command == "build-head-base":
             head_parser.add_argument("--output", type=Path, required=True)
             head_parser.add_argument("--blender", default="blender")
+    for command in ("plan-completion", "build-completion"):
+        completion_parser = subcommands.add_parser(
+            command, help="Fit evidence-pinned candidate GLBs in historical or cinematic mode")
+        completion_parser.add_argument("--manifest", type=Path, required=True)
+        if command == "build-completion":
+            completion_parser.add_argument("--output", type=Path, required=True)
+            completion_parser.add_argument("--blender", default="blender")
+    gap_parser = subcommands.add_parser(
+        "suggest-completion", help="Suggest under-photographed regions from a reference-audit JSON")
+    gap_parser.add_argument("--audit", type=Path, required=True)
+    gap_parser.add_argument("--min-views", type=int, default=2)
+    subcommands.add_parser("completion-doctor", help="Check local TripoSR/MPS dependencies without loading weights")
+    candidate_parser = subcommands.add_parser(
+        "generate-completion-part", help="Use ungated MIT TripoSR on MPS/CUDA/CPU to generate an inferred GLB")
+    candidate_parser.add_argument("--image", type=Path, required=True,
+                                  help="Private transparent-background PNG/WebP of the missing part")
+    candidate_parser.add_argument("--output", type=Path, required=True,
+                                  help="New directory containing candidate.glb and provenance.json")
+    candidate_parser.add_argument("--device", choices=("auto", "mps", "cuda", "cpu"), default="auto")
+    candidate_parser.add_argument("--model", default="stabilityai/TripoSR")
+    candidate_parser.add_argument("--revision", default="main",
+                                  help="TripoSR repository commit SHA, or main (resolved commit is recorded)")
+    candidate_parser.add_argument("--resolution", type=int, default=128)
+    candidate_parser.add_argument("--chunk-size", type=int, default=2048)
+    candidate_parser.add_argument("--offline", action="store_true", help="Use only already-cached model files")
+    image_gen_parser = subcommands.add_parser(
+        "generate-completion-image", help="Run a local ComfyUI masked-image workflow (no cloud endpoint)")
+    image_gen_parser.add_argument("--image", type=Path, required=True)
+    image_gen_parser.add_argument("--workflow", type=Path, required=True,
+                                  help="Local ComfyUI API-format workflow with LoadImage and SaveImage nodes")
+    image_gen_parser.add_argument("--image-node", required=True)
+    image_gen_parser.add_argument("--output-node", required=True)
+    image_gen_parser.add_argument("--output", type=Path, required=True)
+    image_gen_parser.add_argument("--server", default="http://127.0.0.1:8188")
+    image_gen_parser.add_argument("--require-mps", action="store_true")
+    image_gen_parser.add_argument("--timeout-seconds", type=int, default=360)
     makehuman_parser = subcommands.add_parser(
         "prepare-makehuman-head", help="Prepare an official, pinned CC0 MakeHuman head base")
     makehuman_input = makehuman_parser.add_mutually_exclusive_group(required=True)
@@ -1166,6 +1205,62 @@ def main(argv: list[str] | None = None) -> int:
                                           head_fit=plan, bpy_module=bpy)
             print(json.dumps(result, indent=2))
             return 0
+        if args.command in ("plan-completion", "build-completion"):
+            from .reconstruction.completion import evaluate_completion, load_completion_plan
+            plan = load_completion_plan(args.manifest)
+            report = evaluate_completion(plan)
+            if args.command == "plan-completion":
+                print(json.dumps(report, indent=2))
+                return 0
+            output = args.output.resolve()
+            if args.output.is_symlink() or output.exists():
+                raise CompletionError(f"Output revision already exists: {output}")
+            try:
+                import bpy  # type: ignore[import-not-found]
+            except ImportError:
+                executable = shutil.which(args.blender)
+                if executable is None:
+                    raise RuntimeError(f"Blender executable not found: {args.blender}")
+                entry = Path(__file__).resolve().parents[2] / "scripts/blender_entry.py"
+                if not entry.is_file():
+                    raise RuntimeError("Blender build requires scripts/blender_entry.py from a source checkout")
+                completed = subprocess.run([
+                    executable, "--background", "--factory-startup", "--python-exit-code", "1",
+                    "--python", str(entry), "--", "build-completion",
+                    "--manifest", str(args.manifest.resolve()), "--output", str(output),
+                ], check=False)
+                return completed.returncode
+            from .blender_completion import build_completion_scene
+            result = build_completion_scene(plan, report, output, bpy_module=bpy)
+            print(json.dumps(result, indent=2))
+            return 0
+        if args.command == "suggest-completion":
+            from .reconstruction.completion_generation import suggest_completion_regions
+            print(json.dumps(suggest_completion_regions(args.audit, min_views=args.min_views), indent=2))
+            return 0
+        if args.command == "completion-doctor":
+            from .reconstruction.completion_generation import completion_runtime_doctor
+            print(json.dumps(completion_runtime_doctor(), indent=2))
+            return 0
+        if args.command == "generate-completion-part":
+            from .reconstruction.completion_generation import generate_triposr_candidate
+            result = generate_triposr_candidate(
+                args.image, args.output, model_id=args.model,
+                requested_device=args.device, revision=args.revision,
+                resolution=args.resolution, chunk_size=args.chunk_size, offline=args.offline,
+            )
+            print(json.dumps(result, indent=2))
+            return 0
+        if args.command == "generate-completion-image":
+            from .reconstruction.completion_image_generation import generate_comfyui_image
+            result = generate_comfyui_image(
+                args.image, args.workflow, args.output,
+                image_node=args.image_node, output_node=args.output_node,
+                server=args.server, require_mps=args.require_mps,
+                timeout_seconds=args.timeout_seconds,
+            )
+            print(json.dumps(result, indent=2))
+            return 0
         if args.command == "prepare-camera-plan":
             from .reconstruction.cameras import create_camera_plan
             from .reconstruction.references import ReferenceError
@@ -1675,7 +1770,7 @@ def main(argv: list[str] | None = None) -> int:
         manifest = build_scene(recipe, plan, output, bpy_module=bpy)
         print(json.dumps(manifest, indent=2))
         return 0
-    except (CatalogError, RecipeError, PorticoError, FacadeError, MonumentError, GeometryError, AssetImportError, HeadFitError, MakeHumanSourceError, RenderProfileError, RevisionAuditError, AuditError, ExportAuditError, MotionExportError, PhysicsPlanError, DeformationPlanError,
+    except (CatalogError, RecipeError, PorticoError, FacadeError, MonumentError, GeometryError, AssetImportError, HeadFitError, CompletionError, GenerationError, ImageGenerationError, MakeHumanSourceError, RenderProfileError, RevisionAuditError, AuditError, ExportAuditError, MotionExportError, PhysicsPlanError, DeformationPlanError,
             SurfaceError, RuntimeError, OSError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 2
