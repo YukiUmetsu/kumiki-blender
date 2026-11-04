@@ -101,7 +101,8 @@ elif task == "matches_importer":
         for pair in pairs:
             stream.write(pair + "\\n")
 elif task == "geometric_verifier":
-    pass
+    if "FAKE_FAIL_GEOMETRIC" in os.environ:
+        sys.exit(7)
 elif task == "mapper":
     model = argument("--output_path") / "0"
     model.mkdir(parents=True)
@@ -393,6 +394,37 @@ class ColmapWorkflowTests(unittest.TestCase):
         self.assertEqual([command[0] for command in resumed["commands"]].count("feature_extractor"), 1)
         self.assertEqual(resumed["matching_device_history"][-1],
                          {"from": "colmap-cpu", "to": "mps"})
+
+    def test_mps_geometric_verification_failure_is_resumable_without_rematching(self):
+        from kumiki_blender.reconstruction import colmap
+
+        output = self.root / "geo-resume"
+        actual_run = colmap._run
+
+        def stub_mps_only(executable, stage, arguments, output, number, timeout_seconds,
+                          *, max_rss_mb=None):
+            if stage == "match":
+                return 0, [stage, *arguments]
+            return actual_run(executable, stage, arguments, output, number, timeout_seconds,
+                              max_rss_mb=max_rss_mb)
+
+        with (patch.dict(os.environ, {"FAKE_LEARNED_COLMAP": "1", "FAKE_FAIL_GEOMETRIC": "1"}),
+              patch("kumiki_blender.reconstruction.colmap._run", side_effect=stub_mps_only)):
+            failed = build_sparse_reconstruction(
+                self.references(), output, colmap=str(self.fake),
+                matching_preset="sift-lightglue", matching_device="mps",
+                matching_pairs_per_process=2)
+        self.assertEqual(failed["failed_stage"], "geometric_verifier")
+        self.assertEqual(failed["matching_progress"]["status"], "complete")
+        with (patch.dict(os.environ, {"FAKE_LEARNED_COLMAP": "1"}),
+              patch("kumiki_blender.reconstruction.colmap._run", side_effect=stub_mps_only)):
+            resumed = build_sparse_reconstruction(
+                self.references(), output, colmap=str(self.fake),
+                matching_preset="sift-lightglue", matching_device="mps",
+                matching_pairs_per_process=2, resume=True)
+        self.assertEqual(resumed["status"], "candidate / visual-review-required")
+        self.assertEqual([command[0] for command in resumed["commands"]].count("match"), 2)
+        self.assertEqual([command[0] for command in resumed["commands"]].count("geometric_verifier"), 2)
 
     def test_mps_preflight_requires_valid_preset_and_batched_matching(self):
         output = self.root / "invalid-mps"

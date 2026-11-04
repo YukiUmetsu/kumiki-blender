@@ -880,7 +880,8 @@ def build_sparse_reconstruction(reference_set: ReferenceSet, output: str | Path,
         if recorded_size != max_image_size:
             raise ReferenceError("Cannot resume: input image resolution has changed")
         if (report.get("feature_import", {}).get("status") != "complete" or
-                report.get("failed_stage") not in ("exhaustive_matcher", "matches_importer", None)):
+                report.get("failed_stage") not in ("exhaustive_matcher", "matches_importer",
+                                                   "match", "geometric_verifier", None)):
             raise ReferenceError("Cannot resume: feature extraction is incomplete or stage is incompatible")
         entries = stored_index.get("images", [])
         expected = {image.image_id + ".png": image.sha256 for image in references}
@@ -893,7 +894,8 @@ def build_sparse_reconstruction(reference_set: ReferenceSet, output: str | Path,
             if (staged.is_symlink() or not staged.is_file() or
                     _sha256(staged) != entry["sha256"]):
                 raise ReferenceError(f"Cannot resume: staged image changed ({entry['filename']})")
-        if (report.get("matching_progress", {}).get("status") == "complete" or
+        matching_complete = report.get("matching_progress", {}).get("status") == "complete"
+        if ((matching_complete and report.get("failed_stage") != "geometric_verifier") or
                 any((target / "sparse").iterdir())):
             raise ReferenceError("Cannot resume a completed matching or mapping stage")
         previous_error = report.get("error")
