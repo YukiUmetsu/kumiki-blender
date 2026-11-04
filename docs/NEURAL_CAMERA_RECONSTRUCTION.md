@@ -63,9 +63,12 @@ kumiki-blender reconstruct-photos \
 ```
 
 These resource options are optional for learned presets, as shown by their
-defaults above. Matching feature count is a quality/speed/RAM tradeoff, not
-image downscaling: the input pixels remain at their requested resolution, but
-some extracted features may be omitted from pair matching. The smaller
+defaults above. For `sift-lightglue`, the CLI now caps the **actual input SIFT
+keypoints** before sending features to COLMAP's CPU neural matcher. The older
+`FeatureMatching.max_num_matches` flag alone limited only the *returned* matches,
+not the neural model's input (up to 14,783 keypoints in the Sphinx dataset).
+This cap is a quality/speed/RAM tradeoff, not image downscaling: 4K input
+pixels and camera calibration are unchanged. The smaller
 exhaustive block also reduces the image/feature cache footprint. If registration
 is still poor after RAM is stable, increase the matching cap incrementally.
 
@@ -102,6 +105,74 @@ same database for each group of five. It checkpoints `matching_progress` in
 budget is retried with progressively smaller groups (5 -> 2 -> 1); a single
 pair that exceeds the budget stops with a clear error instead of looping.
 Only the failed group is retried, and COLMAP skips already-verified pairs.
+
+### Apple Silicon MPS matcher (preserves existing 4K features)
+
+On M-series Macs, an optional Python LightGlue worker uses **PyTorch Metal/MPS**
+instead of the Homebrew COLMAP CPU ONNX matcher. It loads at most the configured
+number of keypoints per image **per batch** and records correspondences using
+the original COLMAP row indices. This avoids re-extracting features and does
+not resize images. The COLMAP `geometric_verifier` still checks matches before
+camera mapping; a CUDA-only installation is not required.
+
+Install the optional worker dependencies in the Python environment containing
+`kumiki-blender`:
+
+```bash
+python -m pip install numpy torch
+python -m pip install git+https://github.com/cvg/LightGlue.git
+python -c 'import torch; print("MPS available:", torch.backends.mps.is_available())'
+```
+
+To resume the **existing interrupted Sphinx revision**, with checkpointed
+completed pairs and extracted SIFT features intact, **stop the old CPU matcher
+first** (do not run two matching processes against the same SQLite database):
+
+```bash
+kumiki-blender reconstruct-photos \
+  --photos "$PHOTOS" --asset-id great-sphinx-multiview \
+  --output "$LEARNED" --engine colmap --colmap /opt/homebrew/bin/colmap \
+  --matching-preset sift-lightglue --matching-device mps \
+  --max-image-size 4000 --feature-threads 1 --matching-threads 1 \
+  --sift-first-octave 0 --matching-max-features 2048 \
+  --matching-pairs-per-process 8 --max-colmap-rss-mb 12288 \
+  --undistort --timeout-seconds 7200 --resume
+```
+
+For new runs, omit `--resume` and select a **new** output directory. The default
+remains `--matching-device colmap-cpu`. For a fresh CPU run, the cap is applied
+once after extraction to a database with *no matching results*; resumed
+revisions are not rewritten because that would invalidate existing match
+indices. The MPS worker instead filters features **in memory** for each pair
+and maps its resulting indices back to the unchanged database rows.
+
+Unlike the CPU ONNX matcher, this optional MPS path is not yet validated on
+the user's 24 GB machine. Start with 2,048 keypoints; raise toward 4,096 only
+after confirming memory headroom and registrations. Apple Silicon uses shared
+system/GPU memory, and process RSS alone is not a hard guarantee against
+system-wide memory pressure. If MPS operators or weights cannot load, the
+worker fails explicitly; it will not silently switch back to CPU matching.
+
+### Match only selected image pairs
+
+By default, 36 photographs produce all 630 possible pairs, even when some
+angles do not overlap. For a **new** revision, optionally provide an explicit
+newline-separated list of pairs of the staged image filenames, e.g.:
+
+```text
+photo-0001.png photo-0002.png
+photo-0002.png photo-0011.png
+photo-0011.png photo-0023.png
+```
+
+Add `--matching-pair-list ./candidate-pairs.txt` to a batch-matching command.
+Each pair appears once, in either order; unknown names are rejected. The CLI
+checks the selected set during resume so that a different list cannot silently
+shift checkpoint indices. An **old exhaustive checkpoint cannot be converted
+to a selective one**: keep using that checkpoint with MPS, or create a new
+revision. Pair selection should preserve links between front, profile and
+rear photo clusters; otherwise sparse registration can get worse. There is no
+automatic retrieval/ranking of candidates yet.
 
 To continue a failed **matching** stage, including earlier attempts that used
 `exhaustive_matcher`, use the *existing* revision directory with `--resume`

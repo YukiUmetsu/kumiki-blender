@@ -210,7 +210,8 @@ class PhotoModelTests(unittest.TestCase):
                                "--max-colmap-rss-mb", "10240",
                                "--matching-block-size", "3",
                                "--matching-max-features", "2048",
-                               "--matching-pairs-per-process", "5", "--resume"])
+                               "--matching-pairs-per-process", "5", "--resume",
+                               "--matching-device", "mps"])
         self.assertEqual(result, 0)
         self.assertEqual(captured["count"], 8)
         self.assertEqual(captured["kwargs"]["matching_preset"], "loma")
@@ -221,6 +222,7 @@ class PhotoModelTests(unittest.TestCase):
         self.assertEqual(captured["kwargs"]["matching_block_size"], 3)
         self.assertEqual(captured["kwargs"]["matching_max_features"], 2048)
         self.assertEqual(captured["kwargs"]["matching_pairs_per_process"], 5)
+        self.assertEqual(captured["kwargs"]["matching_device"], "mps")
         self.assertTrue(captured["kwargs"]["resume"])
         self.assertEqual(captured["output"], target)
         self.assertEqual(json.loads(output.getvalue())["registered_images"], 8)
@@ -231,6 +233,18 @@ class PhotoModelTests(unittest.TestCase):
             plan_photo_model(self.references, self.root / "bad", settings,
                              dependencies=self.dependencies)
         self.assertFalse((self.root / "bad").exists())
+
+    def test_mps_photo_model_requires_bounded_sift_lightglue(self):
+        for settings in (
+            PhotoModelSettings(engine="pycolmap", matching_device="mps"),
+            PhotoModelSettings(engine="colmap", matching_device="mps", matching_preset="sift"),
+            PhotoModelSettings(engine="colmap", matching_device="mps", matching_preset="sift-lightglue"),
+        ):
+            with self.subTest(settings=settings), self.assertRaises(ReferenceError):
+                settings.validate()
+        valid = PhotoModelSettings(engine="colmap", matching_device="mps",
+                                   matching_preset="sift-lightglue", matching_pairs_per_process=8)
+        valid.validate()
 
     def test_unrelated_web_photos_are_not_treated_as_sufficient_overlap(self):
         output = self.root / "inadequate-overlap"

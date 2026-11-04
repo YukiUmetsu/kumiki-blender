@@ -317,6 +317,63 @@ def _feature_import_report(database: Path, staged_index: Path) -> dict:
             "missing_images": missing, "unexpected_images": unexpected}
 
 
+def _cap_colmap_sift_features(database: Path, maximum: int) -> dict[str, int]:
+    """Enforce an exact neural input cap on a *fresh* COLMAP database.
+
+    COLMAP's --FeatureMatching.max_num_matches does not limit SIFT_LIGHTGLUE's
+    inputs. It is safe to replace keypoints/descriptors only before matching
+    starts, otherwise saved match indices would refer to the wrong feature.
+    """
+    import struct
+    from .mps_lightglue_worker import select_spatial_keypoints
+
+    total = 0
+    reduced = 0
+    max_original = 0
+    max_selected = 0
+    with sqlite3.connect(database) as db:
+        if db.execute("SELECT COUNT(*) FROM matches").fetchone()[0] or db.execute(
+                "SELECT COUNT(*) FROM two_view_geometries").fetchone()[0]:
+            raise ReferenceError("Cannot change keypoint indexing after any matching results exist")
+        rows = db.execute(
+            "SELECT i.image_id, c.width, c.height, k.rows, k.cols, k.data, "
+            "d.rows, d.cols, d.data FROM images i "
+            "JOIN cameras c ON i.camera_id=c.camera_id "
+            "JOIN keypoints k ON k.image_id=i.image_id "
+            "JOIN descriptors d ON d.image_id=i.image_id").fetchall()
+        image_count = db.execute("SELECT COUNT(*) FROM images").fetchone()[0]
+        if len(rows) != image_count:
+            raise ReferenceError("Missing SIFT features; cannot apply a neural keypoint cap")
+        changes: list[tuple[int, bytes, bytes, int]] = []
+        for image_id, width, height, n, kc, kdata, dn, dc, ddata in rows:
+            if (n != dn or kc != 4 or dc != 128 or
+                    len(kdata) != 4 * kc * n or len(ddata) != dc * dn):
+                raise ReferenceError("Invalid SIFT feature dimensions; refusing to rewrite database")
+            max_original = max(max_original, n)
+            total += n
+            if n <= maximum:
+                max_selected = max(max_selected, n)
+                continue
+            selected = select_spatial_keypoints(
+                [(x, y, scale) for x, y, scale, _ in struct.iter_unpack("<ffff", kdata)],
+                width, height, maximum)
+            if not selected:
+                raise ReferenceError("No valid SIFT keypoints remain after selection")
+            new_kdata = b"".join(kdata[i * kc * 4:(i + 1) * kc * 4] for i in selected)
+            new_ddata = b"".join(ddata[i * dc:(i + 1) * dc] for i in selected)
+            changes.append((image_id, new_kdata, new_ddata, len(selected)))
+            reduced += n - len(selected)
+            max_selected = max(max_selected, len(selected))
+        for image_id, kdata, ddata, count in changes:
+            db.execute("UPDATE keypoints SET rows=?, data=? WHERE image_id=?",
+                       (count, kdata, image_id))
+            db.execute("UPDATE descriptors SET rows=?, data=? WHERE image_id=?",
+                       (count, ddata, image_id))
+    return {"images": len(rows), "original_keypoints": total,
+            "removed_keypoints": reduced, "max_original": max_original,
+            "max_selected": max_selected, "limit": maximum}
+
+
 
 def _run(executable: str | list[str], stage: str, arguments: list[str], output: Path,
          number: int, timeout_seconds: int, *,
@@ -428,6 +485,8 @@ def _match_in_bounded_processes(
     match_args: list[str], timeout_seconds: int, max_rss_mb: int | None,
     staged_names: list[str], pairs_per_process: int,
     report: dict[str, Any], checkpoint: Callable[[], dict[str, Any]],
+    *, matching_device: str = "colmap-cpu", max_keypoints: int = 4096,
+    matching_pair_list: Path | None = None,
 ) -> bool:
     """Persist pair-matching progress across independent COLMAP workers.
 
@@ -440,6 +499,27 @@ def _match_in_bounded_processes(
         raise ReferenceError("Duplicate staged image names cannot be matched safely")
     pairs = [(first, second) for i, first in enumerate(names)
              for second in names[i + 1:]]
+    if matching_pair_list is not None:
+        from .mps_lightglue_worker import read_pairs
+        requested = read_pairs(matching_pair_list)
+        known = set(names)
+        if not requested or any(a not in known or b not in known for a, b in requested):
+            raise ReferenceError("Matching pair list must contain only known staged image names")
+        selected = {(min(a, b), max(a, b)) for a, b in requested}
+        if len(selected) != len(requested):
+            raise ReferenceError("Matching pair list contains duplicate pairs")
+        pairs = [pair for pair in pairs if pair in selected]
+    fingerprint = hashlib.sha256(
+        "".join(f"{a}\t{b}\n" for a, b in pairs).encode("utf-8")).hexdigest()
+    old_fingerprint = report.get("matching_pair_fingerprint")
+    if old_fingerprint is not None and old_fingerprint != fingerprint:
+        raise ReferenceError("Matching pair selection changed; cannot resume existing progress")
+    # Old full-exhaustive checkpoints did not have a fingerprint. Their
+    # accumulated pair count and order must not be interpreted as a subset.
+    if old_fingerprint is None and report.get("matching_progress") and matching_pair_list is not None:
+        raise ReferenceError("Cannot apply a new pair list to an existing matching checkpoint")
+    report["matching_pair_fingerprint"] = fingerprint
+    report["matching_pair_selection"] = "manual" if matching_pair_list else "exhaustive"
     progress = report.setdefault("matching_progress", {
         "total_pairs": len(pairs), "next_pair_index": 0,
         "completed_pairs": 0, "completed_batches": 0,
@@ -453,7 +533,13 @@ def _match_in_bounded_processes(
         raise ReferenceError("Invalid or incompatible matching checkpoint; refusing resume")
     # On resume, allow the caller to tighten (but not silently loosen) a
     # previously established safe batch-size ceiling.
-    progress["batch_size"] = min(progress["batch_size"], pairs_per_process)
+    if progress.get("matching_device", "colmap-cpu") != matching_device:
+        # A new backend has a new memory profile. Keep already completed pairs,
+        # but don't inherit the old CPU ONNX worker's one-pair ceiling.
+        progress["batch_size"] = pairs_per_process
+    else:
+        progress["batch_size"] = min(progress["batch_size"], pairs_per_process)
+    progress["matching_device"] = matching_device
     pairs_dir = target / "pairs"
     if pairs_dir.is_symlink():
         raise ReferenceError("Pair-list directory cannot be a symlink")
@@ -468,12 +554,21 @@ def _match_in_bounded_processes(
             raise ReferenceError(f"Pair list already exists: {pair_file}")
         pair_file.write_text("".join(f"{a} {b}\n" for a, b in pairs[start:start + count]),
                              encoding="utf-8")
-        arguments = (["--database_path", str(database), "--match_list_path", str(pair_file),
-                      "--match_type", "pairs"] + match_args)
-        code, command = _run(executable, "matches_importer", arguments, target, number,
+        if matching_device == "colmap-cpu":
+            arguments = (["--database_path", str(database), "--match_list_path", str(pair_file),
+                          "--match_type", "pairs"] + match_args)
+            stage = "matches_importer"
+            worker = executable
+        else:
+            arguments = (["--database", str(database), "--pairs", str(pair_file),
+                          "--max-keypoints", str(max_keypoints),
+                          "--device", matching_device])
+            stage = "match"
+            worker = [sys.executable, "-m", "kumiki_blender.reconstruction.mps_lightglue_worker"]
+        code, command = _run(worker, stage, arguments, target, number,
                              timeout_seconds, max_rss_mb=max_rss_mb)
         report["commands"].append(command)
-        progress["last_log"] = f"logs/{number:02d}-matches_importer.log"
+        progress["last_log"] = f"logs/{number:02d}-{stage}.log"
         if code == 0:
             progress["next_pair_index"] += count
             progress["completed_pairs"] = progress["next_pair_index"]
@@ -497,7 +592,7 @@ def _match_in_bounded_processes(
                   f"{progress['batch_size']} pair(s) per worker",
                   file=sys.stderr, flush=True)
             continue
-        report["failed_stage"], report["exit_code"] = "matches_importer", code
+        report["failed_stage"], report["exit_code"] = stage, code
         if code == 125:
             report["memory_guard_reason"] = reason
             report["error"] = (f"Matching stopped at pair {start + 1}/{len(pairs)}: {reason}. "
@@ -609,6 +704,8 @@ def build_sparse_reconstruction(reference_set: ReferenceSet, output: str | Path,
                                 matching_block_size: int | None = None,
                                 matching_max_features: int | None = None,
                                 matching_pairs_per_process: int | None = None,
+                                matching_device: str = "colmap-cpu",
+                                matching_pair_list: Path | None = None,
                                 resume: bool = False) -> dict[str, Any]:
     """Produce auditable camera/sparse data using a locally installed COLMAP.
 
@@ -634,6 +731,30 @@ def build_sparse_reconstruction(reference_set: ReferenceSet, output: str | Path,
     if registration_profile == "high-recall" and engine != "pycolmap":
         raise ReferenceError("High-recall registration currently requires --engine pycolmap")
     _validate_matching_preset(matching_preset, engine)
+    if matching_device not in ("colmap-cpu", "mps"):
+        raise ReferenceError("Matching device must be colmap-cpu or mps")
+    if matching_device == "mps" and (matching_preset != "sift-lightglue" or
+                                     engine != "colmap"):
+        raise ReferenceError("MPS matching requires --engine colmap --matching-preset sift-lightglue")
+    if matching_device == "mps" and matching_pairs_per_process is None:
+        raise ReferenceError("MPS matching requires --matching-pairs-per-process (recommended: 8)")
+    if matching_pair_list is not None:
+        if matching_pairs_per_process is None:
+            raise ReferenceError("--matching-pair-list requires --matching-pairs-per-process")
+        matching_pair_list = Path(matching_pair_list)
+        if not matching_pair_list.is_file():
+            raise ReferenceError(f"Missing matching pair list: {matching_pair_list}")
+        from .mps_lightglue_worker import read_pairs
+        try:
+            requested_pairs = read_pairs(matching_pair_list)
+        except (ValueError, OSError) as error:
+            raise ReferenceError(f"Invalid matching pair list: {error}") from error
+        allowed_names = {image.image_id + ".png" for image in reference_set.images}
+        if not requested_pairs or any(a not in allowed_names or b not in allowed_names
+                                      for a, b in requested_pairs):
+            raise ReferenceError("Matching pair list must contain only known staged image names")
+        if len({tuple(sorted(pair)) for pair in requested_pairs}) != len(requested_pairs):
+            raise ReferenceError("Matching pair list contains duplicate pairs")
     for name, count in (("feature_threads", feature_threads),
                         ("matching_threads", matching_threads)):
         if count is not None and (type(count) is not int or not 1 <= count <= 64):
@@ -670,9 +791,9 @@ def build_sparse_reconstruction(reference_set: ReferenceSet, output: str | Path,
                              0 if matching_preset == "sift-lightglue" else None)
     effective_rss_mb = (max_colmap_rss_mb if max_colmap_rss_mb is not None else
                         12288 if learned else 0)
-    # In CPU-only LightGlue, limiting concurrent workers alone still allows a
-    # large feature tensor per image pair and a large exhaustive cache. These
-    # caps keep 4K pixels intact, trading a bounded number of matches for RAM.
+    # Limit *actual input keypoints* before CPU ONNX matching, or per pair for
+    # MPS matching. Preserve the 4K pixels; do not mistake a SIFT output-match
+    # limit for a cap on LightGlue's neural attention input.
     effective_block_size = (matching_block_size if matching_block_size is not None else
                             5 if learned else None)
     effective_match_features = (matching_max_features if matching_max_features is not None else
@@ -712,6 +833,7 @@ def build_sparse_reconstruction(reference_set: ReferenceSet, output: str | Path,
         "staged_independent_images": len(references),
         "registration_profile": registration_profile,
         "matching_preset": matching_preset,
+        "matching_device": matching_device,
         "max_image_size": max_image_size,
         "memory_controls": {"feature_threads": effective_feature_threads,
                             "matching_threads": effective_matching_threads,
@@ -784,6 +906,9 @@ def build_sparse_reconstruction(reference_set: ReferenceSet, output: str | Path,
         report.pop("error", None)
         report.pop("memory_guard_reason", None)
         report["memory_controls"] = initial_report["memory_controls"]
+        report.setdefault("matching_device_history", []).append(
+            {"from": report.get("matching_device", "colmap-cpu"), "to": matching_device})
+        report["matching_device"] = matching_device
         report["max_image_size"] = max_image_size
         report["resume_count"] = report.get("resume_count", 0) + 1
     else:
@@ -867,6 +992,14 @@ def build_sparse_reconstruction(reference_set: ReferenceSet, output: str | Path,
                            profile_args + extract_resource_args + extract_args)
         if not run_stage("feature_extractor", extract_command):
             return report
+        if matching_preset == "sift-lightglue" and matching_device == "colmap-cpu":
+            try:
+                report["keypoint_cap"] = _cap_colmap_sift_features(
+                    database, effective_match_features or 4096)
+                checkpoint()
+            except (ReferenceError, sqlite3.Error, ValueError) as error:
+                report.update(failed_stage="feature_cap", exit_code=2, error=str(error))
+                return checkpoint()
     if matching_pairs_per_process is None:
         args = (["--database_path", str(database), cpu_flags[1], "0"] +
                 profile_args + match_resource_args + match_args)
@@ -886,7 +1019,16 @@ def build_sparse_reconstruction(reference_set: ReferenceSet, output: str | Path,
                 executable, target, database, bounded_match_args,
                 timeout_seconds, effective_rss_mb or None,
                 [entry["filename"] for entry in staged["images"]],
-                matching_pairs_per_process, report, checkpoint):
+                matching_pairs_per_process, report, checkpoint,
+                matching_device=matching_device, max_keypoints=effective_match_features or 4096,
+                matching_pair_list=matching_pair_list):
+            return report
+    if matching_device == "mps":
+        # The worker stores raw COLMAP correspondence rows. Without two-view
+        # geometric verification the mapper will silently see zero matches.
+        if not run_stage("geometric_verifier", ["--database_path", str(database),
+                                                "--FeatureMatching.num_threads",
+                                                str(effective_matching_threads or 1)]):
             return report
     if not run_stage("mapper", ["--database_path", str(database),
                                 "--image_path", str(images), "--output_path", str(sparse)]):

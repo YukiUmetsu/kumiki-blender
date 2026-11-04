@@ -191,6 +191,9 @@ def main(argv: list[str] | None = None) -> int:
             photo_parser.add_argument("--matching-preset",
                                       choices=("sift", "sift-lightglue", "aliked-lightglue", "loma", "loma128"),
                                       default="sift", help="Learned matching requires ONNX-enabled COLMAP 4.2+")
+            photo_parser.add_argument("--matching-device", choices=("colmap-cpu", "mps"),
+                                      default="colmap-cpu",
+                                      help="COLMAP CPU matching or Apple Silicon PyTorch MPS LightGlue")
             photo_parser.add_argument("--feature-threads", type=int,
                                       help="CPU feature workers (learned default: 1)")
             photo_parser.add_argument("--matching-threads", type=int,
@@ -202,9 +205,11 @@ def main(argv: list[str] | None = None) -> int:
             photo_parser.add_argument("--matching-block-size", type=int,
                                       help="Exhaustive pair-cache block size (learned default: 5)")
             photo_parser.add_argument("--matching-max-features", type=int,
-                                      help="Cap features per matching pair without downscaling (learned default: 4096)")
+                                      help="Limit actual SIFT keypoints per image without downscaling (learned default: 4096)")
             photo_parser.add_argument("--matching-pairs-per-process", type=int,
                                       help="Run this many image pairs per COLMAP worker, checkpoint each batch")
+            photo_parser.add_argument("--matching-pair-list", type=Path,
+                                      help="Optional file of staged image-name pairs, one per line; reduces pair count")
             photo_parser.add_argument("--resume", action="store_true",
                                       help="Resume matching in the same verified output after interruption")
             photo_parser.add_argument("--timeout-seconds", type=int, default=3600)
@@ -229,6 +234,9 @@ def main(argv: list[str] | None = None) -> int:
         photo_model_parser.add_argument("--matching-preset",
                                         choices=("sift", "sift-lightglue", "aliked-lightglue", "loma", "loma128"),
                                         default="sift", help="Learned matching requires --engine colmap and COLMAP 4.2+")
+        photo_model_parser.add_argument("--matching-device", choices=("colmap-cpu", "mps"),
+                                        default="colmap-cpu",
+                                        help="COLMAP CPU matching or Apple Silicon PyTorch MPS LightGlue")
         photo_model_parser.add_argument("--feature-threads", type=int,
                                         help="CPU feature workers (learned default: 1)")
         photo_model_parser.add_argument("--matching-threads", type=int,
@@ -240,7 +248,7 @@ def main(argv: list[str] | None = None) -> int:
         photo_model_parser.add_argument("--matching-block-size", type=int,
                                         help="Exhaustive pair-cache block size (learned default: 5)")
         photo_model_parser.add_argument("--matching-max-features", type=int,
-                                        help="Maximum features per matching pair (learned default: 4096)")
+                                        help="Limit actual SIFT keypoints per image (learned default: 4096)")
         photo_model_parser.add_argument("--matching-pairs-per-process", type=int,
                                         help="Restart COLMAP after this many image pairs to bound memory")
         photo_model_parser.add_argument("--backend", choices=("openmvs", "colmap"),
@@ -1034,6 +1042,7 @@ def main(argv: list[str] | None = None) -> int:
                               if args.photos else load_reference_set(args.manifest))
                 settings = PhotoModelSettings(
                     engine=args.engine, matching_preset=args.matching_preset,
+                    matching_device=args.matching_device,
                     feature_threads=args.feature_threads, matching_threads=args.matching_threads,
                     sift_first_octave=args.sift_first_octave,
                     max_colmap_rss_mb=args.max_colmap_rss_mb,
@@ -1307,6 +1316,8 @@ def main(argv: list[str] | None = None) -> int:
                                                       max_image_size=args.max_image_size,
                                                       registration_profile=args.registration_profile,
                                                       matching_preset=args.matching_preset,
+                                                      matching_device=args.matching_device,
+                                                      matching_pair_list=args.matching_pair_list,
                                                       feature_threads=args.feature_threads,
                                                       matching_threads=args.matching_threads,
                                                       sift_first_octave=args.sift_first_octave,

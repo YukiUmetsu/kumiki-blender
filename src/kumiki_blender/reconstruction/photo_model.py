@@ -35,6 +35,7 @@ class PhotoModelSettings:
     texture: bool = True
     render_previews: bool = True
     matching_preset: str = "sift"
+    matching_device: str = "colmap-cpu"
     feature_threads: int | None = None
     matching_threads: int | None = None
     sift_first_octave: int | None = None
@@ -49,6 +50,12 @@ class PhotoModelSettings:
         if self.engine not in ("pycolmap", "colmap"):
             raise ReferenceError("Sparse engine must be pycolmap or colmap")
         _validate_matching_preset(self.matching_preset, self.engine)
+        if self.matching_device not in ("colmap-cpu", "mps"):
+            raise ReferenceError("matching_device must be colmap-cpu or mps")
+        if self.matching_device == "mps" and (self.engine != "colmap" or self.matching_preset != "sift-lightglue"):
+            raise ReferenceError("MPS matching requires --engine colmap --matching-preset sift-lightglue")
+        if self.matching_device == "mps" and self.matching_pairs_per_process is None:
+            raise ReferenceError("MPS matching requires --matching-pairs-per-process")
         for name in ("feature_threads", "matching_threads"):
             count = getattr(self, name)
             if count is not None and (type(count) is not int or not 1 <= count <= 64):
@@ -118,6 +125,12 @@ def _dependencies(settings: PhotoModelSettings) -> tuple[dict[str, str], list[st
             found["pycolmap"] = "python-module"
     else:
         names.append(settings.colmap)
+    if settings.matching_device == "mps":
+        for name in ("numpy", "torch", "lightglue"):
+            if importlib.util.find_spec(name) is None:
+                missing.append(f"{name} (MPS matching dependency)")
+            else:
+                found[name] = "python-module"
     if settings.dense_backend == "openmvs":
         names.extend(("InterfaceCOLMAP", "DensifyPointCloud", "ReconstructMesh"))
         names.append("RefineMesh")
@@ -158,6 +171,7 @@ def plan_photo_model(references: ReferenceSet, output: str | Path,
         "missing_photo_rights": any(image.source_url == "local-unattributed"
                                     for image in references.images),
         "sparse_engine": settings.engine, "matching_preset": settings.matching_preset,
+        "matching_device": settings.matching_device,
         "memory_controls": {"feature_threads": settings.feature_threads,
                             "matching_threads": settings.matching_threads,
                             "sift_first_octave": settings.sift_first_octave,
@@ -227,6 +241,7 @@ def build_photo_model(
                            engine=settings.engine, timeout_seconds=settings.sparse_timeout_seconds,
                            undistort=True, max_image_size=settings.max_image_size,
                            matching_preset=settings.matching_preset,
+                           matching_device=settings.matching_device,
                            feature_threads=settings.feature_threads,
                            matching_threads=settings.matching_threads,
                            sift_first_octave=settings.sift_first_octave,

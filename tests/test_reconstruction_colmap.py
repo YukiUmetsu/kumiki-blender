@@ -5,6 +5,7 @@ import io
 import os
 import shutil
 import sqlite3
+import struct
 import tempfile
 import unittest
 from pathlib import Path
@@ -22,6 +23,7 @@ from kumiki_blender.reconstruction.references import ReferenceError, load_refere
 FAKE_COLMAP = '''#!/usr/bin/env python3
 import os
 import sqlite3
+import struct
 import sys
 from pathlib import Path
 
@@ -59,9 +61,20 @@ if task == "feature_extractor":
     if not (masks / "front.png.png").is_file():
         sys.exit(12)
     with sqlite3.connect(argument("--database_path")) as db:
-        db.execute("CREATE TABLE images (image_id INTEGER PRIMARY KEY, name TEXT)")
-        db.executemany("INSERT INTO images (name) VALUES (?)",
+        db.execute("CREATE TABLE images (image_id INTEGER PRIMARY KEY, name TEXT, camera_id INTEGER)")
+        db.execute("CREATE TABLE cameras (camera_id INTEGER PRIMARY KEY, width INTEGER, height INTEGER)")
+        db.execute("INSERT INTO cameras VALUES (1,120,90)")
+        db.execute("CREATE TABLE keypoints (image_id INTEGER PRIMARY KEY, rows INTEGER, cols INTEGER, data BLOB)")
+        db.execute("CREATE TABLE descriptors (image_id INTEGER PRIMARY KEY, rows INTEGER, cols INTEGER, data BLOB)")
+        db.execute("CREATE TABLE matches (pair_id INTEGER PRIMARY KEY, rows INTEGER, cols INTEGER, data BLOB)")
+        db.execute("CREATE TABLE two_view_geometries (pair_id INTEGER PRIMARY KEY, rows INTEGER, cols INTEGER, data BLOB)")
+        db.executemany("INSERT INTO images (name, camera_id) VALUES (?, 1)",
                        [(path.name,) for path in sorted(images.iterdir())])
+        for (image_id,) in db.execute("SELECT image_id FROM images"):
+            db.execute("INSERT INTO keypoints VALUES (?, 4, 4, ?)",
+                       (image_id, b''.join(struct.pack('<ffff', 10.0+i*8, 12.0+i*7, 1.0+i, 0.0)
+                                           for i in range(4))))
+            db.execute("INSERT INTO descriptors VALUES (?, 4, 128, ?)", (image_id, bytes([image_id])*512))
 elif task == "exhaustive_matcher":
     if ("--SiftMatching.use_gpu" if legacy else "--FeatureMatching.use_gpu") not in params:
         sys.exit(42)
@@ -87,6 +100,8 @@ elif task == "matches_importer":
     with progress.open("a") as stream:
         for pair in pairs:
             stream.write(pair + "\\n")
+elif task == "geometric_verifier":
+    pass
 elif task == "mapper":
     model = argument("--output_path") / "0"
     model.mkdir(parents=True)
@@ -318,6 +333,98 @@ class ColmapWorkflowTests(unittest.TestCase):
         self.assertEqual(len((output / "fake-matched-pairs.txt").read_text().splitlines()), 3)
         self.assertEqual(len(list((output / "pairs").glob("*.txt"))), 2)
         self.assertEqual(len(list((output / "logs").glob("*-matches_importer.log"))), 2)
+
+    def test_mps_matching_subprocess_is_batched_and_verified_before_mapping(self):
+        from kumiki_blender.reconstruction import colmap
+
+        actual_run = colmap._run
+
+        def stub_mps_only(executable, stage, arguments, output, number, timeout_seconds,
+                          *, max_rss_mb=None):
+            if stage == "match":
+                self.assertEqual(executable[1:3], ["-m", "kumiki_blender.reconstruction.mps_lightglue_worker"])
+                self.assertIn("--max-keypoints", arguments)
+                self.assertIn("--device", arguments)
+                self.assertEqual(arguments[arguments.index("--device") + 1], "mps")
+                return 0, [stage, *arguments]
+            return actual_run(executable, stage, arguments, output, number, timeout_seconds,
+                              max_rss_mb=max_rss_mb)
+
+        with (patch.dict(os.environ, {"FAKE_LEARNED_COLMAP": "1"}),
+              patch("kumiki_blender.reconstruction.colmap._run", side_effect=stub_mps_only)):
+            report = build_sparse_reconstruction(
+                self.references(), self.root / "mps", colmap=str(self.fake),
+                matching_preset="sift-lightglue", matching_device="mps",
+                matching_max_features=2048, matching_pairs_per_process=2)
+        self.assertEqual(report["status"], "candidate / visual-review-required")
+        self.assertEqual(report["matching_progress"]["completed_pairs"], 3)
+        self.assertEqual(report["matching_device"], "mps")
+        self.assertEqual([command[0] for command in report["commands"]],
+                         ["feature_extractor", "match", "match", "geometric_verifier",
+                          "mapper", "model_converter"])
+
+    def test_resume_existing_cpu_batch_progress_with_new_mps_backend(self):
+        from kumiki_blender.reconstruction import colmap
+
+        output = self.root / "mps-resume"
+        with patch.dict(os.environ, {"FAKE_LEARNED_COLMAP": "1", "FAKE_CHUNK_FAIL_AFTER_FIRST": "1"}):
+            failed = build_sparse_reconstruction(
+                self.references(), output, colmap=str(self.fake),
+                matching_preset="sift-lightglue", matching_pairs_per_process=2)
+        self.assertEqual(failed["matching_progress"]["completed_pairs"], 2)
+        actual_run = colmap._run
+
+        def stub_mps_only(executable, stage, arguments, output, number, timeout_seconds,
+                          *, max_rss_mb=None):
+            if stage == "match":
+                return 0, [stage, *arguments]
+            return actual_run(executable, stage, arguments, output, number, timeout_seconds,
+                              max_rss_mb=max_rss_mb)
+
+        with (patch.dict(os.environ, {"FAKE_LEARNED_COLMAP": "1"}),
+              patch("kumiki_blender.reconstruction.colmap._run", side_effect=stub_mps_only)):
+            resumed = build_sparse_reconstruction(
+                self.references(), output, colmap=str(self.fake),
+                matching_preset="sift-lightglue", matching_device="mps",
+                matching_pairs_per_process=8, matching_max_features=2048, resume=True)
+        self.assertEqual(resumed["matching_progress"]["completed_pairs"], 3)
+        self.assertEqual(resumed["matching_progress"]["batch_size"], 8)
+        self.assertEqual(resumed["matching_progress"]["completed_batches"], 2)
+        self.assertEqual([command[0] for command in resumed["commands"]].count("feature_extractor"), 1)
+        self.assertEqual(resumed["matching_device_history"][-1],
+                         {"from": "colmap-cpu", "to": "mps"})
+
+    def test_mps_preflight_requires_valid_preset_and_batched_matching(self):
+        output = self.root / "invalid-mps"
+        for values in ({"matching_device": "mps"},
+                       {"matching_device": "mps", "matching_preset": "sift-lightglue"},
+                       {"matching_device": "other"}):
+            with self.subTest(values=values), self.assertRaises(ReferenceError):
+                build_sparse_reconstruction(self.references(), output, colmap=str(self.fake), **values)
+            self.assertFalse(output.exists())
+
+    def test_curated_pairs_reduce_number_of_workers_and_preserve_checkpoint_identity(self):
+        chosen = self.root / "pairs.txt"
+        chosen.write_text("left.png front.png\nright.png left.png\n", encoding="utf-8")
+        output = self.root / "selected-pairs"
+        with patch.dict(os.environ, {"FAKE_LEARNED_COLMAP": "1"}):
+            report = build_sparse_reconstruction(
+                self.references(), output, colmap=str(self.fake),
+                matching_preset="sift-lightglue", matching_pairs_per_process=2,
+                matching_pair_list=chosen)
+        self.assertEqual(report["matching_progress"]["total_pairs"], 2)
+        self.assertEqual(report["matching_pair_selection"], "manual")
+        self.assertEqual(len((output / "fake-matched-pairs.txt").read_text().splitlines()), 2)
+
+    def test_curated_pair_list_rejects_unknown_names_before_matching(self):
+        chosen = self.root / "bad-pairs.txt"
+        chosen.write_text("left.png missing.png\n", encoding="utf-8")
+        with patch.dict(os.environ, {"FAKE_LEARNED_COLMAP": "1"}):
+            with self.assertRaisesRegex(ReferenceError, "known staged image"):
+                build_sparse_reconstruction(
+                    self.references(), self.root / "bad-pairs", colmap=str(self.fake),
+                    matching_preset="sift-lightglue", matching_pairs_per_process=2,
+                    matching_pair_list=chosen)
 
     def test_memory_exceeded_batch_halves_until_single_pair_succeeds(self):
         output = self.root / "adaptive-chunked"
