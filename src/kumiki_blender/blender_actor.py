@@ -257,6 +257,8 @@ def build_actor(bpy: Any, plan: ActorPlan) -> ActorRig:
         back = stage.back if stage else .55
         drawings = [(key, images[key]) for key in dict.fromkeys((part.asset, *part.variants.values()))]
         masks = {key: _CACHE[id(image)][0] for key, image in drawings}
+        if not any(mask.any() for mask in masks.values()):
+            continue  # A transform-only part, such as a root with a blank drawing.
         try:
             union, _ = variant_union(masks)
         except ValueError as error:
@@ -335,7 +337,7 @@ def apply_state(rig: ActorRig, parts: dict[str, dict[str, Any]], frame: int | No
         wanted = {shown: 1.0}
         if previous is not None and mix is not None and previous != shown:
             wanted = {shown: float(mix), previous: 1.0 - float(mix)}
-        for key, node in rig.weights[part.id].items():
+        for key, node in rig.weights.get(part.id, {}).items():
             node.outputs[0].default_value = wanted.get(key, 0.0)
             if frame is not None:
                 node.outputs[0].keyframe_insert("default_value", frame=frame)
