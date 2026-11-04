@@ -308,6 +308,12 @@ The new `photo-advice-*/` directory contains:
   registered camera viewpoints and proposed intermediate shots. Created only
   when a usable reconstructed point center and camera poses exist.
 
+When you supply `--front-photo`, positive azimuth means moving toward the
+**front photograph's image-right**, and negative means image-left. These are
+viewer-relative directions, not the statue's anatomical left/right. An
+unregistered photograph has no measured camera angle, so its recommended
+bridge photograph is named instead of assigning a fabricated target angle.
+
 Statuses distinguish **keep**, **recover-first**, **needs-overlap-bridge**,
 **low-current-value**, **keep-separate-model**, **keep-check-overlap** and
 **cannot-use**. Low current value means the photo does not currently connect

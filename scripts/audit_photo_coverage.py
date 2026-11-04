@@ -138,7 +138,10 @@ def _view_label(yaw: float, front_known: bool) -> str:
     if not front_known:
         return "relative to reference camera (not a verified front/side label)"
     magnitude = abs(yaw)
-    side = "right" if yaw > 0 else "left"
+    # The sign is based on the nominated FRONT PHOTO'S image-right direction,
+    # not the object's anatomical left/right. A monument's named "left side"
+    # may be the opposite of screen-left from the front camera.
+    side = "front-image right" if yaw > 0 else "front-image left"
     if magnitude <= 12:
         return "front"
     if magnitude <= 65:
@@ -676,6 +679,10 @@ def analyze(revision: Path, *, source_index: Path | None = None,
                                        "not-registered-in-best-model" if front_photo else
                                        "not-supplied"),
             "centroid_basis": "median of reconstructed 3D points; not verified object center",
+            "azimuth_sign_convention": (
+                "Positive: front photograph's image-right; negative: front photograph's "
+                "image-left. Not an object's anatomical left or right."
+            ),
             "limitations": "Relative azimuth/elevation come from estimated cameras in ONE sparse model. "
                            "Camera-image-up defines vertical; roll, focal length, incomplete surface "
                            "coverage and incorrect poses can bias these angles. "
@@ -722,6 +729,7 @@ def _markdown(report: dict) -> str:
         "",
         f"**Angle basis:** {report['angle_reference']['kind']} "
         f"({report['angle_reference']['original_filename'] or 'none'}).",
+        f"**Azimuth sign:** {report['angle_reference']['azimuth_sign_convention']}",
         "",
         "## Photos to review first",
         "",

@@ -67,7 +67,13 @@ class PhotoCoverageAdviceTests(unittest.TestCase):
             self.assertEqual(report["angle_reference"]["kind"], "annotated-front")
             images = {p["filename"]: p for p in report["images"]}
             self.assertEqual(images["photo-0001.png"]["estimated_view"]["relative_azimuth_deg"], 0)
-            self.assertEqual(images["photo-0002.png"]["estimated_view"]["label"], "right three-quarter")
+            self.assertEqual(images["photo-0002.png"]["estimated_view"]["label"],
+                             "front-image right three-quarter")
+            self.assertEqual(advice._view_label(-90, front_known=True),
+                             "front-image left profile")
+            self.assertIn("Not an object's anatomical left or right",
+                          report["angle_reference"]["azimuth_sign_convention"])
+            self.assertIn("**Azimuth sign:**", advice._markdown(report))
             self.assertGreater(images["photo-0002.png"]["estimated_view"]["relative_azimuth_deg"], 20)
             self.assertIsNone(images["photo-0003.png"]["estimated_view"])
             self.assertTrue(report["recommended_photos"])
