@@ -70,6 +70,17 @@ class CameraComparisonTests(unittest.TestCase):
         with self.assertRaisesRegex(ReferenceError, "no common"):
             compare_camera_registrations(old, other)
 
+    def test_legacy_comparison_rejects_missing_or_incomplete_camera_pose_evidence(self):
+        baseline = self.revision("legacy", registered=["front.png", "left.png"], modern=False)
+        candidate = self.revision("candidate", registered=["front.png", "left.png"])
+        pose_file = baseline / "text-models" / "0" / "images.txt"
+        pose_file.unlink()
+        with self.assertRaisesRegex(ReferenceError, "pose evidence"):
+            compare_camera_registrations(baseline, candidate)
+        pose_file.write_text("1 1 0 0 0 0 0 0 1 front.png\n\n")
+        with self.assertRaisesRegex(ReferenceError, "camera count"):
+            compare_camera_registrations(baseline, candidate)
+
     def test_compare_cli_produces_machine_readable_report(self):
         old = self.revision("old", registered=["front.png"])
         new = self.revision("new", registered=["front.png", "left.png"])

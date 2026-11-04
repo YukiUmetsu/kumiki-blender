@@ -916,6 +916,15 @@ def build_sparse_reconstruction(reference_set: ReferenceSet, output: str | Path,
                 recorded_size = int(extract[extract.index("--FeatureExtraction.max_image_size") + 1])
         if recorded_size != max_image_size:
             raise ReferenceError("Cannot resume: input image resolution has changed")
+        recorded_octave = report.get("memory_controls", {}).get("sift_first_octave")
+        if recorded_octave is None:
+            extract_command = next((command for command in report.get("commands", [])
+                                    if command and command[0] == "feature_extractor"), [])
+            if "--SiftExtraction.first_octave" in extract_command:
+                recorded_octave = int(extract_command[
+                    extract_command.index("--SiftExtraction.first_octave") + 1])
+        if recorded_octave != effective_sift_octave:
+            raise ReferenceError("Cannot resume: SIFT extraction octave differs from stored features")
         if (report.get("feature_import", {}).get("status") != "complete" or
                 report.get("failed_stage") not in ("exhaustive_matcher", "matches_importer",
                                                    "match", "geometric_verifier", None)):
@@ -932,7 +941,8 @@ def build_sparse_reconstruction(reference_set: ReferenceSet, output: str | Path,
                     _sha256(staged) != entry["sha256"]):
                 raise ReferenceError(f"Cannot resume: staged image changed ({entry['filename']})")
         matching_complete = report.get("matching_progress", {}).get("status") == "complete"
-        if ((matching_complete and report.get("failed_stage") != "geometric_verifier") or
+        if ((matching_complete and report.get("failed_stage") != "geometric_verifier" and
+             report.get("pending_stage") != "geometric_verifier") or
                 any((target / "sparse").iterdir())):
             raise ReferenceError("Cannot resume a completed matching or mapping stage")
         # Reject incompatible pair selections before clearing errors or writing
@@ -982,11 +992,16 @@ def build_sparse_reconstruction(reference_set: ReferenceSet, output: str | Path,
     profile_args = (["--registration-profile", "high-recall"]
                     if registration_profile == "high-recall" else [])
     extractor, matcher = MATCHING_PRESETS[matching_preset]
-    extract_resource_args = (["--FeatureExtraction.num_threads", str(effective_feature_threads)]
+    feature_family = colmap_info["cpu_flag_family"] == "feature"
+    extraction_threads_flag = ("--FeatureExtraction.num_threads" if feature_family else
+                               "--SiftExtraction.num_threads")
+    matching_threads_flag = ("--FeatureMatching.num_threads" if feature_family else
+                             "--SiftMatching.num_threads")
+    extract_resource_args = ([extraction_threads_flag, str(effective_feature_threads)]
                              if effective_feature_threads is not None else [])
     if effective_sift_octave is not None:
         extract_resource_args += ["--SiftExtraction.first_octave", str(effective_sift_octave)]
-    match_resource_args = (["--FeatureMatching.num_threads", str(effective_matching_threads)]
+    match_resource_args = ([matching_threads_flag, str(effective_matching_threads)]
                            if effective_matching_threads is not None else [])
     if effective_match_features is not None:
         match_resource_args += ["--FeatureMatching.max_num_matches", str(effective_match_features)]
@@ -1003,6 +1018,7 @@ def build_sparse_reconstruction(reference_set: ReferenceSet, output: str | Path,
         code, command = _run(executable, stage, args, target, number, timeout_seconds,
                              max_rss_mb=effective_rss_mb or None)
         report["commands"].append(command)
+        report.pop("pending_stage", None)
         if code:
             report["failed_stage"], report["exit_code"] = stage, code
             if code == 125:
@@ -1054,7 +1070,7 @@ def build_sparse_reconstruction(reference_set: ReferenceSet, output: str | Path,
         # matches_importer instead consumes exactly the supplied pair list.
         bounded_match_args = [cpu_flags[1], "0"] + profile_args
         if effective_matching_threads is not None:
-            bounded_match_args += ["--FeatureMatching.num_threads", str(effective_matching_threads)]
+            bounded_match_args += [matching_threads_flag, str(effective_matching_threads)]
         if effective_match_features is not None:
             bounded_match_args += ["--FeatureMatching.max_num_matches", str(effective_match_features)]
         bounded_match_args += match_args
@@ -1074,6 +1090,10 @@ def build_sparse_reconstruction(reference_set: ReferenceSet, output: str | Path,
         # raw matches (including a previous failed verification attempt).
         # Unlike the feature matchers, COLMAP's geometric_verifier exposes
         # its thread count as the unprefixed --num_threads option (4.2.1).
+        # Checkpoint *before* launching: SIGINT or a host crash never returns
+        # an exit code, but all already matched pairs remain reusable.
+        report["pending_stage"] = "geometric_verifier"
+        checkpoint()
         if not run_stage("geometric_verifier", ["--database_path", str(database),
                                                 "--num_threads",
                                                 str(effective_matching_threads or 1)]):

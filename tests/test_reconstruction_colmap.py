@@ -84,7 +84,8 @@ elif task == "exhaustive_matcher":
 elif task == "matches_importer":
     if "--match_type" not in params or params[params.index("--match_type") + 1] != "pairs":
         sys.exit(43)
-    if "--FeatureMatching.type" not in params or "--ExhaustiveMatching.block_size" in params:
+    if ("FAKE_LEARNED_COLMAP" in os.environ and "--FeatureMatching.type" not in params or
+            "--ExhaustiveMatching.block_size" in params):
         sys.exit(44)
     pairs = argument("--match_list_path").read_text().splitlines()
     if not pairs or len(pairs) > 5:
@@ -228,6 +229,21 @@ class ColmapWorkflowTests(unittest.TestCase):
         self.assertEqual(report["commands"][0][-2:], ["--SiftExtraction.use_gpu", "0"])
         self.assertEqual(report["commands"][1][-2:], ["--SiftMatching.use_gpu", "0"])
         self.assertEqual(report["colmap_info"]["cpu_flag_family"], "sift")
+
+    def test_legacy_colmap_uses_sift_thread_controls_in_both_matching_modes(self):
+        with patch.dict(os.environ, {"FAKE_COLMAP_LEGACY": "1"}):
+            for batched in (False, True):
+                with self.subTest(batched=batched):
+                    report = build_sparse_reconstruction(
+                        self.references(), self.root / f"legacy-threads-{batched}",
+                        colmap=str(self.fake), feature_threads=2, matching_threads=3,
+                        matching_pairs_per_process=2 if batched else None)
+                    self.assertEqual(report["status"], "candidate / visual-review-required")
+                    self.assertIn("--SiftExtraction.num_threads", report["commands"][0])
+                    match_stage = "matches_importer" if batched else "exhaustive_matcher"
+                    match = next(c for c in report["commands"] if c[0] == match_stage)
+                    self.assertIn("--SiftMatching.num_threads", match)
+                    self.assertNotIn("--FeatureMatching.num_threads", match)
 
     def test_learned_matching_presets_pass_compatible_colmap_arguments(self):
         presets = {"sift-lightglue": ("SIFT", "SIFT_LIGHTGLUE"),
@@ -438,6 +454,44 @@ class ColmapWorkflowTests(unittest.TestCase):
         self.assertEqual([command[0] for command in resumed["commands"]].count("match"), 2)
         self.assertEqual([command[0] for command in resumed["commands"]].count("geometric_verifier"), 2)
 
+    def test_interrupted_mps_verifier_resumes_without_discarding_complete_matches(self):
+        from kumiki_blender.reconstruction import colmap
+
+        output = self.root / "interrupted-verifier"
+        real_run = colmap._run
+        interrupted = False
+
+        def interrupt_verifier(executable, stage, arguments, output, number, timeout_seconds,
+                               *, max_rss_mb=None):
+            nonlocal interrupted
+            if stage == "match":
+                return 0, [stage, *arguments]
+            if stage == "geometric_verifier" and not interrupted:
+                interrupted = True
+                raise KeyboardInterrupt("simulated verifier interruption")
+            return real_run(executable, stage, arguments, output, number,
+                            timeout_seconds, max_rss_mb=max_rss_mb)
+
+        with (patch.dict(os.environ, {"FAKE_LEARNED_COLMAP": "1"}),
+              patch.object(colmap, "_preflight_mps_worker"),
+              patch.object(colmap, "_run", side_effect=interrupt_verifier)):
+            with self.assertRaises(KeyboardInterrupt):
+                build_sparse_reconstruction(
+                    self.references(), output, colmap=str(self.fake),
+                    matching_preset="sift-lightglue", matching_device="mps",
+                    matching_pairs_per_process=2)
+            interrupted_report = json.loads((output / "reconstruction-report.json").read_text())
+            self.assertEqual(interrupted_report["matching_progress"]["status"], "complete")
+            self.assertEqual(interrupted_report["pending_stage"], "geometric_verifier")
+            resumed = build_sparse_reconstruction(
+                self.references(), output, colmap=str(self.fake),
+                matching_preset="sift-lightglue", matching_device="mps",
+                matching_pairs_per_process=2, resume=True)
+        self.assertEqual(resumed["status"], "candidate / visual-review-required")
+        self.assertEqual([c[0] for c in resumed["commands"]].count("match"), 2)
+        self.assertEqual([c[0] for c in resumed["commands"]].count("geometric_verifier"), 1)
+        self.assertNotIn("pending_stage", resumed)
+
     def test_cpu_resume_after_mps_verification_failure_still_verifies_raw_pairs(self):
         from kumiki_blender.reconstruction import colmap
 
@@ -616,6 +670,21 @@ class ColmapWorkflowTests(unittest.TestCase):
             with self.assertRaisesRegex(ReferenceError, "resolution has changed"):
                 build_sparse_reconstruction(self.references(), output, colmap=str(self.fake),
                                             matching_preset="sift-lightglue", max_image_size=2048,
+                                            matching_pairs_per_process=2, resume=True)
+            self.assertEqual((output / "reconstruction-report.json").read_bytes(), before)
+
+    def test_resume_rejects_changed_sift_extraction_octave_without_modifying_report(self):
+        output = self.root / "octave-resume"
+        with patch.dict(os.environ, {"FAKE_LEARNED_COLMAP": "1", "FAKE_FAIL_MATCHER": "1"}):
+            failed = build_sparse_reconstruction(self.references(), output, colmap=str(self.fake),
+                                                 matching_preset="sift-lightglue",
+                                                 sift_first_octave=0)
+            self.assertEqual(failed["failed_stage"], "exhaustive_matcher")
+            before = (output / "reconstruction-report.json").read_bytes()
+            with self.assertRaisesRegex(ReferenceError, "SIFT extraction octave"):
+                build_sparse_reconstruction(self.references(), output, colmap=str(self.fake),
+                                            matching_preset="sift-lightglue",
+                                            sift_first_octave=-1,
                                             matching_pairs_per_process=2, resume=True)
             self.assertEqual((output / "reconstruction-report.json").read_bytes(), before)
 

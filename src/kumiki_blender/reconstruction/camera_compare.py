@@ -44,13 +44,22 @@ def _load_revision(path: str | Path) -> dict[str, Any]:
                 model = max(report["models"], key=lambda item: item["registered_images"])["model"]
             if not isinstance(model, str) or not model.isdigit():
                 raise ValueError("No usable camera model in revision")
-            registered = _registered_image_names(source / "text-models" / model)
+            pose_file = source / "text-models" / model / "images.txt"
+            if pose_file.is_symlink() or not pose_file.is_file():
+                raise ValueError(f"Missing legacy camera pose evidence: {pose_file}")
+            registered = _registered_image_names(pose_file.parent)
+            selected_model = next((entry for entry in report.get("models", [])
+                                   if entry.get("model") == model), None)
+            reported_count = (selected_model.get("registered_images") if selected_model else
+                              report.get("registered_images"))
+            if type(reported_count) is int and len(registered) != reported_count:
+                raise ValueError("Legacy camera count differs from recorded pose evidence")
         if (not isinstance(registered, list) or any(
                 not isinstance(name, str) or name not in by_name for name in registered)):
             raise ValueError("Registered images are not present in staged source evidence")
         if len(registered) != len(set(registered)):
             raise ValueError("Duplicate registered image names")
-    except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError) as error:
+    except (OSError, ValueError, KeyError, TypeError, UnicodeError, json.JSONDecodeError) as error:
         raise ReferenceError(f"Cannot compare camera revision {source}: {error}") from error
     return {"path": str(source), "report": report, "all": by_name,
             "registered": {by_name[name]: name for name in registered}}
