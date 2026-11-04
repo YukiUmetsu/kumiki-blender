@@ -8,7 +8,7 @@ import sqlite3
 import struct
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -225,6 +225,76 @@ class CohortRecoveryTests(unittest.TestCase):
                                 for item in groups))
             self.assertTrue(any(item["verified_pairs_to_registered"] > 0
                                 for item in groups))
+
+    def test_photo_request_names_original_sources_and_marks_angle_clues_unverified(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            revision = fixture(Path(tmp))
+            index = revision / "sparse-reconstruction" / "staged-reference-index.json"
+            manifest = json.loads(index.read_text())
+            originals = {"a.png": "registered-oblique.jpg", "u.png": "target-left-side2.jpeg",
+                         "v.png": "target-screenshot5.jpg", "w.png": "target-top-view.jpg"}
+            for item in manifest["images"]:
+                item["original_filename"] = originals.get(item["filename"], item["filename"])
+            index.write_text(json.dumps(manifest))
+            plan = sfm.plan_cohort_recovery(revision)
+            self.assertEqual(len(plan["first_photos_to_find"]), len(plan["coverage_gaps"]))
+            for gap in plan["coverage_gaps"]:
+                request = gap["photo_request"]
+                self.assertIsNone(request["measured_missing_camera_angle"])
+                self.assertIn("original_filename", request["unregistered"])
+                self.assertIn("intermediate photos", request["next_photos_to_find"])
+            views = {p["original_filename"]: p["view_hint"] for group in
+                     plan["coverage_gaps"] for p in group["photo_request"]["other_missing_views"]}
+            self.assertEqual(views["target-left-side2.jpeg"]["label"], "left side/profile")
+            self.assertEqual(views["target-top-view.jpg"]["label"], "elevated or overhead view")
+            self.assertEqual(views["target-screenshot5.jpg"]["label"],
+                             "angle unknown; inspect photograph")
+
+    def test_missing_angle_guide_markdown_and_visual_artifact(self):
+        try:
+            from PIL import Image
+        except ImportError:
+            self.skipTest("Pillow optional")
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            revision = fixture(root)
+            sparse = revision / "sparse-reconstruction"
+            index = sparse / "staged-reference-index.json"
+            manifest = json.loads(index.read_text())
+            for item in manifest["images"]:
+                photo = sparse / "images" / item["filename"]
+                Image.new("RGB", (40, 30), "#d7b889").save(photo)
+                item["sha256"] = hashlib.sha256(photo.read_bytes()).hexdigest()
+                item["original_filename"] = (
+                    "unregistered-left-side.jpeg" if item["filename"] == "u.png"
+                    else "my-original-" + item["filename"])
+            index.write_text(json.dumps(manifest))
+            guide = root / "angle-guide"
+            output = io.StringIO()
+            with redirect_stdout(output):
+                rc = cli_main(["diagnose-sfm-coverage", "--revision", str(revision),
+                               "--guide-dir", str(guide), "--format", "markdown"])
+            self.assertEqual(rc, 0)
+            self.assertIn("unregistered-left-side.jpeg", output.getvalue())
+            self.assertIn("Registered reference", output.getvalue())
+            self.assertIn("no measured COLMAP camera angles", output.getvalue())
+            self.assertTrue((guide / "missing-angle-guide.md").is_file())
+            self.assertTrue((guide / "missing-camera-angles.jpg").is_file())
+            saved = json.loads((guide / "missing-angle-guide.json").read_text())
+            self.assertTrue(saved["coverage_gaps"])
+            self.assertTrue(all("photo_request" in group for group in saved["coverage_gaps"]))
+            self.assertIn("![Missing-view contact sheet]", (guide / "missing-angle-guide.md").read_text())
+            stderr = io.StringIO()
+            with redirect_stderr(stderr):
+                self.assertNotEqual(cli_main(["diagnose-sfm-coverage", "--revision",
+                                              str(revision), "--guide-dir", str(guide)]), 0)
+            self.assertIn("new directory", stderr.getvalue())
+            stderr = io.StringIO()
+            with redirect_stderr(stderr):
+                self.assertNotEqual(cli_main(["diagnose-sfm-coverage", "--revision",
+                                              str(revision), "--guide-dir",
+                                              str(sparse / "unsafe")]), 0)
+            self.assertIn("outside the source revision", stderr.getvalue())
 
     def test_coverage_report_counts_conservative_existing_3d_tracks(self):
         with tempfile.TemporaryDirectory() as tmp:

@@ -203,12 +203,13 @@ def _coverage_gaps(missing: set[str], registered: set[str],
     return groups
 
 
-def _verify_staged_images(paths: dict[str, Path], db_names: set[str]) -> None:
+def _verify_staged_images(paths: dict[str, Path], db_names: set[str]) -> dict[str, dict]:
     staged = json.loads(paths["index"].read_text(encoding="utf-8"))
     entries = staged.get("images")
     if not isinstance(entries, list):
         raise ValueError("Staged index requires an images list")
     hashes = {}
+    records = {}
     for item in entries:
         name = item.get("filename")
         if (not isinstance(name, str) or not name or
@@ -216,12 +217,14 @@ def _verify_staged_images(paths: dict[str, Path], db_names: set[str]) -> None:
                 not isinstance(item.get("sha256"), str)):
             raise ValueError("Unsafe or duplicate staged photo entry")
         hashes[name] = item["sha256"]
+        records[name] = item
     if set(hashes) != db_names:
         raise ValueError("Staged index and database must contain the same images")
     for name in sorted(db_names):
         photo = paths["images"] / name
         if photo.is_symlink() or not photo.is_file() or _sha256(photo) != hashes[name]:
             raise ValueError(f"Missing, linked or modified staged image: {name}")
+    return records
 
 
 def plan_cohort_recovery(revision: Path, *, model: int = 0,
@@ -233,7 +236,7 @@ def plan_cohort_recovery(revision: Path, *, model: int = 0,
     paths = _source_paths(revision, model)
     registered = _registered_names(paths["text"])
     image_ids, edges = _read_database(paths["database"], settings.min_pair_inliers)
-    _verify_staged_images(paths, set(image_ids))
+    staged = _verify_staged_images(paths, set(image_ids))
     if not registered <= image_ids.keys():
         raise ValueError("Source model cameras do not match the source database")
     chosen = set(image_ids) - registered if targets is None else set(targets)
@@ -271,6 +274,8 @@ def plan_cohort_recovery(revision: Path, *, model: int = 0,
     evidence = assess_verified_pairs(paths["database"], edges)
     track_support = audit_2d3d_support(paths["sparse"], model, registered, missing)
     coverage_gaps = _coverage_gaps(missing, registered, anchors, evidence, track_support)
+    from .sfm_gap_guide import annotate_gap_requests, first_photos_to_find
+    annotate_gap_requests(coverage_gaps, staged, anchors)
     seed_pairs = [edge for edge in evidence if edge["a"] in cohort and
                   edge["b"] in cohort and ({edge["a"], edge["b"]} & missing)]
     unsuitable = [edge for edge in seed_pairs if (
@@ -297,7 +302,9 @@ def plan_cohort_recovery(revision: Path, *, model: int = 0,
     status = ("no-verified-seed-pairs" if not diverse else
               "independent-only / too-few-shared-anchors" if len(anchors) < settings.min_shared_cameras
               else "ready-to-attempt")
-    return {"schema_version": 1, "status": status, "source_revision": str(paths["revision"]),
+    return {"schema_version": 1, "status": status,
+            "first_photos_to_find": first_photos_to_find(coverage_gaps),
+            "source_revision": str(paths["revision"]),
             "source_sparse": str(paths["sparse"]), "source_model_index": model,
             "source_database_sha256": _sha256(paths["database"]),
             "source_images": len(image_ids), "registered_seed_images": len(registered),

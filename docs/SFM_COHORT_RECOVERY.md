@@ -65,6 +65,42 @@ The diagnostic reports which specific old trials yielded only zero, one or two
 shared cameras, and the unregistered group each failed trial attempted.
 An existing 2D-to-3D track count is candidate support **only**, not PnP inliers.
 
+### Get a human-readable missing-angle shopping list (recommended)
+
+Before hunting for additional photos, run the same diagnostic with a new guide
+directory. This uses the **original file names** in `staged-reference-index.json`,
+not only the internal `photo-00XX.png` names:
+
+```bash
+GUIDE=".review/missing-angle-guide-r01"  # must not already exist
+kumiki-blender diagnose-sfm-coverage \
+  --revision "$SOURCE" \
+  --prior-recovery /absolute/path/to/old/cohort-recovery-report.json \
+  --guide-dir "$GUIDE" --format markdown
+```
+
+Results:
+
+- Terminal Markdown states **which registered original photo to connect to
+  which unregistered original photo**, with other missing photos in that group.
+- `$GUIDE/missing-angle-guide.md` is a step-by-step photo acquisition checklist.
+- `$GUIDE/missing-camera-angles.jpg` is a labeled side-by-side contact sheet of
+  the current registered reference and all missing photos for each gap, when
+  Pillow is installed (`pip install -e '.[qa]'`).
+- `$GUIDE/missing-angle-guide.json` provides structured data for other tools.
+
+For a single-file JSON output, omit `--guide-dir` and `--format markdown` (the
+default remains `json`). Every gap also contains `photo_request` with original
+file names and view hints, so other agents can use it without a manual lookup.
+
+**Important:** A name like `object-left-side.jpg` is a *filename clue*, not an
+image classification or measured camera position. The tool explicitly marks
+unregistered angles as unknown. See the contact sheet to inspect the actual
+views. When captions are supplied in the staged manifest, they are labeled as
+source annotations rather than measured geometry. A photograph between two
+appearances is only a hypothesis until COLMAP verifies common **object-surface**
+features and reconstructs coherent poses.
+
 ## 2. Recover independent views, then attempt a guarded merge
 
 In the **same Python virtual environment as PyCOLMAP 4.x**, run:

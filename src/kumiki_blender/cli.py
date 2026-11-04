@@ -295,6 +295,10 @@ def main(argv: list[str] | None = None) -> int:
         if command == "diagnose-sfm-coverage":
             cohort_parser.add_argument("--prior-recovery", type=Path,
                                        help="Optional existing cohort-recovery-report.json")
+            cohort_parser.add_argument("--format", choices=("json", "markdown"), default="json",
+                                       help="JSON for automation, Markdown for a readable missing-angle checklist")
+            cohort_parser.add_argument("--guide-dir", type=Path,
+                                       help="New folder for original-filename guide and side-by-side photo contact sheet")
         if command == "recover-sfm-cohorts":
             cohort_parser.add_argument("--output", type=Path, required=True,
                                        help="New independent output; never alters source models")
@@ -1106,14 +1110,22 @@ def main(argv: list[str] | None = None) -> int:
                 if args.command == "diagnose-sfm-coverage":
                     report = annotate_failed_recovery(report, args.prior_recovery)
                     report = {"status": report["status"],
+                              "first_photos_to_find": report["first_photos_to_find"],
                               "source_revision": report["source_revision"],
                               "seed_pairs": report["seed_pairs"],
                               "rejected_low_parallax_seed_pairs": report["rejected_low_parallax_seed_pairs"],
                               "coverage_gaps": report["coverage_gaps"],
                               "previous_recovery": report.get("previous_recovery")}
+                    if args.guide_dir is not None:
+                        from .reconstruction.sfm_gap_guide import write_gap_guide
+                        report["guide_files"] = write_gap_guide(report, args.revision, args.guide_dir)
             except (OSError, ValueError, sqlite3.Error, ImportError) as error:
                 raise RecipeError(str(error)) from error
-            print(json.dumps(report, indent=2))
+            if args.command == "diagnose-sfm-coverage" and args.format == "markdown":
+                from .reconstruction.sfm_gap_guide import markdown_gap_guide
+                print(markdown_gap_guide(report))
+            else:
+                print(json.dumps(report, indent=2))
             return (0 if args.command != "recover-sfm-cohorts" or
                     report["status"].startswith("candidate / ") else 3)
         if args.command == "prepare-sfm-bridge-photos":

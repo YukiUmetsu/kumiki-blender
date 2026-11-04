@@ -255,6 +255,10 @@ validates shared-camera geometry and reprojections before proposing a merge.
 It supports arbitrary objects, geometry-aware seed ranking, automatic coverage
 gap/3D-track diagnostics, private staging of new bridge photographs, and
 optional verified 3D physical landmarks.
+Start with `diagnose-sfm-coverage --revision "$SOURCE" --format markdown` to
+see the **actual original photo filenames** to connect. Add `--guide-dir
+.review/missing-angle-guide-r01` for a labeled side-by-side contact sheet and
+a reusable acquisition checklist; the output directory must be new.
 
 Once a candidate visibly improves opposite-side coverage, use that
 `reconstruct-photos --undistort` revision as input to `plan-dense-photos`
