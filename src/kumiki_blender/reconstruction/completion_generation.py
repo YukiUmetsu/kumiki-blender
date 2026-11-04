@@ -25,6 +25,16 @@ class GenerationError(ValueError):
 
 
 UNGATED_TRIPOSR = "stabilityai/TripoSR"
+_DINO_REPO = "facebook/dino-vitb16"
+_DINO_COMMIT = "84832256db3f6f3f45d0bfd8c279ebec6b404007"
+_EXPECTED_ARCH = {
+    "image_tokenizer_cls": "tsr.models.tokenizers.image.DINOSingleImageTokenizer",
+    "tokenizer_cls": "tsr.models.tokenizers.triplane.Triplane1DTokenizer",
+    "backbone_cls": "tsr.models.transformer.transformer_1d.Transformer1D",
+    "post_processor_cls": "tsr.models.network_utils.TriplaneUpsampleNetwork",
+    "decoder_cls": "tsr.models.network_utils.NeRFMLP",
+    "renderer_cls": "tsr.models.nerf_renderer.TriplaneNeRFRenderer",
+}
 _SLUG = re.compile(r"[a-z][a-z0-9]*(?:-[a-z0-9]+)*\Z")
 _REVISION = re.compile(r"(?:main|[0-9a-f]{40})\Z")
 _SHA = re.compile(r"[0-9a-f]{64}\Z")
@@ -66,7 +76,7 @@ def completion_runtime_doctor() -> dict[str, Any]:
     import importlib.util
 
     modules = ("torch", "tsr", "numpy", "PIL", "omegaconf", "huggingface_hub",
-               "skimage", "trimesh")
+               "skimage", "trimesh", "einops", "transformers", "imageio", "rembg")
     available = {module: importlib.util.find_spec(module) is not None for module in modules}
     devices: list[str] = []
     if available["torch"]:
@@ -145,12 +155,43 @@ def _resolve_public_model(snapshot_download: Any, revision: str, offline: bool) 
     )).resolve()
 
 
+def _resolve_public_dino(hf_hub_download: Any, offline: bool) -> Path:
+    """Resolve the tokenizer's public Apache-2.0 config without hub credentials."""
+    return Path(hf_hub_download(repo_id=_DINO_REPO, filename="config.json",
+                                revision=_DINO_COMMIT, token=False,
+                                local_files_only=offline)).resolve()
+
+
+def _validate_triposr_architecture(config_data: Any) -> None:
+    """Reject model config paths that would dynamically import arbitrary code."""
+    for key, expected in _EXPECTED_ARCH.items():
+        if config_data.get(key) != expected:
+            raise GenerationError(f"Unexpected TripoSR architecture class: {key}")
+    if config_data.get("image_tokenizer", {}).get("pretrained_model_name_or_path") != _DINO_REPO:
+        raise GenerationError("Unexpected TripoSR image tokenizer model repository")
+
+
 def _load_weights_only(torch: Any, tsr_class: Any, omegaconf: Any,
-                       config: Path, weights: Path) -> Any:
+                       config: Path, weights: Path, dino_config: Path,
+                       tokenizer_module: Any) -> Any:
     """Bypass upstream unsafe default torch.load of remote .ckpt objects."""
     config_data = omegaconf.load(config)
     omegaconf.resolve(config_data)
-    model = tsr_class(config_data)
+    _validate_triposr_architecture(config_data)
+    original_download = tokenizer_module.hf_hub_download
+
+    def pinned_dino_config(*, repo_id: str, filename: str, **kwargs: Any) -> str:
+        if repo_id != _DINO_REPO or filename != "config.json" or kwargs:
+            raise GenerationError("Tokenizer requested an unknown model file or network operation")
+        return str(dino_config)
+
+    # Upstream tokenizer calls hf_hub_download internally without revision/token
+    # control. Scope its config lookup to the already-pinned local public file.
+    try:
+        tokenizer_module.hf_hub_download = pinned_dino_config
+        model = tsr_class(config_data)
+    finally:
+        tokenizer_module.hf_hub_download = original_download
     state = torch.load(weights, map_location="cpu", weights_only=True)
     model.load_state_dict(state)
     return model
@@ -161,7 +202,7 @@ def _infer_triposr(image: Path, output: Path, *, device: str, revision: str,
     """Load public MIT weights without an HF token or license acceptance flow."""
     try:
         import torch
-        from huggingface_hub import snapshot_download
+        from huggingface_hub import hf_hub_download, snapshot_download
         from omegaconf import OmegaConf
     except ImportError as error:
         raise GenerationError(
@@ -173,14 +214,19 @@ def _infer_triposr(image: Path, output: Path, *, device: str, revision: str,
         if actual_device == "mps" and platform.system() == "Darwin":
             _enable_mps_marching_cubes_compat()
         from tsr.system import TSR
+        from tsr.models.tokenizers import image as tokenizer_module
         model_dir = _resolve_public_model(snapshot_download, revision, offline)
         config = model_dir / "config.yaml"
         weights = model_dir / "model.ckpt"
         if not config.is_file() or not weights.is_file():
             raise GenerationError("Incomplete TripoSR checkpoint (config.yaml/model.ckpt)")
+        dino_config = _resolve_public_dino(hf_hub_download, offline)
+        if not dino_config.is_file():
+            raise GenerationError("Missing public DINO tokenizer config")
         # Upstream TSR.from_pretrained uses torch.load without weights_only.
         # Load state tensors explicitly so a remote pickle cannot execute code.
-        model = _load_weights_only(torch, TSR, OmegaConf, config, weights)
+        model = _load_weights_only(torch, TSR, OmegaConf, config, weights,
+                                   dino_config, tokenizer_module)
         model.renderer.set_chunk_size(chunk_size)
         model.to(actual_device)
         prepared = _prepare_image(image)
@@ -204,6 +250,7 @@ def _infer_triposr(image: Path, output: Path, *, device: str, revision: str,
         "revision": model_dir.name,
         "config_sha256": _file_sha256(config),
         "checkpoint_sha256": _file_sha256(weights),
+        "dino_config_sha256": _file_sha256(dino_config),
     }
 
 
@@ -247,7 +294,7 @@ def generate_triposr_candidate(
         if not isinstance(metadata, dict) or metadata.get("device") not in ("mps", "cuda:0", "cpu"):
             raise GenerationError("Inference did not report its actual compute device")
         if not all(isinstance(metadata.get(k), str) and _SHA.fullmatch(metadata[k])
-                   for k in ("checkpoint_sha256", "config_sha256")):
+                   for k in ("checkpoint_sha256", "config_sha256", "dino_config_sha256")):
             raise GenerationError("Inference did not pin its model checkpoint and config")
         if not isinstance(metadata.get("revision"), str) or not re.fullmatch(r"[0-9a-f]{40}", metadata["revision"]):
             raise GenerationError("Inference did not pin its resolved model revision")
@@ -260,7 +307,11 @@ def generate_triposr_candidate(
             "generator": {"adapter": "triposr-local", "model_id": model_id, "license": "MIT",
                           "revision": metadata["revision"],
                           "checkpoint_sha256": metadata["checkpoint_sha256"],
-                          "config_sha256": metadata["config_sha256"]},
+                          "config_sha256": metadata["config_sha256"],
+                          "dino_model_id": _DINO_REPO,
+                          "dino_license": "Apache-2.0",
+                          "dino_config_sha256": metadata["dino_config_sha256"],
+                          "dino_config_revision": _DINO_COMMIT},
             "device": metadata["device"], "requested_device": requested_device,
             "input_sha256": digest, "candidate_file": "candidate.glb",
             "candidate_sha256": result["input_sha256"],

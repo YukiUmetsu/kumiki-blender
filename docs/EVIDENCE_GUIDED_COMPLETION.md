@@ -91,7 +91,10 @@ model without an authentication token, click-through access request, or manual
 approval. Use `--offline` to require an already-cached model; use `--revision`
 with a 40-character checkpoint repo commit for repeatability. The provenance
 report records the actual resolved commit and SHA-256 of `model.ckpt` and
-`config.yaml`, alongside the GLB digest and actual compute device.
+`config.yaml`, alongside the GLB digest and actual compute device. TripoSR
+also needs the public Apache-2.0 `facebook/dino-vitb16` tokenizer config;
+the adapter pins its revision and source bytes, prevents it from fetching
+unknown files or using credentials, and respects `--offline` for both models.
 
 **Runtime setup:** Install PyTorch, Pillow, NumPy, OmegaConf, `huggingface_hub`,
 scikit-image, trimesh and the upstream [TripoSR](https://github.com/VAST-AI-Research/TripoSR)
@@ -103,6 +106,25 @@ inference on MPS and performs only marching cubes on CPU via scikit-image;
 the upstream `run.py` silently forces CPU when CUDA is absent, so **do not use
 that script for MPS**. Use `--device auto` to prefer MPS, then CUDA; it refuses
 unaccelerated execution unless you explicitly select `--device cpu`.
+
+On macOS, TripoSR's stock `requirements.txt` includes a native `torchmcubes`
+extension that may fail to compile. Kumiki's MPS runner replaces that extension
+with scikit-image for surface extraction. In a Python 3.11 environment, install
+the Python runtime dependencies and expose the upstream `tsr/` folder on
+`PYTHONPATH` without attempting the native CUDA extension:
+
+```bash
+python -m pip install torch numpy Pillow omegaconf einops 'transformers==4.35.0' \
+  trimesh rembg huggingface_hub imageio scikit-image
+git clone https://github.com/VAST-AI-Research/TripoSR.git /private/tools/TripoSR
+export PYTHONPATH="/private/tools/TripoSR:$PWD/src"
+kumiki-blender completion-doctor
+```
+
+The example clone path is yours to choose, and the external repository should
+be reviewed/pinned for your environment. For a reproducible deployment, pin
+both the upstream code commit and the model's `--revision`. The runtime is
+intentionally not installed or executed by the regular project CI.
 
 Run `kumiki-blender completion-doctor` first. It checks the optional imports
 and visible MPS/CUDA devices without downloading weights or submitting a job.

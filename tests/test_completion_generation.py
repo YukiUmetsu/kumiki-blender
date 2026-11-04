@@ -14,7 +14,7 @@ from unittest.mock import Mock, patch
 from kumiki_blender.cli import main
 from kumiki_blender.reconstruction.completion_generation import (
     GenerationError, _enable_mps_marching_cubes_compat,
-    _resolve_public_model, _load_weights_only,
+    _resolve_public_model, _resolve_public_dino, _load_weights_only, _EXPECTED_ARCH,
     choose_torch_device, generate_triposr_candidate,
     suggest_completion_regions,
 )
@@ -51,7 +51,8 @@ class CompletionGenerationTests(unittest.TestCase):
             self.assertEqual(image, self.image.resolve())
             self.assertEqual(kwargs["device"], "mps")
             return {"device": "mps", "checkpoint_sha256": "a" * 64,
-                    "config_sha256": "b" * 64, "revision": "c" * 40}
+                    "config_sha256": "b" * 64, "dino_config_sha256": "d" * 64,
+                    "revision": "c" * 40}
 
         out = self.root / "candidate-r01"
         result = generate_triposr_candidate(self.image, out, requested_device="mps",
@@ -77,7 +78,8 @@ class CompletionGenerationTests(unittest.TestCase):
         def bad_inference(_image, output, **_kwargs):
             output.write_bytes(b"not a glb")
             return {"device": "mps", "checkpoint_sha256": "a" * 64,
-                    "config_sha256": "b" * 64, "revision": "c" * 40}
+                    "config_sha256": "b" * 64, "dino_config_sha256": "d" * 64,
+                    "revision": "c" * 40}
 
         with self.assertRaises(GenerationError):
             generate_triposr_candidate(self.image, out, inference=bad_inference)
@@ -102,21 +104,52 @@ class CompletionGenerationTests(unittest.TestCase):
             allow_patterns=["config.yaml", "model.ckpt"], token=False,
             local_files_only=False,
         )
+        dino_download = Mock(return_value=str(self.root / "config.json"))
+        _resolve_public_dino(dino_download, True)
+        self.assertEqual(dino_download.call_args.kwargs["token"], False)
+        self.assertEqual(dino_download.call_args.kwargs["local_files_only"], True)
         fake_model = Mock()
-        tsr = Mock(return_value=fake_model)
-        yaml = SimpleNamespace(load=Mock(return_value={"config": "test"}), resolve=Mock())
+        cfg = dict(_EXPECTED_ARCH, image_tokenizer={
+            "pretrained_model_name_or_path": "facebook/dino-vitb16"})
+        yaml = SimpleNamespace(load=Mock(return_value=cfg), resolve=Mock())
         torch = SimpleNamespace(load=Mock(return_value={"a": "tensor"}))
+        tokenizer = SimpleNamespace(hf_hub_download=Mock())
+        prior_download = tokenizer.hf_hub_download
+        def build_tsr(_cfg):
+            self.assertEqual(tokenizer.hf_hub_download(repo_id="facebook/dino-vitb16",
+                                                        filename="config.json"),
+                             str(self.root / "dino.json"))
+            with self.assertRaises(GenerationError):
+                tokenizer.hf_hub_download(repo_id="other/gated", filename="config.json")
+            return fake_model
+        tsr = Mock(side_effect=build_tsr)
         self.assertIs(_load_weights_only(torch, tsr, yaml,
-                                         self.root / "config.yaml", self.root / "model.ckpt"),
+                                         self.root / "config.yaml", self.root / "model.ckpt",
+                                         self.root / "dino.json", tokenizer),
                       fake_model)
+        self.assertIs(tokenizer.hf_hub_download, prior_download)
         self.assertTrue(torch.load.call_args.kwargs["weights_only"])
+
+    def test_triposr_does_not_import_model_classes_named_by_untrusted_config(self):
+        cfg = dict(_EXPECTED_ARCH, image_tokenizer={
+            "pretrained_model_name_or_path": "facebook/dino-vitb16"})
+        cfg["backbone_cls"] = "os.system"
+        yaml = SimpleNamespace(load=Mock(return_value=cfg), resolve=Mock())
+        tsr = Mock()
+        tokenizer = SimpleNamespace(hf_hub_download=Mock())
+        with self.assertRaisesRegex(GenerationError, "architecture"):
+            _load_weights_only(SimpleNamespace(load=Mock()), tsr, yaml,
+                               self.root / "config.yaml", self.root / "model.ckpt",
+                               self.root / "dino.json", tokenizer)
+        tsr.assert_not_called()
 
     def test_mutated_reference_during_inference_rejected(self):
         def mutate(image, output, **kwargs):
             fixture_glb(output)
             image.write_bytes(b"changed-source")
             return {"device": "mps", "checkpoint_sha256": "a" * 64,
-                    "config_sha256": "b" * 64, "revision": "c" * 40}
+                    "config_sha256": "b" * 64, "dino_config_sha256": "d" * 64,
+                    "revision": "c" * 40}
         out = self.root / "candidate-r01"
         with self.assertRaisesRegex(GenerationError, "changed"):
             generate_triposr_candidate(self.image, out, inference=mutate)
