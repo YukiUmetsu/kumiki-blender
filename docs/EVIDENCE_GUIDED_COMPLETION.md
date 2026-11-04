@@ -107,8 +107,9 @@ unaccelerated execution unless you explicitly select `--device cpu`.
 Run `kumiki-blender completion-doctor` first. It checks the optional imports
 and visible MPS/CUDA devices without downloading weights or submitting a job.
 
-The MPS path is implemented but **has not been exercised on the user's M4** in
-CI; upstream model operators may still require compatibility fixes. Start at
+CI includes an Apple Silicon MPS tensor and CPU marching-cubes smoke test,
+but **full TripoSR inference has not been exercised on the user's M4**; upstream
+model operators may still require compatibility fixes. Start at
 resolution 128 on a 24 GB Mac and use `--resolution 64` if memory is tight.
 The input image stays private; generated outputs are `candidate.glb` and
 `provenance.json`, not a completed monument. TripoSR was trained for single-
