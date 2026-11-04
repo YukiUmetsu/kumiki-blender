@@ -290,9 +290,41 @@ class PhotoPreprocessCacheTests(unittest.TestCase):
             self.assertEqual(set(np.asarray(confidence).flat), {128})
         self.assertEqual(normalization["exif_orientation_applied"], 1)
 
+    def test_ambiguous_sam2_proposals_keep_potential_statue_pixels_uncertain(self):
+        from kumiki_blender.reconstruction.masking import _sam2_mask, _guide, _DEFAULT_BOX
+        from kumiki_blender.reconstruction.photo_preprocess_cache import normalize_cached_photo
+
+        class Predictor:
+            def set_image(self, _pixels):
+                pass
+
+            def predict(self, **_options):
+                a = np.zeros((80, 96), dtype=np.uint8)
+                b = np.zeros_like(a)
+                a[12:72, 10:85] = 1
+                b[30:60, 30:70] = 1
+                return np.stack((a, b)), np.array([0.92, 0.90]), None
+
+        source = load_photo_folder(self.photos, "great-sphinx").images[0]
+        normalized, _, _ = normalize_cached_photo(source, self.cache)
+        mask, details = _sam2_mask(
+            Image.open(normalized), _guide({}, default_box=_DEFAULT_BOX), Predictor())
+        self.assertGreater(details["sam2_candidate_disagreement_fraction"], 0.18)
+        candidate = self.root / "ambiguous.png"
+        Image.fromarray(mask).save(candidate)
+        report, _ = analyze_cached_photo(
+            normalized, source.sha256, self.cache, mask_path=candidate,
+            model_sha="sam2-ambiguous", mask_details=details)
+        self.assertIn("candidate-sam2-ambiguous", report["warnings"])
+        with Image.open(report["confidence_path"]) as confidence:
+            self.assertEqual(set(np.asarray(confidence).flat), {128})
+
     def test_early_qa_cache_survives_new_photo_and_creates_contact_sheet(self):
         first = self.build(1)
         self.assertEqual((first["qa_hits"], first["qa_misses"]), (0, 8))
+        self.assertTrue(first["mask_qa"]["needs_visual_review"])
+        self.assertEqual(first["mask_qa"]["suspect_count"],
+                         len(first["mask_qa"]["suspect_photos"]))
         self.assertTrue((self.root / "run-1" / "photo-qa-contact-sheet.jpg").is_file())
         detail = self.root / "run-1" / first["images"][0]["qa_visual_preview"]
         self.assertTrue(detail.is_file())
@@ -302,6 +334,8 @@ class PhotoPreprocessCacheTests(unittest.TestCase):
         second = self.build(2)
         self.assertEqual((second["qa_hits"], second["qa_misses"]), (8, 1))
         self.assertEqual(len(second["images"]), 9)
+        self.assertEqual(second["mask_qa"]["suspect_count"],
+                         len(second["mask_qa"]["suspect_photos"]))
         self.assertTrue(all(Path(row["qa_confidence_path"]).is_file()
                             for row in second["images"]))
 

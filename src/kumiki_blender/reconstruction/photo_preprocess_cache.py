@@ -19,7 +19,7 @@ from typing import Any, Callable
 from .references import ReferenceError, ReferenceImage, ReferenceSet
 
 SCHEMA = "source-photo-preprocess-v1"
-FOREGROUND_SCHEMA = "source-foreground-sam2-consensus-v2"
+FOREGROUND_SCHEMA = "source-foreground-sam2-consensus-v3"
 
 
 def _digest(path: Path) -> str:
@@ -462,6 +462,19 @@ def prepare_statue_photo_cache(references: ReferenceSet, cache: Path, output: Pa
     write_qa_contact_sheet(report["images"], output / "photo-qa-contact-sheet.jpg")
     report["qa_contact_sheet"] = "photo-qa-contact-sheet.jpg"
     report["qa_warning_count"] = sum(bool(row["qa_warnings"]) for row in report["images"])
+    mask_issues = []
+    for entry in report["images"]:
+        warnings = [warning for warning in entry["qa_warnings"]
+                    if warning.startswith(("foreground-", "candidate-")) or
+                    "background-leakage" in warning or
+                    warning == "independent-segmenters-disagree"]
+        if warnings:
+            mask_issues.append({"photo": entry["original_filename"], "warnings": warnings,
+                                "detail": entry.get("qa_visual_preview")})
+    report["mask_qa"] = {"needs_visual_review": True,
+                         "suspect_count": len(mask_issues),
+                         "suspect_photos": mask_issues,
+                         "limitations": "Automatic masks are unverified; inspect every photo's source/mask/confidence triptych."}
     report["status"] = "candidate / cached-photo-preparation"
     if state.get("auxiliary_disabled_reason"):
         report["auxiliary_model_status"] = "failed / isolated-worker-disabled"

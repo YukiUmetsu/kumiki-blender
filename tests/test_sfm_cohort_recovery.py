@@ -129,6 +129,39 @@ class FakePyCOLMAP:
 
 
 class CohortRecoveryTests(unittest.TestCase):
+    def test_one_shared_camera_uses_verified_hybrid_and_never_unchecked_colmap_merge(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            revision = fixture(root)
+            sparse = revision / "sparse-reconstruction"
+            (sparse / "subject-feature-index.json").write_text(
+                '{"schema":"subject-feature-index-v1","images":{}}')
+            candidate = Reconstruction({
+                1: BASE_CAMERAS[1],
+                5: ("u.png", (0, 2, 6), (0, 0, 1)),
+            }, points=30)
+            fake = FakePyCOLMAP(candidate)
+            fake.merged = Reconstruction({
+                **BASE_CAMERAS, 5: ("u.png", (0, 2, 6), (0, 0, 1)),
+            }, points=108)
+            valid = {"accepted": True, "reasons": [],
+                     "method": "verified-hybrid-3d-points", "shared_cameras": 1,
+                     "shared_filenames": ["a.png"], "new_cameras": 1,
+                     "new_filenames": ["u.png"], "inliers": 20,
+                     "scale": 1., "rotation": np.eye(3).tolist(),
+                     "translation": [0., 0., 0.]}
+            with (patch.object(sfm, "assess_partial_alignment", return_value=valid) as assessor,
+                  patch("kumiki_blender.reconstruction.sfm_point_alignment.fuse_disjoint_models",
+                        return_value=fake.merged) as merger):
+                report = sfm.recover_cohort(
+                    revision, root / "hybrid", pycolmap_module=fake,
+                    settings=sfm.CohortRecoverySettings(min_new_cameras=1),
+                    merge_runner=lambda *a, **kw: self.fail("unvalidated COLMAP merge"))
+            self.assertEqual(report["status"], "candidate / needs-object-and-camera-visual-review")
+            self.assertEqual(report["merge"]["method"], "validated-evidence-track-union")
+            self.assertTrue(assessor.called)
+            merger.assert_called_once()
+
     def test_disconnected_group_without_subject_qa_is_kept_unmerged(self):
         with tempfile.TemporaryDirectory() as tmp:
             revision = fixture(Path(tmp))

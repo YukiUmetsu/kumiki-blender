@@ -76,12 +76,15 @@ def _subject_lookup(path: Path | None):
 
 def extract_verified_3d_matches(database: Path, baseline, cohort, *,
                                 qa_index: Path | None = None,
+                                allow_shared: bool = False,
                                 audit: dict | None = None) -> list[dict]:
     """Join geometric 2D matches to real reconstructed 3D track identifiers.
 
-    A verified two-view pair crosses from registered baseline image to a
-    DIFFERENT registered cohort image. Collisions and many-to-one 3D tracks
-    are dropped instead of choosing a geometrically convenient pairing.
+    A verified two-view pair connects a baseline camera to a DIFFERENT
+    cohort camera. For partially shared models, original image feature IDs
+    in a common camera are also exact 2D identities, provided both points
+    were independently triangulated with additional registered views.
+    Ambiguous many-to-one 3D tracks are dropped.
     """
     import numpy as np
 
@@ -89,25 +92,70 @@ def extract_verified_3d_matches(database: Path, baseline, cohort, *,
         raise ValueError("Missing or unsafe COLMAP match database")
     baseline_ids = set(baseline.reg_image_ids())
     cohort_ids = set(cohort.reg_image_ids())
-    if baseline_ids & cohort_ids:
+    common = baseline_ids & cohort_ids
+    if common and not allow_shared:
         raise ValueError("Point-only alignment requires zero common registered camera IDs")
+    if allow_shared and not 1 <= len(common) <= 2:
+        raise ValueError("Hybrid point alignment needs one or two shared registered cameras")
+    baseline_only = baseline_ids - common
+    cohort_only = cohort_ids - common
+    if allow_shared and (not baseline_only or not cohort_only):
+        raise ValueError("Hybrid point alignment requires independent cameras in both models")
     counts = {name: 0 for name in (
         "cross_registered_geometry_pairs", "nonplanar_geometry_pairs",
         "cross_keypoint_observations", "invalid_feature_indices",
         "neither_point_triangulated", "only_baseline_point_triangulated",
         "only_cohort_point_triangulated", "both_points_triangulated",
         "valid_finite_3d_pairs", "subject_verified_pairs", "ambiguous_3d_pairs",
-        "unique_3d_correspondences")}
+        "unique_3d_correspondences", "shared_anchor_2d3d_pairs",
+        "shared_anchor_subject_verified")}
     subject = _subject_lookup(qa_index)
     matches = defaultdict(lambda: {"image_pairs": set(), "verified_subject_pairs": 0,
                                     "observations": 0, "sample": None})
+
+    def record_pair(base_id, co_id, base_idx, co_idx, *, shared_anchor=False):
+        base_img, co_img = baseline.images[base_id], cohort.images[co_id]
+        if base_idx >= len(base_img.points2D) or co_idx >= len(co_img.points2D):
+            counts["invalid_feature_indices"] += 1
+            return
+        bp, cp = base_img.points2D[base_idx], co_img.points2D[co_idx]
+        bp_3d, cp_3d = bp.has_point3D(), cp.has_point3D()
+        if not bp_3d or not cp_3d:
+            label = ("neither_point_triangulated" if not bp_3d and not cp_3d else
+                     "only_baseline_point_triangulated" if bp_3d else
+                     "only_cohort_point_triangulated")
+            counts[label] += 1
+            return
+        counts["both_points_triangulated"] += 1
+        bp_id, cp_id = int(bp.point3D_id), int(cp.point3D_id)
+        if bp_id not in baseline.points3D or cp_id not in cohort.points3D:
+            return
+        bxyz = np.asarray(baseline.points3D[bp_id].xyz, dtype=float).reshape(3)
+        cxyz = np.asarray(cohort.points3D[cp_id].xyz, dtype=float).reshape(3)
+        if not np.isfinite(bxyz).all() or not np.isfinite(cxyz).all():
+            return
+        counts["valid_finite_3d_pairs"] += 1
+        row = matches[(bp_id, cp_id)]
+        row["image_pairs"].add((base_id, co_id))
+        verified = bool(subject(base_img.name, bp.xy) and
+                        subject(co_img.name, cp.xy))
+        row["verified_subject_pairs"] += int(verified)
+        counts["subject_verified_pairs"] += int(verified)
+        row["observations"] += 1
+        row["sample"] = (bxyz, cxyz, base_id, co_id, base_idx, co_idx)
+        if shared_anchor:
+            counts["shared_anchor_2d3d_pairs"] += 1
+            counts["shared_anchor_subject_verified"] += int(verified)
+
     processed = 0
     with sqlite3.connect(database.as_uri() + "?mode=ro", uri=True) as db:
         for pair_id, count, columns, config, blob in db.execute(
                 "SELECT pair_id, rows, cols, config, data FROM two_view_geometries WHERE rows>=12"):
             left, right = divmod(pair_id, MAX_IMAGE_ID)
-            if not ((left in baseline_ids and right in cohort_ids) or
-                    (right in baseline_ids and left in cohort_ids)):
+            if not ((left in baseline_only and right in cohort_ids) or
+                    (right in baseline_only and left in cohort_ids) or
+                    (not allow_shared and ((left in baseline_ids and right in cohort_ids) or
+                                           (right in baseline_ids and left in cohort_ids)))):
                 continue
             counts["cross_registered_geometry_pairs"] += 1
             # Exclude planar-only, panoramic, watermark and degenerate
@@ -123,38 +171,30 @@ def extract_verified_3d_matches(database: Path, baseline, cohort, *,
                 raise ValueError("Cross-model evidence exceeds bounded feature-match budget")
             import struct
             for left_idx, right_idx in struct.iter_unpack("<II", blob):
-                base_id, co_id = ((left, right) if left in baseline_ids else (right, left))
-                base_idx, co_idx = ((left_idx, right_idx) if left in baseline_ids else
+                base_id, co_id = ((left, right) if left in baseline_only else (right, left))
+                base_idx, co_idx = ((left_idx, right_idx) if left in baseline_only else
                                     (right_idx, left_idx))
-                base_img, co_img = baseline.images[base_id], cohort.images[co_id]
-                if (base_idx >= len(base_img.points2D) or co_idx >= len(co_img.points2D)):
-                    counts["invalid_feature_indices"] += 1
+                record_pair(base_id, co_id, base_idx, co_idx)
+    if allow_shared:
+        for shared_id in sorted(common):
+            base_img, co_img = baseline.images[shared_id], cohort.images[shared_id]
+            if base_img.name != co_img.name or len(base_img.points2D) != len(co_img.points2D):
+                raise ValueError("Common camera has inconsistent original feature identities")
+            if len(base_img.points2D) > MAX_CROSS_VIEW_MATCHES:
+                raise ValueError("Shared camera exceeds bounded point-identity budget")
+            for index, (bp, cp) in enumerate(zip(base_img.points2D, co_img.points2D)):
+                if (not bp.has_point3D() or not cp.has_point3D() or
+                        np.linalg.norm(np.asarray(bp.xy) - np.asarray(cp.xy)) > 0.5):
                     continue
-                bp, cp = base_img.points2D[base_idx], co_img.points2D[co_idx]
-                bp_3d, cp_3d = bp.has_point3D(), cp.has_point3D()
-                if not bp_3d or not cp_3d:
-                    label = ("neither_point_triangulated" if not bp_3d and not cp_3d else
-                             "only_baseline_point_triangulated" if bp_3d else
-                             "only_cohort_point_triangulated")
-                    counts[label] += 1
+                base_point = baseline.points3D.get(int(bp.point3D_id))
+                co_point = cohort.points3D.get(int(cp.point3D_id))
+                # Each 3D point needs parallax outside the single common 2D
+                # observation; same-image pixels alone have no depth evidence.
+                if (base_point is None or co_point is None or
+                        len(base_point.track.elements) < 2 or
+                        len(co_point.track.elements) < 2):
                     continue
-                counts["both_points_triangulated"] += 1
-                bp_id, cp_id = int(bp.point3D_id), int(cp.point3D_id)
-                if bp_id not in baseline.points3D or cp_id not in cohort.points3D:
-                    continue
-                bxyz = np.asarray(baseline.points3D[bp_id].xyz, dtype=float).reshape(3)
-                cxyz = np.asarray(cohort.points3D[cp_id].xyz, dtype=float).reshape(3)
-                if not np.isfinite(bxyz).all() or not np.isfinite(cxyz).all():
-                    continue
-                counts["valid_finite_3d_pairs"] += 1
-                row = matches[(bp_id, cp_id)]
-                row["image_pairs"].add((base_id, co_id))
-                verified = bool(subject(base_img.name, bp.xy) and
-                                subject(co_img.name, cp.xy))
-                row["verified_subject_pairs"] += int(verified)
-                counts["subject_verified_pairs"] += int(verified)
-                row["observations"] += 1
-                row["sample"] = (bxyz, cxyz, base_id, co_id, base_idx, co_idx)
+                record_pair(shared_id, shared_id, index, index, shared_anchor=True)
     by_base, by_cohort = defaultdict(set), defaultdict(set)
     for base_id, co_id in matches:
         by_base[base_id].add(co_id)
@@ -312,11 +352,11 @@ def validate_cross_reprojection(matches: list[dict], alignment: dict, baseline, 
 
 
 def fuse_disjoint_models(baseline, cohort, alignment: dict, *, pycolmap_module=None):
-    """Safely combine genuinely disjoint PyCOLMAP frames and tracks after QA.
+    """Safely combine verified PyCOLMAP frames and tracks after geometric QA.
 
-    Unlike COLMAP model_merger, this does not rely on common registered frames.
-    Existing point observations are not silently welded; every track retains
-    its original 2D source evidence and unique new 3D identifier.
+    No preexisting camera is overwritten. Point tracks are only linked for
+    accepted hybrid inlier pairs whose new-camera observations have separately
+    passed subject confidence and calibrated reprojection checks.
     """
     import copy
     import numpy as np
@@ -326,9 +366,13 @@ def fuse_disjoint_models(baseline, cohort, alignment: dict, *, pycolmap_module=N
     if pycolmap_module is None:
         import pycolmap as pycolmap_module
     ids = set(baseline.reg_image_ids())
-    extra = set(cohort.reg_image_ids())
-    if not extra or ids & extra or set(baseline.images) & extra:
-        raise ValueError("Disconnected merge requires unique image IDs and nonempty camera gain")
+    candidate_ids = set(cohort.reg_image_ids())
+    shared = ids & candidate_ids
+    extra = candidate_ids - ids
+    hybrid = alignment.get("method") == "verified-hybrid-3d-points"
+    if not extra or set(baseline.images) & extra or (shared and
+            (not hybrid or len(shared) > 2)):
+        raise ValueError("Verified merge requires nonconflicting new image IDs")
     transform = np.column_stack((alignment["scale"] * np.asarray(alignment["rotation"], dtype=float),
                                   np.asarray(alignment["translation"], dtype=float).reshape(3)))
     if transform.shape != (3, 4) or not np.isfinite(transform).all() or alignment["scale"] <= 0:
@@ -376,6 +420,39 @@ def fuse_disjoint_models(baseline, cohort, alignment: dict, *, pycolmap_module=N
         for element in point.track.elements:
             track.add_element(element.image_id, element.point2D_idx)
         result.add_point3D(point.xyz, track, point.color)
+    if hybrid:
+        links = alignment.get("verified_new_camera_observations", [])
+        if not isinstance(links, list) or not links:
+            raise ValueError("Hybrid candidate has no audited new-camera 3D observations")
+        seen = set()
+        seen_point_in_image = set()
+        inlier_ids = {tuple(pair) for pair in alignment.get("inlier_point_ids", [])}
+        if len(inlier_ids) < 12:
+            raise ValueError("Hybrid merge needs at least twelve audited 3D inlier pairs")
+        by_image = {image_id: 0 for image_id in extra}
+        for link in links:
+            if (not isinstance(link, list) or len(link) != 4 or
+                    any(not isinstance(i, int) or isinstance(i, bool) for i in link)):
+                raise ValueError("Invalid hybrid observation provenance")
+            base_pid, co_pid, image_id, point_index = link
+            if (image_id not in extra or base_pid not in baseline.points3D or
+                    co_pid not in cohort.points3D or point_index < 0 or
+                    point_index >= len(from_candidates.images[image_id].points2D)):
+                raise ValueError("Hybrid link refers to missing measured 3D evidence")
+            if (base_pid, co_pid) not in inlier_ids:
+                raise ValueError("Hybrid link is not a verified inlier 3D pair")
+            if ((image_id, point_index) in seen or
+                    (image_id, base_pid) in seen_point_in_image):
+                raise ValueError("Duplicate hybrid observation identity")
+            seen.add((image_id, point_index))
+            seen_point_in_image.add((image_id, base_pid))
+            if (not from_candidates.images[image_id].points2D[point_index].has_point3D() or
+                    int(from_candidates.images[image_id].points2D[point_index].point3D_id) != co_pid):
+                raise ValueError("Hybrid link does not match original cohort feature track")
+            result.add_observation(base_pid, pycolmap_module.TrackElement(image_id, point_index))
+            by_image[image_id] += 1
+        if any(count < 8 for count in by_image.values()):
+            raise ValueError("Hybrid candidate has insufficient linked observations per camera")
     if (not result.is_valid() or set(result.reg_image_ids()) != ids | extra or
             result.num_points3D() < baseline.num_points3D()):
         raise ValueError("Combined COLMAP reconstruction fails structural validation")

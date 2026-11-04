@@ -181,6 +181,30 @@ class StatuePipelineTests(unittest.TestCase):
         self.assertEqual(report["failed_worker"]["exit_code"], 2)
         self.assertIn("no exception details", report["failed_worker"]["diagnostic"])
 
+    def test_resume_clears_stale_failed_worker_after_successful_preprocessing(self):
+        def failed_preprocess(argv, log, environment):
+            log.write_text("native abort in previous attempt")
+            return -6
+
+        with self.assertRaisesRegex(ReferenceError, "photo_preprocess failed"):
+            self.build(failed_preprocess)
+        recovery, _calls = self.runner()
+        report = self.build(recovery, resume=True)
+        self.assertNotIn("failed_worker", report)
+        self.assertNotIn("failed_worker", json.loads(
+            (self.output / "statue-pipeline-report.json").read_text()))
+
+    def test_resume_clears_stale_failure_from_already_completed_stage(self):
+        runner, _calls = self.runner()
+        self.build(runner)
+        receipt = self.output / "statue-pipeline-report.json"
+        previous = json.loads(receipt.read_text())
+        previous["failed_worker"] = {"stage": "photo_preprocess", "exit_code": -6,
+                                     "diagnostic": "old OpenMP crash"}
+        receipt.write_text(json.dumps(previous))
+        resumed = self.build(runner, resume=True)
+        self.assertNotIn("failed_worker", resumed)
+
     def test_one_command_runs_every_stage_and_copies_audited_glb(self):
         run, calls = self.runner()
         report = self.build(run)

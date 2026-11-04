@@ -370,6 +370,8 @@ def build_statue_glb(
         if compatible_upgrade:
             report["settings_sha256"] = settings_fingerprint
             report["resume_upgrade"] = "enabled verified camera recovery without rerunning photos"
+        if report.get("failed_worker", {}).get("stage") in report.get("completed_stages", []):
+            report.pop("failed_worker", None)
         if report.get("status") == "private-GLB-candidate / review-required":
             final = target / "model.glb"
             if final.is_symlink() or not final.is_file():
@@ -453,6 +455,10 @@ def build_statue_glb(
             raise ReferenceError(f"{name} failed; inspect {target / 'logs' / (name + '.log')}")
         record = _read_report(receipt)
         report["completed_stages"].append(name)
+        if report.get("failed_worker", {}).get("stage") == name:
+            # A successful resume supersedes this stage's previous native
+            # error. Keep old logs on disk, not as a current failure status.
+            report.pop("failed_worker", None)
         checkpoint("running")
         emit("done", phase)
         return record
@@ -490,6 +496,7 @@ def build_statue_glb(
                              "qa_hits": prepared_report.get("qa_hits"),
                              "qa_misses": prepared_report.get("qa_misses"),
                              "qa_warnings": prepared_report.get("qa_warning_count"),
+                             "mask_qa": prepared_report.get("mask_qa"),
                              "auxiliary_model_status": prepared_report.get("auxiliary_model_status"),
                              "refinement_attempts": prepared_report.get("refinement_attempts"),
                              "refinement_accepted": prepared_report.get("refinement_accepted")}

@@ -225,6 +225,7 @@ def _sam2_mask(photo: Any, guide: dict[str, Any], predictor: Any,
     predictor.set_image(np.asarray(working))
     components = guide.get("component_boxes") or {"subject": guide["box"]}
     merged = np.zeros((h, w), dtype=bool)
+    maximum_candidate_disagreement = 0.0
     for name, bounds in components.items():
         x0, y0, x1, y1 = bounds
         box = np.array([x0*(w-1), y0*(h-1), x1*(w-1), y1*(h-1)], dtype=np.float32)
@@ -259,6 +260,18 @@ def _sam2_mask(photo: Any, guide: dict[str, Any], predictor: Any,
                     compliance += int(match == bool(label))
             return compliance, float(scores[index]) if np.isfinite(scores[index]) else -1.0
         best = max(range(len(masks)), key=grade)
+        best_compliance, best_score = grade(best)
+        # SAM2's mask-score ranking is not evidence that another plausible
+        # silhouette is wrong. If equally prompt-compliant candidates disagree
+        # strongly, mark the image uncertain in early QA instead of pushing
+        # potentially background-based features into the "subject" class.
+        for index in range(len(masks)):
+            compliance, score = grade(index)
+            if (index != best and compliance == best_compliance and
+                    score >= best_score - 0.12):
+                disagreement = float(np.mean((masks[best] > 0) != (masks[index] > 0)))
+                maximum_candidate_disagreement = max(maximum_candidate_disagreement,
+                                                      disagreement)
         merged |= masks[best] > 0
     binary = Image.fromarray(np.where(merged, 255, 0).astype(np.uint8), mode="L")
     if binary.size != (width, height):
@@ -273,7 +286,8 @@ def _sam2_mask(photo: Any, guide: dict[str, Any], predictor: Any,
                                     min(width-1, round(x*(width-1)))])
                         for x, y in guide["background_points"])
     return output, {"components": list(components), "missing_parts": sorted(missing),
-                    "background_seed_violations": negative_hits}
+                    "background_seed_violations": negative_hits,
+                    "sam2_candidate_disagreement_fraction": round(maximum_candidate_disagreement, 6)}
 
 
 def _load_guides(path: str | Path | None, filenames: list[str],

@@ -12,6 +12,9 @@ from kumiki_blender.reconstruction.sfm_point_alignment import (
     estimate_point_alignment, extract_verified_3d_matches, fuse_disjoint_models,
     validate_cross_reprojection, _subject_lookup,
 )
+from kumiki_blender.reconstruction.sfm_cohort_recovery import (
+    CohortRecoverySettings, assess_partial_alignment,
+)
 
 
 class Point:
@@ -60,6 +63,103 @@ def synthetic_pairs(*, outliers=0):
 
 
 class DisconnectedAlignmentTests(unittest.TestCase):
+    def test_one_shared_camera_hybrid_aligns_real_triangulated_surface_tracks(self):
+        from PIL import Image as PILImage
+        import hashlib
+        import json
+
+        class HybridImage(Image):
+            def __init__(self, image_id, point_ids, xyz):
+                super().__init__(image_id, f"img-{image_id}.png", point_ids)
+                for index, point in enumerate(self.points2D):
+                    point.xy = np.asarray(xyz[index][:2], dtype=float) + 50
+
+            def projection_center(self):
+                return np.asarray([self.image_id * 3., 0, 0], dtype=float)
+
+            def viewing_direction(self):
+                return np.asarray([0, 0, 1], dtype=float)
+
+            def project_point(self, xyz):
+                return np.asarray(xyz[:2]) + 50
+
+        def model(image_ids, offset, xyz):
+            images = [HybridImage(image_id, [i + offset for i in range(len(xyz))], xyz)
+                      for image_id in image_ids]
+            reconstructed = Model(images, {i + offset: value for i, value in enumerate(xyz)})
+            for index in range(len(xyz)):
+                reconstructed.points3D[index + offset].track = SimpleNamespace(elements=[
+                    SimpleNamespace(image_id=image_id, point2D_idx=index)
+                    for image_id in image_ids])
+            return reconstructed
+
+        xyz = [(i % 5 * 3., (i // 5) % 3 * 5., i // 15 * 7. + i % 3 * 0.4)
+               for i in range(30)]
+        baseline = model([1, 2, 3], 0, xyz)
+        cohort = model([1, 10], 100, xyz)
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            db = root / "database.db"
+            with sqlite3.connect(db) as conn:
+                conn.execute("CREATE TABLE two_view_geometries (pair_id INTEGER, rows INTEGER, cols INTEGER, config INTEGER, data BLOB)")
+                for left, right in ((1, 2), (1, 3), (2, 10), (3, 10)):
+                    blob = b"".join(struct.pack("<II", i, i) for i in range(len(xyz)))
+                    conn.execute("INSERT INTO two_view_geometries VALUES (?,?,?,?,?)",
+                                 (left * 2147483647 + right, len(xyz), 2, 2, blob))
+            confidence = root / "subject.png"
+            PILImage.new("L", (160, 160), 255).save(confidence)
+            sha = hashlib.sha256(confidence.read_bytes()).hexdigest()
+            qa = root / "subject-feature-index.json"
+            qa.write_text(json.dumps({"schema": "subject-feature-index-v1", "images": {
+                f"img-{image_id}.png": {"confidence_path": str(confidence),
+                                       "confidence_sha256": sha, "dimensions": [160, 160]}
+                for image_id in (1, 2, 3, 10)}}))
+            aligned = assess_partial_alignment(
+                baseline, cohort, db, qa, CohortRecoverySettings(min_new_cameras=1))
+            self.assertTrue(aligned["accepted"], aligned["reasons"])
+            self.assertEqual(aligned["shared_cameras"], 1)
+            self.assertEqual(aligned["evidence_audit"]["shared_anchor_2d3d_pairs"], 30)
+            self.assertGreaterEqual(aligned["new_camera_3d_support"]["10"]["count"], 25)
+            self.assertEqual(aligned["method"], "verified-hybrid-3d-points")
+
+            two_shared = model([1, 2, 10], 100, xyz)
+            aligned_two = assess_partial_alignment(
+                baseline, two_shared, db, qa, CohortRecoverySettings(min_new_cameras=1))
+            self.assertTrue(aligned_two["accepted"], aligned_two["reasons"])
+            self.assertEqual(aligned_two["shared_cameras"], 2)
+            # A scale/pose fit based on plausible stone features cannot hide
+            # an incompatible second anchor camera center.
+            two_shared.images[2].projection_center = lambda: np.asarray([100., 0., 0.])
+            bad_anchor = assess_partial_alignment(
+                baseline, two_shared, db, qa, CohortRecoverySettings(min_new_cameras=1))
+            self.assertFalse(bad_anchor["accepted"])
+            self.assertIn("shared-camera-center-mismatch", bad_anchor["reasons"])
+
+            blank = root / "unverified-subject.png"
+            PILImage.new("L", (160, 160), 128).save(blank)
+            index = json.loads(qa.read_text())
+            index["images"]["img-10.png"] = {
+                "confidence_path": str(blank),
+                "confidence_sha256": hashlib.sha256(blank.read_bytes()).hexdigest(),
+                "dimensions": [160, 160],
+            }
+            qa.write_text(json.dumps(index))
+            unverified = assess_partial_alignment(
+                baseline, cohort, db, qa, CohortRecoverySettings(min_new_cameras=1))
+            self.assertFalse(unverified["accepted"])
+            self.assertIn("insufficient-verified-new-camera-3d-support", unverified["reasons"])
+
+            # A model that sees a completely different object can have one
+            # common camera ID and many 2D matches, but no valid 3D Sim(3).
+            misleading = model([1, 10], 100, xyz)
+            generator = np.random.default_rng(48)
+            for point in misleading.points3D.values():
+                point.xyz = generator.normal(0, 60, size=3)
+            rejected = assess_partial_alignment(
+                baseline, misleading, db, qa, CohortRecoverySettings(min_new_cameras=1))
+            self.assertFalse(rejected["accepted"])
+            self.assertTrue(rejected["reasons"])
+
     def test_subject_lookup_lazily_loads_only_participating_images(self):
         from PIL import Image as PILImage
         import hashlib
@@ -111,6 +211,48 @@ class DisconnectedAlignmentTests(unittest.TestCase):
         self.assertEqual(baseline.num_points3D(), 1)
         self.assertEqual(cohort.num_points3D(), 1)
         self.assertEqual(sorted(round(float(p.xyz[0])) for p in candidate.points3D.values()), [0, 10])
+
+    def test_native_pycolmap_hybrid_merger_links_only_verified_new_camera_observations(self):
+        try:
+            import pycolmap
+        except ImportError:
+            self.skipTest("Optional photogrammetry dependency is absent")
+
+        def make(image_ids):
+            model = pycolmap.Reconstruction()
+            camera = pycolmap.Camera(model="SIMPLE_PINHOLE", width=800, height=600,
+                                    params=[900, 400, 300], camera_id=1)
+            model.add_camera_with_trivial_rig(camera)
+            for image_id in image_ids:
+                frame = pycolmap.Image(
+                    name=f"{image_id}.png", camera_id=1, image_id=image_id,
+                    keypoints=np.asarray([[400 + i, 300 + i] for i in range(12)], dtype=float))
+                model.add_image_with_trivial_frame(frame, pycolmap.Rigid3d())
+            for index in range(12):
+                track = pycolmap.Track()
+                for image_id in image_ids:
+                    track.add_element(image_id, index)
+                model.add_point3D(np.asarray([float(index), float(index % 3), 5.]), track)
+            return model
+
+        baseline, cohort = make([1, 2]), make([2, 3])
+        matches = [
+            [base_pid, co_pid, 3, index]
+            for index, (base_pid, co_pid) in enumerate(zip(
+                sorted(baseline.points3D), sorted(cohort.points3D)))]
+        merged = fuse_disjoint_models(baseline, cohort, {
+            "accepted": True, "method": "verified-hybrid-3d-points",
+            "scale": 1., "rotation": np.eye(3).tolist(), "translation": [0., 0., 0.],
+            "inlier_point_ids": [row[:2] for row in matches],
+            "verified_new_camera_observations": matches})
+        self.assertTrue(merged.is_valid())
+        self.assertEqual(set(merged.reg_image_ids()), {1, 2, 3})
+        self.assertEqual(merged.num_points3D(), baseline.num_points3D())
+        self.assertEqual(sum(bool(p.has_point3D()) for p in merged.images[3].points2D), 12)
+        self.assertEqual(sum(bool(p.has_point3D()) for p in baseline.images[1].points2D), 12)
+        for image_id in (1, 2):
+            self.assertTrue(np.allclose(merged.images[image_id].projection_center(),
+                                        baseline.images[image_id].projection_center()))
     def test_zero_common_cameras_robust_sim3_rejects_outliers(self):
         evidence = synthetic_pairs(outliers=9)
         result = estimate_point_alignment(evidence, baseline_cloud=[x["baseline_xyz"] for x in evidence],

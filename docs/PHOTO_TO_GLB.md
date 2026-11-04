@@ -248,7 +248,10 @@ private `<asset-output-parent>/_statue_photo_cache/` directory (override with
   mask boundary, blue-background warnings and independent-model disagreement.
   When both proposals are usable, disagreement pixels stay **uncertain**;
   invalid foreground masks make all pixels uncertain so useful anatomy is not
-  silently discarded.
+  silently discarded. Multiple similarly scored but substantially different
+  SAM2 silhouettes also mark the **whole source confidence map uncertain**.
+  This prevents an ambiguous automatically selected silhouette from being
+  treated as verified object support during LightGlue matching.
 
 The source QA contact sheet is generated **before feature extraction** and
 does not replace the later rectified multi-view mask audit. Visual inspection
@@ -258,8 +261,13 @@ low resolution and poor lighting do not automatically delete photographs.
 The contact sheet now shows **original / binary SAM2 candidate / confidence
 overlay** separately. For closer inspection, find each 1536-pixel-wide
 triptych at `photo-preprocess/photo-qa-details/photo-XXXX.jpg`.
-The run report includes `qa_hits`, `qa_misses`, `qa_warning_count`,
+The run report includes `qa_hits`, `qa_misses`, `qa_warning_count`, `mask_qa`
+(suspect count, original names, specific problems and full-size preview paths),
 `auxiliary_model_status`, `refinement_attempts`, and `refinement_accepted`.
+`mask_qa.needs_visual_review` stays true even when no automated warning fires:
+without ground-truth outlines, the code cannot certify complete anatomy.
+Source mask/QA cache identities are versioned for the new multimask ambiguity
+checks, while normalized original RGB photos remain cached unchanged.
 
 On a machine with a previously downloaded, verified IS-Net model, install the
 optional library with `pip install -e '.[mask-ai]'` to enable offline
@@ -317,7 +325,7 @@ invalidates the affected cache keys. Interrupted preprocessing can resume
 without recomputing completed, valid entries. The existing new-photo camera
 matching still needs to solve correspondences with the updated photo set.
 
-### Independent camera groups without common registered cameras
+### Independent camera groups with zero, one or two common registered cameras
 
 Previously, the cohort merger could only align groups sharing at least three
 registered cameras. It now has a second, conservative path for **zero shared
@@ -340,6 +348,18 @@ original feature indices and source-photo confidence maps. Then it:
    gates before dense geometry. A rejection leaves the independent candidate
    and its `alignment.reasons` and diagnostics intact.
 
+For **one or two shared registered cameras**, the program additionally
+attempts `verified-hybrid-3d-points` alignment. Shared image *feature IDs*
+can link two independently triangulated object-surface tracks, but only when
+each has independent depth observations and the original image coordinates
+match. Cross-camera COLMAP inliers must still support spatially distributed
+Sim(3) RANSAC, calibrated reprojection, and at least eight verified object
+observations in **every newly added camera**. Shared camera center and viewing
+direction must also agree after transformation. The accepted candidate links
+only those audited new-camera observations into existing baseline 3D tracks;
+ambiguous, unverified, or missing tracks are never welded. This path does not
+reduce any threshold for zero-shared or three-plus-shared alignment.
+
 The standard COLMAP `model_merger` is still used when there are sufficient
 shared registered cameras. It is **not** used to claim a disjoint-group merge
 without shared cameras. Old revisions without early subject QA cannot use the
@@ -354,6 +374,10 @@ the number of cross-group verified image pairs, 2D observations, features with
 only one model's 3D track, features with *both* 3D tracks, ambiguous points,
 and subject-verified correspondences. This identifies why visually similar
 elevated photos cannot be aligned without weakening geometric validation.
+Hybrid rejection reports also include shared-anchor correspondences,
+`new_camera_3d_support`, reprojection errors, and specific alignment reasons.
+The one-shared-camera Great Sphinx candidate with 30 reconstructed points is
+reason to **test** hybrid alignment, not evidence that it will pass the gates.
 
 For a blocked reconstruction **that already has a subject QA index**, use
 `--resume` to retry camera recovery without repeating completed matching.

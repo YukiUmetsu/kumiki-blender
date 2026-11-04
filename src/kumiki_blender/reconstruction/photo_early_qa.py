@@ -13,7 +13,7 @@ from pathlib import Path
 
 from .references import ReferenceError
 
-QA_VERSION = "source-photo-qa-consensus-v2"
+QA_VERSION = "source-photo-qa-consensus-v3"
 UNKNOWN, SUBJECT, BACKGROUND = 128, 255, 0
 
 
@@ -92,6 +92,10 @@ def analyze_cached_photo(normalized: Path, source_sha: str, cache: Path, *,
                         if isinstance(part, str) and part)
     if details.get("background_seed_violations", 0):
         warnings.append("candidate-background-seed-violations")
+    ambiguity = details.get("sam2_candidate_disagreement_fraction", 0)
+    if (isinstance(ambiguity, (float, int)) and not isinstance(ambiguity, bool) and
+            0.18 < ambiguity <= 1):
+        warnings.append("candidate-sam2-ambiguous")
 
     confidence = Image.new("L", rgb.size, UNKNOWN)
     fraction = None
@@ -122,7 +126,8 @@ def analyze_cached_photo(normalized: Path, source_sha: str, cache: Path, *,
             warnings.append("possible-blue-background-leakage")
         suspect = any(label in warnings for label in (
             "foreground-too-small", "foreground-too-large", "foreground-touches-frame",
-            "possible-blue-background-leakage", "candidate-background-seed-violations")) or bool(missing)
+            "possible-blue-background-leakage", "candidate-background-seed-violations",
+            "candidate-sam2-ambiguous")) or bool(missing)
         if not suspect:
             # Keep a broad uncertain band on both sides of the SAM2 boundary;
             # no feature is *removed* on the basis of segmentation alone.
