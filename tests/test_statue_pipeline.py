@@ -178,6 +178,19 @@ class StatuePipelineTests(unittest.TestCase):
         self.assertTrue(report["status"].startswith("private-GLB-candidate"))
         self.assertEqual(report["glb_audit"]["meshes"], 1)
 
+    def test_camera_worker_receives_pre_matching_source_qa_and_cpu_option(self):
+        run, _ = self.runner()
+        captured = []
+        def record(args, log, environment):
+            if log.stem == "cameras":
+                captured.extend(args)
+            return run(args, log, environment)
+        settings = StatuePipelineSettings(**{**vars(self.settings), "matching_device": "torch-cpu"})
+        self.build(record, settings=settings)
+        self.assertIn("--source-qa-report", captured)
+        self.assertIn(str(self.output / "photo-preprocess/photo-preprocess-report.json"), captured)
+        self.assertEqual(captured[captured.index("--matching-device") + 1], "torch-cpu")
+
     def test_missing_profiles_stop_before_masks_and_mesh(self):
         run, calls = self.runner(coverage_bad=True)
         report = self.build(run)

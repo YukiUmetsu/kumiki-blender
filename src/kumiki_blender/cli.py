@@ -191,13 +191,15 @@ def main(argv: list[str] | None = None) -> int:
                                       help="New immutable reconstruction revision directory")
             photo_parser.add_argument("--normalized-cache-dir", type=Path,
                                       help="Reuse byte-verified RGB normalizations of unchanged original photos")
+            photo_parser.add_argument("--source-qa-report", type=Path,
+                                      help="Verified source-photo confidence report for subject-aware matching")
             photo_parser.add_argument("--colmap", default="colmap", help="Installed COLMAP executable")
             photo_parser.add_argument("--engine", choices=("colmap", "pycolmap"), default="colmap",
                                       help="COLMAP CLI (default) or pip-installed CPU PyCOLMAP")
             photo_parser.add_argument("--matching-preset",
                                       choices=("sift", "sift-lightglue", "aliked-lightglue", "loma", "loma128"),
                                       default="sift", help="Learned matching requires ONNX-enabled COLMAP 4.2+")
-            photo_parser.add_argument("--matching-device", choices=("colmap-cpu", "mps"),
+            photo_parser.add_argument("--matching-device", choices=("colmap-cpu", "mps", "torch-cpu"),
                                       default="colmap-cpu",
                                       help="COLMAP CPU matching or Apple Silicon PyTorch MPS LightGlue")
             photo_parser.add_argument("--feature-threads", type=int,
@@ -292,6 +294,8 @@ def main(argv: list[str] | None = None) -> int:
                            help="Never download missing model weights; search local caches only")
     statue_glb.add_argument("--sam2-size", choices=("tiny", "small", "base_plus", "large"), default="small")
     statue_glb.add_argument("--sam2-device", choices=("auto", "mps", "cpu"), default="mps")
+    statue_glb.add_argument("--matching-device", choices=("mps", "torch-cpu"), default="mps",
+                           help="Use Apple MPS LightGlue or PyTorch CPU fallback")
     statue_glb.add_argument("--mask-guides", type=Path,
                            help="Optional manual overrides for automatically inferred segmentation prompts")
     statue_glb.add_argument("--masks-dir", type=Path,
@@ -1283,6 +1287,7 @@ def main(argv: list[str] | None = None) -> int:
                     sam2_checkpoint=args.sam2_checkpoint,
                     auto_download_model=not args.no_auto_model_download,
                     sam2_size=args.sam2_size, sam2_device=args.sam2_device,
+                    matching_device=args.matching_device,
                     mask_guides=args.mask_guides, masks_dir=args.masks_dir,
                     mask_cache_dir=args.mask_cache_dir, photo_cache_dir=args.photo_cache_dir,
                     ai_bridges=args.ai_bridges or args.ai_bridge_workflow is not None,
@@ -1680,6 +1685,7 @@ def main(argv: list[str] | None = None) -> int:
                                                       matching_device=args.matching_device,
                                                       matching_pair_list=args.matching_pair_list,
                                                       normalized_cache_dir=args.normalized_cache_dir,
+                                                      source_qa_report=args.source_qa_report,
                                                       feature_threads=args.feature_threads,
                                                       matching_threads=args.matching_threads,
                                                       sift_first_octave=args.sift_first_octave,

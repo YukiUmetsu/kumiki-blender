@@ -230,6 +230,7 @@ def prepare_statue_photo_cache(references: ReferenceSet, cache: Path, output: Pa
                               "foreground_model_sha256": sha, "source_images": len(references.images),
                               "images": [], "normalized_hits": 0, "normalized_misses": 0,
                               "foreground_hits": 0, "foreground_misses": 0,
+                              "qa_hits": 0, "qa_misses": 0,
                               "background_removal": "SAM2 candidate previews; never used as original evidence"
                               if foreground else "disabled"}
 
@@ -256,10 +257,36 @@ def prepare_statue_photo_cache(references: ReferenceSet, cache: Path, output: Pa
                                                   f"foreground-{mask['key']}.png"),
                          isolated_preview_path=str(_folder(cache, photo.sha256) /
                                                   f"isolated-{mask['key']}.png"))
+        from .photo_early_qa import analyze_cached_photo
+        qa, qa_hit = analyze_cached_photo(
+            normalized, photo.sha256, cache,
+            mask_path=Path(entry["foreground_mask_path"]) if foreground else None,
+            model_sha=sha)
+        report["qa_hits" if qa_hit else "qa_misses"] += 1
+        entry.update(qa_cache_hit=qa_hit, qa_key=qa["key"],
+                     qa_confidence_path=qa["confidence_path"],
+                     qa_confidence_sha256=qa["confidence_sha256"],
+                     qa_warnings=qa["warnings"], qa_status=qa["status"],
+                     qa_brightness=qa["brightness"], qa_blur_score=qa["blur_score"],
+                     qa_average_hash=qa["average_hash"])
         report["images"].append(entry)
         checkpoint_report()
         if progress is not None:
             progress(position, len(references.images), hit)
+    # Duplicate warnings are advisory; identical photographic appearances
+    # are not independent camera baselines, even when file bytes differ.
+    for pos, entry in enumerate(report["images"]):
+        for earlier in report["images"][:pos]:
+            hamming = sum(a != b for a, b in zip(entry["qa_average_hash"],
+                                                  earlier["qa_average_hash"]))
+            if hamming <= 3:
+                entry["qa_warnings"].append(
+                    f"possible-near-duplicate:{earlier['original_filename']}")
+                break
+    from .photo_early_qa import write_qa_contact_sheet
+    write_qa_contact_sheet(report["images"], output / "photo-qa-contact-sheet.jpg")
+    report["qa_contact_sheet"] = "photo-qa-contact-sheet.jpg"
+    report["qa_warning_count"] = sum(bool(row["qa_warnings"]) for row in report["images"])
     report["status"] = "candidate / cached-photo-preparation"
     checkpoint_report()
     return report

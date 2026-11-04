@@ -32,6 +32,7 @@ class StatuePipelineSettings:
     sam2_checkpoint: Path | None = None
     sam2_size: str = "small"
     sam2_device: str = "mps"
+    matching_device: str = "mps"
     mask_guides: Path | None = None
     masks_dir: Path | None = None
     mask_cache_dir: Path | None = None
@@ -57,6 +58,8 @@ class StatuePipelineSettings:
             raise ReferenceError("Unsupported SAM2 model size")
         if self.sam2_device not in ("mps", "cpu", "auto"):
             raise ReferenceError("Unsupported SAM2 device")
+        if self.matching_device not in ("mps", "torch-cpu"):
+            raise ReferenceError("Statue LightGlue matching device must be mps or torch-cpu")
         if not 1024 <= self.max_colmap_rss_mb <= 131072:
             raise ReferenceError("max_colmap_rss_mb must be between 1024 and 131072")
         if not 60 <= self.timeout_seconds <= 86400:
@@ -344,6 +347,9 @@ def build_statue_glb(
         "ai_bridge_workflow_sha256": (_sha256_file(settings.ai_bridge_workflow)
                                       if settings.ai_bridge_workflow else None),
     }
+    # Preserve compatibility with immutable older MPS revision fingerprints.
+    if settings.matching_device != "mps":
+        settings_payload["matching_device"] = settings.matching_device
     settings_fingerprint = hashlib.sha256(json.dumps(
         settings_payload, sort_keys=True).encode()).hexdigest()
     # Older, blocked revisions can resume camera recovery after upgrading the
@@ -466,11 +472,16 @@ def build_statue_glb(
     report["photo_cache"] = {"normalized_hits": prepared_report.get("normalized_hits"),
                              "normalized_misses": prepared_report.get("normalized_misses"),
                              "foreground_hits": prepared_report.get("foreground_hits"),
-                             "foreground_misses": prepared_report.get("foreground_misses")}
+                             "foreground_misses": prepared_report.get("foreground_misses"),
+                             "qa_hits": prepared_report.get("qa_hits"),
+                             "qa_misses": prepared_report.get("qa_misses"),
+                             "qa_warnings": prepared_report.get("qa_warning_count")}
+    report["early_photo_qa"] = "photo-preprocess/photo-qa-contact-sheet.jpg"
     camera_argv = executable + ["reconstruct-photos", "--photos", str(photos.resolve()),
         "--asset-id", asset_id, "--output", str(sparse), "--engine", "colmap",
         "--normalized-cache-dir", str(photo_cache),
-        "--matching-preset", "sift-lightglue", "--matching-device", "mps",
+        "--matching-preset", "sift-lightglue", "--matching-device", settings.matching_device,
+        "--source-qa-report", str(prepared / "photo-preprocess-report.json"),
         "--matching-pairs-per-process", "8", "--max-colmap-rss-mb", str(settings.max_colmap_rss_mb),
         "--undistort", "--timeout-seconds", str(settings.timeout_seconds)]
     if resume and sparse.exists() and "cameras" not in report["completed_stages"]:

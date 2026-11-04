@@ -10,10 +10,11 @@ from unittest.mock import patch
 import numpy as np
 from PIL import Image
 
-from kumiki_blender.reconstruction.colmap import _prepare_images
+from kumiki_blender.reconstruction.colmap import _prepare_images, _stage_subject_qa_index
 from kumiki_blender.reconstruction.photo_preprocess_cache import (
     prepare_statue_photo_cache, read_normalized_photo,
 )
+from kumiki_blender.reconstruction.photo_early_qa import analyze_cached_photo
 from kumiki_blender.reconstruction.splat_input import load_photo_folder
 
 
@@ -107,6 +108,56 @@ class PhotoPreprocessCacheTests(unittest.TestCase):
                 source, self.cache, self.root / "run-1", checkpoint=self.checkpoint,
                 predictor_loader=lambda *_: (object(), "mps"), resume=True)
         self.assertEqual((result["normalized_hits"], result["foreground_hits"]), (8, 8))
+
+    def test_early_qa_marks_unreliable_foreground_as_uncertain_not_background(self):
+        photo = self.photos / "photo-01.jpg"
+        source = next(item for item in load_photo_folder(self.photos, "great-sphinx").images
+                      if item.path == photo)
+        from kumiki_blender.reconstruction.photo_preprocess_cache import normalize_cached_photo
+        normalized, _, _ = normalize_cached_photo(source, self.cache)
+        bad = self.root / "bad-mask.png"
+        Image.new("L", (96, 80), 0).save(bad)
+        receipt, hit = analyze_cached_photo(normalized, source.sha256, self.cache,
+                                            mask_path=bad, model_sha="model-1")
+        self.assertFalse(hit)
+        self.assertIn("foreground-too-small", receipt["warnings"])
+        with Image.open(receipt["confidence_path"]) as confidence:
+            self.assertEqual(set(np.asarray(confidence).flat), {128})
+        _, hit = analyze_cached_photo(normalized, source.sha256, self.cache,
+                                      mask_path=bad, model_sha="model-1")
+        self.assertTrue(hit)
+        Image.new("L", (96, 80), 255).save(bad)
+        changed, hit = analyze_cached_photo(normalized, source.sha256, self.cache,
+                                             mask_path=bad, model_sha="model-1")
+        self.assertFalse(hit)
+        self.assertNotEqual(changed["key"], receipt["key"])
+
+    def test_early_qa_cache_survives_new_photo_and_creates_contact_sheet(self):
+        first = self.build(1)
+        self.assertEqual((first["qa_hits"], first["qa_misses"]), (0, 8))
+        self.assertTrue((self.root / "run-1" / "photo-qa-contact-sheet.jpg").is_file())
+        Image.new("RGB", (96, 80), (30, 70, 130)).save(self.photos / "added.jpg")
+        second = self.build(2)
+        self.assertEqual((second["qa_hits"], second["qa_misses"]), (8, 1))
+        self.assertEqual(len(second["images"]), 9)
+        self.assertTrue(all(Path(row["qa_confidence_path"]).is_file()
+                            for row in second["images"]))
+
+    def test_staged_feature_index_rejects_stale_image_or_modified_confidence(self):
+        report = self.build(1)
+        source = load_photo_folder(self.photos, "great-sphinx")
+        stage = self.root / "stage-qa"
+        stage.mkdir()
+        _prepare_images(list(source.images), stage, normalize_for_colmap=True,
+                        normalized_cache_dir=self.cache)
+        report_path = self.root / "run-1" / "photo-preprocess-report.json"
+        index = _stage_subject_qa_index(report_path, stage)
+        self.assertEqual(len(index["images"]), 8)
+        self.assertTrue((stage / "subject-feature-index.json").is_file())
+        first = Path(report["images"][0]["qa_confidence_path"])
+        first.write_bytes(b"corrupted")
+        with self.assertRaisesRegex(Exception, "confidence.*hash|confidence.*changed"):
+            _stage_subject_qa_index(report_path, stage)
 
 
 if __name__ == "__main__":

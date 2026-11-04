@@ -353,6 +353,45 @@ def _prepare_images(references: list[ReferenceImage], output: Path, *,
     return has_masks
 
 
+def _stage_subject_qa_index(qa_report: Path, reconstruction: Path) -> dict:
+    """Bind immutable per-photo confidence to COLMAP's exact staged pixels.
+
+    Filenames may change as photographs are added, so join by source digest,
+    then independently verify normalized and confidence bytes before matching.
+    """
+    if qa_report.is_symlink() or not qa_report.is_file():
+        raise ReferenceError("Source QA report must be an existing regular file")
+    metadata = json.loads(qa_report.read_text(encoding="utf-8"))
+    index = json.loads((reconstruction / "staged-reference-index.json").read_text(encoding="utf-8"))
+    if (metadata.get("status") != "candidate / cached-photo-preparation"
+            or not isinstance(metadata.get("images"), list)):
+        raise ReferenceError("Source QA is not a completed cached-photo report")
+    by_source = {entry["source_sha256"]: entry for entry in metadata["images"]}
+    if len(by_source) != len(metadata["images"]):
+        raise ReferenceError("Duplicate content hashes in subject QA report")
+    result = {"schema": "subject-feature-index-v1", "images": {},
+              "source_qa_report_sha256": _sha256(qa_report)}
+    for staged in index["images"]:
+        source = by_source.get(staged["original_sha256"])
+        if (not source or source.get("normalized_sha256") != staged["sha256"] or
+                not isinstance(source.get("qa_confidence_sha256"), str)):
+            raise ReferenceError("Subject QA source/normalized photo hash mismatch")
+        confidence = Path(source["qa_confidence_path"])
+        if confidence.is_symlink() or not confidence.is_file() or _sha256(confidence) != source["qa_confidence_sha256"]:
+            raise ReferenceError("Subject confidence hash changed after preparation")
+        from PIL import Image
+        with Image.open(confidence) as raster:
+            if raster.mode != "L" or list(raster.size) != staged["dimensions"]:
+                raise ReferenceError("Subject confidence dimensions differ from staged photograph")
+            raster.verify()
+        result["images"][staged["filename"]] = {
+            "confidence_path": str(confidence.resolve()),
+            "confidence_sha256": source["qa_confidence_sha256"],
+            "normalized_sha256": staged["sha256"], "qa_key": source["qa_key"]}
+    _write_json(reconstruction / "subject-feature-index.json", result)
+    return result
+
+
 def _feature_import_report(database: Path, staged_index: Path) -> dict:
     """Audit what the COLMAP decoder *actually* imported, not what was staged."""
     staged = json.loads(staged_index.read_text(encoding="utf-8"))
@@ -585,6 +624,7 @@ def _match_in_bounded_processes(
     report: dict[str, Any], checkpoint: Callable[[], dict[str, Any]],
     *, matching_device: str = "colmap-cpu", max_keypoints: int = 4096,
     matching_pair_list: Path | None = None,
+    subject_qa_index: Path | None = None,
 ) -> bool:
     """Persist pair-matching progress across independent COLMAP workers.
 
@@ -631,7 +671,8 @@ def _match_in_bounded_processes(
         else:
             arguments = (["--database", str(database), "--pairs", str(pair_file),
                           "--max-keypoints", str(max_keypoints),
-                          "--device", matching_device])
+                          "--device", "cpu" if matching_device == "torch-cpu" else "mps"] +
+                         (["--qa-index", str(subject_qa_index)] if subject_qa_index else []))
             stage = "match"
             worker = [sys.executable, "-m", "kumiki_blender.reconstruction.mps_lightglue_worker"]
         code, command = _run(worker, stage, arguments, target, number,
@@ -776,6 +817,7 @@ def build_sparse_reconstruction(reference_set: ReferenceSet, output: str | Path,
                                 matching_device: str = "colmap-cpu",
                                 matching_pair_list: Path | None = None,
                                 normalized_cache_dir: Path | None = None,
+                                source_qa_report: Path | None = None,
                                 resume: bool = False) -> dict[str, Any]:
     """Produce auditable camera/sparse data using a locally installed COLMAP.
 
@@ -801,13 +843,16 @@ def build_sparse_reconstruction(reference_set: ReferenceSet, output: str | Path,
     if registration_profile == "high-recall" and engine != "pycolmap":
         raise ReferenceError("High-recall registration currently requires --engine pycolmap")
     _validate_matching_preset(matching_preset, engine)
-    if matching_device not in ("colmap-cpu", "mps"):
-        raise ReferenceError("Matching device must be colmap-cpu or mps")
-    if matching_device == "mps" and (matching_preset != "sift-lightglue" or
+    if matching_device not in ("colmap-cpu", "mps", "torch-cpu"):
+        raise ReferenceError("Matching device must be colmap-cpu, mps or torch-cpu")
+    if matching_device in ("mps", "torch-cpu") and (matching_preset != "sift-lightglue" or
                                      engine != "colmap"):
-        raise ReferenceError("MPS matching requires --engine colmap --matching-preset sift-lightglue")
-    if matching_device == "mps" and matching_pairs_per_process is None:
-        raise ReferenceError("MPS matching requires --matching-pairs-per-process (recommended: 8)")
+        raise ReferenceError("PyTorch matching requires --engine colmap --matching-preset sift-lightglue")
+    if matching_device in ("mps", "torch-cpu") and matching_pairs_per_process is None:
+        raise ReferenceError("PyTorch matching requires --matching-pairs-per-process (recommended: 8)")
+    if source_qa_report is not None and (matching_preset != "sift-lightglue" or
+                                         matching_device == "colmap-cpu"):
+        raise ReferenceError("Subject-aware matching requires the MPS or torch-cpu LightGlue worker")
     if matching_pair_list is not None:
         if matching_pairs_per_process is None:
             raise ReferenceError("--matching-pair-list requires --matching-pairs-per-process")
@@ -888,8 +933,12 @@ def build_sparse_reconstruction(reference_set: ReferenceSet, output: str | Path,
     colmap_info, cpu_flags = _probe_colmap(executable)
     supports_extraction_size = (_preflight_matching_preset(executable, matching_preset)
                                 if engine == "colmap" else False)
-    if matching_device == "mps":
-        _preflight_mps_worker()
+    if matching_device in ("mps", "torch-cpu"):
+        if matching_device == "mps":
+            _preflight_mps_worker()
+        else:
+            subprocess.run([sys.executable, "-m", "kumiki_blender.reconstruction.mps_lightglue_worker",
+                            "check", "--device", "cpu"], check=True, timeout=90, capture_output=True)
     colmap_info["engine"] = engine
     # Re-check before creating anything: photo files can be edited after intake.
     for image in references:
@@ -975,6 +1024,10 @@ def build_sparse_reconstruction(reference_set: ReferenceSet, output: str | Path,
             if (staged.is_symlink() or not staged.is_file() or
                     _sha256(staged) != entry["sha256"]):
                 raise ReferenceError(f"Cannot resume: staged image changed ({entry['filename']})")
+        if source_qa_report is not None and report.get("source_qa_index_sha256") is None:
+            raise ReferenceError("Cannot apply subject QA retroactively to already extracted/matched features")
+        if source_qa_report is None and report.get("source_qa_index_sha256") is not None:
+            raise ReferenceError("Cannot resume subject matching without its QA report")
         matching_complete = report.get("matching_progress", {}).get("status") == "complete"
         if ((matching_complete and report.get("failed_stage") != "geometric_verifier" and
              report.get("pending_stage") != "geometric_verifier") or
@@ -1019,6 +1072,19 @@ def build_sparse_reconstruction(reference_set: ReferenceSet, output: str | Path,
         except (ReferenceError, OSError, ValueError) as error:
             report["failed_stage"], report["exit_code"] = "staging", 2
             report["error"] = str(error)
+            return checkpoint()
+    if source_qa_report is not None:
+        try:
+            subject_index = _stage_subject_qa_index(source_qa_report, target)
+            qa_index_file = target / "subject-feature-index.json"
+            current_index_sha = _sha256(qa_index_file)
+            if resume and report.get("source_qa_index_sha256") != current_index_sha:
+                raise ReferenceError("Cannot resume: subject QA index changed")
+            report["source_qa_index_sha256"] = current_index_sha
+            report["source_qa_images"] = len(subject_index["images"])
+            checkpoint()
+        except (OSError, ValueError, ReferenceError) as error:
+            report.update(failed_stage="source_qa", exit_code=2, error=str(error))
             return checkpoint()
     database = target / "database.db"
     images = target / "images"
@@ -1116,9 +1182,10 @@ def build_sparse_reconstruction(reference_set: ReferenceSet, output: str | Path,
                 [entry["filename"] for entry in staged["images"]],
                 matching_pairs_per_process, report, checkpoint,
                 matching_device=matching_device, max_keypoints=effective_match_features or 4096,
-                matching_pair_list=matching_pair_list):
+                matching_pair_list=matching_pair_list,
+                subject_qa_index=target / "subject-feature-index.json" if source_qa_report else None):
             return report
-    if matching_device == "mps" or any(
+    if matching_device in ("mps", "torch-cpu") or any(
             command and command[0] == "match" for command in report["commands"]):
         # The worker stores raw COLMAP correspondence rows. Without two-view
         # geometric verification the mapper will silently see zero matches.
