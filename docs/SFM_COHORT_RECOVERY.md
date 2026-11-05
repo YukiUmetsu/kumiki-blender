@@ -453,6 +453,37 @@ would remove the entire 3D point). Inspect the track instead of forcing the
 operation. On the November 5 Sphinx test, `photo-0060.png` observations 855
 and 1462 both referred to 3D point 18295; do not automatically delete 1462.
 
+For a previously created **separate sparse COLMAP model** without a RoMa
+candidate receipt, `repair-roma-sparse-camera` offers a guarded, explicit
+alternative. It is appropriate only after the duplicate target tracks have
+been inspected in the native model. The Sphinx audit confirmed point 18295
+has five track members, including target indices 855 and 1462, and point 18298
+has three; the lower-error observation 855 must survive. The 49 baseline
+poses had exactly zero measured center/orientation drift before repair.
+
+```sh
+RUN=.review/great-sphinx/statue-hq-r005
+kumiki-blender repair-roma-sparse-camera \
+  --baseline-model "$RUN/dense-masked-fixed-r01/workspace/sparse" \
+  --candidate-model "$RUN/roma-dense-r01/workspace/sparse" \
+  --target photo-0060.png \
+  --remove-index 1462 --remove-index 1463 \
+  --exclude-camera photo-0013.png --exclude-camera photo-0055.png \
+  --outlier-px 8 --allow-duplicate-repair \
+  --output "$RUN/roma-top-only-r01"
+```
+
+This requires exactly the three added cameras named above, zero baseline
+pose drift, both requested outliers above 8px, consistent native track links,
+surviving multi-view tracks, and at least 30 remaining target observations.
+It refuses to deregister a shared multi-camera frame. Native PyCOLMAP 4.x
+`deregister_frame` is used to exclude the two unverified views; neither the
+original 49-camera model nor the 52-camera experiment is edited. The output
+contains `sparse/` and `roma-sparse-repair-report.json`, **not** a dense-ready
+rectified reconstruction. Evaluate independent object-surface matches and
+calibrated view overlays before preparing a separate rectified/masked 50-view
+workspace. Do not rerun OpenMVS solely because this gate passes.
+
 **Before attempting an A/B dense mesh:** independent object-feature support,
 stable original poses, calibrated overlays, and reviewed masks must pass. Use a
 new complete rectified sparse reconstruction revision and new masks, then the

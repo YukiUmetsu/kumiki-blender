@@ -15,7 +15,7 @@ from .registered_camera_recovery import validate_camera_recovery
 from .sfm_cohort_recovery import _source_paths
 
 
-def measure_target_observations(model, name: str, original_keypoints: int) -> list[dict]:
+def measure_target_observations(model, name: str, original_keypoints: int | None) -> list[dict]:
     """Read calibrated native reprojection errors and observation provenance."""
     import numpy as np
 
@@ -43,8 +43,9 @@ def measure_target_observations(model, name: str, original_keypoints: int) -> li
         if not np.isfinite(projected).all():
             raise ValueError('Camera produced non-finite pixel coordinates')
         report.append({'point2D_idx': point_index, 'point3D_id': int(observation.point3D_id),
-                       'source': 'existing-feature' if point_index < original_keypoints else
-                                 'roma-predicted-keypoint',
+                       'source': ('provenance-unknown' if original_keypoints is None else
+                                  'existing-feature' if point_index < original_keypoints else
+                                  'roma-predicted-keypoint'),
                        'error_px': float(np.linalg.norm(projected - xy))})
     return report
 

@@ -381,6 +381,16 @@ def main(argv: list[str] | None = None) -> int:
     roma_audit.add_argument("--outlier-px", type=float, default=8.0)
     roma_audit.add_argument("--remove-index", action="append", type=int, default=[],
                             help="Explicit high-error point2D index to prune in a separate model; repeat")
+    roma_repair = subcommands.add_parser("repair-roma-sparse-camera", help="Create an isolated, guarded COLMAP model with one reviewed new view")
+    roma_repair.add_argument("--baseline-model", type=Path, required=True)
+    roma_repair.add_argument("--candidate-model", type=Path, required=True)
+    roma_repair.add_argument("--output", type=Path, required=True)
+    roma_repair.add_argument("--target", required=True)
+    roma_repair.add_argument("--remove-index", action="append", required=True, type=int)
+    roma_repair.add_argument("--exclude-camera", action="append", required=True)
+    roma_repair.add_argument("--outlier-px", type=float, default=8.0)
+    roma_repair.add_argument("--allow-duplicate-repair", action="store_true",
+                             help="Allow removing one verified, higher-error duplicate while preserving its linked track")
     camera_compare_parser = subcommands.add_parser(
         "compare-camera-registrations",
         help="Read-only before/after registration coverage for two COLMAP revisions")
@@ -1385,6 +1395,19 @@ def main(argv: list[str] | None = None) -> int:
                 report = audit_roma_candidate_camera(args.revision, args.candidate, args.output,
                                                       outlier_px=args.outlier_px,
                                                       remove_indices=args.remove_index, model=args.model)
+            except (ValueError, OSError, RuntimeError) as error:
+                raise RecipeError(str(error)) from error
+            print(json.dumps(report, indent=2))
+            return 0
+        if args.command == "repair-roma-sparse-camera":
+            from .reconstruction.roma_sparse_repair import repair_roma_sparse_model
+            try:
+                report = repair_roma_sparse_model(args.baseline_model, args.candidate_model,
+                                                   args.output, target=args.target,
+                                                   remove_indices=args.remove_index,
+                                                   exclude_cameras=args.exclude_camera,
+                                                   outlier_px=args.outlier_px,
+                                                   allow_duplicate_repair=args.allow_duplicate_repair)
             except (ValueError, OSError, RuntimeError) as error:
                 raise RecipeError(str(error)) from error
             print(json.dumps(report, indent=2))
