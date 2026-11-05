@@ -1,20 +1,24 @@
 """Measured COLMAP tracks produce only reviewable, held-out-tested SAM2 prompts."""
 
 import hashlib
+import io
 import json
 import struct
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
 import numpy as np
 from PIL import Image, ImageDraw
 
+from kumiki_blender.cli import main
 from kumiki_blender.reconstruction.mask_track_guidance import (
     _seed_class, evaluate_track_resegmentation, extract_track_guidance,
 )
 from kumiki_blender.reconstruction.mask_track_resegmentation import refine_masks_from_tracks
+from kumiki_blender.reconstruction.mask_track_selection import select_track_mask_candidates
 from kumiki_blender.reconstruction.references import ReferenceError
 
 
@@ -156,7 +160,8 @@ class TrackGuidanceTests(unittest.TestCase):
             second = refine_masks_from_tracks(
                 self.sparse, self.mask_revision, self.root / "track-masks-r002",
                 sam2_checkpoint=self.weights, cache_dir=cached)
-        self.assertEqual(first["status"], "candidate / track-guided-manual-review-required")
+        self.assertEqual(first["status"], "candidate / automatic-track-guided-qa")
+        self.assertEqual(first["selection_mode"], "automatic")
         self.assertGreaterEqual(first["summary"]["inference_count"], 1)
         self.assertEqual(first["summary"]["accepted"], 1)
         self.assertTrue(next(item for item in first["images"]
@@ -207,6 +212,48 @@ class TrackGuidanceTests(unittest.TestCase):
         with self.assertRaisesRegex(ReferenceError, "identical settings|unfinished"):
             refine_masks_from_tracks(self.sparse, self.mask_revision, target,
                                      sam2_checkpoint=self.weights, resume=True)
+
+    def test_optional_selection_and_polygon_correction_preserves_automatic_revision(self):
+        refined_root = self.root / "automatic"
+        correct = np.zeros((80, 100), dtype=np.uint8)
+        correct[10:75, 10:90] = 255
+        with (patch("kumiki_blender.reconstruction.masking._load_sam2_predictor",
+                    return_value=(object(), "mps")),
+              patch("kumiki_blender.reconstruction.masking._sam2_mask",
+                    return_value=(correct, {"components": ["subject"]}))):
+            refine_masks_from_tracks(self.sparse, self.mask_revision, refined_root,
+                                     sam2_checkpoint=self.weights)
+        bad = self.root / "bad-selection"
+        with self.assertRaisesRegex(ReferenceError, "registered cameras"):
+            select_track_mask_candidates(self.sparse, refined_root, bad,
+                                         use_proposals=["unregistered-photo.png"])
+        self.assertFalse(bad.exists())
+        edits = self.root / "polygon-edits.json"
+        edits.write_text(json.dumps({"images": {"view-05.png": {
+            "exclude_polygons": [[[.60, .60], [.73, .60], [.73, .80], [.60, .80]]]
+        }}}))
+        chosen_root = self.root / "user-corrections"
+        report = select_track_mask_candidates(
+            self.sparse, refined_root, chosen_root,
+            use_proposals=["view-05.png"], edits=edits)
+        entry = next(item for item in report["images"] if item["filename"] == "view-05.png")
+        self.assertEqual(entry["selection"], "explicit-user-proposal")
+        self.assertTrue(entry["user_polygon_edit"])
+        self.assertFalse(report["approved_for_reconstruction"])
+        self.assertEqual(report["status"], "candidate / optional-user-corrections")
+        with Image.open(chosen_root / entry["mask"]) as after, Image.open(
+                refined_root / entry["mask"]) as before:
+            self.assertEqual(after.getpixel((65, 55)), 0)
+            self.assertEqual(before.getpixel((65, 55)), 255)
+        self.assertTrue((chosen_root / "mask-contact-sheet.jpg").is_file())
+        cli_root = self.root / "cli-selection"
+        with redirect_stdout(io.StringIO()):
+            result = main(["select-track-masks", "--reconstruction", str(self.sparse),
+                           "--mask-revision", str(refined_root),
+                           "--output", str(cli_root),
+                           "--use-proposal", "view-05.png"])
+        self.assertEqual(result, 0)
+        self.assertTrue((cli_root / "mask-report.json").is_file())
 
 
 if __name__ == "__main__":

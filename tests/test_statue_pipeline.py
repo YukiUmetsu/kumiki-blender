@@ -177,7 +177,7 @@ class StatuePipelineTests(unittest.TestCase):
                     shutil.copyfile(file, folder / "masks" / file.name)
                 original = json.loads((self.output / "masks/mask-report.json").read_text())
                 (folder / "mask-report.json").write_text(json.dumps({
-                    **original, "status": "candidate / track-guided-manual-review-required",
+                    **original, "status": "candidate / automatic-track-guided-qa",
                     "summary": {"accepted": 0, "abstained": 8}}))
             elif stage.startswith("mask-audit-"):
                 folder = self.output / stage

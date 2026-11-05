@@ -145,6 +145,7 @@ def refine_masks_from_tracks(reconstruction: str | Path, mask_revision: str | Pa
         "status": "incomplete / track-refinement-review-required",
         "approved_for_reconstruction": False, "distribution_allowed": False,
         "requires_anatomy_inventory": True,
+        "selection_mode": "automatic", "optional_manual_corrections": True,
         "images": [], "summary": {"accepted": 0, "rejected": 0, "abstained": 0,
                                  "cache_hits": 0, "inference_count": 0},
         "limitations": "COLMAP tracks and text grounding do not establish statue anatomy; no reduction of camera, mask, or mesh quality gates."}
@@ -277,9 +278,12 @@ def refine_masks_from_tracks(reconstruction: str | Path, mask_revision: str | Pa
         if receipt["accepted"]:
             entry["original_foreground_fraction"] = item.get("foreground_fraction")
             entry["original_candidate_comparison"] = entry.get("candidate_comparison")
-            entry["candidate_comparison"] = {"status": "uncertain / track-guided-mask-still-requires-review",
-                                             "selected": "track-guided",
-                                             "limitations": "Feature tracks do not verify statue anatomy"}
+            entry["candidate_comparison"] = {
+                "status": "candidate / independent-track-recovery",
+                "selected": "track-guided",
+                "holdout_recovered": receipt["heldout_recovered"],
+                "holdout_lost": receipt["heldout_lost"],
+                "limitations": "Sparse tracks do not verify statue anatomy; normal mask and camera QA still apply"}
         result["images"].append(entry)
         checkpoint_report()
         if progress:
@@ -297,6 +301,6 @@ def refine_masks_from_tracks(reconstruction: str | Path, mask_revision: str | Pa
         draw.text((x+5, y+height-23), item["filename"][:42], fill=(234, 236, 238))
     contact.save(target / "mask-contact-sheet.jpg", "JPEG", quality=85)
     result["contact_sheet"] = "mask-contact-sheet.jpg"
-    result["status"] = "candidate / track-guided-manual-review-required"
+    result["status"] = "candidate / automatic-track-guided-qa"
     checkpoint_report()
     return result

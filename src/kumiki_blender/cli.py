@@ -554,6 +554,17 @@ def main(argv: list[str] | None = None) -> int:
     track_mask_parser.add_argument("--max-side", type=int, default=1280)
     track_mask_parser.add_argument("--cache-dir", type=Path)
     track_mask_parser.add_argument("--resume", action="store_true")
+    choose_mask_parser = subcommands.add_parser(
+        "select-track-masks", help="Optionally promote reviewed SAM2 proposals and correct polygons in a new mask revision")
+    choose_mask_parser.add_argument("--reconstruction", type=Path, required=True)
+    choose_mask_parser.add_argument("--mask-revision", type=Path, required=True,
+                                   help="Completed automatic improve-dense-masks revision")
+    choose_mask_parser.add_argument("--output", type=Path, required=True,
+                                   help="Unused immutable output revision")
+    choose_mask_parser.add_argument("--use-proposal", nargs="+", required=True,
+                                   metavar="PHOTO", help="Select a withheld candidate for the specified images")
+    choose_mask_parser.add_argument("--edits", type=Path,
+                                   help="Optional normalized include/exclude polygons for specific photos")
     refine_mask_parser = subcommands.add_parser(
         "refine-dense-masks", help="Remove tiny mask islands/holes or apply camera-specific polygon cleanup")
     refine_mask_parser.add_argument("--reconstruction", type=Path, required=True)
@@ -904,6 +915,17 @@ def main(argv: list[str] | None = None) -> int:
                     progress=lambda count, total, outcome: print(
                         f"Track-guided mask QA {count}/{total}: {outcome}",
                         file=sys.stderr, flush=True))
+            except (ReferenceError, OSError, ValueError) as error:
+                raise RecipeError(str(error)) from error
+            print(json.dumps(report, indent=2))
+            return 0
+        if args.command == "select-track-masks":
+            from .reconstruction.mask_track_selection import select_track_mask_candidates
+            from .reconstruction.references import ReferenceError
+            try:
+                report = select_track_mask_candidates(
+                    args.reconstruction, args.mask_revision, args.output,
+                    use_proposals=args.use_proposal, edits=args.edits)
             except (ReferenceError, OSError, ValueError) as error:
                 raise RecipeError(str(error)) from error
             print(json.dumps(report, indent=2))

@@ -172,16 +172,20 @@ recovers missing held-out tracks, loses none, retains most of the existing
 mask and adds no confidently blue-sky foreground. Otherwise the original
 mask is kept and the reason is recorded.
 
-This is a **candidate improvement, not approval**. Every mask still requires
-original-photo review, and mask QA and camera coverage gates remain in force.
-The original mask revision is never overwritten. Grounded `build-statue-glb`
-runs now invoke this stage automatically; `--no-track-guided-masks` opts out.
+**Automatic is the default.** The pipeline chooses each candidate when it has
+adequate independent evidence and otherwise keeps the original mask or
+abstains. No person needs to click through the photos for this stage to run.
+The result is still a *candidate*, not certified statue anatomy: normal
+automatic mask-consistency and camera-coverage gates may block a weak dataset.
+Visual inspection is recommended, and optional overrides are supported below.
+Grounded `build-statue-glb` runs invoke this stage automatically;
+`--no-track-guided-masks` opts out. Original revisions are never overwritten.
 
 For an independent A/B test without rerunning COLMAP or Grounding DINO:
 
 ```bash
 RUN='.review/great-sphinx/statue-hq-r005'
-BASE='.review/great-sphinx/grounded-masks-r002'
+BASE='.review/great-sphinx/grounded-masks-r003'
 IMPROVED='.review/great-sphinx/track-guided-masks-r001' # must not exist
 
 kumiki-blender improve-dense-masks \
@@ -203,6 +207,42 @@ cannot be overwritten. Inspect `candidates/` for proposals that failed the
 held-out tests and `masks/` for the chosen output. Existing alternatives are
 copied and pinned by SHA-256. Without enough trustworthy multi-view overlap,
 the stage abstains; it never invents viewpoints or certifies statue anatomy.
+
+#### Optional manual corrections (not needed for automatic mode)
+
+If someone inspects a withheld proposal and prefers it to the automatically
+selected mask, `select-track-masks` can promote *only those explicitly named*
+photos into another immutable revision. It does not re-run SAM2:
+
+```bash
+CHOICES='.review/great-sphinx/track-masks-user-choice-r001' # must not exist
+kumiki-blender select-track-masks \
+  --reconstruction "$RUN/cameras" \
+  --mask-revision "$IMPROVED" \
+  --output "$CHOICES" \
+  --use-proposal photo-0021.png photo-0022.png photo-0027.png photo-0034.png photo-0053.png
+```
+
+For an image with an otherwise useful proposal that includes unwanted ground,
+add `--use-proposal photo-0012.png` **and** `--edits /path/to/edits.json`,
+where that file contains image-specific normalized include/exclude polygons:
+
+```json
+{
+  "images": {
+    "photo-0012.png": {
+      "exclude_polygons": [
+        [[0.10, 0.90], [0.20, 0.90], [0.20, 0.95], [0.10, 0.95]]
+      ]
+    }
+  }
+}
+```
+
+The coordinates are illustrative only; trace the actual unwanted region in
+the original rectified photo. Exclusions are applied *after* inclusions.
+Both selected proposals and edits retain source hashes and require the usual
+mask QA. Users can continue without ever invoking this optional command.
 
 The bundled detector choice is Hugging Face
 `IDEA-Research/grounding-dino-tiny` at immutable revision
