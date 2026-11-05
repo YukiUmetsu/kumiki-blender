@@ -6,7 +6,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from kumiki_blender.reconstruction.roma_candidate_database import prepare_roma_candidate_database
+from kumiki_blender.reconstruction.roma_candidate_database import (
+    _filter_ambiguous_pixels, prepare_roma_candidate_database,
+)
 
 
 class CandidateDatabaseTests(unittest.TestCase):
@@ -36,3 +38,18 @@ class CandidateDatabaseTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,'exactly one observation'):
                 prepare_roma_candidate_database(source,evidence,root/'invalid')
             self.assertFalse((root/'invalid').exists())
+            predictions[1]['anchor']='b.png'
+            predictions[0]['xyz']=[9,9,9]
+            predictions[1]['xyz']=[9,9,9]
+            evidence.write_text(json.dumps({'target':'target.png','predictions':predictions}))
+            with self.assertRaisesRegex(ValueError,'disagree with registered source tracks'):
+                prepare_roma_candidate_database(source,evidence,root/'spoofed-xyz')
+            self.assertFalse((root/'spoofed-xyz').exists())
+
+    def test_ambiguous_target_positions_drop_all_conflicting_tracks(self):
+        candidates=[{'track_id':1,'pixel':[20,20]},
+                    {'track_id':2,'pixel':[20.5,20.5]},
+                    {'track_id':3,'pixel':[30,30]}]
+        accepted, discarded=_filter_ambiguous_pixels(candidates, [(30.5,30.5)])
+        self.assertEqual(accepted, [])
+        self.assertEqual(discarded, 3)

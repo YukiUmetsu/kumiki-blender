@@ -17,6 +17,56 @@ from .sfm_track_support import MAX_IMAGE_ID, _tracks
 from .roma_track_consensus import agree_track_predictions
 
 
+def _verified_xyz(point_file: Path, requested_ids: set[int]) -> dict[int, list[float]]:
+    """Check claimed coordinates against the untouched registered 3D model."""
+    if point_file.is_symlink() or not point_file.is_file():
+        raise ValueError('Missing or unsafe registered 3D points')
+    result = {}
+    with point_file.open(encoding='utf-8') as stream:
+        for line in stream:
+            if not line.strip() or line.lstrip().startswith('#'):
+                continue
+            fields = line.split()
+            if len(fields) < 8:
+                raise ValueError('Malformed registered 3D point record')
+            point_id = int(fields[0])
+            if point_id not in requested_ids:
+                continue
+            values = [float(v) for v in fields[1:4]]
+            if point_id in result or not all(map(math.isfinite, values)):
+                raise ValueError('Duplicated or non-finite registered 3D point')
+            result[point_id] = values
+    if set(result) != requested_ids:
+        raise ValueError('RoMa prediction references a missing 3D point')
+    return result
+
+
+def _filter_ambiguous_pixels(candidates: list[dict], original: list[tuple[float, float]],
+                             *, radius: float = 2.0) -> tuple[list[dict], int]:
+    """Drop all spatially conflicting synthetic observations, never pick a winner."""
+    from collections import defaultdict
+    buckets = defaultdict(list)
+    def cell(pixel):
+        return (math.floor(pixel[0] / radius), math.floor(pixel[1] / radius))
+    for pixel in original:
+        buckets[cell(pixel)].append((pixel, None))
+    for index, item in enumerate(candidates):
+        buckets[cell(item['pixel'])].append((item['pixel'], index))
+    rejected = set()
+    for index, item in enumerate(candidates):
+        x, y = cell(item['pixel'])
+        for cx in range(x - 1, x + 2):
+            for cy in range(y - 1, y + 2):
+                for other, other_index in buckets.get((cx, cy), []):
+                    if other_index == index:
+                        continue
+                    if math.dist(item['pixel'], other) < radius:
+                        rejected.add(index)
+                        if other_index is not None:
+                            rejected.add(other_index)
+    return [item for index, item in enumerate(candidates) if index not in rejected], len(rejected)
+
+
 def prepare_roma_candidate_database(revision, predictions_path, output, *, model=0):
     """Add multiview-consistent candidate matches to a *new* database copy.
 
@@ -63,6 +113,10 @@ def prepare_roma_candidate_database(revision, predictions_path, output, *, model
         accepted = agree_track_predictions(predictions)
         if not accepted:
             raise ValueError('No track has agreeing predictions from multiple registered views')
+        real_xyz = _verified_xyz(paths['sparse'] / 'text-models' / str(model) / 'points3D.txt',
+                                 {item['track_id'] for item in accepted})
+        if any(math.dist(item['xyz'], real_xyz[item['track_id']]) > 1e-5 for item in accepted):
+            raise ValueError('RoMa 3D coordinates disagree with registered source tracks')
         track_lookup = _tracks(paths['sparse'] / 'text-models' / str(model) / 'points3D.txt')
         if track_lookup is None:
             raise ValueError('Source model needs exported 3D tracks')
@@ -80,6 +134,12 @@ def prepare_roma_candidate_database(revision, predictions_path, output, *, model
             rows, cols, blob = record
             if cols not in (2, 4, 6) or blob is None or len(blob) != rows * cols * 4:
                 raise ValueError('Target keypoint table has an invalid binary layout')
+            if rows < 0 or rows > 2_000_000:
+                raise ValueError('Target keypoint count exceeds safety bound')
+            previous = [row[:2] for row in struct.iter_unpack('<' + 'f' * cols, blob)]
+            accepted, skipped_ambiguous = _filter_ambiguous_pixels(accepted, previous)
+            if not accepted:
+                raise ValueError('All agreeing RoMa predictions overlap real or conflicting target keypoints')
             camera = checked.execute('SELECT c.width,c.height FROM images i JOIN cameras c ON c.camera_id=i.camera_id WHERE i.image_id=?', (image_id,)).fetchone()
             if camera is None or any(not (0 <= p['pixel'][0] < camera[0] and 0 <= p['pixel'][1] < camera[1]) for p in accepted):
                 raise ValueError('RoMa candidate falls outside target image bounds')
@@ -121,6 +181,7 @@ def prepare_roma_candidate_database(revision, predictions_path, output, *, model
     report = {'status': 'unverified-candidate-matches', 'target': name,
               'source_database_sha256': source_database_sha256,
               'candidate_tracks': len(accepted), 'anchor_counts': {a: len(v) for a, v in anchor_matches.items()},
+              'ambiguous_predictions_skipped': skipped_ambiguous,
               'predictions_sha256': hashlib.sha256(prediction_file.read_bytes()).hexdigest(),
               'warning': 'Target descriptors include zero placeholders. Never use this database for feature extraction or matching. Run geometric verification and PnP; no camera has been accepted.'}
     (target / 'candidate-report.json').write_text(json.dumps(report, indent=2) + '\n')

@@ -370,3 +370,98 @@ pair verification records so COLMAP must reverify them. It adds zero descriptor
 placeholders for predicted target points: **the experimental database must not
 be used for feature matching or rematching**. Successful registration still
 requires pose, reprojection, subject and independent-view validation.
+
+#### Reusable RoMa recovery experiment (MPS or CPU)
+
+`predict-roma-tracks` replaces one-off model notebooks. It reads only the
+hash-pinned staged photos and *existing registered 3D points*, samples official
+RoMa outdoor A-to-B warps at each real anchor observation, rejects low-confidence
+predictions and pixels explicitly labeled background, and writes separate JSON
+files for multiple missing rear/overhead targets. Ambiguous/unknown mask regions
+are **not** proof of foreground. No candidate changes the sparse source.
+
+Install `romatch` and a compatible PyTorch build in the existing local MPS
+reconstruction environment before the first run. RoMa loads its outdoor
+checkpoint on first use. The registered image names are normalized
+`photo-XXXX.png` filenames from the revision, not original web photo names.
+
+```sh
+kumiki-blender predict-roma-tracks \
+  --revision /private/sphinx/cameras-r005 \
+  --anchor photo-0003.png --anchor photo-0014.png \
+  --anchor photo-0020.png \
+  --target photo-0060.png --target photo-0057.png \
+  --output /private/sphinx/roma-predictions-r01 \
+  --device mps --coarse-resolution 420 --refine-resolution 560
+```
+
+Choose registered anchors with *actual shared statue surface*, ideally at
+different azimuths, and change target names using the source camera audit.
+The names in this example are illustrative; verify registration status first.
+Inspect `roma-report.json` for each target's `agreed_tracks`. Two RoMa warps
+agreeing is a **prediction-consistency check**, not independent geometric proof.
+The command requires at least two different registered anchors and rejects
+changed input photos and modified subject-confidence rasters.
+
+For one target with agreement, run the existing isolated importer and COLMAP
+experiment (do not rematch its zero-placeholder descriptors):
+
+```sh
+kumiki-blender prepare-roma-candidate-database \
+  --revision /private/sphinx/cameras-r005 \
+  --predictions /private/sphinx/roma-predictions-r01/photo-0060.png.roma.json \
+  --output /private/sphinx/roma-candidate-0060-r01
+colmap geometric_verifier \
+  --database_path /private/sphinx/roma-candidate-0060-r01/database.db --num_threads 1
+mkdir /private/sphinx/roma-candidate-0060-r01/registered
+colmap image_registrator \
+  --database_path /private/sphinx/roma-candidate-0060-r01/database.db \
+  --input_path /private/sphinx/cameras-r005/sparse/0 \
+  --output_path /private/sphinx/roma-candidate-0060-r01/registered
+kumiki-blender audit-roma-camera \
+  --revision /private/sphinx/cameras-r005 \
+  --candidate /private/sphinx/roma-candidate-0060-r01 \
+  --output /private/sphinx/roma-audit-0060-r01 --outlier-px 8
+```
+
+The audit distinguishes original measured COLMAP keypoints from RoMa-created
+synthetic ones, measures native calibrated reprojection errors, and reports
+camera baseline drift. The registration and audit still **cannot certify** a
+new view: small reprojection error on a *predicted* keypoint is circular
+evidence. Confirm the face/paws/top/rear-left alignment visually and evaluate
+independent, actually measured target-to-registered correspondences. Hold out
+anchors from matching when possible; do not count them as independent proof.
+
+If exactly two bad observation indices have been inspected and found in
+`high_error_observations`, prune only those indices into a **new** model:
+
+```sh
+kumiki-blender audit-roma-camera \
+  --revision /private/sphinx/cameras-r005 \
+  --candidate /private/sphinx/roma-candidate-0060-r01 \
+  --output /private/sphinx/roma-audit-0060-pruned-r01 \
+  --outlier-px 8 --remove-index 123 --remove-index 456
+```
+
+Indices `123` and `456` are placeholders: copy real `point2D_idx` values from
+the first audit, never assume there are only two. Removal is rejected unless
+each observation exceeds the threshold. Only `pruned-model/` changes; the
+original registration and historical 49-view reconstruction remain intact.
+Pruning also refuses an observation whose 3D point is duplicated elsewhere in
+the same target image, or whose native track has only two members (deleting it
+would remove the entire 3D point). Inspect the track instead of forcing the
+operation. On the November 5 Sphinx test, `photo-0060.png` observations 855
+and 1462 both referred to 3D point 18295; do not automatically delete 1462.
+
+**Before attempting an A/B dense mesh:** independent object-feature support,
+stable original poses, calibrated overlays, and reviewed masks must pass. Use a
+new complete rectified sparse reconstruction revision and new masks, then the
+existing `plan-dense-photos` / `build-dense-photos` commands with the same
+OpenMVS settings as the 49-view baseline. A raw `pruned-model/` folder does
+not satisfy the dense reconstruction's rectified-image provenance contract.
+Compare both meshes with `audit-dense-photographs` and Blender calibrated
+reviews, prioritizing top, rear-left, face and paws. Run `audit-dense-masks`,
+`refine-dense-masks`, and `finish-dense-textures` on *new* revisions after
+reviewing foreground leakage, atlas dark patches, white balance and seams.
+Do not overwrite `dense-masked-fixed-r01`, and do not publish a GLB until
+photographic fidelity and texture quality pass human inspection.

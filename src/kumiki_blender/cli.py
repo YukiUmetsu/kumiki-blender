@@ -362,6 +362,25 @@ def main(argv: list[str] | None = None) -> int:
     roma_import.add_argument("--predictions", type=Path, required=True)
     roma_import.add_argument("--output", type=Path, required=True)
     roma_import.add_argument("--model", type=int, default=0)
+    roma_predict = subcommands.add_parser("predict-roma-tracks", help="Generate isolated RoMa multiview predictions for missing views (not verified observations)")
+    roma_predict.add_argument("--revision", type=Path, required=True)
+    roma_predict.add_argument("--output", type=Path, required=True)
+    roma_predict.add_argument("--target", action="append", required=True, help="Unregistered staged photo; repeat for other views")
+    roma_predict.add_argument("--anchor", action="append", required=True, help="Registered staged photo; repeat for at least two")
+    roma_predict.add_argument("--model", type=int, default=0)
+    roma_predict.add_argument("--min-confidence", type=float, default=0.05)
+    roma_predict.add_argument("--max-tracks-per-anchor", type=int, default=4000)
+    roma_predict.add_argument("--device", choices=("auto", "mps", "cpu"), default="auto")
+    roma_predict.add_argument("--coarse-resolution", type=int, default=420)
+    roma_predict.add_argument("--refine-resolution", type=int, default=560)
+    roma_audit = subcommands.add_parser("audit-roma-camera", help="Audit synthetic-vs-real observations in isolated RoMa registration")
+    roma_audit.add_argument("--revision", type=Path, required=True)
+    roma_audit.add_argument("--candidate", type=Path, required=True)
+    roma_audit.add_argument("--output", type=Path, required=True)
+    roma_audit.add_argument("--model", type=int, default=0)
+    roma_audit.add_argument("--outlier-px", type=float, default=8.0)
+    roma_audit.add_argument("--remove-index", action="append", type=int, default=[],
+                            help="Explicit high-error point2D index to prune in a separate model; repeat")
     camera_compare_parser = subcommands.add_parser(
         "compare-camera-registrations",
         help="Read-only before/after registration coverage for two COLMAP revisions")
@@ -1343,6 +1362,30 @@ def main(argv: list[str] | None = None) -> int:
                 report = prepare_roma_candidate_database(args.revision, args.predictions,
                                                           args.output, model=args.model)
             except (ValueError, OSError) as error:
+                raise RecipeError(str(error)) from error
+            print(json.dumps(report, indent=2))
+            return 0
+        if args.command == "predict-roma-tracks":
+            from .reconstruction.roma_predictions import generate_roma_predictions
+            try:
+                report = generate_roma_predictions(args.revision, args.output,
+                                                   targets=args.target, anchors=args.anchor,
+                                                   model=args.model, min_confidence=args.min_confidence,
+                                                   max_tracks_per_anchor=args.max_tracks_per_anchor,
+                                                   device=args.device,
+                                                   coarse_resolution=args.coarse_resolution,
+                                                   refine_resolution=args.refine_resolution)
+            except (ValueError, OSError, RuntimeError) as error:
+                raise RecipeError(str(error)) from error
+            print(json.dumps(report, indent=2))
+            return 0
+        if args.command == "audit-roma-camera":
+            from .reconstruction.roma_camera_audit import audit_roma_candidate_camera
+            try:
+                report = audit_roma_candidate_camera(args.revision, args.candidate, args.output,
+                                                      outlier_px=args.outlier_px,
+                                                      remove_indices=args.remove_index, model=args.model)
+            except (ValueError, OSError, RuntimeError) as error:
                 raise RecipeError(str(error)) from error
             print(json.dumps(report, indent=2))
             return 0
