@@ -1,0 +1,213 @@
+"""Measured COLMAP tracks produce only reviewable, held-out-tested SAM2 prompts."""
+
+import hashlib
+import json
+import struct
+import tempfile
+import unittest
+from pathlib import Path
+from unittest.mock import patch
+
+import numpy as np
+from PIL import Image, ImageDraw
+
+from kumiki_blender.reconstruction.mask_track_guidance import (
+    _seed_class, evaluate_track_resegmentation, extract_track_guidance,
+)
+from kumiki_blender.reconstruction.mask_track_resegmentation import refine_masks_from_tracks
+from kumiki_blender.reconstruction.references import ReferenceError
+
+
+def digest(path):
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+class TrackGuidanceTests(unittest.TestCase):
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        self.root = Path(temp.name)
+        self.sparse = self.root / "registered-cameras"
+        self.photo_dir = self.sparse / "undistorted/images"
+        self.model_dir = self.sparse / "undistorted/sparse"
+        self.model_dir.mkdir(parents=True)
+        self.photo_dir.mkdir()
+        self.mask_revision = self.root / "old-masks"
+        for name in ("masks", "alternatives", "review"):
+            (self.mask_revision / name).mkdir(parents=True)
+        self.weights = self.root / "sam2.pt"
+        self.weights.write_bytes(b"test-checkpoint")
+        self.features = [(x, y, 1000 + i) for i, (x, y) in enumerate(
+            (x, y) for x in range(20, 81, 6) for y in range(20, 66, 5))]
+        self.images = []
+        camera_model = bytearray(struct.pack("<Q", 6))
+        for camera in range(6):
+            name = f"view-{camera:02d}.png"
+            photo_path = self.photo_dir / name
+            Image.new("RGB", (100, 80), (115, 112, 102)).save(photo_path)
+            selected = Image.new("L", (100, 80), 0)
+            selected.paste(255, (10, 10, 90, 75))
+            if camera == 5:
+                paint = ImageDraw.Draw(selected)
+                for x, y, point_id in self.features:
+                    if x >= 46:
+                        paint.rectangle((x-1, y-1, x+1, y+1), fill=0)
+            full = Image.new("L", (100, 80), 0)
+            full.paste(255, (10, 10, 90, 75))
+            base = self.mask_revision / f"masks/{name}.mask.png"
+            broad = self.mask_revision / f"alternatives/{name}.broad.png"
+            grounded = self.mask_revision / f"alternatives/{name}.grounded.png"
+            selected.save(base)
+            selected.save(broad)
+            full.save(grounded)
+            self.images.append({
+                "filename": name, "source_photo_sha256": digest(photo_path),
+                "mask": f"masks/{name}.mask.png", "mask_sha256": digest(base),
+                "guide_source": "grounding-dino / candidate",
+                "detector_guide": {"component_boxes": {"subject": [0.12, 0.10, 0.90, 0.94]}},
+                "candidate_masks": {
+                    "broad": {"path": f"alternatives/{name}.broad.png", "sha256": digest(broad)},
+                    "grounded": {"path": f"alternatives/{name}.grounded.png", "sha256": digest(grounded)}},
+                "candidate_comparison": {"status": "uncertain / competing-candidates"},
+                "warnings": [], "foreground_fraction": .60,
+            })
+            camera_model.extend(struct.pack("<i7di", camera + 1, 1, 0, 0, 0, 0, 0, 0, 1))
+            camera_model.extend(name.encode() + b"\0")
+            camera_model.extend(struct.pack("<Q", len(self.features)))
+            for x, y, point_id in self.features:
+                camera_model.extend(struct.pack("<ddq", x, y, point_id))
+        (self.model_dir / "images.bin").write_bytes(camera_model)
+        self.manifest = [{"filename": item["filename"],
+                          "sha256": item["source_photo_sha256"],
+                          "dimensions": [100, 80]} for item in self.images]
+        (self.sparse / "undistorted-reference-index.json").write_text(json.dumps(
+            {"images": self.manifest}))
+        self.report = {"status": "candidate / inspect-every-mask-before-dense-reconstruction",
+                       "source_revision": str(self.sparse.resolve()), "images": self.images}
+        (self.mask_revision / "mask-report.json").write_text(json.dumps(self.report))
+
+    def test_cross_view_point_prompts_are_evidence_pinned_and_held_out(self):
+        evidence = extract_track_guidance(self.sparse, self.mask_revision, self.report)
+        entry = evidence["images"]["view-05.png"]
+        self.assertGreaterEqual(len(entry["seed_points"]), 3)
+        self.assertGreaterEqual(len(entry["holdout_points"]), 5)
+        self.assertTrue(all(_seed_class(row["point3d_id"]) == "seed"
+                            for row in entry["seed_points"]))
+        self.assertTrue(all(_seed_class(row["point3d_id"]) == "holdout"
+                            for row in entry["holdout_points"]))
+        self.assertTrue(all(len(row["source_views"]) >= 3
+                            for row in entry["seed_points"]))
+        self.assertEqual(evidence["compared_track_ids"], len(self.features))
+
+    def test_unrelated_background_features_and_disconnected_groups_do_not_seed(self):
+        for item in self.images:
+            item["guide_source"] = "grounding-dino / no-detection"
+        evidence = extract_track_guidance(self.sparse, self.mask_revision, self.report)
+        self.assertEqual(evidence["viable_track_ids"], 0)
+        for item in self.images:
+            item["guide_source"] = "grounding-dino / candidate"
+        for item in self.images:
+            item["detector_guide"] = {"component_boxes": {"subject": [0.0, 0.0, 0.1, 0.1]}}
+        evidence = extract_track_guidance(self.sparse, self.mask_revision, self.report)
+        self.assertEqual(evidence["viable_track_ids"], 0)
+        self.assertEqual(evidence["images"]["view-05.png"]["seed_points"], [])
+        # A two-camera island cannot satisfy 3 independent supporting views.
+        for item in self.images:
+            item["detector_guide"] = {"component_boxes": {"subject": [0.12, 0.10, 0.9, 0.94]}}
+        self.features = self.features[:5]
+        self._make_disconnected_groups()
+        evidence = extract_track_guidance(self.sparse, self.mask_revision, self.report)
+        self.assertEqual(evidence["viable_track_ids"], 0)
+
+    def _make_disconnected_groups(self):
+        model = bytearray(struct.pack("<Q", 6))
+        for camera in range(6):
+            name = f"view-{camera:02d}.png"
+            model.extend(struct.pack("<i7di", camera+1, 1, 0, 0, 0, 0, 0, 0, 1))
+            model.extend(name.encode() + b"\0")
+            model.extend(struct.pack("<Q", len(self.features)))
+            for x, y, point_id in self.features:
+                model.extend(struct.pack("<ddq", x, y, point_id + 100_000*(camera//2)))
+        (self.model_dir / "images.bin").write_bytes(model)
+
+    def test_heldout_rejects_false_positive_mask_expansion(self):
+        original = np.zeros((80, 100), dtype=np.uint8)
+        original[10:75, 10:90] = 255
+        leaked = np.ones_like(original) * 255
+        anchors = [{"normalized_xy": [.5, .5]}] * 5
+        receipt = evaluate_track_resegmentation(original, leaked, anchors, anchors)
+        self.assertFalse(receipt["accepted"])
+        self.assertIn("excessive-foreground-area-change", receipt["reasons"])
+
+    def test_targeted_resegmentation_produces_new_revision_without_touching_original(self):
+        original_hashes = [item["mask_sha256"] for item in self.images]
+        cached = self.root / "shared-masks"
+        correct = np.zeros((80, 100), dtype=np.uint8)
+        correct[10:75, 10:90] = 255
+        details = {"components": ["subject"], "missing_parts": [],
+                   "background_seed_violations": 0}
+        with (patch("kumiki_blender.reconstruction.masking._load_sam2_predictor",
+                    return_value=(object(), "mps")) as loader,
+              patch("kumiki_blender.reconstruction.masking._sam2_mask",
+                    return_value=(correct, details)) as inference):
+            first = refine_masks_from_tracks(
+                self.sparse, self.mask_revision, self.root / "track-masks-r001",
+                sam2_checkpoint=self.weights, cache_dir=cached)
+            second = refine_masks_from_tracks(
+                self.sparse, self.mask_revision, self.root / "track-masks-r002",
+                sam2_checkpoint=self.weights, cache_dir=cached)
+        self.assertEqual(first["status"], "candidate / track-guided-manual-review-required")
+        self.assertGreaterEqual(first["summary"]["inference_count"], 1)
+        self.assertEqual(first["summary"]["accepted"], 1)
+        self.assertTrue(next(item for item in first["images"]
+                             if item["filename"] == "view-05.png")["track_guided_replaced"])
+        self.assertEqual(second["summary"]["inference_count"], 0)
+        self.assertEqual(inference.call_count, 1)
+        loader.assert_called_once()
+        self.assertEqual([digest(self.mask_revision / entry["mask"])
+                          for entry in self.images], original_hashes)
+        self.assertTrue((self.root / "track-masks-r001/mask-contact-sheet.jpg").is_file())
+
+    def test_modified_source_mask_prevents_any_new_revision(self):
+        path = self.mask_revision / self.images[0]["mask"]
+        with Image.open(path) as old:
+            revised = old.copy()
+        revised.putpixel((30, 30), 0)
+        revised.save(path)
+        target = self.root / "no-output"
+        with self.assertRaisesRegex(ReferenceError, "modified|changed"):
+            refine_masks_from_tracks(self.sparse, self.mask_revision, target,
+                                     sam2_checkpoint=self.weights)
+        self.assertFalse(target.exists())
+
+    def test_interrupted_revision_resumes_without_rewriting_completed_masks(self):
+        target = self.root / "track-masks-interrupted"
+
+        def interrupted(index, total, status):
+            if index == 3:
+                raise RuntimeError("simulated interruption")
+
+        with self.assertRaisesRegex(RuntimeError, "simulated interruption"):
+            refine_masks_from_tracks(self.sparse, self.mask_revision, target,
+                                     sam2_checkpoint=self.weights, progress=interrupted)
+        partial = json.loads((target / "mask-report.json").read_text())
+        self.assertEqual(partial["status"], "incomplete / track-refinement-review-required")
+        self.assertEqual(len(partial["images"]), 3)
+        copied_digest = digest(target / "masks/view-00.png.mask.png")
+        correct = np.zeros((80, 100), dtype=np.uint8)
+        correct[10:75, 10:90] = 255
+        with (patch("kumiki_blender.reconstruction.masking._load_sam2_predictor",
+                    return_value=(object(), "mps")),
+              patch("kumiki_blender.reconstruction.masking._sam2_mask",
+                    return_value=(correct, {"components": ["subject"]}))):
+            resumed = refine_masks_from_tracks(self.sparse, self.mask_revision, target,
+                                               sam2_checkpoint=self.weights, resume=True)
+        self.assertEqual(resumed["summary"]["accepted"], 1)
+        self.assertEqual(digest(target / "masks/view-00.png.mask.png"), copied_digest)
+        with self.assertRaisesRegex(ReferenceError, "identical settings|unfinished"):
+            refine_masks_from_tracks(self.sparse, self.mask_revision, target,
+                                     sam2_checkpoint=self.weights, resume=True)
+
+
+if __name__ == "__main__":
+    unittest.main()

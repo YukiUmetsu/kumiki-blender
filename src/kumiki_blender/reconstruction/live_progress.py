@@ -27,6 +27,7 @@ _PHASES = (
     ("recovery_coverage", "Rechecking camera coverage"),
     ("ai_bridges", "AI bridge reference previews"),
     ("masks", "Segmenting statue with SAM2"),
+    ("mask_track_guidance", "Verifying subject tracks and refining uncertain masks"),
     ("mask_audit", "Checking mask consistency"),
     ("dense", "Reconstructing dense 3D geometry"),
     ("review", "Preparing Blender review"),
@@ -35,6 +36,7 @@ _PHASES = (
 _SHORT_NAMES = {"preflight": "Prep", "photo_preprocess": "Photo Cache", "cameras": "Cameras", "coverage": "Coverage",
                 "camera_recovery": "Recover", "recovery_coverage": "Recheck",
                 "ai_bridges": "AI Bridges", "masks": "SAM2 Masks",
+                "mask_track_guidance": "Track QA",
                 "mask_audit": "Mask QA", "dense": "OpenMVS", "review": "Blender",
                 "export": "GLB Export"}
 
@@ -89,6 +91,13 @@ def _stage_detail(root: Path, stage: str) -> str | None:
             if done <= total:
                 hits = (report.get("cache") or {}).get("hits", 0)
                 return f"SAM2 masks: {done}/{total} photos ({done * 100 // total}%) · {hits} cached"
+    if stage == "mask_track_guidance":
+        receipt = _read_receipt(root / "track-guided-masks/mask-report.json")
+        entries = receipt.get("images")
+        camera = _read_receipt(root / "cameras/reconstruction-report.json")
+        total = camera.get("undistorted_images")
+        if isinstance(entries, list) and type(total) is int and total > 0:
+            return f"Cross-view masks: {len(entries)}/{total} · {(receipt.get('summary') or {}).get('accepted', 0)} accepted"
     if stage == "dense":
         report = _read_receipt(root / "dense/dense-report.json")
         commands = report.get("commands") or []

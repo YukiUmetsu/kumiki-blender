@@ -4,6 +4,7 @@ import contextlib
 import io
 import json
 import hashlib
+import shutil
 import tempfile
 import unittest
 from pathlib import Path
@@ -68,6 +69,8 @@ class StatuePipelineTests(unittest.TestCase):
             self.assertEqual([argv[i + 1] for i, flag in enumerate(argv)
                               if flag == "--grounding-part-prompt"],
                              ["stone torso.", "stone sphinx head."])
+        self.assertIn("mask_track_guidance", command_lines)
+        self.assertIn("improve-dense-masks", command_lines["mask_track_guidance"])
         receipt = json.loads((self.output / "statue-pipeline-report.json").read_text())
         self.assertEqual(receipt["status"], "private-GLB-candidate / review-required")
 
@@ -166,6 +169,16 @@ class StatuePipelineTests(unittest.TestCase):
                                    "missing_parts": (["head"] if mask_bad else []),
                                    "background_seed_violations": 0})
                 (folder / "mask-report.json").write_text(json.dumps({"images": images}))
+            elif stage == "mask_track_guidance":
+                folder = self.output / "track-guided-masks"
+                (folder / "masks").mkdir(parents=True)
+                source_masks = self.output / "masks/masks"
+                for file in source_masks.glob("*.mask.png"):
+                    shutil.copyfile(file, folder / "masks" / file.name)
+                original = json.loads((self.output / "masks/mask-report.json").read_text())
+                (folder / "mask-report.json").write_text(json.dumps({
+                    **original, "status": "candidate / track-guided-manual-review-required",
+                    "summary": {"accepted": 0, "abstained": 8}}))
             elif stage.startswith("mask-audit-"):
                 folder = self.output / stage
                 folder.mkdir()

@@ -39,7 +39,7 @@ class LiveProgressTests(unittest.TestCase):
         self.assertIn("Checking dependencies", output)
         self.assertIn("Reading photos", output)
         self.assertGreaterEqual(output.count("Reading photos"), 2)
-        self.assertIn("9% phases", output)  # one of eleven phases has completed
+        self.assertIn("8% phases", output)  # one of twelve phases has completed
         self.assertIn("Insufficient views", output)
         self.assertNotIn("\x1b", output)
 
@@ -53,7 +53,7 @@ class LiveProgressTests(unittest.TestCase):
         progress.emit({"kind": "start", "phase": "cameras"})
         progress.emit({"kind": "tick", "phase": "cameras", "detail": "COLMAP: 50/100 pairs"})
         self.assertIn("Skipped", stream.getvalue())
-        self.assertIn("1/12", stream.getvalue())
+        self.assertIn("1/13", stream.getvalue())
         self.assertIn("\x1b[2K", stream.getvalue())
         progress.emit({"kind": "finished"})
 

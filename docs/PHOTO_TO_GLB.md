@@ -159,6 +159,51 @@ the Sphinx. When the sparse reconstruction remains blocked by insufficient
 elevated/side camera coverage, mask experiments can continue independently but
 do **not** bypass the camera-coverage gate or prove a GLB is ready.
 
+### Track-guided SAM2 retries (separate immutable revision)
+
+When broad and grounded candidates disagree, `improve-dense-masks` can use
+existing *registered, triangulated COLMAP tracks* to suggest extra positive
+SAM2 clicks in areas omitted by the selected mask. It checks that a track is
+observed from at least four photographs and that several *other* camera views
+agree inside both SAM2 candidates and the detector guide. Tracks are not
+semantic labels: ambiguous tracks are ignored. A separate held-out set of
+tracks evaluates every proposed retry. A retry is accepted only when it
+recovers missing held-out tracks, loses none, retains most of the existing
+mask and adds no confidently blue-sky foreground. Otherwise the original
+mask is kept and the reason is recorded.
+
+This is a **candidate improvement, not approval**. Every mask still requires
+original-photo review, and mask QA and camera coverage gates remain in force.
+The original mask revision is never overwritten. Grounded `build-statue-glb`
+runs now invoke this stage automatically; `--no-track-guided-masks` opts out.
+
+For an independent A/B test without rerunning COLMAP or Grounding DINO:
+
+```bash
+RUN='.review/great-sphinx/statue-hq-r005'
+BASE='.review/great-sphinx/grounded-masks-r002'
+IMPROVED='.review/great-sphinx/track-guided-masks-r001' # must not exist
+
+kumiki-blender improve-dense-masks \
+  --reconstruction "$RUN/cameras" \
+  --mask-revision "$BASE" \
+  --output "$IMPROVED" \
+  --sam2-device mps \
+  --sam2-checkpoint "$HOME/.cache/kumiki-blender/models/sam2.1_hiera_small.pt" \
+  --cache-dir '.review/great-sphinx/_statue_mask_cache'
+
+open "$IMPROVED/mask-contact-sheet.jpg"
+jq '{status, summary, changed: [.images[] | select(.track_guided_replaced) |
+  {filename, evidence: .track_guidance}]}' "$IMPROVED/mask-report.json"
+jq '{viable_track_ids, rejected, limitations}' "$IMPROVED/track-evidence-report.json"
+```
+
+If interrupted, use the same arguments plus `--resume`. A finished revision
+cannot be overwritten. Inspect `candidates/` for proposals that failed the
+held-out tests and `masks/` for the chosen output. Existing alternatives are
+copied and pinned by SHA-256. Without enough trustworthy multi-view overlap,
+the stage abstains; it never invents viewpoints or certifies statue anatomy.
+
 The bundled detector choice is Hugging Face
 `IDEA-Research/grounding-dino-tiny` at immutable revision
 `a2bb814dd30d776dcf7e30523b00659f4f141c71` (Apache-2.0 model card).

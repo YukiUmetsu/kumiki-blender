@@ -303,6 +303,8 @@ def main(argv: list[str] | None = None) -> int:
     statue_glb.add_argument("--grounding-model-dir", type=Path,
                            help="Existing pinned Grounding DINO model snapshot; otherwise auto-download/cache")
     statue_glb.add_argument("--grounding-device", choices=("auto", "mps", "cpu"), default="auto")
+    statue_glb.add_argument("--no-track-guided-masks", action="store_true",
+                           help="Disable conservative COLMAP-track-guided SAM2 re-prompting")
     statue_glb.add_argument("--matching-device", choices=("mps", "torch-cpu"), default="mps",
                            help="Use Apple MPS LightGlue or PyTorch CPU fallback")
     statue_glb.add_argument("--mask-guides", type=Path,
@@ -538,6 +540,20 @@ def main(argv: list[str] | None = None) -> int:
                                    help="Optional content-addressed cache of masks for identical rectified photos")
     photo_mask_parser.add_argument("--resume", action="store_true",
                                    help="Resume an incomplete masks revision with identical inputs")
+    track_mask_parser = subcommands.add_parser(
+        "improve-dense-masks", help="Safely re-prompt ambiguous SAM2 masks using independent COLMAP feature tracks")
+    track_mask_parser.add_argument("--reconstruction", type=Path, required=True)
+    track_mask_parser.add_argument("--mask-revision", type=Path, required=True,
+                                   help="Completed grounded-SAM2 mask revision with both alternatives")
+    track_mask_parser.add_argument("--output", type=Path, required=True,
+                                   help="New immutable revision; never overwrites source masks")
+    track_mask_parser.add_argument("--sam2-checkpoint", type=Path, required=True)
+    track_mask_parser.add_argument("--sam2-size", choices=("tiny", "small", "base_plus", "large"),
+                                   default="small")
+    track_mask_parser.add_argument("--sam2-device", choices=("auto", "mps", "cpu"), default="auto")
+    track_mask_parser.add_argument("--max-side", type=int, default=1280)
+    track_mask_parser.add_argument("--cache-dir", type=Path)
+    track_mask_parser.add_argument("--resume", action="store_true")
     refine_mask_parser = subcommands.add_parser(
         "refine-dense-masks", help="Remove tiny mask islands/holes or apply camera-specific polygon cleanup")
     refine_mask_parser.add_argument("--reconstruction", type=Path, required=True)
@@ -873,6 +889,22 @@ def main(argv: list[str] | None = None) -> int:
                     grounding_device=args.grounding_device,
                     resume=args.resume)
             except ReferenceError as error:
+                raise RecipeError(str(error)) from error
+            print(json.dumps(report, indent=2))
+            return 0
+        if args.command == "improve-dense-masks":
+            from .reconstruction.mask_track_resegmentation import refine_masks_from_tracks
+            from .reconstruction.references import ReferenceError
+            try:
+                report = refine_masks_from_tracks(
+                    args.reconstruction, args.mask_revision, args.output,
+                    sam2_checkpoint=args.sam2_checkpoint, sam2_size=args.sam2_size,
+                    sam2_device=args.sam2_device, max_side=args.max_side,
+                    cache_dir=args.cache_dir, resume=args.resume,
+                    progress=lambda count, total, outcome: print(
+                        f"Track-guided mask QA {count}/{total}: {outcome}",
+                        file=sys.stderr, flush=True))
+            except (ReferenceError, OSError, ValueError) as error:
                 raise RecipeError(str(error)) from error
             print(json.dumps(report, indent=2))
             return 0
@@ -1328,6 +1360,7 @@ def main(argv: list[str] | None = None) -> int:
                     grounding_part_prompts=tuple(args.grounding_part_prompt),
                     grounding_device=args.grounding_device,
                     grounding_model_dir=args.grounding_model_dir,
+                    track_guided_masks=not args.no_track_guided_masks,
                     matching_device=args.matching_device,
                     mask_guides=args.mask_guides, masks_dir=args.masks_dir,
                     mask_cache_dir=args.mask_cache_dir, photo_cache_dir=args.photo_cache_dir,

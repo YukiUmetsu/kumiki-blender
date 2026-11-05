@@ -37,6 +37,7 @@ class StatuePipelineSettings:
     grounding_part_prompts: tuple[str, ...] = ()
     grounding_device: str = "auto"
     grounding_model_dir: Path | None = None
+    track_guided_masks: bool = True
     matching_device: str = "mps"
     mask_guides: Path | None = None
     masks_dir: Path | None = None
@@ -392,6 +393,8 @@ def build_statue_glb(
                                 grounding_prompt=effective_prompt,
                                 grounding_part_prompts=list(settings.grounding_part_prompts),
                                 candidate_ensemble_schema="grounded-sam2-candidate-ensemble-v1",
+                                track_guidance_schema="track-guided-mask-revision-v1",
+                                track_guided_masks=settings.track_guided_masks,
                                 grounding_device=settings.grounding_device)
     # Preserve compatibility with immutable older MPS revision fingerprints.
     if settings.matching_device != "mps":
@@ -738,9 +741,27 @@ def build_statue_glb(
         run_stage("masks", mask_args, mask_dir / "mask-report.json")
         mask_record = _read_report(mask_dir / "mask-report.json")
         report["mask_cache"] = mask_record.get("cache")
+        if (grounding_folder is not None and settings.mask_guides is None
+                and settings.track_guided_masks):
+            guided_output = target / "track-guided-masks"
+            guided_args = executable + ["improve-dense-masks",
+                "--reconstruction", str(sparse), "--mask-revision", str(mask_dir),
+                "--output", str(guided_output),
+                "--sam2-checkpoint", str(checkpoint_file),
+                "--sam2-size", settings.sam2_size, "--sam2-device", settings.sam2_device,
+                "--cache-dir", str(shared_cache)]
+            if resume and guided_output.exists() and "mask_track_guidance" not in report["completed_stages"]:
+                guided_args.append("--resume")
+            run_stage("mask_track_guidance", guided_args, guided_output / "mask-report.json")
+            mask_record = _read_report(guided_output / "mask-report.json")
+            report["track_guidance"] = mask_record.get("summary", {})
+            mask_source = guided_output / "masks"
+        else:
+            emit("skip", "mask_track_guidance")
     else:
         mask_record = {"images": []}
         emit("skip", "masks")
+        emit("skip", "mask_track_guidance")
 
     if not mask_source.is_dir():
         return checkpoint("blocked / mask-review-required", "masks", ["Expected mask directory is missing"])
@@ -764,7 +785,10 @@ def build_statue_glb(
     audit_report = run_stage(audit_stage, executable + ["audit-dense-masks",
         "--reconstruction", str(sparse), "--rectified-masks", str(mask_source),
         "--output", str(mask_audit)], mask_audit / "mask-consistency-report.json")
-    report["mask_contact_sheet"] = ("masks/mask-contact-sheet.jpg" if settings.masks_dir is None else None)
+    report["mask_contact_sheet"] = (
+        "track-guided-masks/mask-contact-sheet.jpg" if settings.masks_dir is None and
+        grounding_folder is not None and settings.mask_guides is None and settings.track_guided_masks
+        else "masks/mask-contact-sheet.jpg" if settings.masks_dir is None else None)
     report["mask_audit_contact_sheet"] = f"{audit_stage}/mask-consistency-contact-sheet.jpg"
     if settings.masks_dir is None:
         issues = _mask_warnings(mask_record, audit_report, settings.max_mixed_mask_fraction)
