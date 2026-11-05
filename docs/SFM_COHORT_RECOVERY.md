@@ -265,3 +265,50 @@ python -c 'import pycolmap; print(pycolmap.__version__)'
 For upstream behavior and limitations, see
 [COLMAP PyCOLMAP options](https://colmap.github.io/pycolmap/pycolmap.html) and
 [COLMAP merging FAQ](https://colmap.github.io/faq.html#merge-disconnected-models).
+
+## Inspect matching failures before retrying
+
+`plan-sfm-cohort-recovery` includes `pair_stage_diagnostics` when the database
+retains tentative matches. It distinguishes missing match records (attempt
+status unknown), recorded zero tentative matches, a missing verification
+record, rejected verification, and verified 2D matches. For verified matches
+it counts observations on an existing anchor's 3D tracks; these are **candidate**
+2D–3D associations, not PnP inliers. Use the recovery report for actual pose
+estimation and validation results. A count alone does not identify matches on
+the object or establish pose accuracy.
+
+To produce a separate private report and photo-pair visualizations:
+
+```sh
+kumiki-blender audit-sfm-matches --revision /path/to/camera-revision \
+  --output /path/to/new-match-audit --max-pairs-per-target 2
+```
+
+Each visualization shows tentative-only matches in red, geometrically
+verified matches in yellow, and verified matches whose anchor observation is
+on an existing 3D track in green. All colors require visual review: even a
+verified track may belong to the background. The diagrams do not imply that
+the target camera registered or that a match is a PnP inlier. The JSON includes
+all target/registered pairs, including those without a visualization. A missing
+match record does not prove a matcher attempted or skipped the pair; inspect
+pair-list progress and logs for that determination.
+
+### Viewpoint robustness experiments
+
+The existing pipeline uses SIFT + LightGlue on MPS or a CPU fallback. COLMAP
+also supports affine-shape and domain-size-pooled SIFT; its [FAQ](https://colmap.github.io/faq.html#increase-number-of-matches-sparse-3d-points)
+recommends them for difficult matching. Treat alternative extractors as
+experiments: match counts alone do not justify adding poses or tracks.
+Detector-free matchers such as [LoFTR](https://openaccess.thecvf.com/content/CVPR2021/html/Sun_LoFTR_Detector-Free_Local_Feature_Matching_With_Transformers_CVPR_2021_paper.html)
+are another candidate, but introduce different dependencies and still need the
+same geometric and object-region validation.
+
+On the local Sphinx data, an isolated CPU affine/DSP-SIFT experiment for
+`photo-0041` / `photo-0057` produced zero verified matches; MPS SIFT-LightGlue
+on those newly extracted features produced nine tentative and zero verified
+matches. The original pair had 23 tentative and zero verified matches. This is
+one pair, not a general comparison of the algorithms. An independent retry of
+seven selected pairs without subject-confidence filtering likewise recovered
+none of the tested previously unverified pairs. Neither experiment changes the
+source database or justifies disabling subject filtering. See the private audit
+and experiment directories for the images and raw database evidence.

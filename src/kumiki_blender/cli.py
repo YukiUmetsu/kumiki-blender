@@ -352,6 +352,11 @@ def main(argv: list[str] | None = None) -> int:
     recovery_parser.add_argument("--output", type=Path, required=True)
     recovery_parser.add_argument("--colmap", default="colmap")
     recovery_parser.add_argument("--timeout-seconds", type=int, default=1800)
+    match_audit = subcommands.add_parser("audit-sfm-matches", help="Inspect tentative, verified and track-linked photo matches")
+    match_audit.add_argument("--revision", type=Path, required=True)
+    match_audit.add_argument("--output", type=Path, required=True)
+    match_audit.add_argument("--model", type=int, default=0)
+    match_audit.add_argument("--max-pairs-per-target", type=int, default=2)
     camera_compare_parser = subcommands.add_parser(
         "compare-camera-registrations",
         help="Read-only before/after registration coverage for two COLMAP revisions")
@@ -1315,6 +1320,15 @@ def main(argv: list[str] | None = None) -> int:
                                            side=args.side, max_samples=args.max_samples,
                                            max_cameras=args.max_cameras, min_views=args.min_views)
             except ReferenceError as error:
+                raise RecipeError(str(error)) from error
+            print(json.dumps(report, indent=2))
+            return 0
+        if args.command == "audit-sfm-matches":
+            from .reconstruction.sfm_pair_diagnostics import audit_matching_revision
+            try:
+                report = audit_matching_revision(args.revision, args.output, model=args.model,
+                                                 max_pairs_per_target=args.max_pairs_per_target)
+            except ValueError as error:
                 raise RecipeError(str(error)) from error
             print(json.dumps(report, indent=2))
             return 0

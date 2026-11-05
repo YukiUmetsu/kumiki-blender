@@ -276,6 +276,14 @@ def plan_cohort_recovery(revision: Path, *, model: int = 0,
     cohort = missing | anchors
     evidence = assess_verified_pairs(paths["database"], edges)
     track_support = audit_2d3d_support(paths["sparse"], model, registered, missing)
+    # Some legacy databases do not retain tentative matches. Do not mistake
+    # a missing row for proof that a pair was never attempted.
+    from .sfm_pair_diagnostics import diagnose_pairs
+    from contextlib import closing
+    with closing(sqlite3.connect(paths["database"].resolve().as_uri() + "?mode=ro", uri=True)) as db:
+        has_matches = db.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='matches'").fetchone()
+    pair_stages = (diagnose_pairs(paths["database"], paths["sparse"] / "text-models" / str(model) / "points3D.txt",
+                                  registered, missing) if has_matches else [])
     coverage_gaps = _coverage_gaps(missing, registered, anchors, evidence, track_support)
     from .sfm_gap_guide import annotate_gap_requests, first_photos_to_find
     annotate_gap_requests(coverage_gaps, staged, anchors)
@@ -326,7 +334,7 @@ def plan_cohort_recovery(revision: Path, *, model: int = 0,
             "anchor_filenames": sorted(anchors), "cohort_filenames": sorted(cohort),
             "verified_pair_count": len(edges), "seed_pairs": diverse,
             "rejected_low_parallax_seed_pairs": unsuitable,
-            "coverage_gaps": coverage_gaps,
+            "coverage_gaps": coverage_gaps, "pair_stage_diagnostics": pair_stages,
             "source_image_ids": {name: image_ids[name] for name in sorted(cohort)},
             "settings": vars(settings),
             "warning": "Even estimated ray angles and 2D match coverage cannot prove a "
