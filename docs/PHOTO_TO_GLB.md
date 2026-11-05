@@ -207,7 +207,17 @@ support is ambiguous rather than silently admitting ground.
 
 **Automatic is the default.** The pipeline chooses each candidate when it has
 adequate independent evidence and otherwise keeps the original mask or
-abstains. No person needs to click through the photos for this stage to run.
+abstains. For a difficult close-up with too few COLMAP foreground/ground
+tracks, there is now a separate **image-only fragmentation fallback**. It is
+eligible only when at least 85% of a small broad mask is contained in a much
+larger grounded SAM2 candidate. It closes small repeated holes, preserves the
+largest connected body, requires near-identical silhouettes at two neighboring
+filter sizes, and vetoes new sky or known background-track coverage. This can
+recover a chest or paw that SAM2 spotted only in disconnected stone-texture
+fragments. It cannot distinguish adjacent sandstone architecture from the
+statue or prove that unverified sand has been removed. Its `image_repair`
+receipt records those limits separately from `track_guidance`.
+No person needs to click through the photos for this stage to run.
 The result is still a *candidate*, not certified statue anatomy: normal
 automatic mask-consistency and camera-coverage gates may block a weak dataset.
 Visual inspection is recommended, and optional overrides are supported below.
@@ -230,8 +240,9 @@ kumiki-blender improve-dense-masks \
   --cache-dir '.review/great-sphinx/_statue_mask_cache'
 
 open "$IMPROVED/mask-contact-sheet.jpg"
-jq '{status, summary, changed: [.images[] | select(.track_guided_replaced) |
-  {filename, evidence: .track_guidance}]}' "$IMPROVED/mask-report.json"
+jq '{status, summary, changed: [.images[] |
+  select(.track_guided_replaced or .image_repair_replaced) |
+  {filename, track: .track_guidance, image_repair}]}' "$IMPROVED/mask-report.json"
 jq '{viable_track_ids, viable_background_track_ids, geometric_ground_plane,
      rejected, limitations}' "$IMPROVED/track-evidence-report.json"
 ```
@@ -240,7 +251,9 @@ If interrupted, use the same arguments plus `--resume`. A finished revision
 cannot be overwritten. Inspect `candidates/` for proposals that failed the
 held-out tests and `masks/` for the chosen output. Existing alternatives are
 copied and pinned by SHA-256. Without enough trustworthy multi-view overlap,
-the stage abstains; it never invents viewpoints or certifies statue anatomy.
+the track-guided route abstains; only the explicitly labeled, stable
+image-fragmentation fallback can act without tracks. Neither invents
+viewpoints or certifies statue anatomy.
 The stronger background-evidence algorithm creates a new revision fingerprint.
 Identical SAM2 prompts still reuse the existing MPS mask cache; new background
 clicks produce distinct content-addressed cache entries. Never resume an
@@ -261,9 +274,10 @@ kumiki-blender select-track-masks \
   --use-proposal photo-0021.png photo-0022.png photo-0027.png photo-0034.png photo-0053.png
 ```
 
-For an image with an otherwise useful proposal that includes unwanted ground,
-add `--use-proposal photo-0012.png` **and** `--edits /path/to/edits.json`,
-where that file contains image-specific normalized include/exclude polygons:
+For an automatically repaired image with a little unwanted ground, use
+`--edits /path/to/edits.json` **without** `--use-proposal`. Use the latter
+only to promote a separate withheld track-guided candidate. The edits JSON
+contains image-specific normalized include/exclude polygons:
 
 ```json
 {
@@ -281,6 +295,14 @@ The coordinates are illustrative only; trace the actual unwanted region in
 the original rectified photo. Exclusions are applied *after* inclusions.
 Both selected proposals and edits retain source hashes and require the usual
 mask QA. Users can continue without ever invoking this optional command.
+
+```bash
+kumiki-blender select-track-masks \
+  --reconstruction "$RUN/cameras" \
+  --mask-revision "$IMPROVED" \
+  --output '.review/great-sphinx/user-edits-r001' \
+  --edits /path/to/edits.json
+```
 
 The bundled detector choice is Hugging Face
 `IDEA-Research/grounding-dino-tiny` at immutable revision

@@ -561,7 +561,7 @@ def main(argv: list[str] | None = None) -> int:
                                    help="Completed automatic improve-dense-masks revision")
     choose_mask_parser.add_argument("--output", type=Path, required=True,
                                    help="Unused immutable output revision")
-    choose_mask_parser.add_argument("--use-proposal", nargs="+", required=True,
+    choose_mask_parser.add_argument("--use-proposal", nargs="+", default=[],
                                    metavar="PHOTO", help="Select a withheld candidate for the specified images")
     choose_mask_parser.add_argument("--edits", type=Path,
                                    help="Optional normalized include/exclude polygons for specific photos")

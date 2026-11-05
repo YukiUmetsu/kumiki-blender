@@ -22,7 +22,7 @@ from .mask_track_guidance import (SCHEMA as TRACK_SCHEMA,
 from .references import ReferenceError
 
 
-SCHEMA = "track-guided-mask-revision-v4"
+SCHEMA = "track-guided-mask-revision-v5"
 # Inference results depend on the actual guide and checkpoint, not the QA
 # algorithm version. Keep the original prompt-cache namespace so unchanged
 # guides reuse prior MPS work; new negative clicks alter the cache key.
@@ -154,7 +154,9 @@ def refine_masks_from_tracks(reconstruction: str | Path, mask_revision: str | Pa
                                  "cache_hits": 0, "inference_count": 0,
                                  "cross_view_only_prompted_photos": 0,
                                  "ground_repair_attempted": 0,
-                                 "ground_repair_accepted": 0},
+                                 "ground_repair_accepted": 0,
+                                 "image_repair_attempted": 0,
+                                 "image_repair_accepted": 0},
         "limitations": "COLMAP tracks and text grounding do not establish statue anatomy; no reduction of camera, mask, or mesh quality gates."}
 
     def account_receipt(receipt: dict[str, Any]) -> None:
@@ -203,6 +205,10 @@ def refine_masks_from_tracks(reconstruction: str | Path, mask_revision: str | Pa
                 raise ReferenceError(f"Completed mask changed during resume: {name}")
             result["images"].append(entry)
             account_receipt(entry["track_guidance"])
+            if entry.get("image_repair", {}).get("attempted"):
+                result["summary"]["image_repair_attempted"] += 1
+            if entry.get("image_repair", {}).get("accepted"):
+                result["summary"]["image_repair_accepted"] += 1
             result["summary"]["cache_hits"] += 1
             if progress:
                 progress(position, len(images), "resumed")
@@ -226,6 +232,9 @@ def refine_masks_from_tracks(reconstruction: str | Path, mask_revision: str | Pa
                    "cross_view_only_seed_count": cross_view_only_count,
                    "source_evidence": "track-evidence-report.json"}
         candidate_file = None
+        image_repair: dict[str, Any] = {"attempted": False,
+                                       "accepted": False,
+                                       "status": "abstained / track-guidance-first"}
         # Missing-body recovery or independently verifiable ground repair can
         # trigger an automatic retry. Neither requires human approval.
         can_recover = len(seeds) >= 3 and len(holdout) >= 5
@@ -322,6 +331,29 @@ def refine_masks_from_tracks(reconstruction: str | Path, mask_revision: str | Pa
                         receipt["reasons"].append("new-blue-sky-foreground")
                     if receipt["accepted"]:
                         shutil.copyfile(candidate_file, output_mask)
+        elif item.get("candidate_comparison", {}).get("selected") == "broad":
+            # The normal track path cannot help close-ups with zero registered
+            # foreground or ground points (e.g. a cropped statue chest).
+            # Evaluate the *saved* independent masks without rerunning SAM2.
+            from .mask_fragmentation_repair import propose_fragmentation_repair
+            with (Image.open(source_photo) as source_image,
+                  Image.open(selected_file) as selected_image,
+                  Image.open(target / item["candidate_masks"]["broad"]["path"]) as broad,
+                  Image.open(target / item["candidate_masks"]["grounded"]["path"]) as grounded):
+                proposal, image_repair = propose_fragmentation_repair(
+                    source_image, selected_image, broad, grounded,
+                    background_seeds=background_seeds,
+                    background_holdouts=background_holdouts,
+                    foreground_holdouts=holdout)
+            image_repair["attempted"] = True
+            result["summary"]["image_repair_attempted"] += 1
+            if proposal is not None:
+                repair_path = candidate_dir / (name + ".shape-repair.png")
+                proposal.save(repair_path, format="PNG", optimize=True)
+                image_repair.update(proposed_mask="candidates/" + repair_path.name,
+                                    proposed_mask_sha256=_sha256(repair_path))
+                shutil.copyfile(repair_path, output_mask)
+                result["summary"]["image_repair_accepted"] += 1
         account_receipt(receipt)
         with Image.open(source_photo) as photo, Image.open(output_mask) as chosen:
             histogram = chosen.histogram()
@@ -338,7 +370,9 @@ def refine_masks_from_tracks(reconstruction: str | Path, mask_revision: str | Pa
                  "mask_sha256": _sha256(output_mask), "preview": "review/" + preview_path.name,
                  "foreground_fraction": new_fraction,
                  "track_guidance": receipt,
-                 "track_guided_replaced": receipt["accepted"]}
+                 "track_guided_replaced": receipt["accepted"],
+                 "image_repair": image_repair,
+                 "image_repair_replaced": image_repair["accepted"]}
         if receipt["accepted"]:
             entry["original_foreground_fraction"] = item.get("foreground_fraction")
             entry["original_candidate_comparison"] = entry.get("candidate_comparison")
@@ -348,6 +382,15 @@ def refine_masks_from_tracks(reconstruction: str | Path, mask_revision: str | Pa
                 "holdout_recovered": receipt["heldout_recovered"],
                 "holdout_lost": receipt["heldout_lost"],
                 "limitations": "Sparse tracks do not verify statue anatomy; normal mask and camera QA still apply"}
+        elif image_repair["accepted"]:
+            entry["original_foreground_fraction"] = item.get("foreground_fraction")
+            entry["original_candidate_comparison"] = entry.get("candidate_comparison")
+            entry["candidate_comparison"] = {
+                "status": "candidate / automatic-fragmentation-repair",
+                "selected": "grounded-connected-body",
+                "limitations": "Image-only silhouette repair does not certify ground exclusion or statue anatomy"}
+            entry["warnings"] = list(item.get("warnings", [])) + [
+                "Automatically repaired fragmented SAM2 candidate; ground boundaries remain unverified"]
         result["images"].append(entry)
         checkpoint_report()
         if progress:

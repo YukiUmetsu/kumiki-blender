@@ -55,17 +55,20 @@ def select_track_mask_candidates(reconstruction: str | Path, mask_revision: str 
             or target == sparse or target.is_relative_to(sparse)
             or source.is_relative_to(target)):
         raise ReferenceError("Mask correction requires an existing revision and unused separate output")
-    if (not isinstance(use_proposals, list) or not use_proposals or
+    if (not isinstance(use_proposals, list) or
             any(not isinstance(name, str) for name in use_proposals) or
             len(set(use_proposals)) != len(use_proposals)):
-        raise ReferenceError("Choose at least one distinct candidate photo filename")
+        raise ReferenceError("Proposal filenames must be a distinct list")
+    if not use_proposals and edits is None:
+        raise ReferenceError("Provide at least one proposal or a polygon-edit file")
     report_path = source / "mask-report.json"
     if report_path.is_symlink() or not report_path.is_file():
         raise ReferenceError("Missing source mask report")
     previous = json.loads(report_path.read_text(encoding="utf-8"))
     if (previous.get("schema") not in (TRACK_SCHEMA, "track-guided-mask-revision-v1",
                                          "track-guided-mask-revision-v2",
-                                         "track-guided-mask-revision-v3") or
+                                         "track-guided-mask-revision-v3",
+                                         "track-guided-mask-revision-v4") or
             previous.get("source_revision") != str(sparse) or
             not str(previous.get("status", "")).startswith("candidate / ") or
             not isinstance(previous.get("images"), list)):
@@ -82,6 +85,9 @@ def select_track_mask_candidates(reconstruction: str | Path, mask_revision: str 
         raise ReferenceError("Requested proposals or mask/photo coverage do not match registered cameras")
     choices = set(use_proposals)
     edits_map, edits_sha = _load_edits(edits, list(entries))
+    if not choices and not any(any(polygon_list for polygon_list in masks.values())
+                               for masks in edits_map.values()):
+        raise ReferenceError("No proposals or polygon corrections were specified")
     source_files: dict[str, Path] = {}
     for name, entry in entries.items():
         if (not name or Path(name).name != name or

@@ -427,6 +427,36 @@ class TrackGuidanceTests(unittest.TestCase):
                           for entry in self.images], original_hashes)
         self.assertTrue((self.root / "track-masks-r001/mask-contact-sheet.jpg").is_file())
 
+    def test_nested_image_candidate_can_repair_a_view_without_track_points(self):
+        evidence = extract_track_guidance(self.sparse, self.mask_revision, self.report)
+        for row in evidence["images"].values():
+            row.update(seed_points=[], holdout_points=[], foreground_context_points=[],
+                       background_seed_points=[], background_holdout_points=[])
+        self.images[0]["candidate_comparison"]["selected"] = "broad"
+        (self.mask_revision / "mask-report.json").write_text(json.dumps(self.report))
+        proposed = Image.new("L", (100, 80), 0)
+        proposed.paste(255, (9, 9, 91, 76))
+        shape_receipt = {"schema": "nested-fragmented-sam2-repair-v1",
+                         "status": "candidate / automatic-fragmentation-repair",
+                         "accepted": True, "reasons": []}
+        with (patch("kumiki_blender.reconstruction.mask_track_resegmentation.extract_track_guidance",
+                    return_value=evidence),
+              patch("kumiki_blender.reconstruction.mask_fragmentation_repair.propose_fragmentation_repair",
+                    return_value=(proposed, shape_receipt)) as repair):
+            result = refine_masks_from_tracks(
+                self.sparse, self.mask_revision, self.root / "image-only-repair",
+                sam2_checkpoint=self.weights)
+        repair.assert_called_once()
+        self.assertEqual(result["summary"]["image_repair_accepted"], 1)
+        self.assertEqual(result["summary"]["inference_count"], 0)
+        revised = result["images"][0]
+        self.assertTrue(revised["image_repair_replaced"])
+        self.assertFalse(revised["track_guided_replaced"])
+        self.assertEqual(revised["candidate_comparison"]["selected"], "grounded-connected-body")
+        self.assertEqual(digest(self.mask_revision / self.images[0]["mask"]),
+                         self.images[0]["mask_sha256"])
+
+
     def test_verified_background_seed_is_sent_to_sam2_as_negative_click(self):
         evidence = extract_track_guidance(self.sparse, self.mask_revision, self.report)
         negative = {"point3d_id": 9999, "normalized_xy": [.02, .77],
@@ -557,6 +587,15 @@ class TrackGuidanceTests(unittest.TestCase):
         self.assertTrue(entry["user_polygon_edit"])
         self.assertFalse(report["approved_for_reconstruction"])
         self.assertEqual(report["status"], "candidate / optional-user-corrections")
+        # A person can also erase ground from an automatically accepted shape
+        # repair without having to promote an unrelated track proposal.
+        edit_only = select_track_mask_candidates(
+            self.sparse, refined_root, self.root / "edit-only",
+            use_proposals=[], edits=edits)
+        corrected = next(item for item in edit_only["images"]
+                         if item["filename"] == "view-05.png")
+        self.assertTrue(corrected["user_polygon_edit"])
+        self.assertEqual(corrected["selection"], "automatic-base")
         with Image.open(chosen_root / entry["mask"]) as after, Image.open(
                 refined_root / entry["mask"]) as before:
             self.assertEqual(after.getpixel((65, 55)), 0)
