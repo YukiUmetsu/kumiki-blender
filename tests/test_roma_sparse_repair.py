@@ -74,13 +74,20 @@ class Model:
         self.deleted = []
         self.deregistered = []
         if with_new:
-            obs = [Observation() for _ in range(1464)]
+            obs = [Observation() for _ in range(1466)]
             for i in range(42):
                 obs[i] = Observation((0.2, 0), 100 + i)
                 self.points3D[100 + i] = Point([(4, i), (1, i), (2, i)])
+            obs[1353] = Observation((3.315, 0), 18140)
+            obs[1354] = Observation((3.315, 0), 18140)
+            obs[553] = Observation((3.342, 0), 18304)
+            obs[1465] = Observation((2.983, 0), 18304)
             obs[855] = Observation((7.536, 0), 18295)
             obs[1462] = Observation((8.167, 0), 18295 if duplicate else 18296)
             obs[1463] = Observation((11.960, 0), 18298)
+            self.points3D[18140] = Point([(4, 1353), (4, 1354), (1, 2),
+                                          (2, 2), (3, 2), (1, 3), (2, 3)])
+            self.points3D[18304] = Point([(4, 553), (4, 1465), (1, 4), (2, 4)])
             self.points3D[18295] = Point([(4, 855), (4, 1462), (1, 0), (2, 0), (3, 0)])
             self.points3D[18298] = Point([(4, 1463), (1, 1), (2, 1)])
             self.images[4] = Image('photo-0060.png', 4, observations=obs)
@@ -120,30 +127,66 @@ class SparseRepairTests(unittest.TestCase):
             for name in ('cameras.bin', 'images.bin', 'points3D.bin'):
                 (folder / name).write_bytes(b'demo')
 
-    def _run(self, *, model=None, indices=(1462, 1463), allow=True, exclude=None):
+    def _run(self, *, model=None, indices=(1462, 1463), duplicates=(1354, 1465),
+             allow=True, exclude=None):
         candidate = model or Model(with_new=True)
         def loader(path):
             return candidate if path == self.source else Model()
         return repair_roma_sparse_model(self.base, self.source, self.out,
                                        target='photo-0060.png', remove_indices=list(indices),
+                                       remove_duplicate_indices=list(duplicates),
                                        exclude_cameras=exclude if exclude is not None else
                                        ['photo-0013.png', 'photo-0055.png'],
                                        allow_duplicate_repair=allow, model_loader=loader), candidate
 
-    def test_2_outliers_and_2_unverified_views_are_isolated(self):
+    def test_2_outliers_and_3_duplicate_groups_are_isolated(self):
         report, candidate = self._run()
         self.assertEqual(report['registered_images'], 4)
-        self.assertEqual(report['remaining_target_3d_observations'], 43)
-        self.assertEqual(candidate.deleted, [(4, 1463), (4, 1462)])
+        self.assertEqual(report['remaining_target_3d_observations'], 45)
+        self.assertEqual(candidate.deleted, [(4, 1465), (4, 1463), (4, 1462), (4, 1354)])
         self.assertEqual(candidate.deregistered, [5, 6])
-        self.assertEqual([e.point2D_idx for e in candidate.points3D[18295].track.elements
-                          if e.image_id == 4], [855])
+        for point_id, expected_index in ((18140, 1353), (18295, 855), (18304, 553)):
+            self.assertEqual([e.point2D_idx for e in candidate.points3D[point_id].track.elements
+                              if e.image_id == 4], [expected_index])
+        self.assertEqual([row['point2D_idx'] for row in report['removed_duplicate_observations']],
+                         [1354, 1465])
+        self.assertEqual(report['removed_duplicate_observations'][1]['retained_index'], 553)
+        self.assertGreater(report['removed_duplicate_observations'][1]['error_px'], 0)
+        self.assertLess(report['remaining_target_max_reprojection_px'], 8)
         self.assertTrue((self.out / 'sparse/marker.txt').is_file())
         self.assertEqual(report['after_camera_gate']['new_filenames'], ['photo-0060.png'])
 
     def test_duplicate_repair_needs_explicit_opt_in(self):
-        with self.assertRaisesRegex(ValueError, 'explicit opt-in'):
+        with self.assertRaisesRegex(ValueError, 'Invalid explicit sparse camera repair request'):
             self._run(allow=False)
+        self.assertFalse(self.out.exists())
+
+    def test_refuses_omitted_duplicate_even_when_its_error_is_small(self):
+        with self.assertRaisesRegex(ValueError, 'Every duplicate 3D point'):
+            self._run(duplicates=(1354,))
+        self.assertFalse(self.out.exists())
+
+    def test_refuses_duplicate_index_that_is_not_a_duplicate(self):
+        with self.assertRaisesRegex(ValueError, 'must reference a duplicated'):
+            self._run(duplicates=(1354, 1465, 10))
+        self.assertFalse(self.out.exists())
+
+    def test_refuses_duplicate_index_that_also_requests_high_error_removal(self):
+        with self.assertRaisesRegex(ValueError, 'Invalid explicit sparse camera repair'):
+            self._run(duplicates=(1354, 1465, 1462))
+        self.assertFalse(self.out.exists())
+
+    def test_refuses_removing_both_members_of_one_duplicate(self):
+        with self.assertRaisesRegex(ValueError, 'Every duplicate 3D point'):
+            self._run(duplicates=(1353, 1354, 1465))
+        self.assertFalse(self.out.exists())
+
+    def test_refuses_dangling_duplicate_track_member(self):
+        candidate = Model(with_new=True)
+        candidate.points3D[18140].track.elements = candidate.points3D[18140].track.elements[:-1]
+        candidate.points3D[18140].track.elements.append(TrackElement(4, 800))
+        with self.assertRaisesRegex(ValueError, '3D track and target 2D observations disagree'):
+            self._run(model=candidate)
         self.assertFalse(self.out.exists())
 
     def test_refuses_good_observation_removal(self):

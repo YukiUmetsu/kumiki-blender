@@ -387,10 +387,12 @@ def main(argv: list[str] | None = None) -> int:
     roma_repair.add_argument("--output", type=Path, required=True)
     roma_repair.add_argument("--target", required=True)
     roma_repair.add_argument("--remove-index", action="append", required=True, type=int)
+    roma_repair.add_argument("--remove-duplicate-index", action="append", type=int, default=[],
+                             help="Explicit reviewed duplicate point2D index to remove, even if below outlier threshold; repeat")
     roma_repair.add_argument("--exclude-camera", action="append", required=True)
     roma_repair.add_argument("--outlier-px", type=float, default=8.0)
     roma_repair.add_argument("--allow-duplicate-repair", action="store_true",
-                             help="Allow removing one verified, higher-error duplicate while preserving its linked track")
+                             help="Permit explicitly reviewed duplicate repair while preserving surviving native tracks")
     camera_compare_parser = subcommands.add_parser(
         "compare-camera-registrations",
         help="Read-only before/after registration coverage for two COLMAP revisions")
@@ -1405,6 +1407,7 @@ def main(argv: list[str] | None = None) -> int:
                 report = repair_roma_sparse_model(args.baseline_model, args.candidate_model,
                                                    args.output, target=args.target,
                                                    remove_indices=args.remove_index,
+                                                   remove_duplicate_indices=args.remove_duplicate_index,
                                                    exclude_cameras=args.exclude_camera,
                                                    outlier_px=args.outlier_px,
                                                    allow_duplicate_repair=args.allow_duplicate_repair)

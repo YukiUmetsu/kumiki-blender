@@ -456,10 +456,18 @@ and 1462 both referred to 3D point 18295; do not automatically delete 1462.
 For a previously created **separate sparse COLMAP model** without a RoMa
 candidate receipt, `repair-roma-sparse-camera` offers a guarded, explicit
 alternative. It is appropriate only after the duplicate target tracks have
-been inspected in the native model. The Sphinx audit confirmed point 18295
-has five track members, including target indices 855 and 1462, and point 18298
-has three; the lower-error observation 855 must survive. The 49 baseline
-poses had exactly zero measured center/orientation drift before repair.
+been inspected in the native model. The November 5 Sphinx audit found **three**
+duplicated target point IDs:
+
+| 3D point | Target indices | Explicit choice | Evidence / limitation |
+| --- | --- | --- | --- |
+| 18140 | 1353, 1354 | Drop 1354; keep 1353 | Both pixels exactly identical (3.315px error) |
+| 18295 | 855, 1462 | Drop 1462; keep 855 | 855 has lower reprojection error (7.536 vs 8.167px) |
+| 18304 | 553, 1465 | Drop 1465; keep 553 | Retain earlier existing index provisionally; 1465 is slightly lower-error (2.983 vs 3.342px), so this is **not** an automatic confidence decision |
+
+Also remove high-error index 1463 (11.960px). The 49 baseline poses had
+exactly zero measured center/orientation drift before repair. Selecting an
+observation to preserve must never be mistaken for independent pose validation.
 
 ```sh
 RUN=.review/great-sphinx/statue-hq-r005
@@ -468,14 +476,21 @@ kumiki-blender repair-roma-sparse-camera \
   --candidate-model "$RUN/roma-dense-r01/workspace/sparse" \
   --target photo-0060.png \
   --remove-index 1462 --remove-index 1463 \
+  --remove-duplicate-index 1354 --remove-duplicate-index 1465 \
   --exclude-camera photo-0013.png --exclude-camera photo-0055.png \
   --outlier-px 8 --allow-duplicate-repair \
   --output "$RUN/roma-top-only-r01"
 ```
 
 This requires exactly the three added cameras named above, zero baseline
-pose drift, both requested outliers above 8px, consistent native track links,
-surviving multi-view tracks, and at least 30 remaining target observations.
+pose drift, both high-error removals above 8px, both additional removals
+confirmed as duplicates, exactly one surviving target observation per 3D
+point, consistent native track links, surviving multi-view tracks, and at
+least 30 remaining target observations. `--remove-duplicate-index` is
+separate from `--remove-index`: it permits removing an explicitly reviewed
+low-residual duplicate, even when it does not have the higher reprojection
+error. Both kinds require `--allow-duplicate-repair` for duplicate tracks.
+The report records the removed indices and which duplicate indices survived.
 It refuses to deregister a shared multi-camera frame. Native PyCOLMAP 4.x
 `deregister_frame` is used to exclude the two unverified views; neither the
 original 49-camera model nor the 52-camera experiment is edited. The output
