@@ -429,10 +429,19 @@ def main(argv: list[str] | None = None) -> int:
                                   help="OpenMVS pre-refinement face retention; 1 preserves high-poly detail")
         dense_parser.add_argument("--texture-decimate", type=float, default=1.0,
                                   help="OpenMVS texture OBJ face retention; lower for faster atlas LOD while PLY stays high-poly")
-        dense_parser.add_argument("--no-global-seam-leveling", action="store_true",
-                                  help="OpenMVS: disable global texture seam equalization if it creates dark artifacts")
-        dense_parser.add_argument("--no-local-seam-leveling", action="store_true",
-                                  help="OpenMVS: disable local texture seam blending if it creates dark artifacts")
+        global_seam = dense_parser.add_mutually_exclusive_group()
+        global_seam.add_argument("--global-seam-leveling", dest="global_seam_leveling",
+                                 action="store_true",
+                                 help="Opt into OpenMVS global texture seam equalization (broken in 2.4.0)")
+        global_seam.add_argument("--no-global-seam-leveling", dest="global_seam_leveling",
+                                 action="store_false", help="Keep global texture seam equalization off (default)")
+        local_seam = dense_parser.add_mutually_exclusive_group()
+        local_seam.add_argument("--local-seam-leveling", dest="local_seam_leveling",
+                                action="store_true",
+                                help="Opt into OpenMVS local texture seam blending (broken in 2.4.0)")
+        local_seam.add_argument("--no-local-seam-leveling", dest="local_seam_leveling",
+                                action="store_false", help="Keep local texture seam blending off (default)")
+        dense_parser.set_defaults(global_seam_leveling=False, local_seam_leveling=False)
         dense_parser.add_argument("--timeout-seconds", type=int, default=7200)
         dense_parser.add_argument("--no-refine", action="store_true",
                                   help="OpenMVS: skip refined topology")
@@ -1249,8 +1258,8 @@ def main(argv: list[str] | None = None) -> int:
                     max_resolution=args.max_resolution, number_views=args.number_views,
                     refine_decimate=args.refine_decimate,
                     texture_decimate=args.texture_decimate,
-                    texture_global_seam_leveling=not args.no_global_seam_leveling,
-                    texture_local_seam_leveling=not args.no_local_seam_leveling,
+                    texture_global_seam_leveling=args.global_seam_leveling,
+                    texture_local_seam_leveling=args.local_seam_leveling,
                     refine=not args.no_refine, texture=not args.no_texture)
                 report = (plan_dense_reconstruction(args.reconstruction, args.output, settings,
                                                     rectified_masks=args.rectified_masks)

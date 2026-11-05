@@ -126,7 +126,9 @@ private texture projection to produce a mesh for artistic inspection.
       --candidate-masks .review/statue/masks-r03/masks \
       --output .review/statue/mask-compare-r02-r03
 
-    # Use only reviewed masks; OpenMVS consumes <rectified-filename>.mask.png.
+    # Use only reviewed masks; OpenMVS excludes binary label 0 (background)
+    # during densification and texturing. Use a NEW dense revision after
+    # updating the code: older depth maps were computed without this filter.
     kumiki-blender build-dense-photos \
       --reconstruction .review/statue/sparse-r01 \
       --rectified-masks .review/statue/masks-r02/masks \
@@ -137,8 +139,9 @@ private texture projection to produce a mesh for artistic inspection.
       --reconstruction .review/statue/sparse-r01 \
       --output .review/statue/dense-r01 --backend openmvs
 
-    # Only if OpenMVS creates black/dark texture patches: try a separate
-    # reconstruction with seam leveling disabled and compare in Blender.
+    # OpenMVS 2.4.0's seam-leveling bug can create black/colorful texture
+    # patches. Both seam levelers are now OFF by default; this command is
+    # equivalent to the default, retained to show the explicit flags.
     kumiki-blender build-dense-photos \
       --reconstruction .review/statue/sparse-r01 \
       --rectified-masks .review/statue/masks-r02/masks \
@@ -149,7 +152,9 @@ private texture projection to produce a mesh for artistic inspection.
     # exact-size rectified mask for EVERY undistorted registered image:
     # /private/masks/img-0001.jpg.mask.png, etc. Use grayscale 255=keep,
     # 0=exclude. Verify edges manually in the rectified image coordinate
-    # frame. OpenMVS reads these alongside the private image snapshot.
+    # frame. The pipeline explicitly passes --mask-path and
+    # --ignore-mask-label 0 to OpenMVS densification, and the mask label to
+    # texturing. OpenMVS 2.4 RefineMesh does not support an equivalent option.
     kumiki-blender build-dense-photos \
       --reconstruction .review/statue/sparse-r01 \
       --rectified-masks /private/masks \
@@ -265,16 +270,20 @@ modifying the high-poly PLY**. An interrupted texture stage can be resumed
 with a lower texture decimation factor; the immutable dense/mesh stages are
 reused, not recomputed. This does not replace the original high-poly detail
 review or prove that the UV LOD captures thin features.
-OpenMVS already performs global and local texture seam leveling by default.
-Its upstream [2.4.0 black-patch regression](https://github.com/cdcseacave/openMVS/issues/1251)
-can make otherwise usable masked textures appear black; first try a newer
-fixed build. If necessary, use `--no-global-seam-leveling` and/or
-`--no-local-seam-leveling` for a **new private reconstruction revision**.
+OpenMVS's upstream [2.4.0 black-patch regression](https://github.com/cdcseacave/openMVS/issues/1251)
+can make otherwise usable textures appear black or unnaturally colored.
+This pipeline disables global and local seam leveling by default to avoid
+silently corrupting textures on that common Mac build. On a newer fixed
+OpenMVS build, opt into `--global-seam-leveling` and/or
+`--local-seam-leveling` for a **new private reconstruction revision**.
 Both options are recorded in the report and may change during `--resume`
 only when the texture stage failed. Disabling leveling may restore colored
 surfaces but increase UV seams; compare textured Blender reviews.
 Post-hoc exposure correction cannot repair black texture patches created
-during projection.
+during projection. Likewise, foreground masks cannot reconstruct the top,
+back-left, or facial side if those surfaces lack registered overlapping
+photographs. Review camera registration and render multiple calibrated
+views; unobserved geometry must remain flagged, not silently invented.
 Rectified mask files must be genuine grayscale PNGs (binary 0/255, both
 present, exact dimensions), with exact `<photo filename>.mask.png` names.
 `prepare-dense-masks` generates those files with an `approved_for_reconstruction:

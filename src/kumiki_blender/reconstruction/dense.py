@@ -37,8 +37,11 @@ class DenseSettings:
     number_views: int = 5
     refine_decimate: float = 1.0
     texture_decimate: float = 1.0
-    texture_global_seam_leveling: bool = True
-    texture_local_seam_leveling: bool = True
+    # OpenMVS 2.4 has a known texture sampling/seam-leveling regression that
+    # turns valid photographs into black/rainbow atlas patches. Preserve
+    # original photographed color by default; users can opt in on fixed builds.
+    texture_global_seam_leveling: bool = False
+    texture_local_seam_leveling: bool = False
 
     def validate(self) -> "DenseSettings":
         if self.backend not in ("openmvs", "colmap"):
@@ -103,6 +106,10 @@ def plan_dense_reconstruction(reconstruction: str | Path, output: str | Path,
                               executables: dict[str, str] | None = None) -> dict[str, Any]:
     """Non-mutating preflight; requires registered, rectified camera evidence."""
     settings.validate()
+    if rectified_masks is not None and settings.backend != "openmvs":
+        raise ReferenceError(
+            "Rectified subject masks are supported only by the OpenMVS backend; "
+            "COLMAP PatchMatch does not consume these mask arguments")
     source = Path(reconstruction).resolve()
     target = Path(output).resolve()
     if Path(output).is_symlink() or target.exists():
@@ -204,6 +211,12 @@ def plan_dense_reconstruction(reconstruction: str | Path, output: str | Path,
         "undistorted_images": verified,
         "rectified_mask_source": str(mask_source) if mask_source is not None else None,
         "rectified_masks": masks,
+        # OpenMVS's mask-label default is -1 (disabled). Merely copying
+        # .mask.png files next to photos does NOT apply foreground filtering.
+        "mask_application": ({"densify": "ignore-background-label-0",
+                              "texture": "ignore-background-label-0" if settings.texture else None,
+                              "refine": "not-supported-by-openmvs-2.4" if settings.refine else None}
+                             if masks else None),
         "executables": executables,
         "timeout_seconds": settings.timeout_seconds,
         "min_mesh_faces": settings.min_mesh_faces,
@@ -294,6 +307,14 @@ def build_dense_reconstruction(reconstruction: str | Path, output: str | Path,
                 raise ReferenceError(f"Resume cannot change existing dense input/settings: {key}")
         prior = {step.get("stage") for step in report["commands"]
                  if isinstance(step, dict)}
+        if plan["rectified_masks"] and any(
+                step.get("stage") == "densify" and (
+                    "--mask-path" not in step.get("argv", [])
+                    or "--ignore-mask-label" not in step.get("argv", []))
+                for step in report["commands"] if isinstance(step, dict)):
+            raise ReferenceError(
+                "This dense revision previously ran without subject-mask filtering. "
+                "Start a new dense output revision; resuming would reuse contaminated depth maps")
         # Later, unstarted stages may be explicitly disabled after a failure
         # without invalidating the expensive camera/dense/mesh computation.
         failed_texturing = report.get("failed_stage") in (
@@ -344,6 +365,7 @@ def build_dense_reconstruction(reconstruction: str | Path, output: str | Path,
                        "texture_global_seam_leveling": plan["texture_global_seam_leveling"],
                        "texture_local_seam_leveling": plan["texture_local_seam_leveling"],
                        "refine": plan["refine"], "texture": plan["texture"],
+                       "mask_application": plan["mask_application"],
                        "rectified_mask_source": plan["rectified_mask_source"],
                        "rectified_masks": plan["rectified_masks"]})
         report.pop("error", None)
@@ -403,6 +425,16 @@ def build_dense_reconstruction(reconstruction: str | Path, output: str | Path,
             report.update(failed_stage="copy_workspace", error=str(error), exit_code=2)
             return checkpoint()
     if settings.backend == "openmvs":
+        # OpenMVS 2.4 DensifyPointCloud accepts --mask-path and requires an
+        # explicit --ignore-mask-label 0 for black background / white subject.
+        # TextureMesh reads the mask filenames embedded in scene_dense.mvs and
+        # accepts --ignore-mask-label, but NOT --mask-path in OpenMVS 2.4.
+        # RefineMesh 2.4 has neither option; do not send unsupported flags.
+        mask_dir = str(workspace / "images") + "/"
+        dense_mask_args = (["--mask-path", mask_dir,
+                            "--ignore-mask-label", "0"] if plan["rectified_masks"] else [])
+        texture_mask_args = (["--ignore-mask-label", "0"]
+                             if plan["rectified_masks"] else [])
         scene = workspace / "scene.mvs"
         dense = workspace / "scene_dense.mvs"
         mesh = workspace / "scene_dense_mesh.mvs"
@@ -416,7 +448,7 @@ def build_dense_reconstruction(reconstruction: str | Path, output: str | Path,
                                              "--resolution-level", str(settings.resolution_level),
                                              "--max-resolution", str(settings.max_resolution),
                                              "--number-views", str(settings.number_views),
-                                             "--tower-mode", "0"]),
+                                             "--tower-mode", "0", *dense_mask_args]),
             ("mesh", "ReconstructMesh", ["--input-file", str(dense),
                                         "--output-file", str(mesh)]),
         ]
@@ -435,7 +467,8 @@ def build_dense_reconstruction(reconstruction: str | Path, output: str | Path,
                 "--decimate", str(settings.texture_decimate),
                 "--global-seam-leveling", str(int(settings.texture_global_seam_leveling)),
                 "--local-seam-leveling", str(int(settings.texture_local_seam_leveling)),
-                "--resolution-level", str(settings.resolution_level)]))
+                "--resolution-level", str(settings.resolution_level),
+                *texture_mask_args]))
         ply = workspace / "scene_dense_mesh.ply"
         # OpenMVS 2.4 normally exports ReconstructMesh/RefineMesh as PLY even
         # when --output-file ends in .mvs. Requiring an .mvs archive here
