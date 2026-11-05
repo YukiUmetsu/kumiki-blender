@@ -231,13 +231,15 @@ def main(argv: list[str] | None = None) -> int:
                                       help="New immutable reconstruction revision directory")
             photo_parser.add_argument("--normalized-cache-dir", type=Path,
                                       help="Reuse byte-verified RGB normalizations of unchanged original photos")
+            photo_parser.add_argument("--source-qa-report", type=Path,
+                                      help="Verified source-photo confidence report for subject-aware matching")
             photo_parser.add_argument("--colmap", default="colmap", help="Installed COLMAP executable")
             photo_parser.add_argument("--engine", choices=("colmap", "pycolmap"), default="colmap",
                                       help="COLMAP CLI (default) or pip-installed CPU PyCOLMAP")
             photo_parser.add_argument("--matching-preset",
                                       choices=("sift", "sift-lightglue", "aliked-lightglue", "loma", "loma128"),
                                       default="sift", help="Learned matching requires ONNX-enabled COLMAP 4.2+")
-            photo_parser.add_argument("--matching-device", choices=("colmap-cpu", "mps"),
+            photo_parser.add_argument("--matching-device", choices=("colmap-cpu", "mps", "torch-cpu"),
                                       default="colmap-cpu",
                                       help="COLMAP CPU matching or Apple Silicon PyTorch MPS LightGlue")
             photo_parser.add_argument("--feature-threads", type=int,
@@ -332,6 +334,17 @@ def main(argv: list[str] | None = None) -> int:
                            help="Never download missing model weights; search local caches only")
     statue_glb.add_argument("--sam2-size", choices=("tiny", "small", "base_plus", "large"), default="small")
     statue_glb.add_argument("--sam2-device", choices=("auto", "mps", "cpu"), default="mps")
+    statue_glb.add_argument("--subject-detector", choices=("none", "grounding-dino"), default="none",
+                           help="Optional text-grounded subject boxes to guide SAM2; never verified masks")
+    statue_glb.add_argument("--grounding-prompt",
+                           help="Object noun phrase(s), e.g. 'great sphinx statue. stone sphinx.'")
+    statue_glb.add_argument("--grounding-part-prompt", action="append", default=[],
+                           help="Repeat for visible object parts: 'stone sphinx torso', 'sphinx head', etc.")
+    statue_glb.add_argument("--grounding-model-dir", type=Path,
+                           help="Existing pinned Grounding DINO model snapshot; otherwise auto-download/cache")
+    statue_glb.add_argument("--grounding-device", choices=("auto", "mps", "cpu"), default="auto")
+    statue_glb.add_argument("--matching-device", choices=("mps", "torch-cpu"), default="mps",
+                           help="Use Apple MPS LightGlue or PyTorch CPU fallback")
     statue_glb.add_argument("--mask-guides", type=Path,
                            help="Optional manual overrides for automatically inferred segmentation prompts")
     statue_glb.add_argument("--masks-dir", type=Path,
@@ -363,6 +376,11 @@ def main(argv: list[str] | None = None) -> int:
     photo_cache_parser.add_argument("--sam2-checkpoint", type=Path)
     photo_cache_parser.add_argument("--sam2-size", choices=("tiny", "small", "base_plus", "large"), default="small")
     photo_cache_parser.add_argument("--sam2-device", choices=("auto", "mps", "cpu"), default="mps")
+    photo_cache_parser.add_argument("--subject-detector", choices=("none", "grounding-dino"), default="none")
+    photo_cache_parser.add_argument("--grounding-prompt")
+    photo_cache_parser.add_argument("--grounding-part-prompt", action="append", default=[])
+    photo_cache_parser.add_argument("--grounding-model-dir", type=Path)
+    photo_cache_parser.add_argument("--grounding-device", choices=("auto", "mps", "cpu"), default="auto")
     photo_cache_parser.add_argument("--no-foreground", action="store_true")
     photo_cache_parser.add_argument("--resume", action="store_true")
     recovery_parser = subcommands.add_parser(
@@ -551,8 +569,15 @@ def main(argv: list[str] | None = None) -> int:
     photo_mask_parser.add_argument("--sam2-size", choices=("tiny", "small", "base_plus", "large"),
                                    default="small")
     photo_mask_parser.add_argument("--sam2-device", choices=("auto", "mps", "cpu"), default="auto")
+    photo_mask_parser.add_argument("--subject-detector", choices=("none", "grounding-dino"), default="none")
+    photo_mask_parser.add_argument("--grounding-prompt")
+    photo_mask_parser.add_argument("--grounding-part-prompt", action="append", default=[])
+    photo_mask_parser.add_argument("--grounding-model-dir", type=Path)
+    photo_mask_parser.add_argument("--grounding-device", choices=("auto", "mps", "cpu"), default="auto")
     photo_mask_parser.add_argument("--cache-dir", type=Path,
                                    help="Optional content-addressed cache of masks for identical rectified photos")
+    photo_mask_parser.add_argument("--resume", action="store_true",
+                                   help="Resume an incomplete masks revision with identical inputs")
     refine_mask_parser = subcommands.add_parser(
         "refine-dense-masks", help="Remove tiny mask islands/holes or apply camera-specific polygon cleanup")
     refine_mask_parser.add_argument("--reconstruction", type=Path, required=True)
@@ -935,7 +960,13 @@ def main(argv: list[str] | None = None) -> int:
                     center_box=tuple(args.center_box), max_side=args.max_side,
                     iterations=args.iterations, segmenter=args.segmenter,
                     sam2_checkpoint=args.sam2_checkpoint, sam2_size=args.sam2_size,
-                    sam2_device=args.sam2_device, cache_dir=args.cache_dir)
+                    sam2_device=args.sam2_device, cache_dir=args.cache_dir,
+                    subject_detector=args.subject_detector,
+                    grounding_prompt=args.grounding_prompt,
+                    grounding_part_prompts=args.grounding_part_prompt,
+                    grounding_model_dir=args.grounding_model_dir,
+                    grounding_device=args.grounding_device,
+                    resume=args.resume)
             except ReferenceError as error:
                 raise RecipeError(str(error)) from error
             print(json.dumps(report, indent=2))
@@ -1352,9 +1383,18 @@ def main(argv: list[str] | None = None) -> int:
                     load_photo_folder(args.photos, args.asset_id), args.cache_dir, args.output,
                     checkpoint=args.sam2_checkpoint, sam2_size=args.sam2_size,
                     sam2_device=args.sam2_device, foreground=not args.no_foreground,
+                    subject_detector=args.subject_detector,
+                    grounding_model_dir=args.grounding_model_dir,
+                    grounding_prompt=args.grounding_prompt,
+                    grounding_part_prompts=args.grounding_part_prompt,
+                    grounding_device=args.grounding_device,
+                    progress=lambda count, total, hit: print(
+                        f"Photo QA {count}/{total}: normalized {'cache hit' if hit else 'processed'}",
+                        file=sys.stderr, flush=True),
                     resume=args.resume)
             except (ReferenceError, ValueError, OSError, ImportError) as error:
-                raise RecipeError(str(error)) from error
+                raise RecipeError(str(error) or
+                                  f"{type(error).__name__} occurred during photo preprocessing without details") from error
             print(json.dumps(report, indent=2))
             return 0
         if args.command == "build-statue-glb":
@@ -1378,6 +1418,12 @@ def main(argv: list[str] | None = None) -> int:
                     sam2_checkpoint=args.sam2_checkpoint,
                     auto_download_model=not args.no_auto_model_download,
                     sam2_size=args.sam2_size, sam2_device=args.sam2_device,
+                    subject_detector=args.subject_detector,
+                    grounding_prompt=args.grounding_prompt,
+                    grounding_part_prompts=tuple(args.grounding_part_prompt),
+                    grounding_device=args.grounding_device,
+                    grounding_model_dir=args.grounding_model_dir,
+                    matching_device=args.matching_device,
                     mask_guides=args.mask_guides, masks_dir=args.masks_dir,
                     mask_cache_dir=args.mask_cache_dir, photo_cache_dir=args.photo_cache_dir,
                     ai_bridges=args.ai_bridges or args.ai_bridge_workflow is not None,
@@ -1775,6 +1821,7 @@ def main(argv: list[str] | None = None) -> int:
                                                       matching_device=args.matching_device,
                                                       matching_pair_list=args.matching_pair_list,
                                                       normalized_cache_dir=args.normalized_cache_dir,
+                                                      source_qa_report=args.source_qa_report,
                                                       feature_threads=args.feature_threads,
                                                       matching_threads=args.matching_threads,
                                                       sift_first_octave=args.sift_first_octave,

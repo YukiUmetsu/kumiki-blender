@@ -8,7 +8,9 @@ This optional worker needs numpy, torch and the upstream cvg/LightGlue package.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import importlib.util
+import json
 import math
 import sqlite3
 import struct
@@ -95,6 +97,62 @@ def select_spatial_keypoints(points: list[tuple[float, float, float]],
     return sorted(selected)
 
 
+def select_subject_keypoints(points: list[tuple[float, float, float]],
+                             confidence: list[int], width: int, height: int,
+                             limit: int) -> list[int]:
+    """Allocate a majority to subject with nonzero uncertain/background budgets."""
+    if len(confidence) != len(points) or any(value not in (0, 128, 255) for value in confidence):
+        raise ValueError("Feature confidence must be a three-class array")
+    if len(points) <= limit:
+        return select_spatial_keypoints(points, width, height, limit)
+    quotas = [(255, 0.65), (128, 0.25), (0, 0.10)]
+    chosen: set[int] = set()
+    for value, fraction in quotas:
+        members = [index for index, label in enumerate(confidence) if label == value]
+        cap = min(len(members), int(limit * fraction))
+        if cap:
+            local = select_spatial_keypoints([points[i] for i in members], width, height, cap)
+            chosen.update(members[i] for i in local)
+    for value in (255, 128, 0):
+        if len(chosen) >= limit:
+            break
+        remaining = [i for i, label in enumerate(confidence)
+                     if label == value and i not in chosen]
+        need = min(limit - len(chosen), len(remaining))
+        if need:
+            local = select_spatial_keypoints([points[i] for i in remaining], width, height, need)
+            chosen.update(remaining[i] for i in local)
+    return sorted(chosen)
+
+
+def _classify_keypoints(keypoints, image_size: tuple[int, int], path: Path):
+    import numpy as np
+    from PIL import Image
+
+    if path.is_symlink() or not path.is_file():
+        raise ValueError("Missing or unsafe subject confidence raster")
+    with Image.open(path) as image:
+        if image.mode != "L" or image.size != image_size:
+            raise ValueError("Subject confidence pixel grid differs from COLMAP camera")
+        labels = np.asarray(image, dtype=np.uint8)
+    if not np.isin(labels, (0, 128, 255)).all():
+        raise ValueError("Unexpected subject confidence labels")
+    x = np.rint(keypoints[:, 0] - 0.5).astype(np.int64)
+    y = np.rint(keypoints[:, 1] - 0.5).astype(np.int64)
+    width, height = image_size
+    valid = (x >= 0) & (x < width) & (y >= 0) & (y < height)
+    result = np.full(len(keypoints), 128, dtype=np.uint8)
+    result[valid] = labels[y[valid], x[valid]]
+    return result
+
+
+def apply_subject_confidence(features: dict, path: Path) -> None:
+    """Label already selected features without changing their DB row indices."""
+    import numpy as np
+    original = np.asarray(features["keypoints"]) + 0.5
+    features["confidence"] = _classify_keypoints(original, features["image_size"], path)
+
+
 def pair_id(first: int, second: int) -> int:
     if not 0 < first < MAX_IMAGE_ID or not 0 < second < MAX_IMAGE_ID or first == second:
         raise ValueError("Invalid COLMAP image identifiers")
@@ -111,7 +169,8 @@ def read_pairs(path: Path) -> list[tuple[str, str]]:
     return entries
 
 
-def _load_features(database: sqlite3.Connection, name: str, cap: int) -> dict:
+def _load_features(database: sqlite3.Connection, name: str, cap: int,
+                   confidence_path: Path | None = None) -> dict:
     row = database.execute(
         "SELECT i.image_id, c.width, c.height, k.rows, k.cols, k.data, "
         "d.rows, d.cols, d.data "
@@ -138,9 +197,11 @@ def _load_features(database: sqlite3.Connection, name: str, cap: int) -> dict:
         a11, a12, a21, a22 = (keypoints[:, column] for column in range(2, 6))
         scales = (np.hypot(a11, a21) + np.hypot(a12, a22)) / 2.0
         orientations = np.arctan2(a21, a11)
-    chosen = select_spatial_keypoints(
-        [(float(k[0]), float(k[1]), float(scale)) for k, scale in zip(keypoints, scales)],
-        width, height, cap)
+    points = [(float(k[0]), float(k[1]), float(scale)) for k, scale in zip(keypoints, scales)]
+    labels = (_classify_keypoints(keypoints, (width, height), confidence_path)
+              if confidence_path is not None else None)
+    chosen = (select_subject_keypoints(points, labels.tolist(), width, height, cap)
+              if labels is not None else select_spatial_keypoints(points, width, height, cap))
     selected = np.asarray(chosen, dtype=np.int64)
     # COLMAP uses pixel-corner (0.5, 0.5), LightGlue uses pixel-center (0, 0).
     kpts = keypoints[selected, :2].astype(np.float32, copy=True) - 0.5
@@ -152,6 +213,7 @@ def _load_features(database: sqlite3.Connection, name: str, cap: int) -> dict:
             "indices": selected, "keypoints": kpts, "descriptors": values,
             "scales": scales[selected].astype(np.float32),
             "oris": orientations[selected].astype(np.float32),
+            "confidence": labels[selected] if labels is not None else None,
             "original_count": krows}
 
 
@@ -177,6 +239,14 @@ def write_matches(database: sqlite3.Connection, first: dict, second: dict,
         a, b = int(a), int(b)
         if not 0 <= a < len(first["indices"]) or not 0 <= b < len(second["indices"]):
             raise ValueError("Matcher returned out-of-bounds feature index")
+        left_labels, right_labels = first.get("confidence"), second.get("confidence")
+        if left_labels is not None and right_labels is not None:
+            first_label, second_label = int(left_labels[a]), int(right_labels[b])
+            # A verified subject cannot be a confidently excluded background
+            # point in the other view. Background/background correspondences
+            # are also excluded, while uncertain observations remain available.
+            if (first_label == 0 and second_label in (0, 255)) or (second_label == 0 and first_label == 255):
+                continue
         pair = (int(first["indices"][a]), int(second["indices"][b]))
         pairs.append(pair[::-1] if swapped else pair)
     pairs = sorted(set(pairs))
@@ -207,14 +277,34 @@ def _check_dependencies(device: str):
 
 
 def match_pair_file(database_path: Path, pairs_path: Path, max_keypoints: int,
-                    device: str) -> None:
+                    device: str, qa_index: Path | None = None) -> None:
     # Import only here so every other CLI works without ML dependencies.
     torch, LightGlue = _check_dependencies(device)
     model = LightGlue(features="sift", mp=False).eval().to(device)
     names = read_pairs(pairs_path)
+    qa_maps = {}
+    if qa_index is not None:
+        if qa_index.is_symlink() or not qa_index.is_file():
+            raise ValueError("Subject QA index is missing or unsafe")
+        records = json.loads(qa_index.read_text(encoding="utf-8"))
+        if records.get("schema") != "subject-feature-index-v1" or not isinstance(records.get("images"), dict):
+            raise ValueError("Invalid subject QA index")
+        for name in {name for pair in names for name in pair}:
+            item = records["images"].get(name)
+            if not isinstance(item, dict):
+                raise ValueError(f"Missing subject confidence for {name}")
+            path = Path(item["confidence_path"])
+            if path.is_symlink() or not path.is_file():
+                raise ValueError("Unsafe confidence cache path")
+            with path.open("rb") as stream:
+                sha = hashlib.file_digest(stream, "sha256").hexdigest()
+            if sha != item.get("confidence_sha256"):
+                raise ValueError("Subject confidence hash mismatch")
+            qa_maps[name] = path
     with sqlite3.connect(database_path) as db:
         images = {name for pair in names for name in pair}
-        features = {name: _load_features(db, name, max_keypoints) for name in sorted(images)}
+        features = {name: _load_features(db, name, max_keypoints, qa_maps.get(name))
+                    for name in sorted(images)}
         for first_name, second_name in names:
             first, second = features[first_name], features[second_name]
             if not len(first["indices"]) or not len(second["indices"]):
@@ -233,6 +323,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--database", type=Path)
     parser.add_argument("--pairs", type=Path)
     parser.add_argument("--max-keypoints", type=int)
+    parser.add_argument("--qa-index", type=Path)
     parser.add_argument("--device", choices=("mps", "cpu"), required=True)
     args = parser.parse_args(argv)
     if args.command == "match":
@@ -244,7 +335,8 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "check":
             _check_dependencies(args.device)
         else:
-            match_pair_file(args.database, args.pairs, args.max_keypoints, args.device)
+            match_pair_file(args.database, args.pairs, args.max_keypoints,
+                            args.device, args.qa_index)
     except (OSError, sqlite3.Error, RuntimeError, ValueError) as error:
         print(f"MPS LightGlue worker failed: {error}", file=sys.stderr)
         return 1

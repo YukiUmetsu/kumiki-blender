@@ -12,7 +12,7 @@ from unittest.mock import patch
 from kumiki_blender.reconstruction.colmap import _cap_colmap_sift_features
 from kumiki_blender.reconstruction.mps_lightglue_worker import (
     MAX_IMAGE_ID, _load_features, _load_lightglue_matcher, main, pair_id, read_pairs,
-    select_spatial_keypoints,
+    select_spatial_keypoints, select_subject_keypoints, apply_subject_confidence,
     write_matches,
 )
 from kumiki_blender.reconstruction.references import ReferenceError
@@ -67,6 +67,39 @@ class MPSLightGlueFeatureTests(unittest.TestCase):
         self.assertEqual(chosen, sorted(chosen))
         self.assertEqual(len(select_spatial_keypoints(points[:100], 100, 30, 256)), 100)
         self.assertGreater(len({(points[i][0] // 13, points[i][1] // 4) for i in chosen}), 24)
+
+    def test_subject_priority_keeps_uncertain_background_and_original_row_indices(self):
+        points = [(float(i % 30) + 0.5, float(i // 30) + 0.5, 1.0) for i in range(300)]
+        confidence = [255] * 100 + [128] * 100 + [0] * 100
+        chosen = select_subject_keypoints(points, confidence, 30, 10, 90)
+        self.assertEqual(len(chosen), 90)
+        self.assertEqual(chosen, sorted(chosen))
+        self.assertEqual(len(set(chosen)), 90)
+        self.assertGreater(sum(i < 100 for i in chosen), 45)
+        self.assertGreater(sum(100 <= i < 200 for i in chosen), 5)
+        self.assertGreater(sum(i >= 200 for i in chosen), 2)
+
+    def test_confidence_filters_verified_background_only_without_reindexing(self):
+        from PIL import Image
+        map_file = self.root / "labels.png"
+        image = Image.new("L", (4000, 2400), 128)
+        image.putpixel((53, 37), 255)
+        image.putpixel((106, 74), 0)
+        image.save(map_file)
+        with sqlite3.connect(self.database) as db:
+            first = _load_features(db, "photo-a.png", 256)
+            second = _load_features(db, "photo-b.png", 256)
+            apply_subject_confidence(first, map_file)
+            apply_subject_confidence(second, map_file)
+            self.assertEqual(first["original_count"], 300)
+            self.assertEqual(len(first["indices"]), 256)
+            a = next(i for i, source in enumerate(first["indices"])
+                     if source == 2)
+            b = next(i for i, source in enumerate(second["indices"])
+                     if source == 2)
+            count = write_matches(db, first, second, [(a, b)])
+            self.assertEqual(count, 0)
+            self.assertEqual(db.execute("SELECT rows FROM matches").fetchone()[0], 0)
 
     def test_cpu_cap_rewrites_consistent_features_without_resizing_camera(self):
         result = _cap_colmap_sift_features(self.database, 256)

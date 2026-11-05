@@ -11,7 +11,8 @@ see [learned COLMAP matching and camera coverage comparisons](NEURAL_CAMERA_RECO
 ## One-command, quality-gated statue reconstruction (Apple Silicon)
 
 `build-statue-glb` runs a fresh COLMAP SIFT-LightGlue/MPS camera solution,
-first prepares an incremental, private normalization/foreground-preview cache,
+first prepares an incremental, private normalization/foreground-preview cache
+**and a source-photo QA pass before any feature matching**,
 produces an annotated missing-angle report, prepares SAM2.1/MPS mask
 candidates, audits cross-view mask consistency, then runs **resolution-level 0**
 OpenMVS without geometry-destroying refinement. When measured elevated or side
@@ -78,6 +79,109 @@ HTTPS from Meta into `~/.cache/kumiki-blender/models/`. Use
 `--no-auto-model-download` for fully offline mode or `--sam2-checkpoint` to
 choose another installed model. The checkpoint SHA-256 and origin are recorded.
 
+### Optional multi-part grounded segmentation (Grounding DINO → SAM2)
+
+The default SAM2-only behavior is unchanged. The optional **Grounding DINO**
+detector proposes text-conditioned boxes; SAM2 then segments the original,
+unmodified pixels. A detected head is **not** evidence of complete statue
+anatomy. Earlier single-box grounding reduced the foreground from roughly 26%
+to 19% on a 49-camera Sphinx test, including several near-empty body masks.
+
+The guarded workflow now generates **both broad SAM2 and grounded SAM2**
+candidates per image and saves both immutable masks and contact sheets.
+Grounding can also propose separate visible parts via repeated
+`--grounding-part-prompt`; these union as *candidate* segments, not validated
+anatomy. Distant detections are withheld. When the grounded candidate loses
+more than 30% of the broad foreground, grows over 35%, overlaps poorly, or
+retains less than 5% of the image, the pipeline uses the broad candidate and
+marks the result **uncertain**. This avoids the known head-only regression;
+it does *not* prove that the broad mask excludes background. Ambiguous results
+remain blocked by mask QA and must be reviewed against original photographs
+and cross-view feature tracks.
+
+```bash
+# Keep your already-installed SAM2 and MPS Python environment.
+python -m pip install -e '.[mask-grounding]'
+
+# Use a fresh immutable revision; previous r005 masks and camera evidence stay intact.
+kumiki-blender build-statue-glb \
+  --asset-id great-sphinx \
+  --photos "$HOME/Pictures/sphinx-reconstruction-candidates/warren-2019/photos" \
+  --subject-detector grounding-dino \
+  --grounding-prompt 'great sphinx statue. stone sphinx.' \
+  --grounding-part-prompt 'sphinx stone body.' \
+  --grounding-part-prompt 'head and headdress of sphinx.' \
+  --grounding-part-prompt 'front paws of sphinx.' \
+  --grounding-device auto
+
+# If interrupted, repeat those options with --resume.
+```
+
+For an **A/B segmentation test without rerunning COLMAP**, reuse an existing
+camera revision and write candidates to a new, separate output:
+
+```bash
+RUN='.review/great-sphinx/statue-hq-r005'
+NEW='.review/great-sphinx/grounded-masks-r002'
+kumiki-blender prepare-dense-masks \
+  --reconstruction "$RUN/cameras" --output "$NEW" \
+  --segmenter sam2 --sam2-size small --sam2-device mps \
+  --sam2-checkpoint "$HOME/.cache/kumiki-blender/models/sam2.1_hiera_small.pt" \
+  --subject-detector grounding-dino \
+  --grounding-prompt 'great sphinx statue. stone sphinx.' \
+  --grounding-part-prompt 'sphinx stone body.' \
+  --grounding-part-prompt 'head and headdress of sphinx.' \
+  --grounding-part-prompt 'front paws of sphinx.' \
+  --grounding-device auto \
+  --cache-dir '.review/great-sphinx/_statue_mask_cache'
+
+# Compare all three contact sheets: chosen, broad, and grounded candidates.
+open "$NEW/mask-contact-sheet.jpg" \
+     "$NEW/mask-contact-sheet-broad.jpg" \
+     "$NEW/mask-contact-sheet-grounded.jpg"
+
+jq '{processed: (.images|length), uncertain: ([.images[] | select(.candidate_comparison.status | startswith("uncertain"))] | length), cache}' "$NEW/mask-report.json"
+
+kumiki-blender compare-dense-masks \
+  --reconstruction "$RUN/cameras" \
+  --baseline-masks "$RUN/masks/masks" \
+  --candidate-masks "$NEW/masks" \
+  --output '.review/great-sphinx/grounded-mask-comparison-r002'
+```
+
+Compare the new masks *visually* with the originals; cross-view score changes
+alone cannot establish geometry or anatomy accuracy. JSON reports provide
+`candidate_comparison` (overlap, area ratio, rejection reasons), along with
+`candidate_masks.broad` and `.grounded` byte hashes and preview paths for each
+photo. Existing source photos, previous revision masks and sparse cameras are
+never overwritten. Object parts are configured via prompts, not hard-coded to
+the Sphinx. When the sparse reconstruction remains blocked by insufficient
+elevated/side camera coverage, mask experiments can continue independently but
+do **not** bypass the camera-coverage gate or prove a GLB is ready.
+
+The bundled detector choice is Hugging Face
+`IDEA-Research/grounding-dino-tiny` at immutable revision
+`a2bb814dd30d776dcf7e30523b00659f4f141c71` (Apache-2.0 model card).
+The first enabled run downloads approximately 689 MB of `safetensors` weights
+plus configuration/tokenizer files to the Hugging Face model cache. It never
+loads the pickle checkpoint or executes remote model code. `--no-auto-model-download`
+requires that revision already be cached, or provide
+`--grounding-model-dir /path/to/pinned/snapshot`. Model weight SHA-256,
+prompt and device are part of the immutable revision settings and cache identity.
+
+On Apple Silicon, `--grounding-device auto` tries MPS first and retries the
+detector on CPU if an MPS inference operator fails; `--grounding-device cpu`
+forces CPU. The main SAM2 model still uses `--sam2-device` independently.
+Grounding detections are cached by exact image content, model weights, main
+prompt and every part prompt. Broad and grounded SAM2 candidates have separate
+cache keys, so adding one photograph does not reprocess unchanged photos.
+A missed detection
+falls back to a broad **unverified** SAM2 candidate and explicitly blocks
+the mask QA gate until reviewed. Normalized RGB photographs are never cut out.
+No automatic majority-vote correction is applied to reconstructed 3D tracks.
+Do not judge improvements solely from a lower cross-view disagreement rate;
+inspect mask contact sheets and real photographs before continuing to dense 3D.
+
 `--front-photo` is optional. The pipeline looks for a registered photo with an
 unambiguous front-facing filename hint and marks it **tentative**, never a
 verified anatomical orientation. If none can be identified, camera angles are
@@ -134,8 +238,11 @@ kumiki-blender recover-registered-cameras \
   --output .review/great-sphinx/manual-camera-recovery-r01
 ```
 
-If no guide file is supplied, SAM2 automatically samples conservative blue-sky
-negative points and starts with a broad subject prompt. Those mask candidates
+If no guide file or Grounding DINO detector is supplied, SAM2 automatically
+samples conservative blue-sky negative points and starts with a broad subject
+prompt. When Grounding DINO is enabled, its text-conditioned candidate box
+replaces the broad box when it confidently detects the requested subject.
+Those mask candidates
 are reviewed by cross-view and contamination QA, not treated as hand-labeled
 statue parts. The output remains **private and unverified** even after automated
 gates pass. Optional `--mask-guides /private/guides.json` supplies head/headdress/torso/
@@ -229,12 +336,94 @@ private `<asset-output-parent>/_statue_photo_cache/` directory (override with
   approved geometry masks and **are never substituted for original photographic
   evidence during SfM**. The camera-derived rectified masks are generated and
   verified separately downstream.
+- When a locally installed, SHA-verified IS-Net checkpoint and the optional
+  `rembg` library are available, a separate `auxiliary-foreground-*.png`
+  proposal is created on the **original RGB image**. Peripheral disagreements
+  can supply additional SAM2 negative clicks; a refinement is accepted only
+  when it preserves subject pixels on which both models agreed. Missing or
+  invalid IS-Net weights trigger a recorded SAM2-only fallback, never a model
+  download. No model votes create new photogrammetric geometry.
 - `normalized.json` / `foreground-*.json` integrity receipts and a per-run
   `photo-preprocess/photo-preprocess-report.json` index linking originals to
   cached pixels and recording cache hits/misses.
+- SHA-addressed `qa-confidence-*.png` maps with three feature-priority classes:
+  **green/high-confidence subject**, **gold/uncertain**, and **blue/background**
+  in the colorized `photo-preprocess/photo-qa-contact-sheet.jpg`. The actual
+  monochrome maps store 255, 128 and 0 respectively. The report includes
+  exposure, blur/detail, resolution, EXIF orientation, possible near duplicates,
+  mask boundary, blue-background warnings and independent-model disagreement.
+  When both proposals are usable, disagreement pixels stay **uncertain**;
+  invalid foreground masks make all pixels uncertain so useful anatomy is not
+  silently discarded. Multiple similarly scored but substantially different
+  SAM2 silhouettes also mark the **whole source confidence map uncertain**.
+  This prevents an ambiguous automatically selected silhouette from being
+  treated as verified object support during LightGlue matching.
+
+The source QA contact sheet is generated **before feature extraction** and
+does not replace the later rectified multi-view mask audit. Visual inspection
+is still required to confirm that the mask did not remove a cheek, nose, paw,
+tail, damaged stone or another distinctive part. Source-photo QA is advisory:
+low resolution and poor lighting do not automatically delete photographs.
+The contact sheet now shows **original / binary SAM2 candidate / confidence
+overlay** separately. For closer inspection, find each 1536-pixel-wide
+triptych at `photo-preprocess/photo-qa-details/photo-XXXX.jpg`.
+The run report includes `qa_hits`, `qa_misses`, `qa_warning_count`, `mask_qa`
+(suspect count, original names, specific problems and full-size preview paths),
+`auxiliary_model_status`, `refinement_attempts`, and `refinement_accepted`.
+`mask_qa.needs_visual_review` stays true even when no automated warning fires:
+without ground-truth outlines, the code cannot certify complete anatomy.
+Source mask/QA cache identities are versioned for the new multimask ambiguity
+checks, while normalized original RGB photos remain cached unchanged.
+
+On a machine with a previously downloaded, verified IS-Net model, install the
+optional library with `pip install -e '.[mask-ai]'` to enable offline
+model-consensus refinement. The normal SAM2-only path remains supported when
+this extra is absent. The model probe checks the pinned local weight hash
+**without importing rembg or ONNXRuntime into the SAM2/PyTorch process**.
+Each independent proposal runs in a short-lived subprocess, preventing a native
+ONNXRuntime/OpenMP crash from aborting the parent MPS worker on Apple Silicon.
+The child verifies the same checkpoint hash and never downloads unverified
+weights. If the optional runtime crashes or times out, the parent records
+`failed / auxiliary-inference`, disables further optional attempts for that
+run and finishes with original RGB evidence and SAM2-only candidates. The
+failure is also recorded under `auxiliary_model_status` and
+`auxiliary_failure_reason` in the preprocessing report. Cached SAM2 fallback
+results remain valid across `--resume` and unchanged photo sets. Never set
+`KMP_DUPLICATE_LIB_OK=TRUE`: suppressing native runtime safety checks is not
+a substitute for process isolation.
+If the previous native abort occurred before the *first* photo, `--resume`
+also allows the previously unprobed auxiliary model to become available without
+discarding the revision. Resuming after any completed photo still requires
+the same model identity, to protect the cached image evidence.
+
+If a fresh `build-statue-glb` revision stops during `photo_preprocess`, inspect
+`statue-pipeline-report.json` under `failed_worker` for the stage's exit code
+and diagnostic. Retry that incomplete revision with `--resume`; completed
+per-photo content-hash cache entries are reused. Do not delete the source
+photo cache or change the model while resuming a partial run.
+
+With `build-statue-glb`, LightGlue reads these hash-verified confidence maps:
+it reserves most feature capacity for likely statue surfaces while keeping a
+budget for uncertain regions and background. Obviously incompatible
+subject/background correspondences are excluded **without renumbering original
+COLMAP SIFT keypoints**. The original normalized RGB photographs and all
+uncertain areas remain available to the extractor. Ordinary `reconstruct-photos`
+is unchanged unless `--source-qa-report` is supplied (requires `sift-lightglue`
+and an MPS or `torch-cpu` worker). On a Mac use MPS by default; for a CPU
+fallback:
+
+```bash
+kumiki-blender build-statue-glb --asset-id great-sphinx --matching-device torch-cpu
+```
+
+This option changes the camera-matching backend and needs a fresh revision;
+previous completed COLMAP matching cannot be retroactively reweighted. The
+optional PyTorch CPU worker uses the same original feature indices. It still
+requires the LightGlue Python dependency and can be substantially slower.
 
 The cache uses **original image SHA-256, normalization version, checkpoint
-SHA-256 and SAM2 settings**, not filenames or ordinal `photo-XXXX` identifiers.
+SHA-256, SAM2 settings, refinement version and independently verified IS-Net
+weight identity (or absence)**, not filenames or ordinal `photo-XXXX` identifiers.
 When a new photo is added, only the new photo incurs normalization and SAM2
 preprocessing; unchanged images are verified and reused, even when adding a
 file shifts their staged names. Editing a photo or changing the SAM2 model
@@ -242,9 +431,64 @@ invalidates the affected cache keys. Interrupted preprocessing can resume
 without recomputing completed, valid entries. The existing new-photo camera
 matching still needs to solve correspondences with the updated photo set.
 
-For an existing blocked reconstruction, use the usual `--resume`. It prepares
-the new source cache and can run a second recovery pass from the already
-verified camera revision without repeating completed original matching.
+### Independent camera groups with zero, one or two common registered cameras
+
+Previously, the cohort merger could only align groups sharing at least three
+registered cameras. It now has a second, conservative path for **zero shared
+registered cameras**. A candidate elevated group is retained in its own
+immutable trial directory; the program looks for verified COLMAP 2D feature
+correspondences connecting triangulated 3D tracks in both models, using the
+original feature indices and source-photo confidence maps. Then it:
+
+1. Rejects ambiguous many-to-one tracks or missing subject-confidence evidence.
+2. Estimates a 7-degree-of-freedom similarity transform with robust RANSAC;
+   requires many non-collinear, well-distributed subject-feature correspondences
+   across multiple independent camera pairs.
+3. Checks transformed geometry against **both sets of calibrated camera
+   observations** in pixels, rejects implausible camera poses, insufficient
+   spatial coverage or unstable support.
+4. Copies independently reconstructed camera frames and original 2D/3D tracks
+   into a common aligned candidate only after these tests pass. Separate tracks
+   remain separate; they are not artificially welded into a sculpted surface.
+5. Reuses the existing post-merge baseline camera-drift and photo-coverage
+   gates before dense geometry. A rejection leaves the independent candidate
+   and its `alignment.reasons` and diagnostics intact.
+
+For **one or two shared registered cameras**, the program additionally
+attempts `verified-hybrid-3d-points` alignment. Shared image *feature IDs*
+can link two independently triangulated object-surface tracks, but only when
+each has independent depth observations and the original image coordinates
+match. Cross-camera COLMAP inliers must still support spatially distributed
+Sim(3) RANSAC, calibrated reprojection, and at least eight verified object
+observations in **every newly added camera**. Shared camera center and viewing
+direction must also agree after transformation. The accepted candidate links
+only those audited new-camera observations into existing baseline 3D tracks;
+ambiguous, unverified, or missing tracks are never welded. This path does not
+reduce any threshold for zero-shared or three-plus-shared alignment.
+
+The standard COLMAP `model_merger` is still used when there are sufficient
+shared registered cameras. It is **not** used to claim a disjoint-group merge
+without shared cameras. Old revisions without early subject QA cannot use the
+new zero-overlap path automatically, because the object-surface evidence is
+missing; rebuild a fresh revision if you want to test the new matching path.
+The independent 3-camera/119-point Great Sphinx result has **not** been shown
+to satisfy these new correspondence, reprojection or coverage gates. A passing
+synthetic unit test is not a validation of the actual Sphinx photographs.
+
+Every rejected disconnected-model alignment now records an `evidence_audit`:
+the number of cross-group verified image pairs, 2D observations, features with
+only one model's 3D track, features with *both* 3D tracks, ambiguous points,
+and subject-verified correspondences. This identifies why visually similar
+elevated photos cannot be aligned without weakening geometric validation.
+Hybrid rejection reports also include shared-anchor correspondences,
+`new_camera_3d_support`, reprojection errors, and specific alignment reasons.
+The one-shared-camera Great Sphinx candidate with 30 reconstructed points is
+reason to **test** hybrid alignment, not evidence that it will pass the gates.
+
+For a blocked reconstruction **that already has a subject QA index**, use
+`--resume` to retry camera recovery without repeating completed matching.
+Older revisions without this index require a fresh sparse reconstruction;
+`--resume` deliberately refuses to retroactively change their feature weights.
 
 ### Rectified segmentation cache
 
@@ -262,6 +506,16 @@ resized into a different camera grid. COLMAP camera solving, new photo-pair
 matching and OpenMVS depth maps still need fresh work when the source set
 changes. A stopped run on the *same* images can instead use `--resume` to skip
 its completed stages. Neither mechanism fabricates missing viewpoints.
+
+If `prepare-dense-masks` fails **after creating a partial mask directory**,
+`build-statue-glb --resume` now passes the same `--resume` option to the mask
+worker. The worker checks that the sparse reconstruction, model hash, guides,
+settings and cache location still match its incomplete receipt before
+continuing. Valid completed per-photo masks are reused without rerunning
+SAM2; neither the partial revision nor its source photos need deletion.
+The SAM2 checkpoint path is distinct from the report-saving helper, avoiding
+an earlier `FileNotFoundError` that printed a Python function instead of a
+checkpoint filename.
 
 To regenerate after adding photos, run
 `kumiki-blender build-statue-glb --asset-id great-sphinx`; it chooses the next

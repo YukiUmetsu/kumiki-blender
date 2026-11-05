@@ -8,6 +8,7 @@ import sqlite3
 import struct
 import tempfile
 import unittest
+from unittest.mock import patch
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from types import SimpleNamespace
@@ -128,6 +129,79 @@ class FakePyCOLMAP:
 
 
 class CohortRecoveryTests(unittest.TestCase):
+    def test_one_shared_camera_uses_verified_hybrid_and_never_unchecked_colmap_merge(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            revision = fixture(root)
+            sparse = revision / "sparse-reconstruction"
+            (sparse / "subject-feature-index.json").write_text(
+                '{"schema":"subject-feature-index-v1","images":{}}')
+            candidate = Reconstruction({
+                1: BASE_CAMERAS[1],
+                5: ("u.png", (0, 2, 6), (0, 0, 1)),
+            }, points=30)
+            fake = FakePyCOLMAP(candidate)
+            fake.merged = Reconstruction({
+                **BASE_CAMERAS, 5: ("u.png", (0, 2, 6), (0, 0, 1)),
+            }, points=108)
+            valid = {"accepted": True, "reasons": [],
+                     "method": "verified-hybrid-3d-points", "shared_cameras": 1,
+                     "shared_filenames": ["a.png"], "new_cameras": 1,
+                     "new_filenames": ["u.png"], "inliers": 20,
+                     "scale": 1., "rotation": np.eye(3).tolist(),
+                     "translation": [0., 0., 0.]}
+            with (patch.object(sfm, "assess_partial_alignment", return_value=valid) as assessor,
+                  patch("kumiki_blender.reconstruction.sfm_point_alignment.fuse_disjoint_models",
+                        return_value=fake.merged) as merger):
+                report = sfm.recover_cohort(
+                    revision, root / "hybrid", pycolmap_module=fake,
+                    settings=sfm.CohortRecoverySettings(min_new_cameras=1),
+                    merge_runner=lambda *a, **kw: self.fail("unvalidated COLMAP merge"))
+            self.assertEqual(report["status"], "candidate / needs-object-and-camera-visual-review")
+            self.assertEqual(report["merge"]["method"], "validated-evidence-track-union")
+            self.assertTrue(assessor.called)
+            merger.assert_called_once()
+
+    def test_disconnected_group_without_subject_qa_is_kept_unmerged(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            revision = fixture(Path(tmp))
+            independent = Reconstruction({5: ("u.png", (0, 0, 0), (0, 0, 1)),
+                                          6: ("v.png", (2, 0, 0), (0, 0, 1)),
+                                          7: ("w.png", (1, 2, 0), (0, 0, 1))})
+            qa = sfm.assess_disconnected_alignment(
+                Reconstruction(BASE_CAMERAS), independent,
+                revision / "sparse-reconstruction/database.db", None,
+                sfm.CohortRecoverySettings())
+            self.assertFalse(qa["accepted"])
+            self.assertIn("subject-confidence-unavailable", qa["reasons"])
+
+    def test_disconnected_verified_path_does_not_call_common_camera_merger(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            revision = fixture(root)
+            sparse = revision / "sparse-reconstruction"
+            (sparse / "subject-feature-index.json").write_text('{"schema":"subject-feature-index-v1","images":{}}')
+            candidate = Reconstruction({5: ("u.png", (0, 0, 0), (0, 0, 1)),
+                                        6: ("v.png", (2, 0, 0), (0, 0, 1)),
+                                        7: ("w.png", (1, 2, 0), (0, 0, 1))})
+            fake = FakePyCOLMAP(candidate)
+            fake.merged = Reconstruction({**BASE_CAMERAS,
+                                          5: ("u.png", (0, 4, 2), (0, 0, 1)),
+                                          6: ("v.png", (1, 4, 2), (0, 0, 1)),
+                                          7: ("w.png", (2, 4, 2), (0, 0, 1))}, points=400)
+            accepted = {"accepted": True, "reasons": [], "method": "verified-3d-points",
+                        "scale": 1., "rotation": np.eye(3).tolist(),
+                        "translation": [0, 0, 0], "inliers": 22,
+                        "shared_cameras": 0, "new_cameras": 3,
+                        "new_filenames": ["u.png", "v.png", "w.png"], "shared_filenames": []}
+            with patch.object(sfm, "assess_disconnected_alignment", return_value=accepted), \
+                 patch("kumiki_blender.reconstruction.sfm_point_alignment.fuse_disjoint_models",
+                       return_value=fake.merged):
+                report = sfm.recover_cohort(revision, root / "disconnected", pycolmap_module=fake,
+                    merge_runner=lambda *a, **kw: self.fail("common camera merger must not run"))
+            self.assertEqual(report["status"], "candidate / needs-object-and-camera-visual-review")
+            self.assertEqual(report["merge"]["alignment"]["method"], "verified-3d-points")
+            self.assertEqual(report["merge"]["registered_cameras"], 7)
     def test_default_cohort_is_missing_photos_and_verified_bridge_anchors(self):
         with tempfile.TemporaryDirectory() as tmp:
             revision = fixture(Path(tmp))

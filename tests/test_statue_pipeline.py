@@ -20,6 +20,57 @@ from kumiki_blender.reconstruction.statue_pipeline import (
 
 
 class StatuePipelineTests(unittest.TestCase):
+    def test_grounding_failure_is_a_mask_quality_blocker(self):
+        issues = _mask_warnings({"images": [{"filename": "photo-0001.png",
+                                              "foreground_fraction": 0.25,
+                                              "warnings": [], "missing_parts": [],
+                                              "background_seed_violations": 0,
+                                              "subject_detection": {
+                                                  "status": "uncertain / no-confident-detection"}}]},
+                                {"mixed_label_fraction": 0.02}, 0.12)
+        self.assertTrue(any("no reliable subject" in issue for issue in issues))
+
+    def test_grounded_mask_disagreement_blocks_false_positive_dense_reconstruction(self):
+        issues = _mask_warnings({"images": [{"filename": "photo-0001.png",
+                                            "foreground_fraction": 0.35, "warnings": [],
+                                            "missing_parts": [], "background_seed_violations": 0,
+                                            "candidate_comparison": {
+                                                "status": "uncertain / competing-candidates"}}]},
+                                {"mixed_label_fraction": 0.01}, 0.12)
+        self.assertTrue(any("segmentation disagreement" in issue for issue in issues))
+
+    def test_grounded_sam2_is_passed_to_preprocessing_and_rectified_masks(self):
+        run, _ = self.runner()
+        command_lines = {}
+
+        def observed(argv, log, env):
+            command_lines[log.stem] = argv
+            return run(argv, log, env)
+
+        model_dir = self.root / "grounding-model"
+        model_dir.mkdir()
+        (model_dir / "model.safetensors").write_bytes(b"pinned")
+        settings = StatuePipelineSettings(
+            front_photo="image-0.png", sam2_checkpoint=self.model,
+            subject_detector="grounding-dino", grounding_prompt="stone sphinx statue.",
+            grounding_part_prompts=("stone torso.", "stone sphinx head."),
+            grounding_model_dir=model_dir)
+        with (patch("kumiki_blender.reconstruction.subject_grounding.resolve_grounding_model",
+                    return_value=model_dir),
+              patch("kumiki_blender.reconstruction.subject_grounding.grounding_identity",
+                    return_value="pinned:sha")):
+            self.build(observed, settings)
+        for phase in ("photo_preprocess", "masks"):
+            argv = command_lines[phase]
+            self.assertIn("--subject-detector", argv)
+            self.assertEqual(argv[argv.index("--subject-detector") + 1], "grounding-dino")
+            self.assertEqual(argv[argv.index("--grounding-prompt") + 1], "stone sphinx statue.")
+            self.assertEqual([argv[i + 1] for i, flag in enumerate(argv)
+                              if flag == "--grounding-part-prompt"],
+                             ["stone torso.", "stone sphinx head."])
+        receipt = json.loads((self.output / "statue-pipeline-report.json").read_text())
+        self.assertEqual(receipt["status"], "private-GLB-candidate / review-required")
+
     def setUp(self):
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)
@@ -169,6 +220,68 @@ class StatuePipelineTests(unittest.TestCase):
         self.assertEqual(events[-1]["kind"], "blocked")
         self.assertEqual(events[-1]["phase"], "coverage")
 
+    def test_blank_preprocessing_error_is_preserved_as_actionable_worker_failure(self):
+        def failed_preprocess(argv, log, environment):
+            log.write_text("error: \n")  # Eight-byte real-world diagnostic.
+            return 2
+
+        with self.assertRaisesRegex(ReferenceError, "photo_preprocess failed"):
+            self.build(failed_preprocess)
+        report = json.loads((self.output / "statue-pipeline-report.json").read_text())
+        self.assertEqual(report["status"], "blocked / worker-failed")
+        self.assertEqual(report["failed_worker"]["exit_code"], 2)
+        self.assertIn("no exception details", report["failed_worker"]["diagnostic"])
+
+    def test_resume_clears_stale_failed_worker_after_successful_preprocessing(self):
+        def failed_preprocess(argv, log, environment):
+            log.write_text("native abort in previous attempt")
+            return -6
+
+        with self.assertRaisesRegex(ReferenceError, "photo_preprocess failed"):
+            self.build(failed_preprocess)
+        recovery, _calls = self.runner()
+        report = self.build(recovery, resume=True)
+        self.assertNotIn("failed_worker", report)
+        self.assertNotIn("failed_worker", json.loads(
+            (self.output / "statue-pipeline-report.json").read_text()))
+
+    def test_resume_clears_stale_failure_from_already_completed_stage(self):
+        runner, _calls = self.runner()
+        self.build(runner)
+        receipt = self.output / "statue-pipeline-report.json"
+        previous = json.loads(receipt.read_text())
+        previous["failed_worker"] = {"stage": "photo_preprocess", "exit_code": -6,
+                                     "diagnostic": "old OpenMP crash"}
+        receipt.write_text(json.dumps(previous))
+        resumed = self.build(runner, resume=True)
+        self.assertNotIn("failed_worker", resumed)
+
+    def test_resume_retries_incomplete_mask_directory_with_resume_flag(self):
+        normal, _calls = self.runner()
+
+        def fail_masks(argv, log, env):
+            if log.stem == "masks":
+                directory = self.output / "masks"
+                directory.mkdir()
+                (directory / "mask-report.json").write_text(json.dumps({
+                    "status": "incomplete / manual-mask-review-required", "images": []}))
+                return 2
+            return normal(argv, log, env)
+
+        with self.assertRaisesRegex(ReferenceError, "masks failed"):
+            self.build(fail_masks)
+        retried = []
+
+        def check_resume(argv, log, env):
+            if log.stem == "masks":
+                retried.extend(argv)
+                return 2
+            return normal(argv, log, env)
+
+        with self.assertRaisesRegex(ReferenceError, "masks failed"):
+            self.build(check_resume, resume=True)
+        self.assertIn("--resume", retried)
+
     def test_one_command_runs_every_stage_and_copies_audited_glb(self):
         run, calls = self.runner()
         report = self.build(run)
@@ -177,6 +290,19 @@ class StatuePipelineTests(unittest.TestCase):
         self.assertEqual((self.output / "model.glb").read_bytes(), b"fake-audited-glb")
         self.assertTrue(report["status"].startswith("private-GLB-candidate"))
         self.assertEqual(report["glb_audit"]["meshes"], 1)
+
+    def test_camera_worker_receives_pre_matching_source_qa_and_cpu_option(self):
+        run, _ = self.runner()
+        captured = []
+        def record(args, log, environment):
+            if log.stem == "cameras":
+                captured.extend(args)
+            return run(args, log, environment)
+        settings = StatuePipelineSettings(**{**vars(self.settings), "matching_device": "torch-cpu"})
+        self.build(record, settings=settings)
+        self.assertIn("--source-qa-report", captured)
+        self.assertIn(str(self.output / "photo-preprocess/photo-preprocess-report.json"), captured)
+        self.assertEqual(captured[captured.index("--matching-device") + 1], "torch-cpu")
 
     def test_missing_profiles_stop_before_masks_and_mesh(self):
         run, calls = self.runner(coverage_bad=True)
@@ -213,6 +339,9 @@ class StatuePipelineTests(unittest.TestCase):
         stopped = self.build(run)
         self.assertEqual(stopped["status"], "blocked / missing-photo-coverage")
         self.assertIn("camera_recovery_followup", calls)
+        self.assertEqual(stopped["verified_camera_candidate_registered"], 8)
+        self.assertTrue(any("registered" in warning for warning in stopped["initial_coverage_warnings"]))
+        self.assertFalse(any("registered" in warning for warning in stopped["warnings"]))
         updated_run, updated_calls = self.runner(coverage_bad=True, recovery_followup=True)
         result = self.build(updated_run, resume=True)
         self.assertEqual(updated_calls[:2], ["camera_recovery_confidence", "recovery_coverage_confidence"])

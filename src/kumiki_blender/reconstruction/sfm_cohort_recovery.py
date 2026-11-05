@@ -482,6 +482,189 @@ def assess_alignment(baseline, cohort, settings: CohortRecoverySettings,
     return result
 
 
+def assess_disconnected_alignment(baseline, cohort, database: Path, qa_index: Path | None,
+                                  settings: CohortRecoverySettings) -> dict:
+    """Use verified 3D point identities where no common registered camera exists."""
+    import numpy as np
+    from .sfm_point_alignment import (estimate_point_alignment,
+                                      extract_verified_3d_matches, validate_cross_reprojection)
+
+    first, second = _registered_images(baseline), _registered_images(cohort)
+    gained = sorted(set(second) - set(first))
+    result = {"method": "verified-3d-points", "accepted": False,
+              "shared_cameras": 0, "shared_filenames": [],
+              "new_cameras": len(gained), "new_filenames": gained, "reasons": []}
+    if set(first) & set(second):
+        result["reasons"].append("point-alignment-requires-no-common-registered-cameras")
+    if len(gained) < settings.min_new_cameras:
+        result["reasons"].append("insufficient-new-cameras")
+    if qa_index is None:
+        result["reasons"].append("subject-confidence-unavailable")
+    if result["reasons"]:
+        return result
+    try:
+        evidence_audit: dict = {}
+        correspondences = extract_verified_3d_matches(
+            database, baseline, cohort, qa_index=qa_index, audit=evidence_audit)
+        result["evidence_audit"] = evidence_audit
+        first_points = [np.asarray(item.xyz).reshape(3) for item in baseline.points3D.values()]
+        other_points = [np.asarray(item.xyz).reshape(3) for item in cohort.points3D.values()]
+        fit = estimate_point_alignment(correspondences,
+                                       baseline_cloud=first_points, cohort_cloud=other_points)
+        result.update(fit)
+        if fit["accepted"]:
+            reproj = validate_cross_reprojection(correspondences, fit, baseline, cohort)
+            result["reprojection"] = reproj
+            if not reproj["accepted"]:
+                result["reasons"].append(reproj.get("reason") or "cross-model-reprojection-failed")
+        # Finite camera positions/orientations are required even when only
+        # point tracks generated the Sim(3); do not accept a degenerate pose.
+        if fit["accepted"]:
+            for name, (_, image) in second.items():
+                center = np.asarray(image.projection_center(), dtype=float).reshape(3)
+                forward = np.asarray(image.viewing_direction(), dtype=float).reshape(3)
+                if (not np.isfinite(center).all() or not np.isfinite(forward).all() or
+                        np.linalg.norm(forward) < 1e-9):
+                    result["reasons"].append("invalid-cohort-camera-pose")
+                    break
+    except (ValueError, KeyError, OSError, sqlite3.DatabaseError, TypeError,
+            np.linalg.LinAlgError) as error:
+        result["reasons"].append(f"invalid-cross-model-evidence: {error}")
+    result["accepted"] = not result["reasons"]
+    return result
+
+
+def assess_partial_alignment(baseline, cohort, database: Path, qa_index: Path | None,
+                             settings: CohortRecoverySettings) -> dict:
+    """Align one/two shared cameras using independently triangulated subject points.
+
+    A single shared camera does not determine SfM scale. It only helps validate
+    a Sim(3) estimated from original 2D/3D feature tracks; accepted new camera
+    observations must independently reproject to the original statue surface.
+    """
+    import numpy as np
+    from .sfm_point_alignment import (estimate_point_alignment,
+                                      extract_verified_3d_matches, _subject_lookup,
+                                      validate_cross_reprojection)
+
+    first, second = _registered_images(baseline), _registered_images(cohort)
+    common = sorted(set(first) & set(second))
+    gained = sorted(set(second) - set(first))
+    result = {"method": "verified-hybrid-3d-points", "accepted": False,
+              "shared_cameras": len(common), "shared_filenames": common,
+              "new_cameras": len(gained), "new_filenames": gained, "reasons": []}
+    if not 1 <= len(common) <= 2:
+        result["reasons"].append("hybrid-requires-one-or-two-shared-cameras")
+    if len(gained) < settings.min_new_cameras:
+        result["reasons"].append("insufficient-new-cameras")
+    if any(first[name][0] != second[name][0] for name in common):
+        result["reasons"].append("image-id-collision-or-different-database")
+    if qa_index is None:
+        result["reasons"].append("subject-confidence-unavailable")
+    if result["reasons"]:
+        return result
+    try:
+        audit: dict = {}
+        matches = extract_verified_3d_matches(
+            database, baseline, cohort, qa_index=qa_index,
+            allow_shared=True, audit=audit)
+        result["evidence_audit"] = audit
+        fit = estimate_point_alignment(
+            matches,
+            baseline_cloud=[np.asarray(p.xyz).reshape(3) for p in baseline.points3D.values()],
+            cohort_cloud=[np.asarray(p.xyz).reshape(3) for p in cohort.points3D.values()])
+        result.update(fit)
+        if not fit["accepted"]:
+            return result
+        reprojection = validate_cross_reprojection(matches, fit, baseline, cohort)
+        result["reprojection"] = reprojection
+        if not reprojection["accepted"]:
+            result["reasons"].append(reprojection.get("reason") or "cross-model-reprojection-failed")
+        rotation = np.asarray(fit["rotation"], dtype=float)
+        translation = np.asarray(fit["translation"], dtype=float)
+        scale = float(fit["scale"])
+        base_centers = np.asarray([image.projection_center()
+                                   for _, image in first.values()], dtype=float).reshape((-1, 3))
+        spread = max(1e-9, float(np.sqrt(np.mean(np.sum(
+            (base_centers - base_centers.mean(axis=0)) ** 2, axis=1)))))
+        center_ratios, view_angles = [], []
+        for name in common:
+            base, other = first[name][1], second[name][1]
+            mapped_center = scale * (rotation @ np.asarray(
+                other.projection_center(), dtype=float).reshape(3)) + translation
+            center_ratios.append(float(np.linalg.norm(mapped_center - np.asarray(
+                base.projection_center(), dtype=float).reshape(3)) / spread))
+            direction = rotation @ np.asarray(other.viewing_direction(), dtype=float).reshape(3)
+            expected = np.asarray(base.viewing_direction(), dtype=float).reshape(3)
+            denominator = float(np.linalg.norm(direction) * np.linalg.norm(expected))
+            if denominator < 1e-9:
+                result["reasons"].append("invalid-shared-camera-direction")
+                break
+            view_angles.append(float(np.degrees(np.arccos(np.clip(
+                np.dot(direction, expected) / denominator, -1, 1)))))
+        result["max_shared_center_residual_ratio"] = max(center_ratios, default=None)
+        result["max_shared_view_angle_degrees"] = max(view_angles, default=None)
+        if any(x > settings.max_camera_residual_ratio for x in center_ratios):
+            result["reasons"].append("shared-camera-center-mismatch")
+        if any(x > settings.max_view_angle_degrees for x in view_angles):
+            result["reasons"].append("shared-camera-orientation-mismatch")
+
+        # Independently verify that each new camera observes several *matched*
+        # baseline object points. An aligned camera with zero usable tracks is
+        # not evidence of another valid reconstruction viewpoint.
+        subject = _subject_lookup(qa_index)
+        new_ids = set(cohort.reg_image_ids()) - set(baseline.reg_image_ids())
+        accepted_pairs = {tuple(ids) for ids in fit["inlier_point_ids"]}
+        links, observed = [], {}
+        errors_by_camera = {image_id: [] for image_id in new_ids}
+        for row in matches:
+            base_pid, co_pid = row["baseline_point_id"], row["cohort_point_id"]
+            if (base_pid, co_pid) not in accepted_pairs:
+                continue
+            for item in cohort.points3D[co_pid].track.elements:
+                image_id, index = int(item.image_id), int(item.point2D_idx)
+                if image_id not in new_ids:
+                    continue
+                image = cohort.images[image_id]
+                if index >= len(image.points2D):
+                    continue
+                point = image.points2D[index]
+                if (not point.has_point3D() or int(point.point3D_id) != co_pid or
+                        not subject(image.name, point.xy)):
+                    continue
+                projected = image.project_point(
+                    rotation.T @ ((np.asarray(row["baseline_xyz"]) - translation) / scale))
+                if projected is None:
+                    continue
+                error = float(np.linalg.norm(np.asarray(projected).reshape(2) -
+                                             np.asarray(point.xy).reshape(2)))
+                if not math.isfinite(error):
+                    continue
+                observation = (image_id, index)
+                if observation in observed and observed[observation] != base_pid:
+                    result["reasons"].append("ambiguous-new-camera-observation")
+                    continue
+                observed[observation] = base_pid
+                errors_by_camera[image_id].append(error)
+                links.append([base_pid, co_pid, image_id, index])
+        support = {str(image_id): {"count": len(errors),
+                                   "median_px": float(np.median(errors)) if errors else None,
+                                   "p95_px": float(np.percentile(errors, 95)) if errors else None}
+                   for image_id, errors in errors_by_camera.items()}
+        result["new_camera_3d_support"] = support
+        result["verified_new_camera_observations"] = links
+        if any(item["count"] < 8 for item in support.values()):
+            result["reasons"].append("insufficient-verified-new-camera-3d-support")
+        if any(item["count"] and (item["median_px"] > 3.0 or item["p95_px"] > 6.0)
+               for item in support.values()):
+            result["reasons"].append("new-camera-cross-reprojection-mismatch")
+    except (ValueError, KeyError, OSError, sqlite3.DatabaseError, TypeError,
+            np.linalg.LinAlgError) as error:
+        result["reasons"].append(f"invalid-hybrid-evidence: {error}")
+    result["accepted"] = not result["reasons"]
+    return result
+
+
 def _write_report(output: Path, report: dict) -> None:
     (output / "cohort-recovery-report.json").write_text(
         json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
@@ -532,7 +715,16 @@ def inspect_cohort_alignment(revision: Path, candidate_model: Path, *, model: in
         import pycolmap as pycolmap_module
     baseline = pycolmap_module.Reconstruction(paths["model"])
     alternate = pycolmap_module.Reconstruction(candidate_model)
-    qa = assess_alignment(baseline, alternate, settings, landmarks)
+    shared = len(set(_registered_images(baseline)) & set(_registered_images(alternate)))
+    qa_index = paths["sparse"] / "subject-feature-index.json"
+    if shared == 0:
+        qa = assess_disconnected_alignment(baseline, alternate, paths["database"],
+                                           qa_index if qa_index.is_file() else None, settings)
+    elif shared < settings.min_shared_cameras:
+        qa = assess_partial_alignment(baseline, alternate, paths["database"],
+                                      qa_index if qa_index.is_file() else None, settings)
+    else:
+        qa = assess_alignment(baseline, alternate, settings, landmarks)
     qa.update({"schema_version": 1, "baseline": str(paths["model"]),
                "candidate": str(candidate_model.resolve()),
                "landmark_manifest": str(landmarks_path) if landmarks_path else None,
@@ -611,7 +803,18 @@ def recover_cohort(revision: Path, output: Path, *, model: int = 0,
                     if any(planned["source_image_ids"][name] != image_id
                            for name, (image_id, _) in alternate.items()):
                         raise RuntimeError("Mapper used image IDs inconsistent with original database")
-                    alignment = assess_alignment(baseline, candidate, settings)
+                    alternate_common = set(alternate) & set(baseline_registered)
+                    qa_file = paths["sparse"] / "subject-feature-index.json"
+                    if len(alternate_common) >= settings.min_shared_cameras:
+                        alignment = assess_alignment(baseline, candidate, settings)
+                    elif alternate_common:
+                        alignment = assess_partial_alignment(
+                            baseline, candidate, paths["database"],
+                            qa_file if qa_file.is_file() else None, settings)
+                    else:
+                        alignment = assess_disconnected_alignment(
+                            baseline, candidate, paths["database"],
+                            qa_file if qa_file.is_file() else None, settings)
                     gained_targets = sorted(set(alternate) & set(planned["missing_target_filenames"]))
                     alignment["new_target_filenames"] = gained_targets
                     alignment["new_target_cameras"] = len(gained_targets)
@@ -643,17 +846,34 @@ def recover_cohort(revision: Path, output: Path, *, model: int = 0,
         # Keep all unvalidated native output in a clearly non-promoted folder.
         merged_path = output / "merge-under-review"
         merged_path.mkdir()
-        command = [colmap, "model_merger", "--input_path1", str(paths["model"]),
-                   "--input_path2", str(candidate_path), "--output_path", str(merged_path),
-                   "--max_reproj_error", str(settings.merge_max_reproj_error)]
-        completed = merge_runner(command, capture_output=True, text=True,
-                                 timeout=settings.max_seconds_per_trial, check=False)
-        report["merge"] = {"from_trial": attempt, "alignment": alignment,
-                           "returncode": completed.returncode,
-                           "log_excerpt": (completed.stdout + "\n" + completed.stderr)[-2500:]}
-        if completed.returncode != 0:
-            report["status"] = "merge-rejected / colmap-geometric-check"
-            return report
+        if alignment.get("method") in ("verified-3d-points", "verified-hybrid-3d-points"):
+            from .sfm_point_alignment import fuse_disjoint_models
+            try:
+                independent = pycolmap_module.Reconstruction(candidate_path)
+                joined = fuse_disjoint_models(baseline, independent, alignment,
+                                              pycolmap_module=pycolmap_module)
+                joined.write(merged_path)
+                report["merge"] = {"from_trial": attempt, "alignment": alignment,
+                                   "method": "validated-evidence-track-union", "returncode": 0,
+                                   "log_excerpt": "Aligned verified real camera tracks without moving originals."}
+            except (ValueError, RuntimeError, TypeError, OSError) as error:
+                report["merge"] = {"from_trial": attempt, "alignment": alignment,
+                                   "method": "validated-evidence-track-union", "returncode": 2,
+                                   "error": f"{type(error).__name__}: {error}"[:300]}
+                report["status"] = "merge-rejected / disconnected-model-structure"
+                return report
+        else:
+            command = [colmap, "model_merger", "--input_path1", str(paths["model"]),
+                       "--input_path2", str(candidate_path), "--output_path", str(merged_path),
+                       "--max_reproj_error", str(settings.merge_max_reproj_error)]
+            completed = merge_runner(command, capture_output=True, text=True,
+                                     timeout=settings.max_seconds_per_trial, check=False)
+            report["merge"] = {"from_trial": attempt, "alignment": alignment,
+                               "returncode": completed.returncode,
+                               "log_excerpt": (completed.stdout + "\n" + completed.stderr)[-2500:]}
+            if completed.returncode != 0:
+                report["status"] = "merge-rejected / colmap-geometric-check"
+                return report
         merged = pycolmap_module.Reconstruction(merged_path)
         before = _registered_images(baseline)
         after = _registered_images(merged)

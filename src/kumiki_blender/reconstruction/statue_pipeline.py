@@ -32,6 +32,12 @@ class StatuePipelineSettings:
     sam2_checkpoint: Path | None = None
     sam2_size: str = "small"
     sam2_device: str = "mps"
+    subject_detector: str = "none"
+    grounding_prompt: str | None = None
+    grounding_part_prompts: tuple[str, ...] = ()
+    grounding_device: str = "auto"
+    grounding_model_dir: Path | None = None
+    matching_device: str = "mps"
     mask_guides: Path | None = None
     masks_dir: Path | None = None
     mask_cache_dir: Path | None = None
@@ -57,6 +63,23 @@ class StatuePipelineSettings:
             raise ReferenceError("Unsupported SAM2 model size")
         if self.sam2_device not in ("mps", "cpu", "auto"):
             raise ReferenceError("Unsupported SAM2 device")
+        if self.subject_detector not in ("none", "grounding-dino"):
+            raise ReferenceError("Unsupported subject detector")
+        if self.grounding_device not in ("auto", "mps", "cpu"):
+            raise ReferenceError("Unsupported Grounding DINO device")
+        if self.grounding_prompt is not None and (not self.grounding_prompt.strip() or len(self.grounding_prompt) > 400):
+            raise ReferenceError("Grounding DINO prompt needs 1–400 characters")
+        from .subject_grounding import validate_part_prompts
+        validate_part_prompts(self.grounding_part_prompts)
+        if self.grounding_part_prompts and self.subject_detector != "grounding-dino":
+            raise ReferenceError("Part prompts require --subject-detector grounding-dino")
+        if self.subject_detector != "none" and self.masks_dir is not None:
+            raise ReferenceError("Grounding DINO is not used with --masks-dir reviewed masks")
+        if self.grounding_model_dir is not None and (
+                self.grounding_model_dir.is_symlink() or not self.grounding_model_dir.is_dir()):
+            raise ReferenceError("Grounding DINO weights must be in an existing directory")
+        if self.matching_device not in ("mps", "torch-cpu"):
+            raise ReferenceError("Statue LightGlue matching device must be mps or torch-cpu")
         if not 1024 <= self.max_colmap_rss_mb <= 131072:
             raise ReferenceError("max_colmap_rss_mb must be between 1024 and 131072")
         if not 60 <= self.timeout_seconds <= 86400:
@@ -249,6 +272,13 @@ def _mask_warnings(mask_report: dict[str, Any], audit: dict[str, Any],
             warnings.append(f"{name}: foreground extent looks implausible")
         if item.get("missing_parts") or item.get("background_seed_violations"):
             warnings.append(f"{name}: anatomy missing or background prompts violated")
+        detection = item.get("subject_detection")
+        if isinstance(detection, dict) and str(detection.get("status", "")).startswith("uncertain"):
+            warnings.append(f"{name}: text grounding found no reliable subject; review this mask")
+        comparison = item.get("candidate_comparison")
+        if (isinstance(comparison, dict) and
+                str(comparison.get("status", "")).startswith("uncertain")):
+            warnings.append(f"{name}: broad/grounded segmentation disagreement requires review")
         if any("Foreground touches photo border" in warning
                for warning in item.get("warnings", [])):
             warnings.append(f"{name}: segmentation needs guided anatomy/boundary review")
@@ -319,6 +349,18 @@ def build_statue_glb(
                                      "tick", "preflight", "Downloading official SAM2 weights: "
                                      + (f"{count * 100 // total}% ({count // 1048576} MiB)"
                                         if total else f"{count // 1048576} MiB"))))
+    grounding_folder = None
+    grounding_id = None
+    effective_prompt = None
+    if settings.subject_detector == "grounding-dino":
+        if importlib.util.find_spec("transformers") is None:
+            raise ReferenceError("Grounding DINO requires pip install -e '.[mask-grounding]'")
+        from .subject_grounding import grounding_identity, resolve_grounding_model
+        effective_prompt = settings.grounding_prompt or asset_id.replace("-", " ") + "."
+        emit("tick", "preflight", "Resolving pinned Grounding DINO model")
+        grounding_folder = resolve_grounding_model(
+            settings.grounding_model_dir, allow_download=settings.auto_download_model)
+        grounding_id = grounding_identity(grounding_folder)
     refs = load_photo_folder(photos, asset_id)
     audit_reference_set(refs)
     target = output.resolve()
@@ -344,6 +386,16 @@ def build_statue_glb(
         "ai_bridge_workflow_sha256": (_sha256_file(settings.ai_bridge_workflow)
                                       if settings.ai_bridge_workflow else None),
     }
+    if grounding_id is not None:
+        settings_payload.update(subject_detector=settings.subject_detector,
+                                grounding_identity=grounding_id,
+                                grounding_prompt=effective_prompt,
+                                grounding_part_prompts=list(settings.grounding_part_prompts),
+                                candidate_ensemble_schema="grounded-sam2-candidate-ensemble-v1",
+                                grounding_device=settings.grounding_device)
+    # Preserve compatibility with immutable older MPS revision fingerprints.
+    if settings.matching_device != "mps":
+        settings_payload["matching_device"] = settings.matching_device
     settings_fingerprint = hashlib.sha256(json.dumps(
         settings_payload, sort_keys=True).encode()).hexdigest()
     # Older, blocked revisions can resume camera recovery after upgrading the
@@ -364,6 +416,8 @@ def build_statue_glb(
         if compatible_upgrade:
             report["settings_sha256"] = settings_fingerprint
             report["resume_upgrade"] = "enabled verified camera recovery without rerunning photos"
+        if report.get("failed_worker", {}).get("stage") in report.get("completed_stages", []):
+            report.pop("failed_worker", None)
         if report.get("status") == "private-GLB-candidate / review-required":
             final = target / "model.glb"
             if final.is_symlink() or not final.is_file():
@@ -394,6 +448,13 @@ def build_statue_glb(
                   "model_glb": None}
     report["model_checkpoint"] = ({"path": str(checkpoint_file), "source": checkpoint_source,
                                     "sha256": _sha256_file(checkpoint_file)} if checkpoint_file else None)
+    if grounding_id is not None:
+        from .subject_grounding import MODEL_ID, MODEL_REVISION
+        report["subject_detector"] = {
+            "kind": "grounding-dino", "model": MODEL_ID, "revision": MODEL_REVISION,
+            "identity": grounding_id, "prompt": effective_prompt,
+            "device": settings.grounding_device,
+            "status": "candidate / not-verified-foreground-or-geometry"}
 
     def checkpoint(status: str, stage: str | None = None, warnings: list[str] | None = None):
         report.update(status=status, stopped_stage=stage, warnings=warnings or [])
@@ -429,10 +490,28 @@ def build_statue_glb(
         active_phase = phase
         code = runner(argv, target / "logs" / f"{name}.log", environment)
         if code:
-            checkpoint("blocked / worker-failed", name, [f"Stage exited {code}; inspect logs/{name}.log"])
+            log_path = target / "logs" / f"{name}.log"
+            try:
+                with log_path.open("rb") as logfile:
+                    logfile.seek(max(0, log_path.stat().st_size - 4096))
+                    tail = logfile.read(4096).decode("utf-8", "replace")
+                lines = [line.strip() for line in tail.splitlines() if line.strip()]
+                diagnostic = lines[-1] if lines else ""
+            except OSError:
+                diagnostic = ""
+            if not diagnostic or diagnostic == "error:":
+                diagnostic = "Worker returned no exception details; retry this stage directly with Python -X faulthandler"
+            report["failed_worker"] = {"stage": name, "exit_code": code,
+                                       "diagnostic": diagnostic[:500]}
+            checkpoint("blocked / worker-failed", name,
+                       [f"Stage exited {code}: {diagnostic[:250]}; inspect logs/{name}.log"])
             raise ReferenceError(f"{name} failed; inspect {target / 'logs' / (name + '.log')}")
         record = _read_report(receipt)
         report["completed_stages"].append(name)
+        if report.get("failed_worker", {}).get("stage") == name:
+            # A successful resume supersedes this stage's previous native
+            # error. Keep old logs on disk, not as a current failure status.
+            report.pop("failed_worker", None)
         checkpoint("running")
         emit("done", phase)
         return record
@@ -456,6 +535,13 @@ def build_statue_glb(
         prep_argv.append("--no-foreground")
     elif checkpoint_file is not None:
         prep_argv += ["--sam2-checkpoint", str(checkpoint_file)]
+    if grounding_folder is not None:
+        prep_argv += ["--subject-detector", "grounding-dino",
+                      "--grounding-model-dir", str(grounding_folder),
+                      "--grounding-prompt", effective_prompt,
+                      "--grounding-device", settings.grounding_device]
+        for part in settings.grounding_part_prompts:
+            prep_argv += ["--grounding-part-prompt", part]
     if resume and prepared.exists() and "photo_preprocess" not in report["completed_stages"]:
         prep_argv.append("--resume")
     prepared_report = run_stage("photo_preprocess", prep_argv,
@@ -466,11 +552,20 @@ def build_statue_glb(
     report["photo_cache"] = {"normalized_hits": prepared_report.get("normalized_hits"),
                              "normalized_misses": prepared_report.get("normalized_misses"),
                              "foreground_hits": prepared_report.get("foreground_hits"),
-                             "foreground_misses": prepared_report.get("foreground_misses")}
+                             "foreground_misses": prepared_report.get("foreground_misses"),
+                             "qa_hits": prepared_report.get("qa_hits"),
+                             "qa_misses": prepared_report.get("qa_misses"),
+                             "qa_warnings": prepared_report.get("qa_warning_count"),
+                             "mask_qa": prepared_report.get("mask_qa"),
+                             "auxiliary_model_status": prepared_report.get("auxiliary_model_status"),
+                             "refinement_attempts": prepared_report.get("refinement_attempts"),
+                             "refinement_accepted": prepared_report.get("refinement_accepted")}
+    report["early_photo_qa"] = "photo-preprocess/photo-qa-contact-sheet.jpg"
     camera_argv = executable + ["reconstruct-photos", "--photos", str(photos.resolve()),
         "--asset-id", asset_id, "--output", str(sparse), "--engine", "colmap",
         "--normalized-cache-dir", str(photo_cache),
-        "--matching-preset", "sift-lightglue", "--matching-device", "mps",
+        "--matching-preset", "sift-lightglue", "--matching-device", settings.matching_device,
+        "--source-qa-report", str(prepared / "photo-preprocess-report.json"),
         "--matching-pairs-per-process", "8", "--max-colmap-rss-mb", str(settings.max_colmap_rss_mb),
         "--undistort", "--timeout-seconds", str(settings.timeout_seconds)]
     if resume and sparse.exists() and "cameras" not in report["completed_stages"]:
@@ -613,16 +708,34 @@ def build_statue_glb(
             "Automatically selected front is unverified; side labels are provisional" if front["filename"]
             else "No reliable frontal photo hint; true left/right geometry remains unverified")
     if issues:
+        # A verified recovered candidate can clear the numeric registration
+        # threshold while still failing viewpoint coverage. Report its actual
+        # remaining blockers; do not imply the original 47-camera model is
+        # promoted or repeat an outdated 78.3% registration warning.
+        candidate_count = report.get("verified_camera_candidate_registered", 0)
+        if candidate_count > registered and "camera_recovery_coverage_warnings" in report:
+            report["initial_coverage_warnings"] = issues
+            issues = report["camera_recovery_coverage_warnings"]
         return checkpoint("blocked / missing-photo-coverage", "coverage", issues)
 
     if settings.masks_dir is None:
-        run_stage("masks", executable + ["prepare-dense-masks", "--reconstruction", str(sparse),
+        mask_args = executable + ["prepare-dense-masks", "--reconstruction", str(sparse),
             "--output", str(mask_dir), "--segmenter", "sam2",
             "--sam2-size", settings.sam2_size, "--sam2-device", settings.sam2_device,
             "--sam2-checkpoint", str(checkpoint_file),
             "--cache-dir", str(shared_cache)]
-            + (["--guides", str(settings.mask_guides.resolve())] if settings.mask_guides else []),
-            mask_dir / "mask-report.json")
+        if grounding_folder is not None:
+            mask_args += ["--subject-detector", "grounding-dino",
+                          "--grounding-model-dir", str(grounding_folder),
+                          "--grounding-prompt", effective_prompt,
+                          "--grounding-device", settings.grounding_device]
+            for part in settings.grounding_part_prompts:
+                mask_args += ["--grounding-part-prompt", part]
+        if settings.mask_guides:
+            mask_args += ["--guides", str(settings.mask_guides.resolve())]
+        if resume and mask_dir.exists() and "masks" not in report["completed_stages"]:
+            mask_args.append("--resume")
+        run_stage("masks", mask_args, mask_dir / "mask-report.json")
         mask_record = _read_report(mask_dir / "mask-report.json")
         report["mask_cache"] = mask_record.get("cache")
     else:
