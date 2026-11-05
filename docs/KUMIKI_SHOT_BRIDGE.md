@@ -33,6 +33,8 @@ An actor is a Character Studio pack (`character.json` + `layers/`) plus a stagin
 
 `describe-actor` reports each effector's rest position, shoulder and reach.
 
+**Staging check:** preview one frame where the head tilts or turns the most. Ears, feather tips and fur tufts that show a streaked wall there need `fringe`. Raise it until the drawn face of the feature shows.
+
 **Limits:** art is drawn from one view, so keep the camera within about 25 degrees of the actor's facing. Hands overlap held objects. They do not close around them.
 
 ## Sets
