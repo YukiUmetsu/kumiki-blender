@@ -84,6 +84,15 @@ class CameraAuditTests(unittest.TestCase):
 
     def test_audit_distinguishes_original_and_synthetic_features(self):
         model = FakeModel(target=True)
+        class NativeStylePointMap:
+            """Like pycolmap.Point3DMap: indexed access, but no dict.get."""
+            def __init__(self, points):
+                self.points = points
+
+            def __getitem__(self, point_id):
+                return self.points[point_id]
+
+        model.points3D = NativeStylePointMap(model.points3D)
         rows = measure_target_observations(model, 'target.png', 1)
         self.assertEqual([row['source'] for row in rows],
                          ['existing-feature', 'roma-predicted-keypoint', 'roma-predicted-keypoint'])

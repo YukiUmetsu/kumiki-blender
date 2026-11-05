@@ -122,6 +122,36 @@ class DisconnectedAlignmentTests(unittest.TestCase):
             self.assertGreaterEqual(aligned["new_camera_3d_support"]["10"]["count"], 25)
             self.assertEqual(aligned["method"], "verified-hybrid-3d-points")
 
+            class NativeStylePointMap:
+                """PyCOLMAP exposes indexed Point3DMap access, not dict.get."""
+                def __init__(self, items):
+                    self.items_by_id = items
+
+                def __getitem__(self, key):
+                    return self.items_by_id[key]
+
+                def __contains__(self, key):
+                    return key in self.items_by_id
+
+                def items(self):
+                    return self.items_by_id.items()
+
+                def values(self):
+                    return self.items_by_id.values()
+
+                def __len__(self):
+                    return len(self.items_by_id)
+
+            original_base_points, original_cohort_points = baseline.points3D, cohort.points3D
+            baseline.points3D = NativeStylePointMap(original_base_points)
+            cohort.points3D = NativeStylePointMap(original_cohort_points)
+            try:
+                native_map_result = assess_partial_alignment(
+                    baseline, cohort, db, qa, CohortRecoverySettings(min_new_cameras=1))
+                self.assertTrue(native_map_result["accepted"], native_map_result["reasons"])
+            finally:
+                baseline.points3D, cohort.points3D = original_base_points, original_cohort_points
+
             two_shared = model([1, 2, 10], 100, xyz)
             aligned_two = assess_partial_alignment(
                 baseline, two_shared, db, qa, CohortRecoverySettings(min_new_cameras=1))

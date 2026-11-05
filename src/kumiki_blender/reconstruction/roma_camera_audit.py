@@ -32,9 +32,10 @@ def measure_target_observations(model, name: str, original_keypoints: int | None
     for point_index, observation in enumerate(image.points2D):
         if not observation.has_point3D():
             continue
-        point3d = model.points3D.get(int(observation.point3D_id))
-        if point3d is None:
-            raise ValueError(f'COLMAP image references missing 3D point {observation.point3D_id}')
+        try:
+            point3d = model.points3D[int(observation.point3D_id)]
+        except KeyError as error:
+            raise ValueError(f'COLMAP image references missing 3D point {observation.point3D_id}') from error
         xyz_camera = np.asarray(pose * point3d.xyz, dtype=float).reshape(3)
         xy = np.asarray(observation.xy, dtype=float).reshape(2)
         if not np.isfinite(xyz_camera).all() or xyz_camera[2] <= 0 or not np.isfinite(xy).all():

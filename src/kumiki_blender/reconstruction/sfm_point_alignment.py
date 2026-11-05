@@ -186,8 +186,11 @@ def extract_verified_3d_matches(database: Path, baseline, cohort, *,
                 if (not bp.has_point3D() or not cp.has_point3D() or
                         np.linalg.norm(np.asarray(bp.xy) - np.asarray(cp.xy)) > 0.5):
                     continue
-                base_point = baseline.points3D.get(int(bp.point3D_id))
-                co_point = cohort.points3D.get(int(cp.point3D_id))
+                try:
+                    base_point = baseline.points3D[int(bp.point3D_id)]
+                    co_point = cohort.points3D[int(cp.point3D_id)]
+                except KeyError:
+                    continue
                 # Each 3D point needs parallax outside the single common 2D
                 # observation; same-image pixels alone have no depth evidence.
                 if (base_point is None or co_point is None or
