@@ -155,6 +155,12 @@ private texture projection to produce a mesh for artistic inspection.
     # frame. The pipeline explicitly passes --mask-path and
     # --ignore-mask-label 0 to OpenMVS densification, and the mask label to
     # texturing. OpenMVS 2.4 RefineMesh does not support an equivalent option.
+    # OpenMVS looks for img-0001.mask.png (without the photo extension).
+    # The pipeline creates this stem-based alias automatically in its private
+    # workspace while retaining the original img-0001.jpg.mask.png snapshot.
+    # If an older masked revision failed during densify because these aliases
+    # were missing, rerun the identical command with --resume; it repairs the
+    # aliases and reuses the completed InterfaceCOLMAP stage.
     kumiki-blender build-dense-photos \
       --reconstruction .review/statue/sparse-r01 \
       --rectified-masks /private/masks \

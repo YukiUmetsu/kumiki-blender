@@ -41,6 +41,10 @@ elif app == "DensifyPointCloud":
         assert mask_dir.is_dir()
         assert args[args.index("--ignore-mask-label") + 1] == "0"
         assert len(list(mask_dir.glob("view-*.jpg.mask.png"))) == 10
+        for number in range(10):
+            original = mask_dir / f"view-{number:02d}.jpg.mask.png"
+            openmvs_name = mask_dir / f"view-{number:02d}.mask.png"
+            assert original.read_bytes() == openmvs_name.read_bytes()
 elif app == "ReconstructMesh":
     assert flag("--input-file").name == "scene_dense.mvs"
     out = flag("--output-file")
@@ -228,8 +232,10 @@ class DenseMvsTests(unittest.TestCase):
             self.sparse, output, DenseSettings(refine=False, texture=False),
             rectified_masks=masks, executables=self.executables)
         self.assertTrue(result["status"].startswith("dense-mesh-candidate"), result)
-        self.assertEqual(len(list((output / "workspace/images").glob("*.mask.png"))), 10)
+        self.assertEqual(len(list((output / "workspace/images").glob("*.mask.png"))), 20)
         self.assertEqual((output / "workspace/images/view-00.jpg.mask.png").read_bytes(),
+                         (masks / "view-00.jpg.mask.png").read_bytes())
+        self.assertEqual((output / "workspace/images/view-00.mask.png").read_bytes(),
                          (masks / "view-00.jpg.mask.png").read_bytes())
         densify = result["commands"][1]["argv"]
         self.assertEqual(densify[densify.index("--ignore-mask-label") + 1], "0")
@@ -311,6 +317,59 @@ class DenseMvsTests(unittest.TestCase):
             build_dense_reconstruction(self.sparse, output, DenseSettings(),
                                        rectified_masks=masks, executables=self.executables,
                                        resume=True)
+
+    def test_resume_repairs_missing_openmvs_mask_aliases_without_repeating_interface(self):
+        masks = self._make_binary_masks()
+        output = self.root / "masked-legacy-alias"
+        settings = DenseSettings(refine=False, texture=False)
+        with patch.dict(os.environ, {"FAIL_MVS_STAGE": "DensifyPointCloud"}):
+            failed = build_dense_reconstruction(
+                self.sparse, output, settings, rectified_masks=masks,
+                executables=self.executables)
+        self.assertEqual(failed["failed_stage"], "densify")
+        for number in range(10):
+            (output / f"workspace/images/view-{number:02d}.mask.png").unlink()
+        self.assertFalse((output / "workspace/images/view-00.mask.png").exists())
+
+        repaired = build_dense_reconstruction(
+            self.sparse, output, settings, rectified_masks=masks,
+            executables=self.executables, resume=True)
+        self.assertTrue(repaired["status"].startswith("dense-mesh-candidate"), repaired)
+        self.assertEqual(repaired["resume_skipped_stages"], ["interface"])
+        self.assertEqual((output / "workspace/images/view-00.mask.png").read_bytes(),
+                         (masks / "view-00.jpg.mask.png").read_bytes())
+
+    def test_openmvs_rejects_colliding_mask_stems_before_creating_output(self):
+        masks = self._make_binary_masks()
+        root = self.sparse / "undistorted/images"
+        renamed = "view-00.png"
+        (root / renamed).write_bytes((root / "view-01.jpg").read_bytes())
+        index_path = self.sparse / "undistorted-reference-index.json"
+        index = json.loads(index_path.read_text())
+        index["images"][1]["filename"] = renamed
+        index_path.write_text(json.dumps(index))
+        output = self.root / "colliding-aliases"
+        with self.assertRaisesRegex(ReferenceError, "unique rectified image stems"):
+            plan_dense_reconstruction(self.sparse, output, DenseSettings(),
+                                      rectified_masks=masks, executables=self.executables)
+        self.assertFalse(output.exists())
+
+    def test_resume_rejects_conflicting_openmvs_mask_alias(self):
+        masks = self._make_binary_masks()
+        output = self.root / "masked-conflicting-alias"
+        settings = DenseSettings(refine=False, texture=False)
+        with patch.dict(os.environ, {"FAIL_MVS_STAGE": "DensifyPointCloud"}):
+            failed = build_dense_reconstruction(
+                self.sparse, output, settings, rectified_masks=masks,
+                executables=self.executables)
+        self.assertEqual(failed["failed_stage"], "densify")
+        alias = output / "workspace/images/view-00.mask.png"
+        alias.unlink()  # Do not modify the hardlinked canonical mask snapshot.
+        alias.write_bytes(b"stale mask")
+        with self.assertRaisesRegex(ReferenceError, "OpenMVS mask alias changed"):
+            build_dense_reconstruction(self.sparse, output, settings,
+                                       rectified_masks=masks,
+                                       executables=self.executables, resume=True)
 
     def test_gpu_colmap_always_copies_undistorted_workspace(self):
         output = self.root / "dense-r02"

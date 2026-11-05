@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
 import re
 import shutil
 import subprocess
@@ -100,6 +101,37 @@ def _check_regular(path: Path, root: Path) -> None:
         raise ReferenceError(f"Required reconstruction file is missing or linked outside the revision: {path.name}")
 
 
+def _stage_openmvs_mask_aliases(image_root: Path, masks: list[dict[str, Any]]) -> None:
+    """Make OpenMVS stem-based mask paths alongside hash-pinned snapshots.
+
+    The rectified-mask contract names a mask ``photo-0003.png.mask.png``,
+    whereas OpenMVS 2.4 looks for ``photo-0003.mask.png``. Preserve the
+    original snapshot for resume validation and link an identical alias in
+    the private workspace. This can also repair a previously failed stage.
+    """
+    for entry in masks:
+        original = image_root / (entry["filename"] + ".mask.png")
+        alias = image_root / (Path(entry["filename"]).stem + ".mask.png")
+        _check_regular(original, image_root)
+        if _sha256(original) != entry["sha256"]:
+            raise ReferenceError(f"OpenMVS mask snapshot changed: {entry['filename']}")
+        if alias.exists() or alias.is_symlink():
+            _check_regular(alias, image_root)
+            if _sha256(alias) != entry["sha256"]:
+                raise ReferenceError(f"OpenMVS mask alias changed: {alias.name}")
+            continue
+        try:
+            os.link(original, alias)
+        except OSError:
+            # Exclusive creation prevents replacing another alias if a
+            # concurrent process created it after the existence check.
+            with original.open("rb") as source, alias.open("xb") as destination:
+                shutil.copyfileobj(source, destination)
+        _check_regular(alias, image_root)
+        if _sha256(alias) != entry["sha256"]:
+            raise ReferenceError(f"OpenMVS mask alias changed during staging: {alias.name}")
+
+
 def plan_dense_reconstruction(reconstruction: str | Path, output: str | Path,
                               settings: DenseSettings, *,
                               rectified_masks: str | Path | None = None,
@@ -163,6 +195,9 @@ def plan_dense_reconstruction(reconstruction: str | Path, output: str | Path,
     masks = []
     mask_source = None
     if rectified_masks is not None:
+        stems = [Path(name).stem for name in verified]
+        if len(stems) != len(set(stems)):
+            raise ReferenceError("OpenMVS masks require unique rectified image stems")
         mask_source = Path(rectified_masks).resolve()
         if (Path(rectified_masks).is_symlink() or not mask_source.is_dir()
                 or mask_source.is_relative_to(source / "undistorted/images")):
@@ -357,6 +392,7 @@ def build_dense_reconstruction(reconstruction: str | Path, output: str | Path,
             _check_regular(snapshot, target)
             if _sha256(snapshot) != entry["sha256"]:
                 raise ReferenceError(f"Resume rectified mask changed: {entry['filename']}")
+        _stage_openmvs_mask_aliases(workspace / "images", plan["rectified_masks"])
         report["resumed_from"] = {"failed_stage": report.get("failed_stage"),
                                   "exit_code": report.get("exit_code")}
         report.update({"status": "review-required", "failed_stage": None,
@@ -421,6 +457,7 @@ def build_dense_reconstruction(reconstruction: str | Path, output: str | Path,
                 shutil.copy2(mask["path"], destination)
                 if _sha256(destination) != mask["sha256"]:
                     raise ReferenceError(f"Rectified mask changed while staging: {mask['filename']}")
+            _stage_openmvs_mask_aliases(workspace / "images", plan["rectified_masks"])
         except (OSError, ReferenceError) as error:
             report.update(failed_stage="copy_workspace", error=str(error), exit_code=2)
             return checkpoint()
