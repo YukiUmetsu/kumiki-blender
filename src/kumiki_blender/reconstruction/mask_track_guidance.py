@@ -22,7 +22,7 @@ from .mask_consistency import (_MAX_MODEL_BYTES, _binary_image_tracks,
 from .references import ReferenceError
 
 
-SCHEMA = "multi-view-subject-track-evidence-v3"
+SCHEMA = "multi-view-subject-track-evidence-v4"
 MIN_SUPPORTING_CAMERAS = 3
 MAX_SEEDS_PER_IMAGE = 12
 
@@ -253,15 +253,21 @@ def extract_track_guidance(reconstruction: Path, mask_revision: Path,
             result = results[view["name"]]
             result["supporting_3d_tracks"] += 1
             if not view["union"]:
-                # Neither existing candidate sees the point. No independent
-                # evidence that it is the subject: abstain.
-                result["rejected_by_semantic_consensus"] += 1
-                continue
+                # If both SAM2 masks miss a visible chest/torso point in the
+                # target, don't permanently discard it. Its *independent*
+                # other-camera 3D track may still establish a strong subject
+                # candidate. Require stronger support than the normal path.
+                if (view["sky"] or len(supporting)-int(view["supported"]) < 4 or
+                        len(supporting)/len(views) < .80 or point_id in ground_tracks):
+                    result["rejected_by_semantic_consensus"] += 1
+                    continue
             row = {"point3d_id": point_id, "normalized_xy": view["normalized_xy"],
                    "supporting_cameras": len(supporting) - int(view["supported"]),
                    "confidence": round(len(supporting) / len(views), 5),
                    "source_views": [v["name"] for v in supporting if v["name"] != view["name"]],
                    "previously_selected": view["selected"],
+                   "source": ("independent-cross-view-only-foreground" if not view["union"]
+                              else "candidate-mask-and-cross-view-foreground"),
                    "ground_truth": False}
             result["holdout_candidates" if _seed_class(point_id) == "holdout"
                    else "seed_candidates"].append(row)

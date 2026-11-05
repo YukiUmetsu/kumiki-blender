@@ -18,6 +18,7 @@ from kumiki_blender.reconstruction.mask_track_guidance import (
     _seed_class, evaluate_track_resegmentation, extract_track_guidance,
 )
 from kumiki_blender.reconstruction.mask_ground_plane import evaluate_local_ground_spill
+from kumiki_blender.reconstruction.mask_ground_plane import fit_ground_plane
 from kumiki_blender.reconstruction.mask_track_resegmentation import refine_masks_from_tracks
 from kumiki_blender.reconstruction.mask_track_selection import select_track_mask_candidates
 from kumiki_blender.reconstruction.references import ReferenceError
@@ -104,6 +105,41 @@ class TrackGuidanceTests(unittest.TestCase):
                             for row in entry["seed_points"]))
         self.assertEqual(evidence["compared_track_ids"], len(self.features))
 
+    def test_five_other_views_recover_chest_points_missed_by_both_target_masks(self):
+        target = self.images[-1]
+        selected = self.mask_revision / target["mask"]
+        for variant in target["candidate_masks"].values():
+            path = self.mask_revision / variant["path"]
+            path.write_bytes(selected.read_bytes())
+            variant["sha256"] = digest(path)
+        (self.mask_revision / "mask-report.json").write_text(json.dumps(self.report))
+        evidence = extract_track_guidance(self.sparse, self.mask_revision, self.report)
+        row = evidence["images"]["view-05.png"]
+        self.assertTrue(any(point["source"] == "independent-cross-view-only-foreground"
+                            for point in row["seed_points"]))
+        self.assertTrue(all(point["supporting_cameras"] >= 4 for point in row["seed_points"]))
+        restored = np.zeros((80, 100), dtype=np.uint8)
+        restored[10:75, 10:90] = 255
+        with (patch("kumiki_blender.reconstruction.masking._load_sam2_predictor",
+                    return_value=(object(), "mps")),
+              patch("kumiki_blender.reconstruction.masking._sam2_mask",
+                    return_value=(restored, {"components": ["subject"]})) as inference):
+            revision = refine_masks_from_tracks(
+                self.sparse, self.mask_revision, self.root / "cross-view-only-recovery",
+                sam2_checkpoint=self.weights)
+        self.assertGreaterEqual(inference.call_count, 1)
+        recovered = next(item for item in revision["images"]
+                         if item["filename"] == "view-05.png")
+        self.assertTrue(recovered["track_guided_replaced"])
+        self.assertGreaterEqual(revision["summary"]["cross_view_only_prompted_photos"], 1)
+        self.assertGreater(recovered["track_guidance"]["cross_view_only_seed_count"], 0)
+        # Three independent source views are not enough to infer a completely
+        # omitted subject region, even if the point is triangulated.
+        for item in self.images[3:5]:
+            item["guide_source"] = "grounding-dino / no-detection"
+        weaker = extract_track_guidance(self.sparse, self.mask_revision, self.report)
+        self.assertFalse(weaker["images"]["view-05.png"]["seed_points"])
+
     def test_unrelated_background_features_and_disconnected_groups_do_not_seed(self):
         for item in self.images:
             item["guide_source"] = "grounding-dino / no-detection"
@@ -134,6 +170,53 @@ class TrackGuidanceTests(unittest.TestCase):
             for x, y, point_id in self.features:
                 model.extend(struct.pack("<ddq", x, y, point_id + 100_000*(camera//2)))
         (self.model_dir / "images.bin").write_bytes(model)
+
+    def _plane_fixture(self, *, camera_below=False, statue_below=False, wall=False):
+        """Synthetic registered points for adversarial floor-plane QA."""
+        folder = self.root / ("bad-camera" if camera_below else
+                              "bad-statue" if statue_below else
+                              "wall" if wall else "plausible-ground")
+        folder.mkdir(exist_ok=True)
+        images = bytearray(struct.pack("<Q", 6))
+        for camera in range(6):
+            images.extend(struct.pack("<i7di", camera+1, 1, 0, 0, 0,
+                                      camera*.4, -5.0 if camera_below else 0.0,
+                                      0, 1))
+            images.extend(f"pose-{camera}.png".encode()+b"\0")
+            images.extend(struct.pack("<Q", 0))
+        (folder / "images.bin").write_bytes(images)
+        rows = []
+        observations = {}
+        for n, (x, z) in enumerate((x, z) for x in range(12) for z in range(8)):
+            point_id = 9000+n
+            rows.append((point_id, (1.0 if wall else x*.2, x*.2 if wall else 3.,
+                                    z*.2)))
+            observations[point_id] = [{"supported": False, "mask_exterior": True,
+                                       "lower_scene_exterior": True} for _ in range(6)]
+        for n in range(40):
+            point_id = 10000+n
+            rows.append((point_id, (n*.06, 4.0 if statue_below else 0.0,
+                                    (n % 8)*.1)))
+            observations[point_id] = [{"supported": True, "mask_exterior": False,
+                                       "lower_scene_exterior": False} for _ in range(6)]
+        points = bytearray(struct.pack("<Q", len(rows)))
+        for point_id, (x, y, z) in rows:
+            points.extend(struct.pack("<QdddBBBdQ", point_id, x, y, z,
+                                      90, 90, 90, .1, 0))
+        (folder / "points3D.bin").write_bytes(points)
+        return fit_ground_plane(folder, observations)
+
+    def test_ground_plane_requires_cameras_above_it_and_statue_above_floor(self):
+        ids, good = self._plane_fixture()
+        self.assertGreater(len(ids), 30)
+        self.assertTrue(good["status"].startswith("candidate"))
+        _, bad_cameras = self._plane_fixture(camera_below=True)
+        self.assertEqual(bad_cameras["reason"], "plane-not-below-registered-cameras")
+        _, bad_statue = self._plane_fixture(statue_below=True)
+        self.assertEqual(bad_statue["reason"],
+                         "ground-plane-conflicts-with-verified-statue-tracks")
+        _, wall = self._plane_fixture(wall=True)
+        self.assertEqual(wall["reason"], "no-strong-low-horizontal-plane")
 
     def test_heldout_rejects_false_positive_mask_expansion(self):
         original = np.zeros((80, 100), dtype=np.uint8)
@@ -399,6 +482,8 @@ class TrackGuidanceTests(unittest.TestCase):
                               if item["filename"] == "view-05.png")
         self.assertTrue(selected_entry["track_guided_replaced"])
         self.assertTrue(selected_entry["track_guidance"]["ground_repair_verified"])
+        self.assertEqual(report["summary"]["ground_repair_attempted"], 1)
+        self.assertEqual(report["summary"]["ground_repair_accepted"], 1)
         self.assertEqual(selected_entry["track_guidance"]["status"],
                          "candidate / heldout-ground-repair")
 
@@ -437,6 +522,8 @@ class TrackGuidanceTests(unittest.TestCase):
             resumed = refine_masks_from_tracks(self.sparse, self.mask_revision, target,
                                                sam2_checkpoint=self.weights, resume=True)
         self.assertEqual(resumed["summary"]["accepted"], 1)
+        self.assertEqual(resumed["summary"]["abstained"], 5)
+        self.assertEqual(resumed["summary"]["cache_hits"], 3)
         self.assertEqual(digest(target / "masks/view-00.png.mask.png"), copied_digest)
         with self.assertRaisesRegex(ReferenceError, "identical settings|unfinished"):
             refine_masks_from_tracks(self.sparse, self.mask_revision, target,

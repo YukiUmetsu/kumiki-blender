@@ -22,7 +22,7 @@ from .mask_track_guidance import (SCHEMA as TRACK_SCHEMA,
 from .references import ReferenceError
 
 
-SCHEMA = "track-guided-mask-revision-v3"
+SCHEMA = "track-guided-mask-revision-v4"
 # Inference results depend on the actual guide and checkpoint, not the QA
 # algorithm version. Keep the original prompt-cache namespace so unchanged
 # guides reuse prior MPS work; new negative clicks alter the cache key.
@@ -151,8 +151,23 @@ def refine_masks_from_tracks(reconstruction: str | Path, mask_revision: str | Pa
         "requires_anatomy_inventory": True,
         "selection_mode": "automatic", "optional_manual_corrections": True,
         "images": [], "summary": {"accepted": 0, "rejected": 0, "abstained": 0,
-                                 "cache_hits": 0, "inference_count": 0},
+                                 "cache_hits": 0, "inference_count": 0,
+                                 "cross_view_only_prompted_photos": 0,
+                                 "ground_repair_attempted": 0,
+                                 "ground_repair_accepted": 0},
         "limitations": "COLMAP tracks and text grounding do not establish statue anatomy; no reduction of camera, mask, or mesh quality gates."}
+
+    def account_receipt(receipt: dict[str, Any]) -> None:
+        kind = ("accepted" if receipt.get("accepted") else
+                "abstained" if str(receipt.get("status", "")).startswith("abstained") else
+                "rejected")
+        result["summary"][kind] += 1
+        if receipt.get("proposed_mask") and receipt.get("cross_view_only_seed_count", 0):
+            result["summary"]["cross_view_only_prompted_photos"] += 1
+        if receipt.get("ground_repair_attempted"):
+            result["summary"]["ground_repair_attempted"] += 1
+        if receipt.get("ground_repair_verified") and receipt.get("accepted"):
+            result["summary"]["ground_repair_accepted"] += 1
 
     def checkpoint_report() -> None:
         # The resume receipt must never become truncated on a worker crash.
@@ -187,6 +202,7 @@ def refine_masks_from_tracks(reconstruction: str | Path, mask_revision: str | Pa
                     _sha256(output_mask) != entry.get("mask_sha256")):
                 raise ReferenceError(f"Completed mask changed during resume: {name}")
             result["images"].append(entry)
+            account_receipt(entry["track_guidance"])
             result["summary"]["cache_hits"] += 1
             if progress:
                 progress(position, len(images), "resumed")
@@ -198,6 +214,8 @@ def refine_masks_from_tracks(reconstruction: str | Path, mask_revision: str | Pa
         seeds = evidence["images"][name]["seed_points"]
         holdout = evidence["images"][name]["holdout_points"]
         context = evidence["images"][name]["foreground_context_points"]
+        cross_view_only_count = sum(row.get("source") ==
+                                    "independent-cross-view-only-foreground" for row in seeds)
         background_seeds = evidence["images"][name]["background_seed_points"]
         background_holdouts = evidence["images"][name]["background_holdout_points"]
         receipt = {"status": "abstained / insufficient-triangulated-subject-evidence",
@@ -205,6 +223,7 @@ def refine_masks_from_tracks(reconstruction: str | Path, mask_revision: str | Pa
                    "heldout_count": len(holdout), "reasons": [],
                    "background_seed_count": len(background_seeds),
                    "background_holdout_count": len(background_holdouts),
+                   "cross_view_only_seed_count": cross_view_only_count,
                    "source_evidence": "track-evidence-report.json"}
         candidate_file = None
         # Missing-body recovery or independently verifiable ground repair can
@@ -290,6 +309,8 @@ def refine_masks_from_tracks(reconstruction: str | Path, mask_revision: str | Pa
                         receipt["status"] = "rejected / ground-plane-appearance-spill"
                         receipt["reasons"].append("ground-plane-appearance-spill")
                     receipt.update(cache_key=cache_key, cache_hit=cache is not None,
+                                   cross_view_only_seed_count=cross_view_only_count,
+                                   ground_repair_attempted=can_repair,
                                    proposed_mask="candidates/" + candidate_file.name,
                                    proposed_mask_sha256=_sha256(candidate_file),
                                    sky_leaks_before=_mask_sky_leaks(photo, original_binary),
@@ -301,9 +322,7 @@ def refine_masks_from_tracks(reconstruction: str | Path, mask_revision: str | Pa
                         receipt["reasons"].append("new-blue-sky-foreground")
                     if receipt["accepted"]:
                         shutil.copyfile(candidate_file, output_mask)
-        result["summary"]["accepted" if receipt["accepted"] else
-                          "abstained" if receipt["status"].startswith("abstained") else
-                          "rejected"] += 1
+        account_receipt(receipt)
         with Image.open(source_photo) as photo, Image.open(output_mask) as chosen:
             histogram = chosen.histogram()
             new_fraction = round(sum(histogram[128:]) / (chosen.width * chosen.height), 6)

@@ -166,6 +166,14 @@ existing *registered, triangulated COLMAP tracks* to suggest extra positive
 SAM2 clicks in areas omitted by the selected mask. It checks that a track is
 observed from at least four photographs and that several *other* camera views
 agree inside both SAM2 candidates and the detector guide. A second, stricter
+route can recover a visible chest or torso point which **both** candidates
+missed in the target photo, but only if at least four other registered views
+independently confirm the same 3D point as statue in at least 80% of its
+observations. The low-plane ground classifier vetoes conflicting background
+geometry, and held-out foreground/background checks still decide acceptance.
+Neither an AI-generated photograph nor an untriangulated detection qualifies.
+
+A separate background
 test looks for **negative background tracks** outside both masks, well clear
 of their contours and outside Grounding DINO detections in at least four
 other registered views. When COLMAP camera rotations and triangulated 3D
@@ -184,7 +192,10 @@ another conservative veto on ground-colored mask expansions. It cannot label
 the full image as sand based on color alone. When a mask already includes
 ground, trusted existing foreground clicks can also guide an automatic SAM2
 ground-removal retry; only improvement on independent held-out ground points,
-with no loss of held-out statue tracks, can approve it.
+with no loss of held-out statue tracks, can approve it. The fitted plane must
+also sit below most camera centers and agree with the height of verified statue
+tracks; otherwise the system abstains rather than treating a flat torso or
+wall as ground.
 
 The ordinary 20% maximum growth remains the fallback. Expansion up to 55%
 (or 90% with substantially stronger evidence) is allowed **only** with enough
@@ -208,7 +219,7 @@ For an independent A/B test without rerunning COLMAP or Grounding DINO:
 ```bash
 RUN='.review/great-sphinx/statue-hq-r005'
 BASE='.review/great-sphinx/grounded-masks-r003'
-IMPROVED='.review/great-sphinx/track-guided-masks-r004' # must not exist
+IMPROVED='.review/great-sphinx/track-guided-masks-r005' # must not exist
 
 kumiki-blender improve-dense-masks \
   --reconstruction "$RUN/cameras" \

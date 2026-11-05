@@ -26,47 +26,55 @@ def _is_held_out(point_id: int) -> bool:
                           "big") % 5 == 0
 
 
-def _camera_up_vectors(model_dir: Path) -> list[list[float]]:
-    """Read COLMAP image rotations without loading large 2D feature arrays."""
-    result = []
+def _camera_geometry(model_dir: Path) -> tuple[list[list[float]], list[list[float]]]:
+    """Read COLMAP camera-up and centers without loading 2D feature arrays."""
+    ups, centers = [], []
     binary = model_dir / "images.bin"
     if not binary.is_file() or binary.is_symlink() or binary.stat().st_size > _MAX_MODEL_BYTES:
-        return result
+        return [], []
     try:
         with binary.open("rb") as source:
             header = source.read(8)
             if len(header) != 8:
-                return []
+                return [], []
             count, = struct.unpack("<Q", header)
             if count > 100_000:
-                return []
+                return [], []
             for _ in range(count):
                 record = source.read(64)
                 if len(record) != 64:
-                    return []
-                _, w, x, y, z, *_ = struct.unpack("<i7di", record)
+                    return [], []
+                _, w, x, y, z, tx, ty, tz, _ = struct.unpack("<i7di", record)
                 norm = math.sqrt(w*w + x*x + y*y + z*z)
                 if norm < 1e-8:
-                    return []
+                    return [], []
                 w, x, y, z = (value / norm for value in (w, x, y, z))
-                # Camera negative-Y axis (up in the image), expressed in world space.
-                result.append([-2*(x*y + w*z), -(1-2*(x*x+z*z)),
-                               -2*(y*z - w*x)])
+                # COLMAP qvec rotates world to camera. Up is minus the second
+                # row of R and camera center is -R.T @ t, both in world space.
+                rotation = (
+                    (1-2*(y*y+z*z), 2*(x*y-w*z), 2*(x*z+w*y)),
+                    (2*(x*y+w*z), 1-2*(x*x+z*z), 2*(y*z-w*x)),
+                    (2*(x*z-w*y), 2*(y*z+w*x), 1-2*(x*x+y*y)),
+                )
+                ups.append([-value for value in rotation[1]])
+                translation = (tx, ty, tz)
+                centers.append([-sum(rotation[i][j]*translation[i]
+                                     for i in range(3)) for j in range(3)])
                 for _char in range(4096):
                     if source.read(1) == b"\x00":
                         break
                 else:
-                    return []
+                    return [], []
                 num_data = source.read(8)
                 if len(num_data) != 8:
-                    return []
+                    return [], []
                 num_points, = struct.unpack("<Q", num_data)
                 if num_points > 10_000_000:
-                    return []
+                    return [], []
                 source.seek(num_points * 24, 1)
     except (OSError, struct.error):
-        return []
-    return result
+        return [], []
+    return ups, centers
 
 
 def _point_coordinates(model_dir: Path, needed: set[int]) -> dict[int, tuple[float, float, float]]:
@@ -126,10 +134,14 @@ def fit_ground_plane(model_dir: Path, observations: dict[int, list[dict[str, Any
     invalid["candidate_tracks"] = len(candidates)
     if len(candidates) < 24:
         return set(), invalid
-    xyz = _point_coordinates(model_dir, set(candidates))
+    subject_ids = [point_id for point_id, views in observations.items()
+                   if sum(view["supported"] for view in views) >= 3]
+    all_xyz = _point_coordinates(model_dir, set(candidates) | set(subject_ids))
+    xyz = {point_id: all_xyz[point_id] for point_id in candidates if point_id in all_xyz}
     if len(xyz) < 24:
         return set(), {**invalid, "reason": "missing-triangulated-3d-coordinates"}
-    camera_up = np.asarray(_camera_up_vectors(model_dir), dtype=float)
+    up_vectors, camera_positions = _camera_geometry(model_dir)
+    camera_up = np.asarray(up_vectors, dtype=float)
     if len(camera_up) < 4:
         return set(), {**invalid, "reason": "missing-camera-orientations"}
     up = np.median(camera_up, axis=0)
@@ -183,6 +195,17 @@ def fit_ground_plane(model_dir: Path, observations: dict[int, list[dict[str, Any
     singular = np.linalg.svd(planar, compute_uv=False)
     if len(singular) < 2 or singular[1] < scale * .23:
         return set(), {**invalid, "reason": "ground-plane-not-spatially-extended"}
+    centers = np.asarray(camera_positions, dtype=float)
+    if (not np.isfinite(centers).all() or
+            np.mean(centers @ best_normal - best_offset > 2*tolerance) < .75):
+        return set(), {**invalid, "reason": "plane-not-below-registered-cameras"}
+    subject_coords = np.asarray([all_xyz[point_id] for point_id in subject_ids
+                                 if point_id in all_xyz], dtype=float)
+    if len(subject_coords) >= 30:
+        separation = subject_coords @ best_normal - best_offset
+        if (np.mean(separation > 2*tolerance) < .55 or
+                np.mean(separation < -2*tolerance) > .10):
+            return set(), {**invalid, "reason": "ground-plane-conflicts-with-verified-statue-tracks"}
     # Held-out 3D tracks are checked against the frozen fitted plane; none of
     # them chose its normal, offset, threshold, or spatial extent.
     verified = np.abs(coords @ best_normal - best_offset) <= tolerance
@@ -192,6 +215,9 @@ def fit_ground_plane(model_dir: Path, observations: dict[int, list[dict[str, Any
         "candidate_tracks": len(candidates), "inlier_tracks": len(inliers),
         "training_inlier_tracks": int(best.sum()),
         "heldout_inlier_tracks": int(np.count_nonzero(verified & ~training)),
+        "camera_above_plane_fraction": round(float(np.mean(
+            centers @ best_normal - best_offset > 2*tolerance)), 5),
+        "verified_statue_tracks_compared": len(subject_coords),
         "normal": [round(float(v), 7) for v in best_normal],
         "offset": round(best_offset, 7),
         "relative_inlier_tolerance": .006,

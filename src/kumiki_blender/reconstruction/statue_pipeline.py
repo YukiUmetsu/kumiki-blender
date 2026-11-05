@@ -393,7 +393,7 @@ def build_statue_glb(
                                 grounding_prompt=effective_prompt,
                                 grounding_part_prompts=list(settings.grounding_part_prompts),
                                 candidate_ensemble_schema="grounded-sam2-candidate-ensemble-v1",
-                                track_guidance_schema="track-guided-mask-revision-v3",
+                                track_guidance_schema="track-guided-mask-revision-v4",
                                 track_guided_masks=settings.track_guided_masks,
                                 grounding_device=settings.grounding_device)
     # Preserve compatibility with immutable older MPS revision fingerprints.
