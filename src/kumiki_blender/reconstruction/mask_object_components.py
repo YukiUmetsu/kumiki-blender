@@ -11,11 +11,12 @@ import math
 from typing import Any
 
 
-SCHEMA = "visible-object-regions-v1"
+SCHEMA = "visible-object-regions-v3"
 
 
 def discover_visible_regions(photo: Any, broad: Any, grounded: Any, *,
                              detector_guide: dict[str, Any] | None = None,
+                             foreground_seeds: list[dict] | None = None,
                              background_seeds: list[dict] | None = None,
                              max_regions: int = 5) -> tuple[dict[str, Any] | None,
                                                             dict[str, Any]]:
@@ -133,10 +134,91 @@ def discover_visible_regions(photo: Any, broad: Any, grounded: Any, *,
             box[1], box[3] = max(0., point[1]-.05), min(1., point[1]+.05)
         add_region(f"region_{index+1:02d}", box, point, "connected-mask-spatial-partition")
 
+    # Verified source-view tracks may identify a part missed in *both* masks.
+    # Use them as optional, local, bounded prompts only; held-out tracks must
+    # never be consumed here. Points far from the observed object abstain.
+    exterior_distance = ndi.distance_transform_edt(~support)
+    trusted_positives = []
+    for row in (foreground_seeds or [])[:12]:
+        point = row.get("normalized_xy") if isinstance(row, dict) else None
+        if (not isinstance(point, list) or len(point) != 2 or
+                any(type(v) not in (float, int) or not math.isfinite(v) or not 0 <= v <= 1
+                    for v in point)):
+            continue
+        x, y = point
+        trusted_positives.append(point)
+        px = min(dimensions[0]-1, round(x*(dimensions[0]-1)))
+        py = min(dimensions[1]-1, round(y*(dimensions[1]-1)))
+        if exterior_distance[py, px] > .14*max(dimensions):
+            continue
+        if support[py, px]:
+            for name, (left, top, right, bottom) in component_boxes.items():
+                if (left <= x <= right and top <= y <= bottom and
+                        all(math.dist(point, prior) > .025
+                            for prior in part_points[name])):
+                    part_points[name].append([round(x, 6), round(y, 6)])
+                    receipt["components"].append({"id": name, "source": "cross-view-track-click",
+                                                   "point": part_points[name][-1]})
+                    break
+            continue
+        # Keep a small prompt box near the visible silhouette rather than a
+        # huge object box that can admit adjacent walls or ground.
+        box = [max(0., x-.11), max(0., y-.11), min(1., x+.11), min(1., y+.11)]
+        add_region(f"tracked_{len(component_boxes)+1:02d}", box, point,
+                   "nearby-cross-view-foreground-track")
+
     if len(component_boxes) < 2:
         receipt["status"] = "abstained / insufficient-distinct-regions"
         return None, receipt
-    negatives = _auto_sam2_guide(photo, _DEFAULT_BOX)["background_points"]
+    negatives = [point for point in
+                 _auto_sam2_guide(photo, _DEFAULT_BOX)["background_points"]
+                 if all(math.dist(point, positive) >= .08
+                        for positive in trusted_positives)]
+    # A distinct, distant lower-scene appearance can suggest negative SAM2
+    # clicks without being promoted to *verified* ground evidence. Use the
+    # intersection of both masks as the visual reference when available.
+    rgb = np.asarray(photo.convert("RGB").resize(dimensions, Image.Resampling.BILINEAR),
+                     dtype=np.float32)
+    broad_raw = np.asarray(broad.convert("L").resize(
+        dimensions, Image.Resampling.NEAREST)) >= 128
+    exterior_union_distance = ndi.distance_transform_edt(~(broad_raw | support))
+    reliable_core = ndi.binary_erosion(broad_raw & support, iterations=max(2, kernel//2))
+    reference = reliable_core if reliable_core.sum() >= .015*support.size else support
+    reference_rgb = np.median(rgb[reference], axis=0)
+    visual_exteriors = []
+    for y in (.63, .77, .89, .96):
+        for x in (.07, .23, .50, .77, .93):
+            px = min(dimensions[0]-1, round(x*(dimensions[0]-1)))
+            py = min(dimensions[1]-1, round(y*(dimensions[1]-1)))
+            if exterior_union_distance[py, px] < .055*max(dimensions):
+                continue
+            radius = max(2, round(max(dimensions)*.008))
+            neighborhood = rgb[max(0, py-radius):py+radius+1,
+                               max(0, px-radius):px+radius+1]
+            color = np.mean(neighborhood, axis=(0, 1))
+            contrast = float(np.linalg.norm(color-reference_rgb))
+            brightness_ratio = float(np.mean(color)/max(1., np.mean(reference_rgb)))
+            chroma_difference = float(np.linalg.norm(
+                color/max(1., np.sum(color)) -
+                reference_rgb/max(1., np.sum(reference_rgb))))
+            # Illumination may turn the same stone much lighter, especially
+            # on statues. Do not label bright sandstone as background merely
+            # because it is absent from an already-incomplete SAM2 mask.
+            if (contrast < 55 or
+                    (brightness_ratio >= .85 and chroma_difference < .25) or
+                    np.mean(np.std(neighborhood, axis=(0, 1))) > 38):
+                continue
+            point = [x, y]
+            if (all(math.dist(point, positive) >= .08
+                    for positive in trusted_positives) and
+                    all(math.dist(point, other) > .09
+                        for other in negatives + visual_exteriors)):
+                visual_exteriors.append(point)
+            if len(visual_exteriors) >= 6:
+                break
+        if len(visual_exteriors) >= 6:
+            break
+    negatives.extend(visual_exteriors)
     for row in background_seeds or []:
         point = row.get("normalized_xy") if isinstance(row, dict) else None
         if (isinstance(point, list) and len(point) == 2 and
@@ -148,6 +230,7 @@ def discover_visible_regions(photo: Any, broad: Any, grounded: Any, *,
                     "background_points": negatives}, default_box=_DEFAULT_BOX)
     receipt.update(status="candidate / spatially-discovered-regions",
                    discovered_regions=len(component_boxes),
+                   heuristic_exterior_negatives=visual_exteriors,
                    analysis_dimensions=list(dimensions),
                    principal_axis=[round(float(n), 6) for n in direction])
     return guide, receipt

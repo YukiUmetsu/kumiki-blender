@@ -263,8 +263,8 @@ incomplete older algorithm revision using this new version.
 #### Generic visible-region discovery (automatic, experimental)
 
 When a selected **broad** or previously fragmentation-repaired candidate is
-likely missing pieces and the track
-recovery path has insufficient evidence, the default pipeline also discovers
+likely missing pieces and the track-recovery path has insufficient evidence,
+the default pipeline also discovers
 several *visible 2D regions* from the existing grounded candidate. It uses the
 largest connected mask region, image-space principal direction and spatial
 partitions to generate bounded boxes with positive SAM2 clicks. Genuine
@@ -273,12 +273,30 @@ full-frame boxes cannot. The labels `region_01`, `region_02`, etc. are
 object-neutral and **do not imply semantic knowledge** of a Sphinx, statue,
 person, plant, or other object. No extra text model or subject-specific prompt
 is required. It works with the existing SAM 2.1 checkpoint and `mps` device.
+Independently corroborated COLMAP foreground tracks can add extra positive
+clicks, including a small local box for a nearby part missing from *both*
+original masks. Tracks far from the visible object are not accepted as
+automatic part anchors; withheld tracks remain reserved for QA.
+
+For photographs with visually distinct surrounding ground or scenery, the
+system may also propose a few *unverified image-exterior negatives* from the
+lower scene. They must be outside both original candidates, spatially far from
+the subject, and substantially darker or different in color than the subject
+core. Bright variations of the same stone material are deliberately excluded.
+These clicks guide SAM2 but are **never treated as ground truth** or as
+independent evidence for choosing a smaller final mask.
 
 Each region receives an independent SAM2 prediction; proposals are merged,
 then screened for connectedness, substantial retention of the original subject,
 reasonable bounded growth, foreground holdouts, negative ground tracks, sky
 leakage, and expansion outside the original grounded candidate. If the retry
 does not clearly improve the silhouette, the prior mask stays selected.
+For already selected grounded candidates, a separate **ground-trim** path may
+replace a smaller silhouette *only* when at least two corroborated ground
+training points were covered by the old mask and excluded by the new mask,
+and three held-out foreground points remain intact. Unverified photo colors
+alone never authorize a trim. The `operation` field distinguishes this path
+from body recovery.
 `images[].component_guidance` records discovery, prompts, cache keys, raw
 candidates, and QA verdicts. Raw and reviewed proposals are retained under
 `candidates/`. `summary.component_recovery_attempted` and
@@ -287,9 +305,10 @@ with identical settings reuse the content-addressed SAM2 cache.
 
 This path **does not remove arbitrary adjacent sandstone or ground**: without
 verified negative points, foreground labels, or clear optical boundaries,
-silhouette truth cannot be established from these photos alone. Missing
-parts outside *both* source candidates are also not reconstructable from
-2D candidate overlap. The system abstains rather than inventing pixels or
+silhouette truth cannot be established from these photos alone. Parts absent
+from both source candidates need independently verified 3D track anchors or
+other external evidence; 2D overlap cannot establish their presence. The
+system abstains rather than inventing pixels or
 silently relaxing quality gates. For a strict track/shape-only comparison, pass
 `--no-component-recovery` to `improve-dense-masks`. Manual polygon overrides
 remain optional and never block automatic operation.

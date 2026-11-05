@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 
-SCHEMA = "component-guided-mask-qa-v1"
+SCHEMA = "component-guided-mask-qa-v3"
 
 
 def evaluate_component_recovery(photo: Any, current: Any, proposed: Any,
@@ -57,17 +57,33 @@ def evaluate_component_recovery(photo: Any, current: Any, proposed: Any,
         photo.size, Image.Resampling.NEAREST)) >= 128
     old_count = np.count_nonzero(old)
     new_count = np.count_nonzero(repaired)
-    retained = np.count_nonzero(repaired & old) / max(1, old_count)
-    growth = new_count / max(1, old_count)
-    receipt.update(before_fraction=round(old_count/old.size, 6),
-                   after_fraction=round(new_count/old.size, 6),
+    retained = float(np.count_nonzero(repaired & old) / max(1, old_count))
+    growth = float(new_count / max(1, old_count))
+    def hits(rows: list[dict], mask: Any) -> int:
+        return sum(bool(mask[min(photo.height-1, round(row["normalized_xy"][1] * (photo.height-1))),
+                             min(photo.width-1, round(row["normalized_xy"][0] * (photo.width-1)))])
+                   for row in rows)
+
+    # Shrinking a mask is permitted only when separately triangulated ground
+    # seeds are actually removed. No color-only guess may erase torso pixels.
+    ground_seed_hits_before = hits(background_seeds, old)
+    ground_seed_hits_after = hits(background_seeds, repaired)
+    trimming_ground = growth < .98
+    receipt.update(operation="ground-trim" if trimming_ground else "body-recovery",
+                   verified_background_seed_hits_before=ground_seed_hits_before,
+                   verified_background_seed_hits_after=ground_seed_hits_after)
+    receipt.update(before_fraction=round(float(old_count/old.size), 6),
+                   after_fraction=round(float(new_count/old.size), 6),
                    retained_previous_fraction=round(retained, 6),
                    area_growth=round(growth, 6),
                    connected_component_fraction=round(connected_fraction, 6))
-    if (old_count == 0 or growth < 1.04 or growth > 1.45 or
-            new_count/old.size > .72 or retained < .88 or
-            connected_fraction < .88):
+    if (old_count == 0 or new_count/old.size > .72 or connected_fraction < .88 or
+            (trimming_ground and (growth < .68 or retained < .68 or
+                                  ground_seed_hits_before < 2 or ground_seed_hits_after)) or
+            (not trimming_ground and (growth < 1.04 or growth > 1.45 or retained < .88))):
         return reject("implausible-area-or-lost-original-silhouette")
+    if trimming_ground and len(foreground_holdouts) < 3:
+        return reject("ground-trim-needs-independent-foreground-holdouts")
 
     # A component mask may close gaps in the earlier grounded prediction, but
     # must not roam across unrelated walls, ground or other objects.
@@ -85,15 +101,14 @@ def evaluate_component_recovery(photo: Any, current: Any, proposed: Any,
     if unsupported > .12:
         return reject("expansion-unsupported-by-independent-grounded-candidate")
 
-    def hits(rows: list[dict], mask: Any) -> int:
-        return sum(bool(mask[min(photo.height-1, round(row["normalized_xy"][1] * (photo.height-1))),
-                             min(photo.width-1, round(row["normalized_xy"][0] * (photo.width-1)))])
-                   for row in rows)
-
     negatives = background_seeds + background_holdouts
     receipt["verified_background_hits"] = hits(negatives, repaired)
     if receipt["verified_background_hits"]:
         return reject("verified-background-point-in-component-union")
+    prompt_negatives = [{"normalized_xy": p} for p in guide.get("background_points", [])]
+    receipt["sam2_negative_prompt_hits"] = hits(prompt_negatives, repaired)
+    if receipt["sam2_negative_prompt_hits"]:
+        return reject("sam2-negative-prompt-violated")
     lost_foreground = sum(
         bool(old[min(photo.height-1, round(row["normalized_xy"][1]*(photo.height-1))),
                  min(photo.width-1, round(row["normalized_xy"][0]*(photo.width-1)))]) and
@@ -103,10 +118,16 @@ def evaluate_component_recovery(photo: Any, current: Any, proposed: Any,
     receipt["lost_foreground_holdouts"] = lost_foreground
     if lost_foreground > 0:
         return reject("lost-independent-foreground-holdout")
-    for points in guide.get("part_points", {}).values():
-        if any(not repaired[min(photo.height-1, round(y*(photo.height-1))),
-                            min(photo.width-1, round(x*(photo.width-1)))] for x, y in points):
-            return reject("discovered-region-positive-point-missing")
+    region_points = [point for points in guide.get("part_points", {}).values()
+                     for point in points]
+    present = sum(bool(repaired[min(photo.height-1, round(y*(photo.height-1))),
+                                min(photo.width-1, round(x*(photo.width-1)))])
+                  for x, y in region_points)
+    receipt["retained_region_points"] = present
+    if (not region_points or
+            (trimming_ground and present < max(2, round(.6*len(region_points)))) or
+            (not trimming_ground and present != len(region_points))):
+        return reject("discovered-region-positive-point-missing")
 
     from .mask_track_resegmentation import _mask_sky_leaks
     before_sky = _mask_sky_leaks(photo, current)
@@ -120,6 +141,10 @@ def evaluate_component_recovery(photo: Any, current: Any, proposed: Any,
     receipt["ground_appearance_qa"] = ground_qa
     if ground_qa["rejected"]:
         return reject("verified-local-ground-appearance-spill")
-    receipt.update(accepted=True, status="candidate / auto-discovered-component-recovery",
-                   limitations="No independent track evidence means component semantics and ground remain uncertain.")
+    receipt.update(accepted=True, status=("candidate / verified-ground-seed-trim"
+                                          if trimming_ground else
+                                          "candidate / auto-discovered-component-recovery"),
+                   limitations=("Background seeds corroborated across views are still not semantic ground truth."
+                                if trimming_ground else
+                                "Without independent track evidence, component semantics and ground remain uncertain."))
     return proposal, receipt

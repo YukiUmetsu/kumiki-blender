@@ -22,7 +22,7 @@ from .mask_track_guidance import (SCHEMA as TRACK_SCHEMA,
 from .references import ReferenceError
 
 
-SCHEMA = "track-guided-mask-revision-v6"
+SCHEMA = "track-guided-mask-revision-v7"
 # Inference results depend on the actual guide and checkpoint, not the QA
 # algorithm version. Keep the original prompt-cache namespace so unchanged
 # guides reuse prior MPS work; new negative clicks alter the cache key.
@@ -383,9 +383,12 @@ def refine_masks_from_tracks(reconstruction: str | Path, mask_revision: str | Pa
                                     proposed_mask_sha256=_sha256(repair_path))
                 shutil.copyfile(repair_path, output_mask)
                 result["summary"]["image_repair_accepted"] += 1
+        candidate_choice = item.get("candidate_comparison", {}).get("selected")
+        can_trim_grounded = (candidate_choice == "grounded" and
+                             len(background_seeds) >= 2 and len(holdout) >= 3)
         if (component_recovery and not (can_recover or can_repair) and
-                item.get("candidate_comparison", {}).get("selected") in
-                ("broad", "grounded-connected-body")):
+                (candidate_choice in ("broad", "grounded-connected-body") or
+                 can_trim_grounded)):
             from .mask_object_components import discover_visible_regions
             from .mask_object_recovery import SCHEMA as COMPONENT_QA_SCHEMA
             from .mask_object_recovery import evaluate_component_recovery
@@ -396,6 +399,7 @@ def refine_masks_from_tracks(reconstruction: str | Path, mask_revision: str | Pa
                 photo = source_image.convert("RGB")
                 guide, discovered = discover_visible_regions(
                     photo, broad, grounded, detector_guide=item.get("detector_guide"),
+                    foreground_seeds=seeds + context[:8],
                     background_seeds=background_seeds)
                 component_receipt = {"attempted": False, "accepted": False,
                                      "status": discovered["status"],

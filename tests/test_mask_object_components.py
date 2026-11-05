@@ -68,6 +68,46 @@ class AutomaticVisibleRegionTests(unittest.TestCase):
                 self.assertIsNotNone(guide, report)
                 self.assertGreaterEqual(report["discovered_regions"], 3)
 
+    def test_cross_view_seeds_prompt_missing_nearby_parts_not_distant_background(self):
+        tracks = [{"normalized_xy": [.76, .52]},
+                  {"normalized_xy": [.49, .50]},
+                  {"normalized_xy": [.98, .02]}]
+        guide, report = discover_visible_regions(
+            self.photo, self.old, self.grounded, foreground_seeds=tracks)
+        self.assertIsNotNone(guide)
+        sources = [component["source"] for component in report["components"]]
+        self.assertIn("nearby-cross-view-foreground-track", sources)
+        self.assertIn("cross-view-track-click", sources)
+        guided_points = [point for region in guide["part_points"].values()
+                         for point in region]
+        self.assertIn([.76, .52], guided_points)
+        self.assertNotIn([.98, .02], guided_points)
+
+    def test_photo_color_distinct_exterior_provides_unverified_negative_clicks(self):
+        scene = Image.new("RGB", self.photo.size, (40, 43, 47))
+        ImageDraw.Draw(scene).rectangle((35, 35, 125, 105), fill=(170, 143, 113))
+        guide, receipt = discover_visible_regions(scene, self.old, self.grounded)
+        self.assertIsNotNone(guide)
+        exterior = receipt["heuristic_exterior_negatives"]
+        self.assertTrue(exterior)
+        self.assertTrue(all(y >= .63 for _, y in exterior))
+        self.assertTrue(all(point in guide["background_points"] for point in exterior))
+        protected, _ = discover_visible_regions(
+            scene, self.old, self.grounded,
+            foreground_seeds=[{"normalized_xy": exterior[0]}])
+        self.assertNotIn(exterior[0], protected["background_points"])
+        _, uniform_report = discover_visible_regions(self.photo, self.old, self.grounded)
+        self.assertEqual(uniform_report["heuristic_exterior_negatives"], [])
+
+    def test_new_mask_cannot_cover_a_negative_prompt_even_without_track_evidence(self):
+        guide, _ = discover_visible_regions(self.photo, self.old, self.grounded)
+        guide["background_points"].append([.65, .5])
+        candidate, receipt = evaluate_component_recovery(
+            self.photo, self.old, self.grounded, self.grounded, guide=guide,
+            foreground_holdouts=[], background_seeds=[], background_holdouts=[])
+        self.assertIsNone(candidate)
+        self.assertIn("sam2-negative-prompt-violated", receipt["reasons"])
+
     def test_accepts_well_supported_contiguous_expansion(self):
         guide, _ = discover_visible_regions(self.photo, self.old, self.grounded)
         result, report = evaluate_component_recovery(
@@ -90,6 +130,32 @@ class AutomaticVisibleRegionTests(unittest.TestCase):
             self.photo, self.old, wildly_expanded, self.grounded, guide=guide,
             foreground_holdouts=[], background_seeds=[], background_holdouts=[])
         self.assertIsNone(result)
+
+    def test_trim_requires_independent_ground_and_preserves_foreground(self):
+        old = rectangle(25, 25, 140, 105)
+        trim = rectangle(25, 25, 105, 105)
+        guide, _ = discover_visible_regions(self.photo, old, old)
+        ground = [{"normalized_xy": [x, .55]} for x in (.68, .73)]
+        foreground = [{"normalized_xy": [x, .55]} for x in (.20, .35, .50)]
+        chosen, receipt = evaluate_component_recovery(
+            self.photo, old, trim, old, guide=guide,
+            foreground_holdouts=foreground, background_seeds=ground,
+            background_holdouts=[])
+        self.assertIsNotNone(chosen, receipt)
+        self.assertEqual(receipt["operation"], "ground-trim")
+        self.assertEqual(receipt["verified_background_seed_hits_before"], 2)
+        self.assertEqual(receipt["verified_background_seed_hits_after"], 0)
+
+        without_evidence, receipt = evaluate_component_recovery(
+            self.photo, old, trim, old, guide=guide,
+            foreground_holdouts=foreground, background_seeds=[],
+            background_holdouts=[])
+        self.assertIsNone(without_evidence)
+        without_foreground, receipt = evaluate_component_recovery(
+            self.photo, old, trim, old, guide=guide,
+            foreground_holdouts=[], background_seeds=ground,
+            background_holdouts=[])
+        self.assertIsNone(without_foreground)
 
 
 if __name__ == "__main__":

@@ -484,7 +484,10 @@ class TrackGuidanceTests(unittest.TestCase):
               patch("kumiki_blender.reconstruction.masking._load_sam2_predictor",
                     return_value=(object(), "mps")) as loader,
               patch("kumiki_blender.reconstruction.masking._sam2_mask",
-                    return_value=(restored, {"components": ["region_01"]})) as segment):
+                    return_value=(restored, {"components": ["region_01"]})) as segment,
+              patch("kumiki_blender.reconstruction.mask_object_recovery.evaluate_component_recovery",
+                    return_value=(Image.fromarray(restored, "L"),
+                                  {"accepted": True, "status": "candidate / synthetic-qa"}))):
             first = refine_masks_from_tracks(
                 self.sparse, self.mask_revision, self.root / "component-mask-r001",
                 sam2_checkpoint=self.weights, cache_dir=cache)
@@ -517,6 +520,41 @@ class TrackGuidanceTests(unittest.TestCase):
                 self.assertEqual(main(arguments + ["--no-component-recovery"]), 0)
         self.assertTrue(action.call_args_list[0].kwargs["component_recovery"])
         self.assertFalse(action.call_args_list[1].kwargs["component_recovery"])
+
+    def test_grounded_candidate_can_trim_verified_background_without_track_recovery(self):
+        evidence = extract_track_guidance(self.sparse, self.mask_revision, self.report)
+        for row in evidence["images"].values():
+            row.update(seed_points=[], holdout_points=[], foreground_context_points=[],
+                       background_seed_points=[], background_holdout_points=[])
+        entry = self.images[0]
+        entry["candidate_comparison"]["selected"] = "grounded"
+        (self.mask_revision / "mask-report.json").write_text(json.dumps(self.report))
+        evidence["images"]["view-00.png"]["background_seed_points"] = [
+            {"normalized_xy": [x, .5]} for x in (.76, .81)]
+        evidence["images"]["view-00.png"]["holdout_points"] = [
+            {"normalized_xy": [x, .5]} for x in (.22, .32, .42)]
+        trimmed = np.zeros((80, 100), dtype=np.uint8)
+        trimmed[10:75, 10:70] = 255
+        with (patch("kumiki_blender.reconstruction.mask_track_resegmentation.extract_track_guidance",
+                    return_value=evidence),
+              patch("kumiki_blender.reconstruction.masking._load_sam2_predictor",
+                    return_value=(object(), "mps")),
+              patch("kumiki_blender.reconstruction.masking._sam2_mask",
+                    return_value=(trimmed, {"components": ["region_01"]})),
+              patch("kumiki_blender.reconstruction.mask_object_recovery.evaluate_component_recovery",
+                    return_value=(Image.fromarray(trimmed, "L"),
+                                  {"accepted": True, "status": "candidate / synthetic-ground-qa",
+                                   "operation": "ground-trim", "verified_background_hits": 0})) as qa):
+            result = refine_masks_from_tracks(
+                self.sparse, self.mask_revision, self.root / "trim-grounded",
+                sam2_checkpoint=self.weights)
+        self.assertEqual(result["summary"]["selected_component"], 1)
+        self.assertEqual(result["summary"]["selected_unchanged"], 5)
+        selected = result["images"][0]
+        self.assertEqual(selected["component_guidance"]["evaluation"]["operation"],
+                         "ground-trim")
+        self.assertEqual(selected["component_guidance"]["evaluation"]["verified_background_hits"], 0)
+        self.assertEqual(len(qa.call_args.kwargs["background_seeds"]), 2)
 
 
     def test_verified_background_seed_is_sent_to_sam2_as_negative_click(self):
