@@ -1,6 +1,7 @@
 """Object-neutral component prompts and conservative automatic union QA."""
 
 import unittest
+from importlib.util import find_spec
 
 from PIL import Image, ImageDraw
 
@@ -14,6 +15,8 @@ def rectangle(left, top, right, bottom, size=(180, 130)):
     return mask
 
 
+@unittest.skipUnless(find_spec("scipy") is not None,
+                     "Real pixel-level SAM2 prompt QA uses optional scipy")
 class AutomaticVisibleRegionTests(unittest.TestCase):
     def setUp(self):
         self.photo = Image.new("RGB", (180, 130), (168, 143, 113))

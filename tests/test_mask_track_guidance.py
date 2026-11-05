@@ -477,10 +477,18 @@ class TrackGuidanceTests(unittest.TestCase):
         cache = self.root / "model-cache"
         no_shape = {"status": "abstained / no-shape-improvement", "accepted": False,
                     "reasons": []}
+        synthetic_guide = {"box": [.1, .1, .9, .9], "foreground_points": [],
+                           "background_points": [],
+                           "component_boxes": {"region_01": [.1, .1, .9, .9]},
+                           "part_points": {"region_01": [[.5, .5]]},
+                           "part_visibility": {}}
         with (patch("kumiki_blender.reconstruction.mask_track_resegmentation.extract_track_guidance",
                     return_value=evidence),
               patch("kumiki_blender.reconstruction.mask_fragmentation_repair.propose_fragmentation_repair",
                     return_value=(None, no_shape)),
+              patch("kumiki_blender.reconstruction.mask_object_components.discover_visible_regions",
+                    return_value=(synthetic_guide, {"status": "candidate / synthetic-regions",
+                                                    "discovered_regions": 1})),
               patch("kumiki_blender.reconstruction.masking._load_sam2_predictor",
                     return_value=(object(), "mps")) as loader,
               patch("kumiki_blender.reconstruction.masking._sam2_mask",
@@ -535,8 +543,16 @@ class TrackGuidanceTests(unittest.TestCase):
             {"normalized_xy": [x, .5]} for x in (.22, .32, .42)]
         trimmed = np.zeros((80, 100), dtype=np.uint8)
         trimmed[10:75, 10:70] = 255
+        synthetic_guide = {"box": [.1, .1, .9, .9], "foreground_points": [],
+                           "background_points": [],
+                           "component_boxes": {"region_01": [.1, .1, .9, .9]},
+                           "part_points": {"region_01": [[.5, .5]]},
+                           "part_visibility": {}}
         with (patch("kumiki_blender.reconstruction.mask_track_resegmentation.extract_track_guidance",
                     return_value=evidence),
+              patch("kumiki_blender.reconstruction.mask_object_components.discover_visible_regions",
+                    return_value=(synthetic_guide, {"status": "candidate / synthetic-regions",
+                                                    "discovered_regions": 1})),
               patch("kumiki_blender.reconstruction.masking._load_sam2_predictor",
                     return_value=(object(), "mps")),
               patch("kumiki_blender.reconstruction.masking._sam2_mask",
