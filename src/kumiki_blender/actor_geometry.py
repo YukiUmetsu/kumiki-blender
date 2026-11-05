@@ -285,3 +285,29 @@ def part_transform(*, pivot: tuple[float, float], x: float, y: float, rotation: 
     centre = np.array((pivot[0] * metres_per_px, 0.0, -pivot[1] * metres_per_px))
     placed = centre + np.array((x * metres_per_px, 0.0, -y * metres_per_px))
     return placed - orientation @ (scale * centre), orientation, (scale_x, scale_x, scale_y)
+
+
+def draw_order_conflicts(parts: list[tuple[str, float, float, tuple[float, float, float, float]]],
+                         min_overlap: float = .15) -> list[tuple[str, str]]:
+    """Pairs staged against the rig's own draw order.
+
+    Each entry is (id, z, layer, rest box). A rig draws higher `z` on top. A smaller
+    `layer` is nearer the camera. A pair conflicts when the part the rig draws
+    underneath is staged in front, and their rest boxes overlap enough to matter.
+    Returns (staged in front, should be in front) pairs.
+    """
+    conflicts = []
+    for index, (a_id, a_z, a_layer, a_box) in enumerate(parts):
+        for b_id, b_z, b_layer, b_box in parts[index + 1:]:
+            width = min(a_box[2], b_box[2]) - max(a_box[0], b_box[0])
+            height = min(a_box[3], b_box[3]) - max(a_box[1], b_box[1])
+            if width <= 0 or height <= 0:
+                continue
+            smaller = min((a_box[2] - a_box[0]) * (a_box[3] - a_box[1]), (b_box[2] - b_box[0]) * (b_box[3] - b_box[1]))
+            if smaller <= 0 or width * height / smaller < min_overlap:
+                continue
+            if a_z < b_z and a_layer < b_layer:
+                conflicts.append((a_id, b_id))
+            elif b_z < a_z and b_layer < a_layer:
+                conflicts.append((b_id, a_id))
+    return conflicts

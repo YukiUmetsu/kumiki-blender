@@ -12,7 +12,7 @@ from typing import Any
 
 import numpy as np
 
-from .actor_geometry import chain_weights, heightfield_mesh, inflate_mask, local_matrix, part_transform, trace_chain, variant_union
+from .actor_geometry import chain_weights, draw_order_conflicts, heightfield_mesh, inflate_mask, local_matrix, part_transform, trace_chain, variant_union
 from .actor_plan import ActorPart, ActorPlan, ActorPlanError, Effector
 
 _CACHE: dict[int, tuple[np.ndarray, int, int]] = {}
@@ -148,7 +148,7 @@ def _part_mesh(bpy: Any, plan: ActorPlan, name: str, material: Any, mask: np.nda
     return obj, design, height
 
 
-def _rest_bounds(plan: ActorPlan, images: dict[str, Any]) -> tuple[float, float, float, float, float]:
+def _rest_bounds(plan: ActorPlan, images: dict[str, Any]) -> tuple[float, float, float, float, float, dict[str, tuple[float, float, float, float]]]:
     """Design-space rest bounds from drawn alpha, plus the ground line.
 
     The ground comes from `ground_parts` when named, because a tail can hang below the feet.
@@ -165,6 +165,7 @@ def _rest_bounds(plan: ActorPlan, images: dict[str, Any]) -> tuple[float, float,
         return matrices[part.id]
 
     xs, ys, ground = [], [], []
+    boxes: dict[str, tuple[float, float, float, float]] = {}
     for part in plan.parts:
         image = images[part.asset]
         mask, width, height = _CACHE[id(image)]
@@ -178,9 +179,10 @@ def _rest_bounds(plan: ActorPlan, images: dict[str, Any]) -> tuple[float, float,
         placed = (world(part) @ corners.T).T
         xs += placed[:, 0].tolist()
         ys += placed[:, 1].tolist()
+        boxes[part.id] = (float(placed[:, 0].min()), float(placed[:, 1].min()), float(placed[:, 0].max()), float(placed[:, 1].max()))
         if part.id in plan.ground_parts:
             ground += placed[:, 1].tolist()
-    return min(xs), min(ys), max(xs), max(ys), max(ground or ys)
+    return min(xs), min(ys), max(xs), max(ys), max(ground or ys), boxes
 
 
 def _logical_size(plan: ActorPlan, key: str, image: Any) -> tuple[float, float]:
@@ -243,7 +245,15 @@ def build_actor(bpy: Any, plan: ActorPlan) -> ActorRig:
         images[key] = image
         if id(image) not in _CACHE:
             _CACHE[id(image)] = (image_alpha(image), image.size[0], image.size[1])
-    left, top, right, bottom, ground = _rest_bounds(plan, images)
+    left, top, right, bottom, ground, boxes = _rest_bounds(plan, images)
+    # A profile may not contradict the rig's own draw order: that exposes joints the rig hides.
+    staged = [(part.id, part.z, plan.stage[part.id].layer, boxes[part.id]) for part in plan.parts
+              if part.id in boxes and part.id in plan.stage and plan.stage[part.id].layer is not None
+              and plan.stage[part.id].surface == "own"]
+    conflicts = draw_order_conflicts(staged)
+    if conflicts:
+        raise ActorPlanError("Profile contradicts the rig's draw order: " + "; ".join(
+            f"{front} is staged in front of {behind}, but the rig draws it behind" for front, behind in conflicts))
     scale = plan.height_m / (bottom - top)
     root = bpy.data.objects.new(f"actor-{plan.actor_id}", None)
     bpy.context.collection.objects.link(root)

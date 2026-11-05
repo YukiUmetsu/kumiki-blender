@@ -8,7 +8,7 @@ import unittest
 import numpy as np
 
 from kumiki_blender.actor_geometry import (
-    chain_weights, heightfield_mesh, inflate_mask, local_matrix, part_transform, trace_chain, variant_union,
+    chain_weights, draw_order_conflicts, heightfield_mesh, inflate_mask, local_matrix, part_transform, trace_chain, variant_union,
 )
 
 
@@ -192,6 +192,24 @@ class PartTransform(unittest.TestCase):
     def test_positive_pitch_looks_up(self):
         _, rotation, _ = part_transform(pivot=(0, 0), x=0, y=0, rotation=0, scale_x=1, scale_y=1, metres_per_px=.001, pitch=30)
         self.assertGreater((rotation @ np.array((0, -1, 0)))[2], 0)
+
+
+class DrawOrder(unittest.TestCase):
+    BODY = ("body", 2.0, 0.0, (0, 0, 100, 100))
+
+    def test_flags_a_lower_part_staged_in_front(self):
+        arm = ("arm", 1.0, -.05, (60, 20, 130, 80))
+        self.assertEqual(draw_order_conflicts([self.BODY, arm]), [("arm", "body")])
+        self.assertEqual(draw_order_conflicts([arm, self.BODY]), [("arm", "body")])
+
+    def test_accepts_staging_that_follows_the_rig(self):
+        arm = ("arm", 1.0, .006, (60, 20, 130, 80))
+        self.assertEqual(draw_order_conflicts([self.BODY, arm]), [])
+
+    def test_ignores_parts_that_do_not_overlap_enough(self):
+        far = ("far", 1.0, -.05, (300, 0, 400, 100))
+        sliver = ("sliver", 1.0, -.05, (98, 0, 198, 100))
+        self.assertEqual(draw_order_conflicts([self.BODY, far, sliver]), [])
 
 
 class KumikiMatrixParity(unittest.TestCase):
