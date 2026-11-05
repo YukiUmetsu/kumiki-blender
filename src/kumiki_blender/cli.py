@@ -357,6 +357,11 @@ def main(argv: list[str] | None = None) -> int:
     match_audit.add_argument("--output", type=Path, required=True)
     match_audit.add_argument("--model", type=int, default=0)
     match_audit.add_argument("--max-pairs-per-target", type=int, default=2)
+    roma_import = subcommands.add_parser("prepare-roma-candidate-database", help="Import RoMa track candidates into a separate COLMAP database")
+    roma_import.add_argument("--revision", type=Path, required=True)
+    roma_import.add_argument("--predictions", type=Path, required=True)
+    roma_import.add_argument("--output", type=Path, required=True)
+    roma_import.add_argument("--model", type=int, default=0)
     camera_compare_parser = subcommands.add_parser(
         "compare-camera-registrations",
         help="Read-only before/after registration coverage for two COLMAP revisions")
@@ -1329,6 +1334,15 @@ def main(argv: list[str] | None = None) -> int:
                 report = audit_matching_revision(args.revision, args.output, model=args.model,
                                                  max_pairs_per_target=args.max_pairs_per_target)
             except ValueError as error:
+                raise RecipeError(str(error)) from error
+            print(json.dumps(report, indent=2))
+            return 0
+        if args.command == "prepare-roma-candidate-database":
+            from .reconstruction.roma_candidate_database import prepare_roma_candidate_database
+            try:
+                report = prepare_roma_candidate_database(args.revision, args.predictions,
+                                                          args.output, model=args.model)
+            except (ValueError, OSError) as error:
                 raise RecipeError(str(error)) from error
             print(json.dumps(report, indent=2))
             return 0

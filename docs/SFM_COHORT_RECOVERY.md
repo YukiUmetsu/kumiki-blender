@@ -348,3 +348,25 @@ normal registration and object-surface checks. Five other tested targets did
 not provide enough consensus tracks. No camera or mesh was promoted. These are
 preliminary findings from one dataset, not accuracy measurements or proof that
 RoMa can recover an unobserved surface.
+
+To test agreed RoMa predictions without touching the camera revision:
+
+```sh
+kumiki-blender prepare-roma-candidate-database \
+  --revision /path/to/camera-revision --predictions /path/to/predictions.json \
+  --output /path/to/new-candidate
+colmap geometric_verifier --database_path /path/to/new-candidate/database.db --num_threads 1
+mkdir /path/to/new-candidate/registered
+colmap image_registrator --database_path /path/to/new-candidate/database.db \
+  --input_path /path/to/camera-revision/sparse/0 \
+  --output_path /path/to/new-candidate/registered
+```
+
+The JSON contains `target` and a `predictions` list with `anchor`, integer
+`track_id`, `xyz`, target `pixel` and boolean `subject_candidate`. The importer
+checks source photo hashes and that each anchor actually observes each track.
+It accepts only multiview-consistent candidates and invalidates the affected
+pair verification records so COLMAP must reverify them. It adds zero descriptor
+placeholders for predicted target points: **the experimental database must not
+be used for feature matching or rematching**. Successful registration still
+requires pose, reprojection, subject and independent-view validation.
