@@ -496,9 +496,11 @@ class TrackGuidanceTests(unittest.TestCase):
               patch("kumiki_blender.reconstruction.mask_object_recovery.evaluate_component_recovery",
                     return_value=(Image.fromarray(restored, "L"),
                                   {"accepted": True, "status": "candidate / synthetic-qa"}))):
-            first = refine_masks_from_tracks(
-                self.sparse, self.mask_revision, self.root / "component-mask-r001",
-                sam2_checkpoint=self.weights, cache_dir=cache)
+            with patch("kumiki_blender.reconstruction.mask_object_recovery.SCHEMA",
+                       "component-guided-mask-qa-v3"):
+                first = refine_masks_from_tracks(
+                    self.sparse, self.mask_revision, self.root / "component-mask-r001",
+                    sam2_checkpoint=self.weights, cache_dir=cache)
             second = refine_masks_from_tracks(
                 self.sparse, self.mask_revision, self.root / "component-mask-r002",
                 sam2_checkpoint=self.weights, cache_dir=cache)
@@ -506,6 +508,7 @@ class TrackGuidanceTests(unittest.TestCase):
         self.assertEqual(first["summary"]["inference_count"], 1)
         self.assertEqual(second["summary"]["cache_hits"], 1)
         self.assertEqual(second["summary"]["inference_count"], 0)
+        self.assertTrue(second["images"][0]["component_guidance"]["prior_qa_cache_reused"])
         self.assertEqual(segment.call_count, 1)
         loader.assert_called_once()
         revised = first["images"][0]

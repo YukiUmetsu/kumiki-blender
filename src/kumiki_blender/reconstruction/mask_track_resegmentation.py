@@ -407,16 +407,30 @@ def refine_masks_from_tracks(reconstruction: str | Path, mask_revision: str | Pa
                 if guide is not None:
                     component_receipt["attempted"] = True
                     result["summary"]["component_recovery_attempted"] += 1
-                    cache_key = hashlib.sha256(json.dumps([
+                    inference_inputs = [
                         COMPONENT_DISCOVERY_SCHEMA, COMPONENT_QA_SCHEMA,
                         item["source_photo_sha256"], model_sha, sam2_size,
                         sam2_device, max_side, guide,
                         item["candidate_masks"]["broad"]["sha256"],
-                        item["candidate_masks"]["grounded"]["sha256"]],
-                        sort_keys=True).encode()).hexdigest()
+                        item["candidate_masks"]["grounded"]["sha256"]]
+                    cache_key = hashlib.sha256(json.dumps(
+                        inference_inputs, sort_keys=True).encode()).hexdigest()
                     cached = _cached_mask(cache_root, cache_key, list(photo.size))
+                    # QA rules do not affect the SAM2 prediction. Reuse the
+                    # verified v3 prediction while upgrading acceptance logic;
+                    # do not force 28+ redundant MPS inferences on this dataset.
+                    legacy_cache_hit = False
+                    if cached is None and COMPONENT_QA_SCHEMA == "component-guided-mask-qa-v4":
+                        legacy_inputs = [inference_inputs[0],
+                                         "component-guided-mask-qa-v3",
+                                         *inference_inputs[2:]]
+                        legacy_key = hashlib.sha256(json.dumps(
+                            legacy_inputs, sort_keys=True).encode()).hexdigest()
+                        cached = _cached_mask(cache_root, legacy_key, list(photo.size))
+                        legacy_cache_hit = cached is not None
                     component_receipt.update(cache_key=cache_key,
                                              cache_hit=cached is not None,
+                                             prior_qa_cache_reused=legacy_cache_hit,
                                              guide=guide)
                     try:
                         if cached is not None:
@@ -434,7 +448,7 @@ def refine_masks_from_tracks(reconstruction: str | Path, mask_revision: str | Pa
                             result["summary"]["inference_count"] += 1
                         raw_candidate = candidate_dir / (name + ".component-guided.png")
                         segmented.save(raw_candidate, format="PNG", optimize=True)
-                        if cached is None:
+                        if cached is None or legacy_cache_hit:
                             _save_mask_cache(cache_root, cache_key, raw_candidate,
                                              list(photo.size), segment_details)
                         component_receipt.update(

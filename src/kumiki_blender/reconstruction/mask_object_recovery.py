@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 
-SCHEMA = "component-guided-mask-qa-v3"
+SCHEMA = "component-guided-mask-qa-v4"
 
 
 def evaluate_component_recovery(photo: Any, current: Any, proposed: Any,
@@ -50,9 +50,45 @@ def evaluate_component_recovery(photo: Any, current: Any, proposed: Any,
         return reject("empty-connected-proposal")
     counts = np.bincount(labels.ravel())
     counts[0] = 0
-    main = labels == int(np.argmax(counts))
+    primary_label = int(np.argmax(counts))
+    main = labels == primary_label
+    # An occluder can split one real object into separate image components.
+    # Never retain arbitrary SAM2 islands, but allow a bounded secondary
+    # component containing a *cross-view foreground seed* and also supported
+    # by the independently generated grounded mask. The later negative/holdout
+    # checks still veto leaked ground, scaffolding and other objects.
+    grounded_small = np.asarray(grounded.convert("L").resize(
+        small_dims, Image.Resampling.NEAREST)) >= 128
+    retained_islands: list[dict[str, Any]] = []
+    for name, points in guide.get("part_points", {}).items():
+        if not name.startswith("tracked_"):
+            continue
+        for x, y in points:
+            px = min(small_dims[0]-1, max(0, round(x*(small_dims[0]-1))))
+            py = min(small_dims[1]-1, max(0, round(y*(small_dims[1]-1))))
+            label = int(labels[py, px])
+            if label == 0 or label == primary_label or any(
+                    item["label"] == label for item in retained_islands):
+                continue
+            island = labels == label
+            size = int(counts[label])
+            independently_supported = float(np.count_nonzero(island & grounded_small) /
+                                            max(1, size))
+            if (size < .005*closed.size or size > .25*counts[primary_label] or
+                    independently_supported < .15):
+                continue
+            main |= island
+            retained_islands.append({"label": label, "source": name,
+                                     "fraction": round(size/closed.size, 6),
+                                     "grounded_support_fraction": round(independently_supported, 6)})
+    receipt["retained_tracked_islands"] = retained_islands
     connected_fraction = np.count_nonzero(main) / max(1, np.count_nonzero(closed))
-    body = ndi.binary_fill_holes(main)
+    # Fill holes per component. Joining unrelated components before filling can
+    # accidentally bridge a large, unobserved background region.
+    selected_labels = {primary_label, *(item["label"] for item in retained_islands)}
+    body = np.zeros_like(main)
+    for label in selected_labels:
+        body |= ndi.binary_fill_holes(labels == label)
     repaired = np.asarray(Image.fromarray((body*255).astype("uint8"), "L").resize(
         photo.size, Image.Resampling.NEAREST)) >= 128
     old_count = np.count_nonzero(old)
@@ -77,10 +113,13 @@ def evaluate_component_recovery(photo: Any, current: Any, proposed: Any,
                    retained_previous_fraction=round(retained, 6),
                    area_growth=round(growth, 6),
                    connected_component_fraction=round(connected_fraction, 6))
+    # A verified, separately visible section of the same object can account
+    # for additional growth, but an ordinary single-component proposal cannot.
+    maximum_growth = 1.60 if retained_islands else 1.45
     if (old_count == 0 or new_count/old.size > .72 or connected_fraction < .88 or
             (trimming_ground and (growth < .68 or retained < .68 or
                                   ground_seed_hits_before < 2 or ground_seed_hits_after)) or
-            (not trimming_ground and (growth < 1.04 or growth > 1.45 or retained < .88))):
+            (not trimming_ground and (growth < 1.04 or growth > maximum_growth or retained < .88))):
         return reject("implausible-area-or-lost-original-silhouette")
     if trimming_ground and len(foreground_holdouts) < 3:
         return reject("ground-trim-needs-independent-foreground-holdouts")
@@ -91,9 +130,7 @@ def evaluate_component_recovery(photo: Any, current: Any, proposed: Any,
         small_dims, Image.Resampling.NEAREST)) >= 128
     prior_small = np.asarray(current.convert("L").resize(
         small_dims, Image.Resampling.NEAREST)) >= 128
-    supported_small = np.asarray(grounded.convert("L").resize(
-        small_dims, Image.Resampling.NEAREST)) >= 128
-    envelope = ndi.binary_dilation(supported_small,
+    envelope = ndi.binary_dilation(grounded_small,
                                    iterations=max(2, round(max(small_dims)*.015)))
     added = candidate_small & ~prior_small
     unsupported = np.count_nonzero(added & ~envelope) / max(1, np.count_nonzero(added))

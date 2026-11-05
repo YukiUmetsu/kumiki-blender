@@ -120,6 +120,54 @@ class AutomaticVisibleRegionTests(unittest.TestCase):
         self.assertTrue(report["accepted"])
         self.assertGreater(report["area_growth"], 1.1)
 
+    def test_keeps_verified_detached_object_region_behind_occlusion(self):
+        old = rectangle(70, 25, 115, 95)
+        proposed = rectangle(65, 22, 121, 99)
+        ImageDraw.Draw(proposed).rectangle((22, 55, 43, 86), fill=255)
+        guide = {"part_points": {"region_01": [[.52, .4]],
+                                 "tracked_02": [[.17, .53]]},
+                 "background_points": []}
+        selected, receipt = evaluate_component_recovery(
+            self.photo, old, proposed, proposed, guide=guide,
+            foreground_holdouts=[{"normalized_xy": [.52, .4]}],
+            background_seeds=[], background_holdouts=[])
+        self.assertIsNotNone(selected, receipt)
+        self.assertEqual(len(receipt["retained_tracked_islands"]), 1)
+        self.assertGreater(receipt["area_growth"], 1.45)
+        self.assertGreater(selected.getpixel((30, 69)), 128)
+
+        # Without independent cross-view evidence the detached region must
+        # not override the ordinary 45% growth limit.
+        untracked = {"part_points": {"region_01": [[.52, .4]],
+                                     "region_02": [[.17, .53]]},
+                     "background_points": []}
+        rejected, conservative = evaluate_component_recovery(
+            self.photo, old, proposed, proposed, guide=untracked,
+            foreground_holdouts=[], background_seeds=[], background_holdouts=[])
+        self.assertIsNone(rejected)
+        self.assertEqual(conservative["retained_tracked_islands"], [])
+
+    def test_detached_region_needs_grounded_support_and_respects_background(self):
+        old = rectangle(70, 25, 115, 95)
+        proposed = rectangle(65, 22, 121, 99)
+        ImageDraw.Draw(proposed).rectangle((22, 55, 43, 86), fill=255)
+        guide = {"part_points": {"region_01": [[.52, .4]],
+                                 "tracked_02": [[.17, .53]]},
+                 "background_points": []}
+        no_support = rectangle(65, 22, 121, 99)
+        result, report = evaluate_component_recovery(
+            self.photo, old, proposed, no_support, guide=guide,
+            foreground_holdouts=[], background_seeds=[], background_holdouts=[])
+        self.assertIsNone(result)
+        self.assertEqual(report["retained_tracked_islands"], [])
+
+        result, report = evaluate_component_recovery(
+            self.photo, old, proposed, proposed, guide=guide,
+            foreground_holdouts=[], background_seeds=[{"normalized_xy": [.17, .53]}],
+            background_holdouts=[])
+        self.assertIsNone(result)
+        self.assertIn("verified-background-point-in-component-union", report["reasons"])
+
     def test_rejects_confirmed_background_and_unsupported_growth(self):
         guide, _ = discover_visible_regions(self.photo, self.old, self.grounded)
         ground = [{"normalized_xy": [.65, .5]}]
