@@ -152,20 +152,23 @@ def _load_triangular_ply(path: Path, *, expected_vertices: int,
                 vertex_props.append((words[2], words[1]))
             elif active == "face":
                 face_props.append(words)
-    # OpenMVS 2.4 writes unsigned 32-bit face indices; other triangle-only
-    # PLY exporters commonly write signed 32-bit indices.
+    # OpenMVS 2.4 emits `property list uint8 uint32 vertex_indices`.
+    # `uchar uint` is the same binary layout but these are different legal
+    # PLY type spellings. Older and third-party exporters also use int32 and
+    # the singular `vertex_index` property name.
     face_index_kind = (face_props[0][3] if len(face_props) == 1
                        and len(face_props[0]) == 5 else None)
     if (not {"x", "y", "z"}.issubset({name for name, _ in vertex_props})
-            or face_index_kind not in ("int", "uint", "int32", "uint32")
-            or face_props[0][:3] != ["property", "list", "uchar"]
-            or face_props[0][4] != "vertex_indices"):
-        raise ReferenceError("Surface QA requires triangular PLY face indices")
+            or _PLY_SCALARS.get(face_index_kind) not in ("i4", "u4")
+            or not face_props or face_props[0][:2] != ["property", "list"]
+            or _PLY_SCALARS.get(face_props[0][2]) != "u1"
+            or face_props[0][4] not in ("vertex_indices", "vertex_index")):
+        raise ReferenceError(f"Surface QA requires triangular PLY face indices; found: {face_props!r}")
     if fmt == "binary_little_endian":
         dtype = np.dtype([(name, "<" + _PLY_SCALARS[kind]) for name, kind in vertex_props])
         vertices = np.fromfile(path, dtype=dtype, count=expected_vertices, offset=offset)
         face_offset = offset + expected_vertices * dtype.itemsize
-        index_dtype = "<u4" if face_index_kind in ("uint", "uint32") else "<i4"
+        index_dtype = "<u4" if _PLY_SCALARS[face_index_kind] == "u4" else "<i4"
         face_dtype = np.dtype([("size", "u1"), ("indices", index_dtype, (3,))])
         faces_raw = np.fromfile(path, dtype=face_dtype, count=expected_faces, offset=face_offset)
         if (len(vertices) != expected_vertices or len(faces_raw) != expected_faces

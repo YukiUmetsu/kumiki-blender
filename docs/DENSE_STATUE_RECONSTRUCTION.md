@@ -171,6 +171,9 @@ private texture projection to produce a mesh for artistic inspection.
     # sampled view-support point cloud highlights weakly photographed mesh
     # patches; magenta boundary points expose mesh openings (e.g. an empty
     # upper surface or missing side). This creates no replacement geometry.
+    # The reader accepts OpenMVS 2.4's binary PLY face declaration
+    # `property list uint8 uint32 vertex_indices` as well as equivalent
+    # uchar/uint and signed 32-bit index spellings.
     kumiki-blender audit-dense-surface-coverage \
       --dense-revision .review/statue/dense-subject-only-r01 \
       --output .review/statue/surface-coverage-r01 \

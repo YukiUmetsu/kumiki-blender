@@ -112,6 +112,32 @@ class SurfaceCoverageTests(unittest.TestCase):
                 self.assertFalse(report["distribution_allowed"])
                 self.assertEqual(len(report["per_camera"]), 3)
 
+    def test_openmvs_uint8_uint32_face_indices_and_legacy_spellings(self):
+        # OpenMVS writes uint8/uint32 in PLY headers; both are aliases for
+        # uchar/uint. No need to reinterpret or rewrite a 1M-face mesh.
+        for face_property in (
+                "property list uint8 uint32 vertex_indices",
+                "property list uint8 int32 vertex_indices",
+                "property list uchar uint vertex_index"):
+            with self.subTest(face_property=face_property):
+                self.write_mesh("binary")
+                original = b"property list uchar uint vertex_indices"
+                self.mesh.write_bytes(self.mesh.read_bytes().replace(
+                    original, face_property.encode("ascii"), 1))
+                xyz, faces = _load_triangular_ply(
+                    self.mesh, expected_vertices=4, expected_faces=2, np=np)
+                np.testing.assert_array_equal(faces, self.faces)
+                np.testing.assert_allclose(xyz, self.vertices)
+
+    def test_unsupported_face_count_type_rejected_explicitly(self):
+        self.write_mesh("binary")
+        self.mesh.write_bytes(self.mesh.read_bytes().replace(
+            b"property list uchar uint vertex_indices",
+            b"property list ushort uint vertex_indices", 1))
+        with self.assertRaisesRegex(ReferenceError, "triangular PLY face indices"):
+            _load_triangular_ply(self.mesh, expected_vertices=4,
+                                 expected_faces=2, np=np)
+
     def test_mask_aware_upper_bound_and_no_mask_override(self):
         with_masks = audit_surface_coverage(
             self.dense, self.root / "masked", min_views=3)
