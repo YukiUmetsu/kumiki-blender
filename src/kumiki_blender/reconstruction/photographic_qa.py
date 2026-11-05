@@ -12,6 +12,35 @@ from .surface_coverage import (_boundary_edges, _load_triangular_ply,
                                _write_ply_points,
                                plan_surface_coverage)
 from .silhouette_qa import compare_silhouettes
+from .discrepancy_regions import discrepancy_regions
+
+
+def _area_stratified_samples(xyz, faces, max_samples, np):
+    """Sample mesh area reproducibly with weights based on triangle area."""
+    # Equal-area stratification gives each unit of mesh area equal weight,
+    # rather than giving each triangle equal weight.
+    face_area = np.empty(len(faces), dtype=np.float64)
+    for start in range(0, len(faces), 100000):
+        batch = xyz[faces[start:start + 100000]]
+        face_area[start:start + len(batch)] = np.linalg.norm(
+            np.cross(batch[:, 1] - batch[:, 0], batch[:, 2] - batch[:, 0]), axis=1) / 2
+    cumulative_area = np.cumsum(face_area)
+    if not np.isfinite(cumulative_area[-1]) or cumulative_area[-1] <= 0:
+        raise ReferenceError('Mesh has no finite nonzero surface area to audit')
+    sample_count = max_samples
+    offsets = (np.arange(sample_count) + 0.5) * (cumulative_area[-1] / sample_count)
+    indices = np.searchsorted(cumulative_area, offsets, side='right')
+    triangles = xyz[faces[indices]]
+    # Low-discrepancy barycentric coordinates avoid repeatedly testing the
+    # same center when a large triangle occupies multiple area strata.
+    sequence = np.arange(sample_count, dtype=np.float64) + 0.5
+    u = (sequence * 0.7548776662466927) % 1
+    v = (sequence * 0.5698402909980532) % 1
+    root = np.sqrt(u)
+    samples = ((1 - root)[:, None] * triangles[:, 0] +
+               (root * (1 - v))[:, None] * triangles[:, 1] +
+               (root * v)[:, None] * triangles[:, 2])
+    return samples, indices, cumulative_area[-1]
 
 
 def audit_photographs(dense_revision, output, *, blender, side=256, max_samples=10000,
@@ -31,9 +60,8 @@ def audit_photographs(dense_revision, output, *, blender, side=256, max_samples=
         raise ReferenceError('Photographic QA requires pinned rectified foreground masks')
     xyz, faces = _load_triangular_ply(Path(plan['mesh']), expected_vertices=plan['mesh_vertices'],
                                       expected_faces=plan['mesh_faces'], np=np)
-    indices = np.linspace(0, len(faces)-1, min(len(faces), max_samples), dtype=np.int64)
+    samples, indices, total_area = _area_stratified_samples(xyz, faces, max_samples, np)
     triangles = xyz[faces[indices]]
-    samples = triangles.mean(axis=1)
     cross = np.cross(triangles[:, 1] - triangles[:, 0], triangles[:, 2] - triangles[:, 0])
     areas = np.linalg.norm(cross, axis=1) / 2
     boundary, topology = _boundary_edges(xyz, faces, max_points=50000, np=np)
@@ -72,6 +100,7 @@ def audit_photographs(dense_revision, output, *, blender, side=256, max_samples=
                     raise ReferenceError(f"Mask is not binary: {camera['filename']}")
                 reference = np.asarray(mask.convert('L').resize((w, h), Image.Resampling.NEAREST))
             metrics, diff = compare_silhouettes(reference, rendered)
+            candidates = discrepancy_regions(reference, rendered)
             projected, depth = _camera_coords(samples, camera, (w, h), np)
             valid = (np.isfinite(projected).all(axis=1) & (depth > 0) & (projected[:, 0] >= 0)
                      & (projected[:, 0] < w) & (projected[:, 1] >= 0) & (projected[:, 1] < h)
@@ -92,12 +121,17 @@ def audit_photographs(dense_revision, output, *, blender, side=256, max_samples=
                                       'render_only_pixels': excess})
             tiles.sort(key=lambda tile: -(tile['reference_only_pixels'] + tile['render_only_pixels']))
             records.append({'filename': camera['filename'], 'visible_masked_samples': int((visible & valid).sum()),
-                            'discrepancy_tiles': tiles, **metrics})
+                            'discrepancy_tiles': tiles, 'discrepancy_regions': candidates, **metrics})
             with Image.open(camera['source_photo_path']) as source:
                 photo = source.convert('RGB').resize((w, h), Image.Resampling.LANCZOS)
             mesh_image = Image.fromarray(rendered).convert('RGB')
             diff_image = Image.fromarray(diff)
-            overlay = Image.blend(photo, diff_image, 0.5)
+            # Keep the photograph untouched outside discrepant pixels.
+            overlay_pixels = np.asarray(photo).copy()
+            different = (reference > 0) != (rendered > 0)
+            overlay_pixels[different] = ((overlay_pixels[different].astype(np.uint16) +
+                                         diff[different].astype(np.uint16)) // 2).astype(np.uint8)
+            overlay = Image.fromarray(overlay_pixels)
             sheet = Image.new('RGB', (w * 4, h + 24), 'black')
             for j, image in enumerate((photo, mesh_image, diff_image, overlay)):
                 sheet.paste(image, (w*j, 24))
@@ -127,12 +161,22 @@ def audit_photographs(dense_revision, output, *, blender, side=256, max_samples=
                         'zero_visible_samples': int(np.count_nonzero(counts[selected] == 0)),
                         'mean_visible_views': float(counts[selected].mean())})
     regions.sort(key=lambda region: -region['weak_samples'])
+    # Rank image-space candidates for inspection; separate photographs do not
+    # establish that two regions correspond to the same physical surface.
+    ranked = []
+    for record in records:
+        for candidate in record['discrepancy_regions']:
+            ranked.append({'filename': record['filename'], **candidate})
+    ranked.sort(key=lambda item: (-item['interior_pixels'] / (item['pixels'] / item['image_fraction']),
+                                  -item['image_fraction'], item['filename']))
     report = {'status': 'diagnostic / photographic-fidelity-not-verified', 'mesh_sha256': plan['mesh_sha256'],
               'registered_cameras': plan['registered_cameras'], 'audited_cameras': len(records),
-              'sampled_faces': len(samples), 'min_views': min_views,
+              'sampled_faces': int(len(np.unique(indices))), 'surface_samples': len(samples), 'sampling': 'deterministic-area-stratified-barycentric',
+              'mesh_surface_area': float(total_area), 'min_views': min_views,
               'weak_visible_fraction': float(np.mean(counts < min_views)),
               'zero_visible_samples': int((counts == 0).sum()), 'topology': topology,
-              'per_camera': records, 'regions': regions, 'distribution_allowed': False,
-              'limitations': 'Ray visibility tests mesh occlusion but does not prove photo consistency, surface accuracy, or correct depth. Face-index sampling is not area-weighted. Silhouette discrepancies can reflect masks, occluders, alignment, or resolution. Absent geometry has no 3D sample. Review comparisons manually.'}
+              'per_camera': records, 'regions': regions, 'ranked_image_discrepancies': ranked[:100],
+              'distribution_allowed': False,
+              'limitations': 'Ray visibility tests mesh occlusion but does not prove photo consistency, surface accuracy, or correct depth. Area-stratified barycentric samples are approximate and depend on the sample budget. Silhouette discrepancies can reflect masks, occluders, alignment, or resolution. Absent geometry has no 3D sample. Review comparisons manually.'}
     (target / 'photographic-qa-report.json').write_text(json.dumps(report, indent=2) + '\n')
     return report
