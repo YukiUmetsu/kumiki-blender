@@ -327,3 +327,24 @@ and 90 observations, passed the unchanged baseline-camera check, and changed
 the top-view candidate's conservative one-to-one track support from 21 to 25.
 It also reduced some other support counts, so it is not a guarantee of improvement
 and does not validate an overhead camera.
+
+### RoMa multiview track experiment
+
+`reconstruction.roma_track_consensus.agree_track_predictions` groups predicted
+image positions by an existing 3D track. At least two distinct anchor photos must
+agree within four target-image pixels; conflicting predictions are discarded.
+Subject labels exclude only confident background. Unknown labels are retained,
+so they do not prove a match is on the object. The result is a PnP candidate,
+not a verified observation, independent image measurement, or registered pose.
+It does not mutate the reconstruction.
+
+A private Sphinx experiment used the official RoMa outdoor model on MPS (420px
+coarse, 560px refinement) and six existing registered anchors. With prediction
+confidence above 0.05, the previously unregistered `photo-0060.png` had 39
+consensus tracks and 37 PnP inliers at COLMAP's 12px threshold. Holding out
+anchor predictions showed mixed agreement, including some large residuals.
+The original masks include unknown areas and the candidate has not passed the
+normal registration and object-surface checks. Five other tested targets did
+not provide enough consensus tracks. No camera or mesh was promoted. These are
+preliminary findings from one dataset, not accuracy measurements or proof that
+RoMa can recover an unobserved surface.
