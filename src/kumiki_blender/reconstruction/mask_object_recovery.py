@@ -44,7 +44,7 @@ def evaluate_component_recovery(photo: Any, current: Any, proposed: Any,
     small = np.asarray(proposed.convert("L").resize(
         small_dims, Image.Resampling.NEAREST)) >= 128
     kernel = max(3, round(max(small_dims)*.008)) | 1
-    closed = ndi.binary_closing(small, structure=np.ones((kernel, kernel), dtype=bool))
+    # Closing with the default zero-valued boundary erases real object pixels\n    # whenever a cropped head, paw, or torso reaches the image edge. Extend\n    # observed boundary values before cleanup, then return to original size.\n    border = kernel // 2\n    padded = np.pad(small, border, mode="edge")\n    closed = ndi.binary_closing(\n        padded, structure=np.ones((kernel, kernel), dtype=bool))[border:-border, border:-border]
     labels, groups = ndi.label(closed)
     if not groups:
         return reject("empty-connected-proposal")

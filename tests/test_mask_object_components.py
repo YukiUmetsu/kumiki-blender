@@ -168,7 +168,7 @@ class AutomaticVisibleRegionTests(unittest.TestCase):
         self.assertIsNone(result)
         self.assertIn("verified-background-point-in-component-union", report["reasons"])
 
-    def test_rejects_confirmed_background_and_unsupported_growth(self):
+    def test_cropped_object_preserves_real_pixels_at_image_border(self):\n        previous = rectangle(40, 35, 115, 129)\n        candidate = rectangle(35, 31, 123, 129)\n        guide = {"part_points": {"region_01": [[.4, .55]],\n                                 "region_02": [[.4, .96]]},\n                 "background_points": []}\n        selected, report = evaluate_component_recovery(\n            self.photo, previous, candidate, candidate, guide=guide,\n            foreground_holdouts=[], background_seeds=[], background_holdouts=[])\n        self.assertIsNotNone(selected, report)\n        self.assertEqual(selected.getpixel((75, 129)), 255)\n\n    def test_rejects_confirmed_background_and_unsupported_growth(self):
         guide, _ = discover_visible_regions(self.photo, self.old, self.grounded)
         ground = [{"normalized_xy": [.65, .5]}]
         result, report = evaluate_component_recovery(
