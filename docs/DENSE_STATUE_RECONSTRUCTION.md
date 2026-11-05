@@ -1093,3 +1093,16 @@ Generated output stays private pending manual review and a valid attribution
 notice. A full OpenMVS/Blender reconstruction on this source remains a future
 benchmark; availability of photographs is not a claim that its camera
 registration or mesh appearance has already been verified.
+
+### Silhouette comparison foundation
+
+`reconstruction.silhouette_qa.compare_silhouettes` compares two already
+registered binary masks. It reports strict pixel IoU, precision (rendered
+pixels inside the reference), and recall (reference pixels covered by the
+render). Empty denominators are reported as null. Its RGB map marks reference-only
+pixels red, render-only pixels blue, overlap gray, and discrepancies within a
+configurable reference-boundary band yellow. The band flags uncertain mask
+edges; it does not change or excuse the strict metrics. Mask errors and camera
+misregistration can cause either discrepancy. An excess pixel is not by itself
+proof of ground leakage, and a missing pixel does not localize a surface in 3D.
+This function does not render or verify camera alignment or depth visibility.

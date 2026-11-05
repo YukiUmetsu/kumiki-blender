@@ -326,7 +326,7 @@ def audit_surface_coverage(dense_revision: str | Path, output: str | Path, *,
         "schema_version": 1,
         "status": ("incomplete-view-audit / subset-of-registered-cameras" if not complete_camera_set
                    else "coverage-gap-detected / review-required" if weak_fraction > 0.05
-                   else "coverage-candidate / photographic-fidelity-not-verified"),
+                   else "projected-support-only / occlusion-and-fidelity-not-verified"),
         "source_revision": plan["source_revision"], "mesh_sha256": plan["mesh_sha256"],
         "registered_cameras": plan["registered_cameras"],
         "audited_cameras": plan["audited_cameras"],
