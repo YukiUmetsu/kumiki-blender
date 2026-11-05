@@ -13,6 +13,7 @@ from PIL import Image
 from kumiki_blender.reconstruction.references import ReferenceError
 from kumiki_blender.reconstruction.subject_grounding import (
     GroundingDetector, _select_box, grounded_guide, grounding_identity, resolve_grounding_model,
+    validate_part_prompts,
 )
 
 
@@ -78,6 +79,43 @@ class SubjectGroundingTests(unittest.TestCase):
                 default_box=(0.12, 0.04, 0.88, 0.96))
         self.assertEqual(guide["box"], [0.12, 0.04, 0.88, 0.96])
         self.assertEqual(receipt["status"], "uncertain / no-confident-detection")
+
+    def test_multi_component_parts_are_independently_cached_and_distant_objects_rejected(self):
+        calls = []
+
+        class PartsDetector:
+            def __init__(self, *_args):
+                pass
+
+            def detect(self, _photo, prompt):
+                calls.append(prompt)
+                return {
+                    "stone animal statue.": [{"box": [0.25, 0.15, 0.70, 0.6], "score": 0.91}],
+                    "body of animal statue.": [{"box": [0.22, 0.52, 0.85, 0.92], "score": 0.77}],
+                    "distant tree.": [{"box": [0.9, 0.0, 1., 0.17], "score": 0.95}],
+                }[prompt]
+
+        args = dict(image_sha256=self.sha, cache_root=self.cache,
+                    model_dir=self.model, model_identity=grounding_identity(self.model),
+                    prompt="stone animal statue.", device="auto",
+                    part_prompts=("body of animal statue.", "distant tree."),
+                    default_box=(0.12, 0.04, 0.88, 0.96))
+        with patch("kumiki_blender.reconstruction.subject_grounding.GroundingDetector",
+                   PartsDetector):
+            first, receipt = grounded_guide(self.photo, state={}, **args)
+            cached, hit = grounded_guide(self.photo, state={}, **args)
+        self.assertEqual(first, cached)
+        self.assertEqual(len(calls), 3)
+        self.assertTrue(hit["cache_hit"])
+        self.assertEqual(set(first["component_boxes"]), {"subject", "part_01"})
+        self.assertEqual(receipt["accepted_part_prompts"], ["body of animal statue."])
+        self.assertEqual(receipt["unresolved_part_prompts"], ["distant tree."])
+
+    def test_generic_part_prompt_names_are_bounded(self):
+        self.assertEqual(validate_part_prompts([" wing ", "tail"]), ("wing", "tail"))
+        for bad in ([""], ["  "], ["x" * 161], ["x"] * 9, [3]):
+            with self.subTest(bad=bad), self.assertRaises(ReferenceError):
+                validate_part_prompts(bad)
 
     def test_invalid_cache_is_never_accepted(self):
         calls = []

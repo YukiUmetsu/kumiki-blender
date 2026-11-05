@@ -20,8 +20,20 @@ from .references import ReferenceError
 
 MODEL_ID = "IDEA-Research/grounding-dino-tiny"
 MODEL_REVISION = "a2bb814dd30d776dcf7e30523b00659f4f141c71"
-SCHEMA = "grounded-subject-proposals-v1"
+SCHEMA = "grounded-subject-proposals-v2"
 SCORE_THRESHOLD = 0.28
+
+
+def validate_part_prompts(part_prompts: tuple[str, ...] | list[str] | None) -> tuple[str, ...]:
+    """Object-agnostic prompts for distinct visible parts; no anatomy inferred."""
+    if part_prompts is None:
+        return ()
+    if not isinstance(part_prompts, (tuple, list)) or len(part_prompts) > 8:
+        raise ReferenceError("Grounding DINO accepts at most eight part prompts")
+    if any(not isinstance(prompt, str) or not prompt.strip() or len(prompt) > 160
+           for prompt in part_prompts):
+        raise ReferenceError("Each part prompt needs 1–160 characters")
+    return tuple(prompt.strip() for prompt in part_prompts)
 
 
 def resolve_grounding_model(explicit: Path | None = None, *,
@@ -175,10 +187,21 @@ def _select_box(detections: list[dict[str, Any]]) -> list[float] | None:
             round(min(1.0, selected[3] + margin), 6)]
 
 
+def _near_subject(part_box: list[float], subject_box: list[float]) -> bool:
+    """Suppress unrelated remote detections, without claiming shared identity."""
+    horizontal_gap = max(0.0, subject_box[0] - part_box[2],
+                         part_box[0] - subject_box[2])
+    vertical_gap = max(0.0, subject_box[1] - part_box[3],
+                       part_box[1] - subject_box[3])
+    return horizontal_gap <= 0.15 and vertical_gap <= 0.15
+
+
 def grounded_guide(photo: Any, *, image_sha256: str, cache_root: Path,
                    model_dir: Path, model_identity: str, prompt: str,
                    device: str, state: dict[str, Any],
-                   default_box: tuple[float, ...]) -> tuple[dict[str, Any], dict[str, Any]]:
+                   default_box: tuple[float, ...],
+                   part_prompts: tuple[str, ...] | list[str] | None = None
+                   ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Generate a reviewable SAM2 prompt, with a hashed per-photo detector cache."""
     from .masking import _auto_sam2_guide, _guide
 
@@ -186,25 +209,38 @@ def grounded_guide(photo: Any, *, image_sha256: str, cache_root: Path,
         raise ReferenceError("Grounding DINO prompt needs 1–400 characters")
     if len(image_sha256) != 64 or any(c not in "0123456789abcdef" for c in image_sha256):
         raise ReferenceError("Invalid grounding source image hash")
+    parts = validate_part_prompts(part_prompts)
     key = hashlib.sha256(json.dumps([SCHEMA, image_sha256, list(photo.size),
-                                    model_identity, prompt, SCORE_THRESHOLD],
+                                    model_identity, prompt, parts, device, SCORE_THRESHOLD],
                                    sort_keys=True).encode()).hexdigest()
     root = cache_root / "subject-grounding" / key[:2] / key
     receipt = root / "detections.json"
     if any(path.is_symlink() for path in (cache_root, root.parent.parent, root.parent, root, receipt)):
         raise ReferenceError("Subject detection cache cannot contain symlinks")
     detections = None
+    part_detections = None
     if receipt.is_file():
         try:
             existing = json.loads(receipt.read_text(encoding="utf-8"))
             proposed = existing.get("detections") if isinstance(existing, dict) else None
+            proposed_parts = existing.get("part_detections") if isinstance(existing, dict) else None
             if (isinstance(existing, dict) and existing.get("key") == key
                     and existing.get("schema") == SCHEMA
                     and isinstance(proposed, list) and len(proposed) <= 12
                     and all(isinstance(x, dict) and _valid_box(x.get("box"))
                             and type(x.get("score")) in (float, int)
-                            and SCORE_THRESHOLD <= x["score"] <= 1 for x in proposed)):
+                            and SCORE_THRESHOLD <= x["score"] <= 1 for x in proposed)
+                    and isinstance(proposed_parts, list) and len(proposed_parts) == len(parts)
+                    and all(isinstance(entry, dict) and entry.get("prompt") == part and
+                            isinstance(entry.get("detections"), list) and
+                            len(entry["detections"]) <= 12 and
+                            all(isinstance(item, dict) and _valid_box(item.get("box")) and
+                                type(item.get("score")) in (float, int) and
+                                SCORE_THRESHOLD <= item["score"] <= 1
+                                for item in entry["detections"])
+                            for part, entry in zip(parts, proposed_parts))):
                 detections = proposed
+                part_detections = proposed_parts
         except (OSError, ValueError, TypeError):
             pass
     cache_hit = detections is not None
@@ -212,6 +248,8 @@ def grounded_guide(photo: Any, *, image_sha256: str, cache_root: Path,
         if "detector" not in state:
             state["detector"] = GroundingDetector(model_dir, device)
         detections = state["detector"].detect(photo, prompt)
+        part_detections = [{"prompt": part, "detections": state["detector"].detect(photo, part)}
+                           for part in parts]
         root.mkdir(parents=True, exist_ok=True)
         temporary = None
         try:
@@ -219,7 +257,8 @@ def grounded_guide(photo: Any, *, image_sha256: str, cache_root: Path,
                                              prefix=".detection-", suffix=".json",
                                              delete=False) as stream:
                 temporary = Path(stream.name)
-                json.dump({"schema": SCHEMA, "key": key, "detections": detections}, stream)
+                json.dump({"schema": SCHEMA, "key": key, "detections": detections,
+                           "part_detections": part_detections}, stream)
                 stream.write("\n")
             os.replace(temporary, receipt)
             temporary = None
@@ -230,11 +269,26 @@ def grounded_guide(photo: Any, *, image_sha256: str, cache_root: Path,
     base = _auto_sam2_guide(photo, default_box)
     if selected is None:
         return base, {"status": "uncertain / no-confident-detection", "detections": detections,
+                      "part_detections": part_detections,
                       "cache_hit": cache_hit, "model_identity": model_identity}
     # Grounding proposals guide SAM2; no automatic foreground point is assumed
     # to lie on an irregular or partially occluded object.
-    guide = _guide({"box": selected, "background_points": base["background_points"]},
+    component_boxes = {"subject": selected}
+    accepted_parts = []
+    rejected_parts = []
+    for index, row in enumerate(part_detections or []):
+        box = _select_box(row["detections"])
+        if box is None or not _near_subject(box, selected):
+            rejected_parts.append(row["prompt"])
+            continue
+        component_boxes[f"part_{index + 1:02d}"] = box
+        accepted_parts.append(row["prompt"])
+    guide = _guide({"box": selected, "background_points": base["background_points"],
+                    "component_boxes": component_boxes},
                    default_box=default_box)
     return guide, {"status": "candidate / text-grounded-box", "detections": detections,
                    "selected_box": selected, "cache_hit": cache_hit,
+                   "part_detections": part_detections,
+                   "accepted_part_prompts": accepted_parts,
+                   "unresolved_part_prompts": rejected_parts,
                    "model_identity": model_identity}

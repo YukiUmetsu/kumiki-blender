@@ -96,6 +96,8 @@ def analyze_cached_photo(normalized: Path, source_sha: str, cache: Path, *,
     if (isinstance(ambiguity, (float, int)) and not isinstance(ambiguity, bool) and
             0.18 < ambiguity <= 1):
         warnings.append("candidate-sam2-ambiguous")
+    if details.get("grounding_candidate_uncertain") is True:
+        warnings.append("candidate-grounded-broad-disagreement")
 
     confidence = Image.new("L", rgb.size, UNKNOWN)
     fraction = None

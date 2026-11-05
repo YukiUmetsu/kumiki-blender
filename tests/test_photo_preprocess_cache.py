@@ -35,6 +35,7 @@ class PhotoPreprocessCacheTests(unittest.TestCase):
 
         def grounded(photo, **kwargs):
             calls.append(kwargs["image_sha256"])
+            self.assertEqual(kwargs["part_prompts"], ("stone body.", "stone head."))
             from kumiki_blender.reconstruction.masking import _guide
             return (_guide({"box": [0.1, 0.05, 0.9, 0.95]},
                            default_box=(0.12, 0.04, 0.88, 0.96)),
@@ -45,7 +46,9 @@ class PhotoPreprocessCacheTests(unittest.TestCase):
                 load_photo_folder(self.photos, "great-sphinx"), self.cache,
                 self.root / f"grounded-{ordinal}", checkpoint=self.checkpoint,
                 subject_detector="grounding-dino", grounding_model_dir=model_dir,
-                grounding_prompt="sphinx statue.", predictor_loader=lambda *_: (object(), "mps"))
+                grounding_prompt="sphinx statue.",
+                grounding_part_prompts=("stone body.", "stone head."),
+                predictor_loader=lambda *_: (object(), "mps"))
 
         with (patch("kumiki_blender.reconstruction.subject_grounding.resolve_grounding_model",
                     return_value=model_dir),

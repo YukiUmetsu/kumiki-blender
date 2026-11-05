@@ -214,10 +214,14 @@ def _run_rembg_isolated(normalized: Path, checkpoint: Path, output: Path, *,
 def _foreground_key(normalized_sha: str, checkpoint_sha: str, size: str,
                     auxiliary_sha: str | None = None,
                     grounding_identity: str | None = None,
-                    grounding_prompt: str | None = None) -> str:
+                    grounding_prompt: str | None = None,
+                    grounding_part_prompts: tuple[str, ...] = (),
+                    grounding_device: str = "auto") -> str:
     fields = json.dumps([FOREGROUND_SCHEMA, normalized_sha, checkpoint_sha,
                          size, 1280, auxiliary_sha] +
-                        ([grounding_identity, grounding_prompt] if grounding_identity else []))
+                        ([grounding_identity, grounding_prompt, list(grounding_part_prompts),
+                          grounding_device,
+                          "grounded-sam2-candidate-ensemble-v1"] if grounding_identity else []))
     return hashlib.sha256(fields.encode()).hexdigest()
 
 
@@ -233,7 +237,9 @@ def _foreground_preview(normalized: Path, cache: Path, source_sha: str,
     normalized_sha = _digest(normalized)
     key = _foreground_key(normalized_sha, checkpoint_sha, size,
                           state.get("auxiliary_model_sha256"),
-                          state.get("grounding_identity"), state.get("grounding_prompt"))
+                          state.get("grounding_identity"), state.get("grounding_prompt"),
+                          state.get("grounding_part_prompts", ()),
+                          state.get("grounding_device", "auto"))
     folder = _folder(cache, source_sha)
     mask = folder / f"foreground-{key}.png"
     preview = folder / f"isolated-{key}.png"
@@ -278,6 +284,7 @@ def _foreground_preview(normalized: Path, cache: Path, source_sha: str,
     with Image.open(normalized) as source:
         photo = source.convert("RGB")
     subject_detection = None
+    comparison = None
     if state.get("grounding_identity"):
         from .subject_grounding import grounded_guide
         guide, subject_detection = grounded_guide(
@@ -285,10 +292,29 @@ def _foreground_preview(normalized: Path, cache: Path, source_sha: str,
             model_dir=state["grounding_model_dir"],
             model_identity=state["grounding_identity"],
             prompt=state["grounding_prompt"], device=state["grounding_device"],
-            state=state, default_box=_DEFAULT_BOX)
+            state=state, default_box=_DEFAULT_BOX,
+            part_prompts=state.get("grounding_part_prompts", ()))
+        from .mask_candidate_ensemble import select_mask_candidate
+        broad_guide = _auto_sam2_guide(photo, _DEFAULT_BOX)
+        broad_mask, broad_details = _sam2_mask(photo, broad_guide, state["predictor"])
+        if subject_detection["status"].startswith("candidate"):
+            try:
+                grounded_mask, grounded_details = _sam2_mask(photo, guide, state["predictor"])
+            except ReferenceError as error:
+                subject_detection["status"] = "uncertain / grounded-sam2-inference-failed"
+                subject_detection["failure_reason"] = str(error)[:200]
+                grounded_mask, grounded_details = broad_mask, broad_details
+        else:
+            grounded_mask, grounded_details = broad_mask, broad_details
+        choice, comparison = select_mask_candidate(broad_mask, grounded_mask, subject_detection)
+        if choice == "grounded":
+            mask_array, details = grounded_mask, grounded_details
+        else:
+            guide = broad_guide
+            mask_array, details = broad_mask, broad_details
     else:
         guide = _auto_sam2_guide(photo, _DEFAULT_BOX)
-    mask_array, details = _sam2_mask(photo, guide, state["predictor"])
+        mask_array, details = _sam2_mask(photo, guide, state["predictor"])
     refinement = {"status": "unavailable / no-independent-background-candidate",
                   "attempted": False, "accepted": False}
     auxiliary_file = None
@@ -349,11 +375,13 @@ def _foreground_preview(normalized: Path, cache: Path, source_sha: str,
               "isolated_sha256": _digest(preview),
               "auxiliary_model_sha256": state.get("auxiliary_model_sha256"),
               "subject_detection": subject_detection,
+              "candidate_comparison": comparison,
               "grounding_identity": state.get("grounding_identity"),
               "auxiliary_mask_path": str(auxiliary_file) if auxiliary_file else None,
               "refinement": refinement,
               "foreground_fraction": round(occupied, 6),
-              "status": "candidate / manual-review-required" if 0.05 <= occupied <= 0.90
+              "status": "candidate / manual-review-required" if 0.05 <= occupied <= 0.90 and
+              not (comparison and comparison["status"].startswith("uncertain"))
               else "suspect / manual-review-required",
               "details": details,
               "limitations": "Broad-prompt foreground preview, not verified statue segmentation or camera evidence."}
@@ -367,6 +395,7 @@ def prepare_statue_photo_cache(references: ReferenceSet, cache: Path, output: Pa
                                subject_detector: str = "none",
                                grounding_model_dir: Path | None = None,
                                grounding_prompt: str | None = None,
+                               grounding_part_prompts: tuple[str, ...] | list[str] | None = None,
                                grounding_device: str = "auto",
                                predictor_loader: Callable[..., Any] | None = None,
                                background_proposer: Callable[..., Any] | None = None,
@@ -387,6 +416,10 @@ def prepare_statue_photo_cache(references: ReferenceSet, cache: Path, output: Pa
         raise ReferenceError("Unsupported subject detector or device")
     if subject_detector != "none" and (not foreground or not grounding_prompt):
         raise ReferenceError("Grounding DINO needs foreground masks and a text prompt")
+    from .subject_grounding import validate_part_prompts
+    part_prompts = validate_part_prompts(grounding_part_prompts)
+    if part_prompts and subject_detector != "grounding-dino":
+        raise ReferenceError("Part prompts require --subject-detector grounding-dino")
     grounding_folder = None
     grounding_id = None
     if subject_detector == "grounding-dino":
@@ -409,7 +442,11 @@ def prepare_statue_photo_cache(references: ReferenceSet, cache: Path, output: Pa
                 prior.get("foreground_model_sha256") != sha or
                 prior.get("subject_detector", "none") != subject_detector or
                 prior.get("grounding_identity") != grounding_id or
-                prior.get("grounding_prompt") != grounding_prompt):
+                prior.get("grounding_prompt") != grounding_prompt or
+                prior.get("grounding_part_prompts", []) != list(part_prompts) or
+                prior.get("grounding_device", "auto") != grounding_device or
+                prior.get("candidate_ensemble_schema") != (
+                    "grounded-sam2-candidate-ensemble-v1" if grounding_id else None)):
             raise ReferenceError("Cannot resume preprocessing with changed photos or model")
         if prior.get("auxiliary_model_sha256") != auxiliary_identity:
             # A native abort during the previous optional-model probe can
@@ -425,6 +462,7 @@ def prepare_statue_photo_cache(references: ReferenceSet, cache: Path, output: Pa
         "background_proposer": background_proposer,
         "grounding_model_dir": grounding_folder, "grounding_identity": grounding_id,
         "grounding_prompt": grounding_prompt, "grounding_device": grounding_device,
+        "grounding_part_prompts": part_prompts,
     }
     report: dict[str, Any] = {"schema_version": 1, "asset_id": references.asset_id,
                               "status": "running", "cache_root": str(cache.resolve()),
@@ -433,6 +471,10 @@ def prepare_statue_photo_cache(references: ReferenceSet, cache: Path, output: Pa
                               "subject_detector": subject_detector,
                               "grounding_identity": grounding_id,
                               "grounding_prompt": grounding_prompt,
+                              "grounding_part_prompts": list(part_prompts),
+                              "grounding_device": grounding_device,
+                              "candidate_ensemble_schema": (
+                                  "grounded-sam2-candidate-ensemble-v1" if grounding_id else None),
                               "images": [], "normalized_hits": 0, "normalized_misses": 0,
                               "foreground_hits": 0, "foreground_misses": 0,
                               "qa_hits": 0, "qa_misses": 0,
@@ -470,13 +512,19 @@ def prepare_statue_photo_cache(references: ReferenceSet, cache: Path, output: Pa
                                                   f"isolated-{mask['key']}.png"),
                          auxiliary_mask_path=mask.get("auxiliary_mask_path"),
                          refinement=refinement)
+            entry["foreground_candidate_comparison"] = mask.get("candidate_comparison")
         from .photo_early_qa import analyze_cached_photo
         qa, qa_hit = analyze_cached_photo(
             normalized, photo.sha256, cache,
             mask_path=Path(entry["foreground_mask_path"]) if foreground else None,
             auxiliary_mask_path=Path(entry["auxiliary_mask_path"])
             if foreground and entry.get("auxiliary_mask_path") else None,
-            model_sha=sha, mask_details=mask.get("details") if foreground else None)
+            model_sha=sha, mask_details={
+                **mask.get("details", {}),
+                "grounding_candidate_uncertain": bool(
+                    mask.get("candidate_comparison") and
+                    mask["candidate_comparison"]["status"].startswith("uncertain"))}
+            if foreground else None)
         report["qa_hits" if qa_hit else "qa_misses"] += 1
         entry.update(qa_cache_hit=qa_hit, qa_key=qa["key"],
                      exif_orientation_applied=receipt["exif_orientation_applied"],

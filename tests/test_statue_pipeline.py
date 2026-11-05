@@ -30,6 +30,15 @@ class StatuePipelineTests(unittest.TestCase):
                                 {"mixed_label_fraction": 0.02}, 0.12)
         self.assertTrue(any("no reliable subject" in issue for issue in issues))
 
+    def test_grounded_mask_disagreement_blocks_false_positive_dense_reconstruction(self):
+        issues = _mask_warnings({"images": [{"filename": "photo-0001.png",
+                                            "foreground_fraction": 0.35, "warnings": [],
+                                            "missing_parts": [], "background_seed_violations": 0,
+                                            "candidate_comparison": {
+                                                "status": "uncertain / competing-candidates"}}]},
+                                {"mixed_label_fraction": 0.01}, 0.12)
+        self.assertTrue(any("segmentation disagreement" in issue for issue in issues))
+
     def test_grounded_sam2_is_passed_to_preprocessing_and_rectified_masks(self):
         run, _ = self.runner()
         command_lines = {}
@@ -44,6 +53,7 @@ class StatuePipelineTests(unittest.TestCase):
         settings = StatuePipelineSettings(
             front_photo="image-0.png", sam2_checkpoint=self.model,
             subject_detector="grounding-dino", grounding_prompt="stone sphinx statue.",
+            grounding_part_prompts=("stone torso.", "stone sphinx head."),
             grounding_model_dir=model_dir)
         with (patch("kumiki_blender.reconstruction.subject_grounding.resolve_grounding_model",
                     return_value=model_dir),
@@ -55,6 +65,9 @@ class StatuePipelineTests(unittest.TestCase):
             self.assertIn("--subject-detector", argv)
             self.assertEqual(argv[argv.index("--subject-detector") + 1], "grounding-dino")
             self.assertEqual(argv[argv.index("--grounding-prompt") + 1], "stone sphinx statue.")
+            self.assertEqual([argv[i + 1] for i, flag in enumerate(argv)
+                              if flag == "--grounding-part-prompt"],
+                             ["stone torso.", "stone sphinx head."])
         receipt = json.loads((self.output / "statue-pipeline-report.json").read_text())
         self.assertEqual(receipt["status"], "private-GLB-candidate / review-required")
 

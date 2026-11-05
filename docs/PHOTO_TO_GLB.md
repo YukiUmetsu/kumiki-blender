@@ -79,13 +79,25 @@ HTTPS from Meta into `~/.cache/kumiki-blender/models/`. Use
 `--no-auto-model-download` for fully offline mode or `--sam2-checkpoint` to
 choose another installed model. The checkpoint SHA-256 and origin are recorded.
 
-### Optional text-grounded subject detection (Grounding DINO → SAM2)
+### Optional multi-part grounded segmentation (Grounding DINO → SAM2)
 
-The default SAM2-only behavior is unchanged. For photographs where an unverified
-broad SAM2 box includes nearby architecture or loses part of the monument, enable
-the optional **Grounding DINO** subject detector. It proposes text-conditioned
-bounding boxes; SAM2 then segments the original, unmodified pixels. Detection
-is **not** proof that the entire statue, face or damaged anatomy was retained.
+The default SAM2-only behavior is unchanged. The optional **Grounding DINO**
+detector proposes text-conditioned boxes; SAM2 then segments the original,
+unmodified pixels. A detected head is **not** evidence of complete statue
+anatomy. Earlier single-box grounding reduced the foreground from roughly 26%
+to 19% on a 49-camera Sphinx test, including several near-empty body masks.
+
+The guarded workflow now generates **both broad SAM2 and grounded SAM2**
+candidates per image and saves both immutable masks and contact sheets.
+Grounding can also propose separate visible parts via repeated
+`--grounding-part-prompt`; these union as *candidate* segments, not validated
+anatomy. Distant detections are withheld. When the grounded candidate loses
+more than 30% of the broad foreground, grows over 35%, overlaps poorly, or
+retains less than 5% of the image, the pipeline uses the broad candidate and
+marks the result **uncertain**. This avoids the known head-only regression;
+it does *not* prove that the broad mask excludes background. Ambiguous results
+remain blocked by mask QA and must be reviewed against original photographs
+and cross-view feature tracks.
 
 ```bash
 # Keep your already-installed SAM2 and MPS Python environment.
@@ -97,6 +109,9 @@ kumiki-blender build-statue-glb \
   --photos "$HOME/Pictures/sphinx-reconstruction-candidates/warren-2019/photos" \
   --subject-detector grounding-dino \
   --grounding-prompt 'great sphinx statue. stone sphinx.' \
+  --grounding-part-prompt 'sphinx stone body.' \
+  --grounding-part-prompt 'head and headdress of sphinx.' \
+  --grounding-part-prompt 'front paws of sphinx.' \
   --grounding-device auto
 
 # If interrupted, repeat those options with --resume.
@@ -107,25 +122,42 @@ camera revision and write candidates to a new, separate output:
 
 ```bash
 RUN='.review/great-sphinx/statue-hq-r005'
-NEW='.review/great-sphinx/grounded-masks-r001'
+NEW='.review/great-sphinx/grounded-masks-r002'
 kumiki-blender prepare-dense-masks \
   --reconstruction "$RUN/cameras" --output "$NEW" \
   --segmenter sam2 --sam2-size small --sam2-device mps \
   --sam2-checkpoint "$HOME/.cache/kumiki-blender/models/sam2.1_hiera_small.pt" \
   --subject-detector grounding-dino \
   --grounding-prompt 'great sphinx statue. stone sphinx.' \
+  --grounding-part-prompt 'sphinx stone body.' \
+  --grounding-part-prompt 'head and headdress of sphinx.' \
+  --grounding-part-prompt 'front paws of sphinx.' \
   --grounding-device auto \
   --cache-dir '.review/great-sphinx/_statue_mask_cache'
+
+# Compare all three contact sheets: chosen, broad, and grounded candidates.
+open "$NEW/mask-contact-sheet.jpg" \
+     "$NEW/mask-contact-sheet-broad.jpg" \
+     "$NEW/mask-contact-sheet-grounded.jpg"
+
+jq '{processed: (.images|length), uncertain: ([.images[] | select(.candidate_comparison.status | startswith("uncertain"))] | length), cache}' "$NEW/mask-report.json"
+
 kumiki-blender compare-dense-masks \
   --reconstruction "$RUN/cameras" \
   --baseline-masks "$RUN/masks/masks" \
   --candidate-masks "$NEW/masks" \
-  --output '.review/great-sphinx/grounded-mask-comparison-r001'
+  --output '.review/great-sphinx/grounded-mask-comparison-r002'
 ```
 
 Compare the new masks *visually* with the originals; cross-view score changes
-alone cannot establish geometry or anatomy accuracy. A separate candidate
-revision never overwrites the prior masks, photographs or sparse cameras.
+alone cannot establish geometry or anatomy accuracy. JSON reports provide
+`candidate_comparison` (overlap, area ratio, rejection reasons), along with
+`candidate_masks.broad` and `.grounded` byte hashes and preview paths for each
+photo. Existing source photos, previous revision masks and sparse cameras are
+never overwritten. Object parts are configured via prompts, not hard-coded to
+the Sphinx. When the sparse reconstruction remains blocked by insufficient
+elevated/side camera coverage, mask experiments can continue independently but
+do **not** bypass the camera-coverage gate or prove a GLB is ready.
 
 The bundled detector choice is Hugging Face
 `IDEA-Research/grounding-dino-tiny` at immutable revision
@@ -140,8 +172,10 @@ prompt and device are part of the immutable revision settings and cache identity
 On Apple Silicon, `--grounding-device auto` tries MPS first and retries the
 detector on CPU if an MPS inference operator fails; `--grounding-device cpu`
 forces CPU. The main SAM2 model still uses `--sam2-device` independently.
-Grounding detections are cached by exact image content, model weights and text
-prompt, and are reused independently of SAM2 mask caches. A missed detection
+Grounding detections are cached by exact image content, model weights, main
+prompt and every part prompt. Broad and grounded SAM2 candidates have separate
+cache keys, so adding one photograph does not reprocess unchanged photos.
+A missed detection
 falls back to a broad **unverified** SAM2 candidate and explicitly blocks
 the mask QA gate until reviewed. Normalized RGB photographs are never cut out.
 No automatic majority-vote correction is applied to reconstructed 3D tracks.

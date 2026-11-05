@@ -55,8 +55,60 @@ class DenseMaskTests(unittest.TestCase):
         self.assertEqual(first["grounding_identity"], "pinned:test-sha")
         self.assertEqual(first["images"][0]["guide"]["box"], proposed["box"])
         self.assertEqual(first["images"][0]["guide_source"], "grounding-dino / candidate")
-        self.assertEqual(first["cache"]["hits"], 3)
-        self.assertEqual(inference.call_count, 1)
+        self.assertEqual(first["cache"]["hits"], 6)
+        self.assertEqual(first["cache"]["misses"], 2)
+        self.assertEqual(inference.call_count, 2)
+        self.assertEqual(first["images"][0]["candidate_comparison"]["selected"], "grounded")
+        self.assertEqual(set(first["images"][0]["candidate_masks"]), {"broad", "grounded"})
+        self.assertTrue((self.root / "grounded-masks" / first["alternative_contact_sheets"]["broad"]).is_file())
+        self.assertTrue((self.root / "grounded-masks" / first["alternative_contact_sheets"]["grounded"]).is_file())
+
+    def test_head_only_detection_retains_broad_mask_and_alternative_receipts(self):
+        weights = self.root / "sam2-small.pt"
+        weights.write_bytes(b"unit-test-checkpoint")
+        model = self.root / "grounding"
+        model.mkdir()
+        (model / "model.safetensors").write_bytes(b"weights")
+        broad = np.zeros((256, 320), dtype=np.uint8)
+        broad[20:230, 60:280] = 255
+        head = np.zeros_like(broad)
+        head[20:90, 140:200] = 255
+        from kumiki_blender.reconstruction.masking import _guide
+
+        def infer(_photo, guide, *_args):
+            return (head if guide["box"][0] == 0.4 else broad), {
+                "components": ["subject"], "missing_parts": [],
+                "background_seed_violations": 0}
+
+        with (patch("kumiki_blender.reconstruction.subject_grounding.resolve_grounding_model",
+                    return_value=model),
+              patch("kumiki_blender.reconstruction.subject_grounding.grounding_identity",
+                    return_value="test:pinned"),
+              patch("kumiki_blender.reconstruction.subject_grounding.grounded_guide",
+                    return_value=(_guide({"box": [0.4, 0.1, 0.6, 0.4]},
+                                        default_box=(0.12, 0.04, 0.88, 0.96)),
+                                  {"status": "candidate / text-grounded-box"})),
+              patch("kumiki_blender.reconstruction.masking._load_sam2_predictor",
+                    return_value=(object(), "mps")),
+              patch("kumiki_blender.reconstruction.masking._sam2_mask", side_effect=infer)):
+            first = generate_rectified_masks(
+                self.sparse, self.root / "dual-r001", segmenter="sam2",
+                sam2_checkpoint=weights, subject_detector="grounding-dino",
+                grounding_prompt="stone object.", grounding_model_dir=model,
+                cache_dir=self.root / "shared-cache")
+            second = generate_rectified_masks(
+                self.sparse, self.root / "dual-r002", segmenter="sam2",
+                sam2_checkpoint=weights, subject_detector="grounding-dino",
+                grounding_prompt="stone object.", grounding_model_dir=model,
+                cache_dir=self.root / "shared-cache")
+        self.assertEqual(first["cache"]["misses"], 2)
+        self.assertEqual(second["cache"]["misses"], 0)
+        selected = first["images"][0]
+        self.assertEqual(selected["candidate_comparison"]["selected"], "broad")
+        self.assertIn("disagree", " ".join(selected["warnings"]))
+        self.assertTrue((self.root / "dual-r001" / selected["candidate_masks"]["grounded"]["path"]).is_file())
+        with Image.open(self.root / "dual-r001" / selected["mask"]) as image:
+            self.assertEqual(np.count_nonzero(np.asarray(image)), np.count_nonzero(broad))
 
     def test_sam2_checkpoint_path_survives_progress_reporting(self):
         weights = self.root / "sam2-small.pt"
@@ -177,6 +229,17 @@ class DenseMaskTests(unittest.TestCase):
         self.assertEqual(parsed["view-00.png"]["box"], [0.2, 0.1, 0.8, 0.9])
         self.assertEqual(parsed["view-00.png"]["foreground_points"], [[0.5, 0.5]])
         self.assertEqual(len(sha), 64)
+
+    def test_component_guides_support_arbitrary_objects_without_unsafe_part_names(self):
+        from kumiki_blender.reconstruction.masking import _guide
+        parsed = _guide({"component_boxes": {"sail": [0.1, 0.05, 0.4, 0.9],
+                                                "hull": [0.25, 0.6, 0.92, 0.95]},
+                         "part_visibility": {"sail": "visible", "hull": "uncertain"}},
+                        default_box=(0.12, 0.04, 0.88, 0.96))
+        self.assertEqual(set(parsed["component_boxes"]), {"sail", "hull"})
+        with self.assertRaisesRegex(ReferenceError, "safe object-part names"):
+            _guide({"component_boxes": {"../unsafe": [0.1, 0.1, 0.8, 0.8]}},
+                   default_box=(0.12, 0.04, 0.88, 0.96))
 
     def test_all_masks_are_binary_pinned_and_usable_by_openmvs(self):
         # Fake only GrabCut inference; real Pillow encoding and dense mask audit run.

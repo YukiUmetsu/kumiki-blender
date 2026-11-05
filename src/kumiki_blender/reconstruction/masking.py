@@ -10,6 +10,7 @@ import json
 import hashlib
 import math
 import os
+import re
 import shutil
 import tempfile
 from pathlib import Path
@@ -21,7 +22,10 @@ from .references import ReferenceError
 
 _DEFAULT_BOX = (0.12, 0.04, 0.88, 0.96)
 _ISNET_SHA256 = "60920e99c45464f2ba57bee2ad08c919a52bbf852739e96947fbb4358c0d964a"
+# Legacy monument-specific audit utility retains this vocabulary. General
+# segmentation guides deliberately accept any bounded object-part labels.
 _SPHINX_PARTS = frozenset({"head", "headdress", "neck", "torso", "paws", "tail"})
+_PART_NAME = re.compile(r"[a-z][a-z0-9_-]{0,31}\Z")
 _SAM2_CONFIGS = {"tiny": "t", "small": "s", "base_plus": "b+", "large": "l"}
 _MASK_CACHE_SCHEMA = "rectified-mask-v1"
 
@@ -132,14 +136,16 @@ def _guide(value: Any, *, default_box: tuple[float, ...]) -> dict[str, Any]:
     landmarks = value.get("part_points", {})
     visibility = value.get("part_visibility", {})
     if (not isinstance(components, dict) or not isinstance(landmarks, dict)
-            or set(components) - _SPHINX_PARTS or set(landmarks) - _SPHINX_PARTS):
-        raise ReferenceError("component_boxes and part_points must name Sphinx anatomy")
-    if (not isinstance(visibility, dict) or set(visibility) - _SPHINX_PARTS
+            or any(not isinstance(name, str) or not _PART_NAME.fullmatch(name)
+                   for name in set(components) | set(landmarks))):
+        raise ReferenceError("component_boxes and part_points require safe object-part names")
+    if (not isinstance(visibility, dict) or any(
+            not isinstance(name, str) or not _PART_NAME.fullmatch(name) for name in visibility)
             or any(value not in ("visible", "not_visible", "uncertain")
                    for value in visibility.values())):
-        raise ReferenceError("part_visibility must mark Sphinx anatomy visible/not_visible/uncertain")
-    if len(components) > 6:
-        raise ReferenceError("Too many component boxes")
+        raise ReferenceError("part_visibility must mark object parts visible/not_visible/uncertain")
+    if len(components) > 9 or len(landmarks) > 9 or len(visibility) > 9:
+        raise ReferenceError("Too many named object parts")
     checked_boxes = {name: list(_box(bounds)) for name, bounds in components.items()}
     if checked_boxes and set(landmarks) - set(checked_boxes):
         raise ReferenceError("Every visible part landmark needs a matching component box")
@@ -396,6 +402,7 @@ def generate_rectified_masks(reconstruction: str | Path, output: str | Path, *,
                              cache_dir: str | Path | None = None,
                              subject_detector: str = "none",
                              grounding_prompt: str | None = None,
+                             grounding_part_prompts: tuple[str, ...] | list[str] | None = None,
                              grounding_model_dir: str | Path | None = None,
                              grounding_device: str = "auto",
                              resume: bool = False) -> dict[str, Any]:
@@ -414,6 +421,10 @@ def generate_rectified_masks(reconstruction: str | Path, output: str | Path, *,
         raise ReferenceError("Unsupported subject detector or Grounding DINO device")
     if subject_detector != "none" and (segmenter != "sam2" or not grounding_prompt):
         raise ReferenceError("Grounding DINO needs SAM2 and --grounding-prompt")
+    from .subject_grounding import validate_part_prompts
+    part_prompts = validate_part_prompts(grounding_part_prompts)
+    if part_prompts and subject_detector != "grounding-dino":
+        raise ReferenceError("Part prompts require --subject-detector grounding-dino")
     cache_root = Path(cache_dir).resolve() if cache_dir is not None else None
     if cache_root is not None and (Path(cache_dir).is_symlink() or
                                    (cache_root.exists() and not cache_root.is_dir())):
@@ -502,6 +513,9 @@ def generate_rectified_masks(reconstruction: str | Path, output: str | Path, *,
                 prior.get("subject_detector", "none") != subject_detector or
                 prior.get("grounding_identity") != grounding_id or
                 prior.get("grounding_prompt") != grounding_prompt or
+                prior.get("grounding_part_prompts", []) != list(part_prompts) or
+                prior.get("candidate_ensemble_schema") != (
+                    "grounded-sam2-candidate-ensemble-v1" if grounding_id else None) or
                 prior.get("cache", {}).get("directory") !=
                 (str(cache_root) if cache_root else None)):
             raise ReferenceError("Cannot resume masks with changed photos, model, or settings")
@@ -514,6 +528,11 @@ def generate_rectified_masks(reconstruction: str | Path, output: str | Path, *,
         raise ReferenceError("Mask output folders cannot be symbolic links")
     mask_dir.mkdir(exist_ok=resume)
     preview_dir.mkdir(exist_ok=resume)
+    alternatives_dir = target / "alternatives"
+    if grounding_id is not None:
+        if alternatives_dir.is_symlink():
+            raise ReferenceError("Alternative mask folder cannot be a symbolic link")
+        alternatives_dir.mkdir(exist_ok=resume)
     report: dict[str, Any] = {
         "schema_version": 1, "source_revision": str(source),
         "guide_sha256": guide_sha, "max_side": max_side, "iterations": iterations,
@@ -526,6 +545,8 @@ def generate_rectified_masks(reconstruction: str | Path, output: str | Path, *,
         "subject_detector": subject_detector,
         "grounding_identity": grounding_id,
         "grounding_prompt": grounding_prompt,
+        "grounding_part_prompts": list(part_prompts),
+        "candidate_ensemble_schema": ("grounded-sam2-candidate-ensemble-v1" if grounding_id else None),
         "automatic_guidance": segmenter == "sam2" and guides is None,
         "requires_anatomy_inventory": segmenter == "sam2",
         "cache": {"directory": str(cache_root) if cache_root else None,
@@ -537,6 +558,55 @@ def generate_rectified_masks(reconstruction: str | Path, output: str | Path, *,
     def save_progress_report() -> None:
         (target / "mask-report.json").write_text(json.dumps(report, indent=2) + "\n",
                                                  encoding="utf-8")
+
+    def infer_cached_mask(original: Any, guide: dict[str, Any], source_sha: str,
+                          expected: list[int], *, grounded: bool
+                          ) -> tuple[Any, dict[str, Any], str, bool]:
+        nonlocal predictor, device
+        from PIL import Image
+
+        fingerprint_input = {
+            "schema": _MASK_CACHE_SCHEMA,
+            "source_sha256": source_sha, "dimensions": expected, "segmenter": segmenter,
+            "model_sha256": model_sha, "model_size": sam2_size if segmenter == "sam2" else None,
+            "guide": guide if segmenter != "rembg" else None,
+            "max_side": max_side, "iterations": iterations if segmenter == "grabcut" else None,
+        }
+        if grounded and grounding_id is not None:
+            fingerprint_input.update(grounding_identity=grounding_id,
+                                     grounding_prompt=grounding_prompt,
+                                     grounding_part_prompts=list(part_prompts))
+        fingerprint = hashlib.sha256(json.dumps(fingerprint_input, sort_keys=True).encode()).hexdigest()
+        cached = _cached_mask(cache_root, fingerprint, expected)
+        if cached is not None:
+            with Image.open(cached[0]) as image:
+                mask = image.copy()
+            report["cache"]["hits"] += 1
+            return mask, cached[1], fingerprint, True
+        if segmenter == "rembg":
+            binary, details = _rembg_mask(original, session), {}
+        elif segmenter == "sam2":
+            if predictor is None:
+                assert checkpoint is not None
+                predictor, device = _load_sam2_predictor(checkpoint, sam2_size, sam2_device)
+                report["segmentation_device"] = device
+            binary, details = _sam2_mask(original, guide, predictor, max_side)
+        else:
+            binary, details = _grabcut(original, guide, max_side, iterations), {}
+        if not binary.any() or (binary == 255).all():
+            raise ReferenceError(f"{segmenter} returned an empty or entirely foreground mask")
+        mask = Image.fromarray(binary, mode="L")
+        report["cache"]["misses"] += 1
+        if cache_root is not None:
+            # Cache each candidate independently, never overwrite prior revisions.
+            with tempfile.NamedTemporaryFile(dir=target, suffix=".png", delete=False) as stream:
+                temporary = Path(stream.name)
+            try:
+                mask.save(temporary, format="PNG", optimize=True)
+                _save_mask_cache(cache_root, fingerprint, temporary, expected, details)
+            finally:
+                temporary.unlink(missing_ok=True)
+        return mask, details, fingerprint, False
 
     save_progress_report()
     for filename in plan["undistorted_images"]:
@@ -556,45 +626,64 @@ def generate_rectified_masks(reconstruction: str | Path, output: str | Path, *,
                         cache_root=cache_root or target.parent / "_grounding_detection_cache",
                         model_dir=grounding_folder, model_identity=grounding_id,
                         prompt=grounding_prompt, device=grounding_device,
-                        state=grounding_state, default_box=default_box)
+                        state=grounding_state, default_box=default_box,
+                        part_prompts=part_prompts)
                 else:
                     active_guide = (_auto_sam2_guide(original, default_box)
                                     if segmenter == "sam2" and guides is None
                                     else guide_map[filename])
-                fingerprint_input = {
-                    "schema": _MASK_CACHE_SCHEMA,
-                    "source_sha256": images[filename]["sha256"],
-                    "dimensions": expected, "segmenter": segmenter,
-                    "model_sha256": model_sha, "model_size": sam2_size if segmenter == "sam2" else None,
-                    "guide": active_guide if segmenter != "rembg" else None,
-                    "max_side": max_side, "iterations": iterations if segmenter == "grabcut" else None,
-                }
-                if grounding_id is not None:
-                    fingerprint_input["grounding_identity"] = grounding_id
-                    fingerprint_input["grounding_prompt"] = grounding_prompt
-                fingerprint = hashlib.sha256(json.dumps(fingerprint_input, sort_keys=True).encode()).hexdigest()
-                cached = _cached_mask(cache_root, fingerprint, expected)
-                details: dict[str, Any] = {}
-                if cached is not None:
-                    cached_file, details = cached
-                    with Image.open(cached_file) as cached_image:
-                        mask = cached_image.copy()
-                    report["cache"]["hits"] += 1
-                else:
-                    if segmenter == "rembg":
-                        binary = _rembg_mask(original, session)
-                    elif segmenter == "sam2":
-                        if predictor is None:
-                            assert checkpoint is not None
-                            predictor, device = _load_sam2_predictor(checkpoint, sam2_size, sam2_device)
-                            report["segmentation_device"] = device
-                        binary, details = _sam2_mask(original, active_guide, predictor, max_side)
+                comparison = None
+                alternate_receipts = {}
+                detector_guide = active_guide if detection is not None else None
+                if grounding_id is not None and guides is None:
+                    from .mask_candidate_ensemble import select_mask_candidate
+
+                    broad_guide = _auto_sam2_guide(original, default_box)
+                    broad, broad_details, broad_key, broad_hit = infer_cached_mask(
+                        original, broad_guide, images[filename]["sha256"], expected,
+                        grounded=False)
+                    if detection is not None and detection["status"].startswith("candidate"):
+                        try:
+                            grounded_mask, grounded_details, grounded_key, grounded_hit = infer_cached_mask(
+                                original, active_guide, images[filename]["sha256"], expected,
+                                grounded=True)
+                        except ReferenceError as error:
+                            detection["status"] = "uncertain / grounded-sam2-inference-failed"
+                            detection["failure_reason"] = str(error)[:200]
+                            grounded_mask, grounded_details = broad, broad_details
+                            grounded_key, grounded_hit = broad_key, broad_hit
                     else:
-                        binary = _grabcut(original, guide_map[filename], max_side, iterations)
-                    if not binary.any() or (binary == 255).all():
-                        raise ReferenceError(f"{segmenter} returned an empty or entirely foreground mask")
-                    mask = Image.fromarray(binary, mode="L")
-                    report["cache"]["misses"] += 1
+                        grounded_mask, grounded_details = broad, broad_details
+                        grounded_key, grounded_hit = broad_key, broad_hit
+                    choice, comparison = select_mask_candidate(broad, grounded_mask, detection)
+                    mask, details, fingerprint, selected_hit = (
+                        (grounded_mask, grounded_details, grounded_key, grounded_hit)
+                        if choice == "grounded" else
+                        (broad, broad_details, broad_key, broad_hit))
+                    if choice == "broad":
+                        active_guide = broad_guide
+                    alternate_paths = {}
+                    for label, candidate in (("broad", broad), ("grounded", grounded_mask)):
+                        path = alternatives_dir / f"{filename}.{label}.png"
+                        candidate.save(path, format="PNG", optimize=True)
+                        alternate_paths[label] = str(path.relative_to(target))
+                        small = original.convert("RGB")
+                        small.thumbnail((900, 900))
+                        red = Image.new("RGB", small.size, (238, 58, 35))
+                        alpha = candidate.resize(small.size, Image.Resampling.NEAREST).point(
+                            lambda intensity: round(intensity * 0.28))
+                        candidate_preview = Image.composite(red, small, alpha)
+                        preview_path = preview_dir / f"{filename}.{label}.jpg"
+                        candidate_preview.save(preview_path, "JPEG", quality=86)
+                        alternate_receipts[label] = {"path": alternate_paths[label],
+                            "sha256": _sha256(path),
+                            "preview": str(preview_path.relative_to(target)),
+                            "cache_key": broad_key if label == "broad" else grounded_key,
+                            "cache_hit": broad_hit if label == "broad" else grounded_hit}
+                else:
+                    mask, details, fingerprint, selected_hit = infer_cached_mask(
+                        original, active_guide, images[filename]["sha256"], expected,
+                        grounded=False)
                 occupancy = round(sum(mask.histogram()[128:])/ (mask.width*mask.height), 5)
                 warnings = []
                 if segmenter == "grabcut" and guides is None:
@@ -604,7 +693,9 @@ def generate_rectified_masks(reconstruction: str | Path, output: str | Path, *,
                 if segmenter == "sam2" and guides is None:
                     warnings.append("Automatic subject prompts are candidates, not verified anatomy")
                 if detection is not None and detection["status"].startswith("uncertain"):
-                    warnings.append("Grounding DINO could not confidently identify the subject; used broad SAM2 box")
+                    warnings.append("Text-guided SAM2 could not produce a reliable subject mask; retained broad SAM2 candidate")
+                if comparison is not None and comparison["status"].startswith("uncertain"):
+                    warnings.append("Broad and grounded SAM2 candidates disagree; inspect both before dense reconstruction")
                 if details.get("sam2_candidate_disagreement_fraction", 0) > 0.10:
                     warnings.append("SAM2 mask candidates disagree; inspect anatomy and boundaries")
                 for part in details.get("missing_parts", []):
@@ -623,8 +714,6 @@ def generate_rectified_masks(reconstruction: str | Path, output: str | Path, *,
                     warnings.append("Foreground touches photo border; inspect cropped statue")
                 mask_path = mask_dir / (filename + ".mask.png")
                 mask.save(mask_path, format="PNG", optimize=True)
-                if cached is None:
-                    _save_mask_cache(cache_root, fingerprint, mask_path, expected, details)
                 original.thumbnail((900, 900))
                 base = original.convert("RGB")
                 cover = Image.new("RGB", base.size, (238, 58, 35))
@@ -636,10 +725,11 @@ def generate_rectified_masks(reconstruction: str | Path, output: str | Path, *,
                 report["images"].append({
                     "filename": filename, "source_photo_sha256": images[filename]["sha256"],
                     "mask": str(mask_path.relative_to(target)), "mask_sha256": _sha256(mask_path),
-                    "cache_hit": cached is not None, "cache_key": fingerprint if cache_root else None,
+                    "cache_hit": selected_hit, "cache_key": fingerprint if cache_root else None,
                     "preview": str(preview.relative_to(target)),
                     "foreground_fraction": occupancy,
                     "guide": active_guide, "warnings": warnings,
+                    "detector_guide": detector_guide,
                     "guide_source": ("grounding-dino / candidate" if detection and
                                      detection["status"].startswith("candidate") else
                                      "grounding-dino / no-detection" if detection else
@@ -647,6 +737,8 @@ def generate_rectified_masks(reconstruction: str | Path, output: str | Path, *,
                                      if segmenter == "sam2" and guides is None else
                                      "user-guides" if guides is not None else "default-box"),
                     "subject_detection": detection,
+                    "candidate_comparison": comparison,
+                    "candidate_masks": alternate_receipts,
                     "missing_parts": details.get("missing_parts", []),
                     "background_seed_violations": details.get("background_seed_violations", 0),
                     "parts_verified": sorted(active_guide["part_points"]),
@@ -657,19 +749,29 @@ def generate_rectified_masks(reconstruction: str | Path, output: str | Path, *,
             save_progress_report()
             raise
         save_progress_report()
-    columns, cell_width, cell_height = 4, 288, 238
-    rows = (len(report["images"]) + columns - 1) // columns
-    contact = Image.new("RGB", (columns * cell_width, rows * cell_height), (28, 31, 34))
-    draw = ImageDraw.Draw(contact)
-    for index, item in enumerate(report["images"]):
-        x = index % columns * cell_width
-        y = index // columns * cell_height
-        with Image.open(target / item["preview"]) as preview:
-            preview.thumbnail((cell_width-8, cell_height-30))
-            contact.paste(preview, (x+4, y+4))
-        draw.text((x+6, y+cell_height-23), item["filename"][:42], fill=(234, 236, 238))
-    contact.save(target / "mask-contact-sheet.jpg", "JPEG", quality=85)
+    def contact_sheet(label: str | None = None) -> str:
+        columns, cell_width, cell_height = 4, 288, 238
+        rows = (len(report["images"]) + columns - 1) // columns
+        contact = Image.new("RGB", (columns * cell_width, rows * cell_height), (28, 31, 34))
+        draw = ImageDraw.Draw(contact)
+        for index, item in enumerate(report["images"]):
+            x = index % columns * cell_width
+            y = index // columns * cell_height
+            path = (item["candidate_masks"][label]["preview"] if label
+                    else item["preview"])
+            with Image.open(target / path) as preview:
+                preview.thumbnail((cell_width-8, cell_height-30))
+                contact.paste(preview, (x+4, y+4))
+            draw.text((x+6, y+cell_height-23), item["filename"][:42], fill=(234, 236, 238))
+        name = f"mask-contact-sheet-{label}.jpg" if label else "mask-contact-sheet.jpg"
+        contact.save(target / name, "JPEG", quality=85)
+        return name
+
+    contact_sheet()
     report["contact_sheet"] = "mask-contact-sheet.jpg"
+    if grounding_id is not None and guides is None:
+        report["alternative_contact_sheets"] = {
+            label: contact_sheet(label) for label in ("broad", "grounded")}
     report["status"] = "candidate / inspect-every-mask-before-dense-reconstruction"
     save_progress_report()
     return report

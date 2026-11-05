@@ -34,6 +34,7 @@ class StatuePipelineSettings:
     sam2_device: str = "mps"
     subject_detector: str = "none"
     grounding_prompt: str | None = None
+    grounding_part_prompts: tuple[str, ...] = ()
     grounding_device: str = "auto"
     grounding_model_dir: Path | None = None
     matching_device: str = "mps"
@@ -68,6 +69,10 @@ class StatuePipelineSettings:
             raise ReferenceError("Unsupported Grounding DINO device")
         if self.grounding_prompt is not None and (not self.grounding_prompt.strip() or len(self.grounding_prompt) > 400):
             raise ReferenceError("Grounding DINO prompt needs 1–400 characters")
+        from .subject_grounding import validate_part_prompts
+        validate_part_prompts(self.grounding_part_prompts)
+        if self.grounding_part_prompts and self.subject_detector != "grounding-dino":
+            raise ReferenceError("Part prompts require --subject-detector grounding-dino")
         if self.subject_detector != "none" and self.masks_dir is not None:
             raise ReferenceError("Grounding DINO is not used with --masks-dir reviewed masks")
         if self.grounding_model_dir is not None and (
@@ -270,6 +275,10 @@ def _mask_warnings(mask_report: dict[str, Any], audit: dict[str, Any],
         detection = item.get("subject_detection")
         if isinstance(detection, dict) and str(detection.get("status", "")).startswith("uncertain"):
             warnings.append(f"{name}: text grounding found no reliable subject; review this mask")
+        comparison = item.get("candidate_comparison")
+        if (isinstance(comparison, dict) and
+                str(comparison.get("status", "")).startswith("uncertain")):
+            warnings.append(f"{name}: broad/grounded segmentation disagreement requires review")
         if any("Foreground touches photo border" in warning
                for warning in item.get("warnings", [])):
             warnings.append(f"{name}: segmentation needs guided anatomy/boundary review")
@@ -381,6 +390,8 @@ def build_statue_glb(
         settings_payload.update(subject_detector=settings.subject_detector,
                                 grounding_identity=grounding_id,
                                 grounding_prompt=effective_prompt,
+                                grounding_part_prompts=list(settings.grounding_part_prompts),
+                                candidate_ensemble_schema="grounded-sam2-candidate-ensemble-v1",
                                 grounding_device=settings.grounding_device)
     # Preserve compatibility with immutable older MPS revision fingerprints.
     if settings.matching_device != "mps":
@@ -529,6 +540,8 @@ def build_statue_glb(
                       "--grounding-model-dir", str(grounding_folder),
                       "--grounding-prompt", effective_prompt,
                       "--grounding-device", settings.grounding_device]
+        for part in settings.grounding_part_prompts:
+            prep_argv += ["--grounding-part-prompt", part]
     if resume and prepared.exists() and "photo_preprocess" not in report["completed_stages"]:
         prep_argv.append("--resume")
     prepared_report = run_stage("photo_preprocess", prep_argv,
@@ -716,6 +729,8 @@ def build_statue_glb(
                           "--grounding-model-dir", str(grounding_folder),
                           "--grounding-prompt", effective_prompt,
                           "--grounding-device", settings.grounding_device]
+            for part in settings.grounding_part_prompts:
+                mask_args += ["--grounding-part-prompt", part]
         if settings.mask_guides:
             mask_args += ["--guides", str(settings.mask_guides.resolve())]
         if resume and mask_dir.exists() and "masks" not in report["completed_stages"]:
