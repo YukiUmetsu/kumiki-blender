@@ -160,6 +160,20 @@ private texture projection to produce a mesh for artistic inspection.
       --rectified-masks /private/masks \
       --output .review/statue/dense-subject-only-r01 --backend openmvs
 
+    # Automatic, object-agnostic geometry coverage QA. Camera projections
+    # are checked against the verified binary masks when available. The
+    # sampled view-support point cloud highlights weakly photographed mesh
+    # patches; magenta boundary points expose mesh openings (e.g. an empty
+    # upper surface or missing side). This creates no replacement geometry.
+    kumiki-blender audit-dense-surface-coverage \
+      --dense-revision .review/statue/dense-subject-only-r01 \
+      --output .review/statue/surface-coverage-r01 \
+      --min-views 2 --max-samples 40000
+
+    # Import the following PLY clouds beside the real scan in Blender:
+    # surface-coverage-r01/view-support-points.ply
+    # surface-coverage-r01/open-boundary-points.ply
+
     # On a supported GPU, use COLMAP PatchMatch instead.
     kumiki-blender build-dense-photos \
       --reconstruction .review/statue/sparse-r01 \
@@ -284,6 +298,20 @@ during projection. Likewise, foreground masks cannot reconstruct the top,
 back-left, or facial side if those surfaces lack registered overlapping
 photographs. Review camera registration and render multiple calibrated
 views; unobserved geometry must remain flagged, not silently invented.
+
+`audit-dense-surface-coverage` reports optimistic per-triangle camera support,
+intersected with the foreground masks when present. The colors are **red**
+(zero plausible views), **orange** (one), **yellow** (two), and **green**
+(three or more). An object's mesh may have holes where there are no triangles
+to sample at all. `open-boundary-points.ply` marks these boundaries in
+**magenta**. The audit also reports non-manifold edges and the densest weak
+coverage regions in normalized COLMAP coordinate bins; the axes are not
+automatically labeled as face, top, left, or rear. With fewer than all
+registered cameras the report is explicitly a partial-view audit. Neither
+green points nor a zero-boundary count prove real-world shape fidelity, and
+the output remains a private candidate requiring photographic comparison.
+`build-statue-glb` runs this QA automatically between dense reconstruction
+and its Blender review, preserving both overlays alongside the GLB.
 Rectified mask files must be genuine grayscale PNGs (binary 0/255, both
 present, exact dimensions), with exact `<photo filename>.mask.png` names.
 `prepare-dense-masks` generates those files with an `approved_for_reconstruction:

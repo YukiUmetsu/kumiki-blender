@@ -450,6 +450,17 @@ def main(argv: list[str] | None = None) -> int:
         if command == "build-dense-photos":
             dense_parser.add_argument("--resume", action="store_true",
                                       help="Resume an incomplete OpenMVS revision without repeating completed stages")
+    for command in ("plan-dense-surface-coverage", "audit-dense-surface-coverage"):
+        surface_parser = subcommands.add_parser(
+            command, help="Map weak camera support and open mesh boundaries without inventing geometry")
+        surface_parser.add_argument("--dense-revision", type=Path, required=True)
+        surface_parser.add_argument("--output", type=Path, required=True,
+                                    help="New private surface QA revision")
+        surface_parser.add_argument("--max-samples", type=int, default=40_000)
+        surface_parser.add_argument("--min-views", type=int, default=2)
+        surface_parser.add_argument("--max-cameras", type=int, default=256)
+        surface_parser.add_argument("--no-masks", action="store_true",
+                                    help="Geometry-only camera support without foreground-mask intersections")
     for command in ("plan-splats", "build-splats"):
         splat_parser = subcommands.add_parser(
             command, help="Train private Gaussian splats from multi-angle photos or COLMAP cameras")
@@ -1272,6 +1283,22 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(report, indent=2))
             return (0 if args.command == "plan-dense-photos" or
                     report["status"].startswith("dense-mesh-candidate") else 3)
+        if args.command in ("plan-dense-surface-coverage", "audit-dense-surface-coverage"):
+            from .reconstruction.surface_coverage import (audit_surface_coverage,
+                                                          plan_surface_coverage)
+            from .reconstruction.references import ReferenceError
+            try:
+                operation = (plan_surface_coverage if args.command.startswith("plan-")
+                             else audit_surface_coverage)
+                report = operation(args.dense_revision, args.output,
+                                   max_samples=args.max_samples, min_views=args.min_views,
+                                   max_cameras=args.max_cameras, use_masks=not args.no_masks)
+            except ReferenceError as error:
+                raise RecipeError(str(error)) from error
+            print(json.dumps(report, indent=2))
+            # A report with gaps remains a successful diagnostic, never a
+            # declaration that the surface is complete or distribution-ready.
+            return 0
         if args.command == "compare-camera-registrations":
             from .reconstruction.camera_compare import compare_camera_registrations
             from .reconstruction.references import ReferenceError

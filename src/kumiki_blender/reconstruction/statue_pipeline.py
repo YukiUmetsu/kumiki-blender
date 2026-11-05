@@ -821,6 +821,25 @@ def build_statue_glb(
         dense / "dense-report.json")
     if not str(mesh_record.get("status", "")).startswith("dense-mesh-candidate"):
         return checkpoint("blocked / dense-mesh-review-required", "dense", ["No validated dense mesh"])
+    # Inspect actual reconstructed topology and registered-camera support
+    # before rendering a private GLB. This is an advisory quality gate: a
+    # missing region must be visible in a QA overlay, but the experimental
+    # GLB remains exportable for an artist to inspect and correct.
+    surface_dir = target / "surface-coverage"
+    surface_record = run_stage("surface_coverage", executable + [
+        "audit-dense-surface-coverage", "--dense-revision", str(dense),
+        "--output", str(surface_dir), "--min-views", "2"],
+        surface_dir / "surface-coverage-report.json")
+    report["surface_coverage"] = {
+        "status": surface_record.get("status"),
+        "possible_view_support": surface_record.get("possible_view_support"),
+        "topology": surface_record.get("topology"),
+        "report": "surface-coverage/surface-coverage-report.json",
+        "open_boundary_overlay": "surface-coverage/open-boundary-points.ply",
+        "weak_view_overlay": "surface-coverage/view-support-points.ply",
+        "photographic_fidelity_verified": False,
+    }
+    checkpoint("running")
     record = run_stage("review", executable + ["render-dense-blender-review",
         "--dense-revision", str(dense), "--output", str(review),
         "--blender", settings.blender, "--no-renders"],
