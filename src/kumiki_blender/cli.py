@@ -461,6 +461,14 @@ def main(argv: list[str] | None = None) -> int:
         surface_parser.add_argument("--max-cameras", type=int, default=256)
         surface_parser.add_argument("--no-masks", action="store_true",
                                     help="Geometry-only camera support without foreground-mask intersections")
+    photo_qa = subcommands.add_parser("audit-dense-photographs", help="Compare ray-occluded mesh with registered photographs")
+    photo_qa.add_argument("--dense-revision", type=Path, required=True)
+    photo_qa.add_argument("--output", type=Path, required=True)
+    photo_qa.add_argument("--blender", default="blender")
+    photo_qa.add_argument("--side", type=int, default=256)
+    photo_qa.add_argument("--max-samples", type=int, default=10000)
+    photo_qa.add_argument("--max-cameras", type=int, default=256)
+    photo_qa.add_argument("--min-views", type=int, default=2)
     for command in ("plan-splats", "build-splats"):
         splat_parser = subcommands.add_parser(
             command, help="Train private Gaussian splats from multi-angle photos or COLMAP cameras")
@@ -1298,6 +1306,17 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(report, indent=2))
             # A report with gaps remains a successful diagnostic, never a
             # declaration that the surface is complete or distribution-ready.
+            return 0
+        if args.command == "audit-dense-photographs":
+            from .reconstruction.photographic_qa import audit_photographs
+            from .reconstruction.references import ReferenceError
+            try:
+                report = audit_photographs(args.dense_revision, args.output, blender=args.blender,
+                                           side=args.side, max_samples=args.max_samples,
+                                           max_cameras=args.max_cameras, min_views=args.min_views)
+            except ReferenceError as error:
+                raise RecipeError(str(error)) from error
+            print(json.dumps(report, indent=2))
             return 0
         if args.command == "compare-camera-registrations":
             from .reconstruction.camera_compare import compare_camera_registrations

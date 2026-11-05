@@ -1106,3 +1106,38 @@ edges; it does not change or excuse the strict metrics. Mask errors and camera
 misregistration can cause either discrepancy. An excess pixel is not by itself
 proof of ground leakage, and a missing pixel does not localize a surface in 3D.
 This function does not render or verify camera alignment or depth visibility.
+
+### Occlusion-aware photographic diagnostic
+
+Run with a new output directory, outside both source revisions:
+
+```sh
+kumiki-blender audit-dense-photographs \
+  --dense-revision .review/great-sphinx/statue-hq-r005/dense-masked-fixed-r01 \
+  --output .review/great-sphinx/statue-hq-r005/photo-qa-ray-r02 \
+  --blender /Applications/Blender.app/Contents/MacOS/Blender \
+  --side 256 --max-samples 10000
+```
+
+Blender builds a CPU BVH of the pinned mesh and casts calibrated camera rays
+at pixel centers to obtain a silhouette, then casts rays to sampled face centers
+for occlusion-aware support. Face samples count only when the first intersection
+is at the sample and its projection is inside the foreground mask. The output
+contains per-camera comparisons, a contact sheet, strict silhouette metrics,
+4×4 image discrepancy tiles, normalized 3D support grid cells, and PLY point
+clouds of visible support and open boundaries. Red/orange points have fewer
+than two observations by default; magenta marks sampled open edges. Image-space
+red and blue indicate reference-only and render-only pixels, yellow indicates
+a two-pixel mask-boundary uncertainty band. Camera poses, reference photos,
+masks and mesh are checked against the existing revision records.
+
+Results are diagnostics, not a fidelity certificate. Face-index sampling is
+not area weighted; the grid measures only existing faces. Rays do not establish
+whether the surface has the correct depth or appearance. A completely absent
+surface has no sample and can only be suspected from photo discrepancies or
+boundaries. Imperfect masks, occluders, pose error, low resolution, thin geometry,
+and pixel quantization affect comparisons. Reference-only and render-only
+pixels are not automatically missing object and ground. Review original photos
+and masks before assigning a cause. Region counts are not probabilities or
+confidence in reconstruction accuracy. The BVH method is CPU-based; Blender
+is required. Increase `--side` for finer silhouette detail at greater cost.
