@@ -22,7 +22,11 @@ from .mask_track_guidance import (SCHEMA as TRACK_SCHEMA,
 from .references import ReferenceError
 
 
-SCHEMA = "track-guided-mask-revision-v1"
+SCHEMA = "track-guided-mask-revision-v2"
+# Inference results depend on the actual guide and checkpoint, not the QA
+# algorithm version. Keep the original prompt-cache namespace so unchanged
+# guides reuse prior MPS work; new negative clicks alter the cache key.
+PROMPT_CACHE_SCHEMA = "track-guided-mask-revision-v1"
 
 
 def _mask_sky_leaks(photo: Any, mask: Any) -> int:
@@ -193,9 +197,13 @@ def refine_masks_from_tracks(reconstruction: str | Path, mask_revision: str | Pa
         shutil.copyfile(selected_file, output_mask)
         seeds = evidence["images"][name]["seed_points"]
         holdout = evidence["images"][name]["holdout_points"]
+        background_seeds = evidence["images"][name]["background_seed_points"]
+        background_holdouts = evidence["images"][name]["background_holdout_points"]
         receipt = {"status": "abstained / insufficient-triangulated-subject-evidence",
                    "accepted": False, "seed_count": len(seeds),
                    "heldout_count": len(holdout), "reasons": [],
+                   "background_seed_count": len(background_seeds),
+                   "background_holdout_count": len(background_holdouts),
                    "source_evidence": "track-evidence-report.json"}
         candidate_file = None
         if len(seeds) >= 3 and len(holdout) >= 5:
@@ -215,12 +223,19 @@ def refine_masks_from_tracks(reconstruction: str | Path, mask_revision: str | Pa
                     bottom = min(1.0, max(.96, *(y+.04 for _, y in points)))
                     negatives = [point for point in guide_base["background_points"]
                                  if all(math.dist(point, seed) >= .05 for seed in points)]
+                    used_background = []
+                    for row in background_seeds:
+                        point = row["normalized_xy"]
+                        if (all(math.dist(point, seed) >= .08 for seed in points)
+                                and all(math.dist(point, existing) >= .035 for existing in negatives)):
+                            negatives.append(point)
+                            used_background.append(row)
                     from .masking import _MASK_CACHE_SCHEMA
                     guide = _guide({"box": [left, top, right, bottom],
                                     "foreground_points": points,
                                     "background_points": negatives}, default_box=_DEFAULT_BOX)
                     cache_key = hashlib.sha256(json.dumps([
-                        _MASK_CACHE_SCHEMA, SCHEMA, item["source_photo_sha256"],
+                        _MASK_CACHE_SCHEMA, PROMPT_CACHE_SCHEMA, item["source_photo_sha256"],
                         model_sha, evidence["model_sha256"], item["mask_sha256"],
                         sam2_size, sam2_device, max_side, guide],
                         sort_keys=True).encode()).hexdigest()
@@ -243,7 +258,9 @@ def refine_masks_from_tracks(reconstruction: str | Path, mask_revision: str | Pa
                         _save_mask_cache(cache_root, cache_key, candidate_file,
                                          list(photo.size), details)
                     receipt = evaluate_track_resegmentation(
-                        original_binary, refined, seeds, holdout)
+                        original_binary, refined, seeds, holdout,
+                        background_seeds=used_background,
+                        background_holdouts=background_holdouts)
                     receipt.update(cache_key=cache_key, cache_hit=cache is not None,
                                    proposed_mask="candidates/" + candidate_file.name,
                                    proposed_mask_sha256=_sha256(candidate_file),

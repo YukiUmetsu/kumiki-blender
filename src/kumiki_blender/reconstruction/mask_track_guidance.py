@@ -22,7 +22,7 @@ from .mask_consistency import (_MAX_MODEL_BYTES, _binary_image_tracks,
 from .references import ReferenceError
 
 
-SCHEMA = "multi-view-subject-track-evidence-v1"
+SCHEMA = "multi-view-subject-track-evidence-v2"
 MIN_SUPPORTING_CAMERAS = 3
 MAX_SEEDS_PER_IMAGE = 12
 
@@ -146,6 +146,12 @@ def extract_track_guidance(reconstruction: Path, mask_revision: Path,
                 b.resize(dims, Image.Resampling.NEAREST).filter(ImageFilter.MinFilter(7))) >= 128
             grounded_interior = np.asarray(
                 g.resize(dims, Image.Resampling.NEAREST).filter(ImageFilter.MinFilter(7))) >= 128
+            # A negative requires clearance from *both* candidate silhouettes,
+            # not merely a pixel that the currently selected mask omitted.
+            # Dilation keeps uncertain contour and thin-anatomy pixels out.
+            union_binary = Image.fromarray(np.where(union_array, 255, 0).astype("uint8"), "L")
+            background_interior = np.asarray(
+                union_binary.filter(ImageFilter.MaxFilter(9))) == 0
             rgb = np.asarray(photo_small)
             seen = set()
             for point_id, x, y in tracks[name]:
@@ -169,21 +175,49 @@ def extract_track_guidance(reconstruction: Path, mask_revision: Path,
                                 _box_contains(detector, u, v) and
                                 _inside(broad_interior, sx, sy) and
                                 _inside(grounded_interior, sx, sy))
+                corroborated_background = (not sky and
+                                           entry.get("guide_source") == "grounding-dino / candidate" and
+                                           isinstance(detector, dict) and
+                                           not _box_contains(detector, u, v) and
+                                           _inside(background_interior, sx, sy))
                 observations[point_id].append({
                     "name": name, "normalized_xy": [round(u, 6), round(v, 6)],
                     "supported": bool(corroborated), "sky": sky,
+                    "background_supported": bool(corroborated_background),
                     "selected": _inside(selected_array, sx, sy),
                     "union": _inside(union_array, sx, sy)})
 
     results: dict[str, dict[str, Any]] = {
         name: {"seed_candidates": [], "holdout_candidates": [],
+               "background_seed_candidates": [], "background_holdout_candidates": [],
                "supporting_3d_tracks": 0, "rejected_by_semantic_consensus": 0}
         for name in sorted(entries)}
     viable_tracks = 0
+    viable_background_tracks = 0
     for point_id, views in observations.items():
         if len(views) < minimum_support + 1 or any(view["sky"] for view in views):
             continue
         supporting = [view for view in views if view["supported"]]
+        background_supporting = [view for view in views if view["background_supported"]]
+        # A background track must agree outside both masks AND outside text
+        # detector boxes in at least four other registered photographs.
+        # A single conflicting foreground vote vetoes this negative label.
+        if (not supporting and len(background_supporting) >= max(4, minimum_support)
+                and len(background_supporting) / len(views) >= .80):
+            viable_background_tracks += 1
+            for view in views:
+                if (view["sky"] or view["union"] or
+                        len(background_supporting) - int(view["background_supported"]) < 4):
+                    continue
+                row = {"point3d_id": point_id, "normalized_xy": view["normalized_xy"],
+                       "supporting_cameras": len(background_supporting) - int(view["background_supported"]),
+                       "confidence": round(len(background_supporting)/len(views), 5),
+                       "source_views": [v["name"] for v in background_supporting
+                                        if v["name"] != view["name"]],
+                       "ground_truth": False}
+                results[view["name"]]["background_holdout_candidates" if
+                                      _seed_class(point_id) == "holdout" else
+                                      "background_seed_candidates"].append(row)
         if len(supporting) < minimum_support:
             continue
         # Conservative threshold: detector box AND both masks agree in at
@@ -216,23 +250,37 @@ def extract_track_guidance(reconstruction: Path, mask_revision: Path,
             row for row in result.pop("seed_candidates") if not row["previously_selected"]])
         result["holdout_points"] = select_spatially_distributed(
             result.pop("holdout_candidates"), max_count=80)
+        result["background_seed_points"] = select_spatially_distributed(
+            result.pop("background_seed_candidates"), max_count=12)
+        result["background_holdout_points"] = select_spatially_distributed(
+            result.pop("background_holdout_candidates"), max_count=80)
         result["seed_grid_cells"] = len({(int(p["normalized_xy"][0] * 5),
                                          int(p["normalized_xy"][1] * 5))
                                         for p in result["seed_points"]})
     return {"schema": SCHEMA, "model_sha256": _sha256(model),
             "camera_revision": str(source), "mask_revision": str(root),
             "compared_track_ids": len(observations), "viable_track_ids": viable_tracks,
+            "viable_background_track_ids": viable_background_tracks,
             "min_independent_camera_support": minimum_support,
             "rejected": dict(rejected), "images": results,
-            "limitations": "Sparse 3D tracks have no verified semantic label; masks and detector agreement only produce candidate clicks. Holdout points were never used in prompting."}
+            "limitations": "Sparse 3D tracks have no verified semantic label; independent mask and detector agreement only produce candidate foreground/background clicks. Foreground and background holdout tracks were never used in prompting."}
 
 
 def evaluate_track_resegmentation(initial: Any, proposed: Any,
-                                   seeds: list[dict], holdouts: list[dict]
+                                   seeds: list[dict], holdouts: list[dict],
+                                   background_seeds: list[dict] | None = None,
+                                   background_holdouts: list[dict] | None = None
                                    ) -> dict[str, Any]:
-    """Only adopt a revision with independent heldout improvement and no regression."""
+    """Require recovered statue tracks and no independently held-out background.
+
+    A larger mask can pass only with many spatially independent background
+    counterexamples, recovered foreground holdouts and localized expansion.
+    Without those checks, retain the original 20% growth guard.
+    """
     import numpy as np
 
+    background_seeds = background_seeds or []
+    background_holdouts = background_holdouts or []
     old = np.asarray(initial) >= 128
     new = np.asarray(proposed) >= 128
     if old.shape != new.shape or old.ndim != 2:
@@ -247,20 +295,59 @@ def evaluate_track_resegmentation(initial: Any, proposed: Any,
     lost = sum(hit(old, row) and not hit(new, row) for row in holdouts)
     missed_seeds = sum(not hit(new, row) for row in seeds)
     missed_holdout_before = sum(not hit(old, row) for row in holdouts)
+    background_violations = sum(hit(new, row) for row in background_seeds)
+    # Negative holdouts are never provided to the SAM2 predictor. They are an
+    # independent veto on new foreground, even when area statistics look good.
+    background_holdout_gained = sum(not hit(old, row) and hit(new, row)
+                                    for row in background_holdouts)
+    added = new & ~old
+    step = max(1, max(old.shape) // 128)
+    ys, xs = np.nonzero(added[::step, ::step])
+    anchors = seeds + [row for row in holdouts if not hit(old, row) and hit(new, row)]
+    supported_fraction = 0.0
+    if len(xs) and anchors:
+        xs = xs.astype(float) * step / max(1, old.shape[1]-1)
+        ys = ys.astype(float) * step / max(1, old.shape[0]-1)
+        locations = np.array([row["normalized_xy"] for row in anchors], dtype=float)
+        near = np.zeros(len(xs), dtype=bool)
+        # Bound intermediate arrays: never allocate (image pixels × tracks).
+        for index in range(0, len(xs), 4096):
+            distances = ((xs[index:index+4096, None]-locations[:, 0])**2 +
+                         (ys[index:index+4096, None]-locations[:, 1])**2)
+            near[index:index+4096] = np.min(distances, axis=1) <= .15**2
+        supported_fraction = float(np.mean(near))
+    area_ratio = new_count / max(1, old_count)
+    growth_limit = 1.20
+    if (len(seeds) >= 4 and len(background_seeds) >= 3 and
+            len(background_holdouts) >= 8 and recovered >= 2 and not lost and
+            not background_violations and not background_holdout_gained and
+            supported_fraction >= .75):
+        growth_limit = 1.55
+        if (len(background_holdouts) >= 20 and recovered >= 4 and
+                len(seeds) >= 6 and supported_fraction >= .85):
+            growth_limit = 1.90
     reasons = []
     if len(seeds) < 3 or len(holdouts) < 5:
         reasons.append("insufficient-spatially-independent-seed-or-holdout-tracks")
-    if old_count == 0 or new_count < .85 * old_count or new_count > 1.20 * old_count:
+    if old_count == 0 or area_ratio < .85 or area_ratio > growth_limit:
         reasons.append("excessive-foreground-area-change")
     if missed_seeds:
         reasons.append("new-sam2-candidate-violates-track-seed-prompts")
     if recovered < 2 or lost:
         reasons.append("heldout-tracks-do-not-show-safe-recovery")
+    if background_violations or background_holdout_gained:
+        reasons.append("independent-background-tracks-became-foreground")
     # Heldout tracks never certify the whole silhouette or an anatomy inventory.
     return {"status": "candidate / heldout-track-improvement" if not reasons
             else "rejected / insufficient-independent-subject-evidence",
             "accepted": not reasons, "reasons": reasons, "seed_count": len(seeds),
             "heldout_count": len(holdouts), "heldout_recovered": recovered,
             "heldout_lost": lost, "heldout_missing_before": missed_holdout_before,
-            "foreground_area_ratio": round(new_count / max(1, old_count), 6),
+            "background_seed_count": len(background_seeds),
+            "background_holdout_count": len(background_holdouts),
+            "background_seed_violations": background_violations,
+            "background_holdout_new_foreground": background_holdout_gained,
+            "added_foreground_near_recovered_tracks_fraction": round(supported_fraction, 6),
+            "adaptive_growth_limit": growth_limit,
+            "foreground_area_ratio": round(area_ratio, 6),
             "limitations": "A passing track test is not verified monument anatomy or geometric completeness."}

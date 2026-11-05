@@ -143,6 +143,66 @@ class TrackGuidanceTests(unittest.TestCase):
         self.assertFalse(receipt["accepted"])
         self.assertIn("excessive-foreground-area-change", receipt["reasons"])
 
+    def test_independent_background_holdouts_allow_supported_growth_but_veto_ground(self):
+        old = np.zeros((100, 100), dtype=np.uint8)
+        old[20:80, 20:70] = 255
+        recovered = old.copy()
+        recovered[20:80, 70:95] = 255  # 50% additional, track-supported body.
+        seeds = [{"normalized_xy": [x, y]} for x, y in (
+            (.75, .25), (.83, .3), (.89, .4), (.76, .55), (.84, .65), (.9, .75))]
+        heldout = [{"normalized_xy": [x, y]} for x, y in (
+            (.77, .35), (.85, .45), (.8, .6), (.88, .7),
+            (.3, .3), (.4, .4), (.5, .5), (.6, .6), (.3, .7), (.6, .75))]
+        negatives = [{"normalized_xy": [x, .05]} for x in (.1, .3, .5, .7)]
+        bg_holdout = [{"normalized_xy": [x, y]} for x, y in (
+            (.1, .15), (.3, .1), (.5, .1), (.7, .1),
+            (.1, .9), (.3, .9), (.5, .9), (.7, .9), (.9, .9), (.95, .1))]
+        old_guard = evaluate_track_resegmentation(old, recovered, seeds, heldout)
+        self.assertFalse(old_guard["accepted"])
+        evaluated = evaluate_track_resegmentation(
+            old, recovered, seeds, heldout, negatives, bg_holdout)
+        self.assertTrue(evaluated["accepted"])
+        self.assertEqual(evaluated["adaptive_growth_limit"], 1.55)
+        self.assertEqual(evaluated["background_holdout_new_foreground"], 0)
+        leaked_ground = recovered.copy()
+        leaked_ground[84:96, 20:95] = 255
+        rejected = evaluate_track_resegmentation(
+            old, leaked_ground, seeds, heldout, negatives, bg_holdout)
+        self.assertFalse(rejected["accepted"])
+        self.assertIn("independent-background-tracks-became-foreground", rejected["reasons"])
+
+    def test_cross_view_negative_prompts_require_multiple_mask_and_detector_votes(self):
+        # A consistently observed ground track must be clear of both masks
+        # *and* of all DINO component boxes in other registered views.
+        ground_id = next(point_id for point_id in range(200000, 200100)
+                         if _seed_class(point_id) == "seed")
+        for entry in self.images:
+            smaller = Image.new("L", (100, 80), 0)
+            smaller.paste(255, (20, 20, 80, 70))
+            for filename in (entry["mask"], entry["candidate_masks"]["broad"]["path"],
+                             entry["candidate_masks"]["grounded"]["path"]):
+                smaller.save(self.mask_revision / filename)
+            entry["mask_sha256"] = digest(self.mask_revision / entry["mask"])
+            for alternative in entry["candidate_masks"].values():
+                alternative["sha256"] = digest(self.mask_revision / alternative["path"])
+        model = bytearray(struct.pack("<Q", 6))
+        for camera in range(6):
+            model.extend(struct.pack("<i7di", camera+1, 1, 0, 0, 0, 0, 0, 0, 1))
+            model.extend(f"view-{camera:02d}.png".encode() + b"\0")
+            model.extend(struct.pack("<Q", len(self.features) + 1))
+            for x, y, point_id in [*self.features, (10, 60, ground_id)]:
+                model.extend(struct.pack("<ddq", x, y, point_id))
+        (self.model_dir / "images.bin").write_bytes(model)
+        result = extract_track_guidance(self.sparse, self.mask_revision, self.report)
+        self.assertEqual(result["viable_background_track_ids"], 1)
+        self.assertEqual(result["images"]["view-05.png"]["background_seed_points"][0]
+                         ["point3d_id"], ground_id)
+        # Text detector must also exclude the track: a false broad box vetoes it.
+        for entry in self.images:
+            entry["detector_guide"]["component_boxes"]["subject"] = [0, 0, 1, 1]
+        result = extract_track_guidance(self.sparse, self.mask_revision, self.report)
+        self.assertEqual(result["viable_background_track_ids"], 0)
+
     def test_targeted_resegmentation_produces_new_revision_without_touching_original(self):
         original_hashes = [item["mask_sha256"] for item in self.images]
         cached = self.root / "shared-masks"
@@ -172,6 +232,28 @@ class TrackGuidanceTests(unittest.TestCase):
         self.assertEqual([digest(self.mask_revision / entry["mask"])
                           for entry in self.images], original_hashes)
         self.assertTrue((self.root / "track-masks-r001/mask-contact-sheet.jpg").is_file())
+
+    def test_verified_background_seed_is_sent_to_sam2_as_negative_click(self):
+        evidence = extract_track_guidance(self.sparse, self.mask_revision, self.report)
+        negative = {"point3d_id": 9999, "normalized_xy": [.02, .77],
+                    "supporting_cameras": 5, "confidence": 1.0,
+                    "source_views": [f"view-{i:02d}.png" for i in range(5)],
+                    "ground_truth": False}
+        evidence["images"]["view-05.png"]["background_seed_points"] = [negative]
+        correct = np.zeros((80, 100), dtype=np.uint8)
+        correct[10:75, 10:90] = 255
+        with (patch("kumiki_blender.reconstruction.mask_track_resegmentation.extract_track_guidance",
+                    return_value=evidence),
+              patch("kumiki_blender.reconstruction.masking._load_sam2_predictor",
+                    return_value=(object(), "mps")),
+              patch("kumiki_blender.reconstruction.masking._sam2_mask",
+                    return_value=(correct, {"components": ["subject"]})) as inference):
+            report = refine_masks_from_tracks(self.sparse, self.mask_revision,
+                                              self.root / "negative-revision",
+                                              sam2_checkpoint=self.weights)
+        self.assertIn([.02, .77], inference.call_args.args[1]["background_points"])
+        revised = next(item for item in report["images"] if item["filename"] == "view-05.png")
+        self.assertEqual(revised["track_guidance"]["background_seed_count"], 1)
 
     def test_modified_source_mask_prevents_any_new_revision(self):
         path = self.mask_revision / self.images[0]["mask"]

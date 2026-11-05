@@ -63,7 +63,7 @@ def select_track_mask_candidates(reconstruction: str | Path, mask_revision: str 
     if report_path.is_symlink() or not report_path.is_file():
         raise ReferenceError("Missing source mask report")
     previous = json.loads(report_path.read_text(encoding="utf-8"))
-    if (previous.get("schema") != TRACK_SCHEMA or
+    if (previous.get("schema") not in (TRACK_SCHEMA, "track-guided-mask-revision-v1") or
             previous.get("source_revision") != str(sparse) or
             not str(previous.get("status", "")).startswith("candidate / ") or
             not isinstance(previous.get("images"), list)):
