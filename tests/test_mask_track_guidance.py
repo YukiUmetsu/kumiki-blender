@@ -456,6 +456,68 @@ class TrackGuidanceTests(unittest.TestCase):
         self.assertEqual(digest(self.mask_revision / self.images[0]["mask"]),
                          self.images[0]["mask_sha256"])
 
+    def test_generic_component_discovery_retries_sam2_and_reuses_cache(self):
+        evidence = extract_track_guidance(self.sparse, self.mask_revision, self.report)
+        for row in evidence["images"].values():
+            row.update(seed_points=[], holdout_points=[], foreground_context_points=[],
+                       background_seed_points=[], background_holdout_points=[])
+        first_item = self.images[0]
+        first_item["candidate_comparison"]["selected"] = "broad"
+        selected = self.mask_revision / first_item["mask"]
+        broad = self.mask_revision / first_item["candidate_masks"]["broad"]["path"]
+        old = Image.new("L", (100, 80), 0)
+        old.paste(255, (10, 10, 70, 75))
+        old.save(selected)
+        old.save(broad)
+        first_item["mask_sha256"] = digest(selected)
+        first_item["candidate_masks"]["broad"]["sha256"] = digest(broad)
+        (self.mask_revision / "mask-report.json").write_text(json.dumps(self.report))
+        restored = np.zeros((80, 100), dtype=np.uint8)
+        restored[10:75, 10:90] = 255
+        cache = self.root / "model-cache"
+        no_shape = {"status": "abstained / no-shape-improvement", "accepted": False,
+                    "reasons": []}
+        with (patch("kumiki_blender.reconstruction.mask_track_resegmentation.extract_track_guidance",
+                    return_value=evidence),
+              patch("kumiki_blender.reconstruction.mask_fragmentation_repair.propose_fragmentation_repair",
+                    return_value=(None, no_shape)),
+              patch("kumiki_blender.reconstruction.masking._load_sam2_predictor",
+                    return_value=(object(), "mps")) as loader,
+              patch("kumiki_blender.reconstruction.masking._sam2_mask",
+                    return_value=(restored, {"components": ["region_01"]})) as segment):
+            first = refine_masks_from_tracks(
+                self.sparse, self.mask_revision, self.root / "component-mask-r001",
+                sam2_checkpoint=self.weights, cache_dir=cache)
+            second = refine_masks_from_tracks(
+                self.sparse, self.mask_revision, self.root / "component-mask-r002",
+                sam2_checkpoint=self.weights, cache_dir=cache)
+        self.assertEqual(first["summary"]["component_recovery_accepted"], 1)
+        self.assertEqual(first["summary"]["inference_count"], 1)
+        self.assertEqual(second["summary"]["cache_hits"], 1)
+        self.assertEqual(second["summary"]["inference_count"], 0)
+        self.assertEqual(segment.call_count, 1)
+        loader.assert_called_once()
+        revised = first["images"][0]
+        self.assertTrue(revised["component_guided_replaced"])
+        self.assertEqual(revised["candidate_comparison"]["selected"],
+                         "auto-discovered-visible-regions")
+        self.assertIn("region_01", revised["component_guidance"]["guide"]["component_boxes"])
+        self.assertFalse(revised["image_repair_replaced"])
+        self.assertEqual(first_item["mask_sha256"], digest(selected))
+
+    def test_component_recovery_is_default_and_can_be_disabled(self):
+        arguments = ["improve-dense-masks", "--reconstruction", str(self.sparse),
+                     "--mask-revision", str(self.mask_revision),
+                     "--output", str(self.root / "next-revision"),
+                     "--sam2-checkpoint", str(self.weights)]
+        with patch("kumiki_blender.reconstruction.mask_track_resegmentation.refine_masks_from_tracks",
+                   return_value={"status": "candidate / mocked"}) as action:
+            with redirect_stdout(io.StringIO()):
+                self.assertEqual(main(arguments), 0)
+                self.assertEqual(main(arguments + ["--no-component-recovery"]), 0)
+        self.assertTrue(action.call_args_list[0].kwargs["component_recovery"])
+        self.assertFalse(action.call_args_list[1].kwargs["component_recovery"])
+
 
     def test_verified_background_seed_is_sent_to_sam2_as_negative_click(self):
         evidence = extract_track_guidance(self.sparse, self.mask_revision, self.report)

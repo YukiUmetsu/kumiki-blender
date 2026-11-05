@@ -22,7 +22,7 @@ from .mask_track_guidance import (SCHEMA as TRACK_SCHEMA,
 from .references import ReferenceError
 
 
-SCHEMA = "track-guided-mask-revision-v5"
+SCHEMA = "track-guided-mask-revision-v6"
 # Inference results depend on the actual guide and checkpoint, not the QA
 # algorithm version. Keep the original prompt-cache namespace so unchanged
 # guides reuse prior MPS work; new negative clicks alter the cache key.
@@ -48,6 +48,7 @@ def refine_masks_from_tracks(reconstruction: str | Path, mask_revision: str | Pa
                              sam2_size: str = "small", sam2_device: str = "auto",
                              cache_dir: str | Path | None = None,
                              max_side: int = 1280, resume: bool = False,
+                             component_recovery: bool = True,
                              progress: Callable[[int, int, str], None] | None = None
                              ) -> dict[str, Any]:
     """Build a new candidate mask revision using strict held-out feature QA."""
@@ -68,6 +69,8 @@ def refine_masks_from_tracks(reconstruction: str | Path, mask_revision: str | Pa
         raise ReferenceError("Track guidance needs existing SAM2 weights and a valid model/device")
     if not 256 <= max_side <= 4096:
         raise ReferenceError("Track guidance max_side must be 256–4096")
+    if type(component_recovery) is not bool:
+        raise ReferenceError("Component recovery must be enabled or disabled")
     if cache_dir is not None:
         cache_root = Path(cache_dir).resolve()
         if (Path(cache_dir).is_symlink() or cache_root.is_relative_to(target) or
@@ -84,7 +87,7 @@ def refine_masks_from_tracks(reconstruction: str | Path, mask_revision: str | Pa
     evidence = extract_track_guidance(source, original, prior)
     model_sha = _sha256(checkpoint)
     config = hashlib.sha256(json.dumps([
-        SCHEMA, _sha256(report_path), evidence, model_sha, sam2_size, sam2_device,
+        SCHEMA, component_recovery, _sha256(report_path), evidence, model_sha, sam2_size, sam2_device,
         max_side, [item["mask_sha256"] for item in prior["images"]],
         [[i["candidate_masks"][key]["sha256"] for key in ("broad", "grounded")]
          for i in prior["images"]]], sort_keys=True).encode()).hexdigest()
@@ -150,13 +153,20 @@ def refine_masks_from_tracks(reconstruction: str | Path, mask_revision: str | Pa
         "approved_for_reconstruction": False, "distribution_allowed": False,
         "requires_anatomy_inventory": True,
         "selection_mode": "automatic", "optional_manual_corrections": True,
+        "component_recovery": component_recovery,
         "images": [], "summary": {"accepted": 0, "rejected": 0, "abstained": 0,
                                  "cache_hits": 0, "inference_count": 0,
                                  "cross_view_only_prompted_photos": 0,
                                  "ground_repair_attempted": 0,
                                  "ground_repair_accepted": 0,
                                  "image_repair_attempted": 0,
-                                 "image_repair_accepted": 0},
+                                 "image_repair_accepted": 0,
+                                 "component_recovery_attempted": 0,
+                                 "component_recovery_accepted": 0,
+                                 "selected_track": 0,
+                                 "selected_shape": 0,
+                                 "selected_component": 0,
+                                 "selected_unchanged": 0},
         "limitations": "COLMAP tracks and text grounding do not establish statue anatomy; no reduction of camera, mask, or mesh quality gates."}
 
     def account_receipt(receipt: dict[str, Any]) -> None:
@@ -187,6 +197,18 @@ def refine_masks_from_tracks(reconstruction: str | Path, mask_revision: str | Pa
             if transient is not None:
                 transient.unlink(missing_ok=True)
 
+    def account_final_selection(entry: dict[str, Any]) -> str:
+        if entry.get("component_guided_replaced"):
+            kind = "component"
+        elif entry.get("track_guided_replaced"):
+            kind = "track"
+        elif entry.get("image_repair_replaced"):
+            kind = "shape"
+        else:
+            kind = "unchanged"
+        result["summary"]["selected_" + kind] += 1
+        return kind
+
     predictor = None
     checkpoint_report()
     for position, item in enumerate(images, 1):
@@ -209,7 +231,12 @@ def refine_masks_from_tracks(reconstruction: str | Path, mask_revision: str | Pa
                 result["summary"]["image_repair_attempted"] += 1
             if entry.get("image_repair", {}).get("accepted"):
                 result["summary"]["image_repair_accepted"] += 1
+            if entry.get("component_guidance", {}).get("attempted"):
+                result["summary"]["component_recovery_attempted"] += 1
+            if entry.get("component_guidance", {}).get("accepted"):
+                result["summary"]["component_recovery_accepted"] += 1
             result["summary"]["cache_hits"] += 1
+            account_final_selection(entry)
             if progress:
                 progress(position, len(images), "resumed")
             checkpoint_report()
@@ -235,6 +262,8 @@ def refine_masks_from_tracks(reconstruction: str | Path, mask_revision: str | Pa
         image_repair: dict[str, Any] = {"attempted": False,
                                        "accepted": False,
                                        "status": "abstained / track-guidance-first"}
+        component_receipt: dict[str, Any] = {"attempted": False, "accepted": False,
+                                            "status": "abstained / no-component-recovery"}
         # Missing-body recovery or independently verifiable ground repair can
         # trigger an automatic retry. Neither requires human approval.
         can_recover = len(seeds) >= 3 and len(holdout) >= 5
@@ -354,6 +383,81 @@ def refine_masks_from_tracks(reconstruction: str | Path, mask_revision: str | Pa
                                     proposed_mask_sha256=_sha256(repair_path))
                 shutil.copyfile(repair_path, output_mask)
                 result["summary"]["image_repair_accepted"] += 1
+        if (component_recovery and not (can_recover or can_repair) and
+                item.get("candidate_comparison", {}).get("selected") in
+                ("broad", "grounded-connected-body")):
+            from .mask_object_components import discover_visible_regions
+            from .mask_object_recovery import SCHEMA as COMPONENT_QA_SCHEMA
+            from .mask_object_recovery import evaluate_component_recovery
+            from .mask_object_components import SCHEMA as COMPONENT_DISCOVERY_SCHEMA
+            with (Image.open(source_photo) as source_image,
+                  Image.open(target / item["candidate_masks"]["broad"]["path"]) as broad,
+                  Image.open(target / item["candidate_masks"]["grounded"]["path"]) as grounded):
+                photo = source_image.convert("RGB")
+                guide, discovered = discover_visible_regions(
+                    photo, broad, grounded, detector_guide=item.get("detector_guide"),
+                    background_seeds=background_seeds)
+                component_receipt = {"attempted": False, "accepted": False,
+                                     "status": discovered["status"],
+                                     "discovery": discovered}
+                if guide is not None:
+                    component_receipt["attempted"] = True
+                    result["summary"]["component_recovery_attempted"] += 1
+                    cache_key = hashlib.sha256(json.dumps([
+                        COMPONENT_DISCOVERY_SCHEMA, COMPONENT_QA_SCHEMA,
+                        item["source_photo_sha256"], model_sha, sam2_size,
+                        sam2_device, max_side, guide,
+                        item["candidate_masks"]["broad"]["sha256"],
+                        item["candidate_masks"]["grounded"]["sha256"]],
+                        sort_keys=True).encode()).hexdigest()
+                    cached = _cached_mask(cache_root, cache_key, list(photo.size))
+                    component_receipt.update(cache_key=cache_key,
+                                             cache_hit=cached is not None,
+                                             guide=guide)
+                    try:
+                        if cached is not None:
+                            with Image.open(cached[0]) as cache_image:
+                                segmented = cache_image.copy()
+                            segment_details = cached[1]
+                            result["summary"]["cache_hits"] += 1
+                        else:
+                            if predictor is None:
+                                predictor, actual_device = _load_sam2_predictor(
+                                    checkpoint.resolve(), sam2_size, sam2_device)
+                                result["effective_sam2_device"] = actual_device
+                            binary, segment_details = _sam2_mask(photo, guide, predictor, max_side)
+                            segmented = Image.fromarray(binary, "L")
+                            result["summary"]["inference_count"] += 1
+                        raw_candidate = candidate_dir / (name + ".component-guided.png")
+                        segmented.save(raw_candidate, format="PNG", optimize=True)
+                        if cached is None:
+                            _save_mask_cache(cache_root, cache_key, raw_candidate,
+                                             list(photo.size), segment_details)
+                        component_receipt.update(
+                            proposed_mask="candidates/" + raw_candidate.name,
+                            proposed_mask_sha256=_sha256(raw_candidate),
+                            segment_details=segment_details)
+                        with Image.open(output_mask) as current:
+                            reviewed, qa = evaluate_component_recovery(
+                                photo, current, segmented, grounded, guide=guide,
+                                foreground_holdouts=holdout,
+                                background_seeds=background_seeds,
+                                background_holdouts=background_holdouts)
+                        component_receipt.update(status=qa["status"], evaluation=qa,
+                                                 accepted=reviewed is not None)
+                        if reviewed is not None:
+                            reviewed_path = candidate_dir / (name + ".component-reviewed.png")
+                            reviewed.save(reviewed_path, format="PNG", optimize=True)
+                            component_receipt.update(
+                                selected_mask="candidates/" + reviewed_path.name,
+                                selected_mask_sha256=_sha256(reviewed_path))
+                            shutil.copyfile(reviewed_path, output_mask)
+                            result["summary"]["component_recovery_accepted"] += 1
+                    except ReferenceError as error:
+                        # Automatic inference is optional: a missing package or
+                        # unsupported MPS op must not erase valid prior masks.
+                        component_receipt.update(status="abstained / component-inference-unavailable",
+                                                 error=str(error)[:240])
         account_receipt(receipt)
         with Image.open(source_photo) as photo, Image.open(output_mask) as chosen:
             histogram = chosen.histogram()
@@ -372,7 +476,9 @@ def refine_masks_from_tracks(reconstruction: str | Path, mask_revision: str | Pa
                  "track_guidance": receipt,
                  "track_guided_replaced": receipt["accepted"],
                  "image_repair": image_repair,
-                 "image_repair_replaced": image_repair["accepted"]}
+                 "image_repair_replaced": image_repair["accepted"] and not component_receipt["accepted"],
+                 "component_guidance": component_receipt,
+                 "component_guided_replaced": component_receipt["accepted"]}
         if receipt["accepted"]:
             entry["original_foreground_fraction"] = item.get("foreground_fraction")
             entry["original_candidate_comparison"] = entry.get("candidate_comparison")
@@ -382,6 +488,13 @@ def refine_masks_from_tracks(reconstruction: str | Path, mask_revision: str | Pa
                 "holdout_recovered": receipt["heldout_recovered"],
                 "holdout_lost": receipt["heldout_lost"],
                 "limitations": "Sparse tracks do not verify statue anatomy; normal mask and camera QA still apply"}
+        elif component_receipt["accepted"]:
+            entry["original_foreground_fraction"] = item.get("foreground_fraction")
+            entry["original_candidate_comparison"] = entry.get("candidate_comparison")
+            entry["candidate_comparison"] = {
+                "status": "candidate / automatic-component-recovery",
+                "selected": "auto-discovered-visible-regions",
+                "limitations": "Photo-derived region prompts cannot certify anatomy or ground boundaries"}
         elif image_repair["accepted"]:
             entry["original_foreground_fraction"] = item.get("foreground_fraction")
             entry["original_candidate_comparison"] = entry.get("candidate_comparison")
@@ -392,9 +505,10 @@ def refine_masks_from_tracks(reconstruction: str | Path, mask_revision: str | Pa
             entry["warnings"] = list(item.get("warnings", [])) + [
                 "Automatically repaired fragmented SAM2 candidate; ground boundaries remain unverified"]
         result["images"].append(entry)
+        final_kind = account_final_selection(entry)
         checkpoint_report()
         if progress:
-            progress(position, len(images), receipt["status"])
+            progress(position, len(images), "selected / " + final_kind)
     from PIL import ImageDraw
     columns, width, height = 4, 288, 238
     contact = Image.new("RGB", (columns * width,
