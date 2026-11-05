@@ -79,6 +79,75 @@ HTTPS from Meta into `~/.cache/kumiki-blender/models/`. Use
 `--no-auto-model-download` for fully offline mode or `--sam2-checkpoint` to
 choose another installed model. The checkpoint SHA-256 and origin are recorded.
 
+### Optional text-grounded subject detection (Grounding DINO → SAM2)
+
+The default SAM2-only behavior is unchanged. For photographs where an unverified
+broad SAM2 box includes nearby architecture or loses part of the monument, enable
+the optional **Grounding DINO** subject detector. It proposes text-conditioned
+bounding boxes; SAM2 then segments the original, unmodified pixels. Detection
+is **not** proof that the entire statue, face or damaged anatomy was retained.
+
+```bash
+# Keep your already-installed SAM2 and MPS Python environment.
+python -m pip install -e '.[mask-grounding]'
+
+# Use a fresh immutable revision; previous r005 masks and camera evidence stay intact.
+kumiki-blender build-statue-glb \
+  --asset-id great-sphinx \
+  --photos "$HOME/Pictures/sphinx-reconstruction-candidates/warren-2019/photos" \
+  --subject-detector grounding-dino \
+  --grounding-prompt 'great sphinx statue. stone sphinx.' \
+  --grounding-device auto
+
+# If interrupted, repeat those options with --resume.
+```
+
+For an **A/B segmentation test without rerunning COLMAP**, reuse an existing
+camera revision and write candidates to a new, separate output:
+
+```bash
+RUN='.review/great-sphinx/statue-hq-r005'
+NEW='.review/great-sphinx/grounded-masks-r001'
+kumiki-blender prepare-dense-masks \
+  --reconstruction "$RUN/cameras" --output "$NEW" \
+  --segmenter sam2 --sam2-size small --sam2-device mps \
+  --sam2-checkpoint "$HOME/.cache/kumiki-blender/models/sam2.1_hiera_small.pt" \
+  --subject-detector grounding-dino \
+  --grounding-prompt 'great sphinx statue. stone sphinx.' \
+  --grounding-device auto \
+  --cache-dir '.review/great-sphinx/_statue_mask_cache'
+kumiki-blender compare-dense-masks \
+  --reconstruction "$RUN/cameras" \
+  --baseline-masks "$RUN/masks/masks" \
+  --candidate-masks "$NEW/masks" \
+  --output '.review/great-sphinx/grounded-mask-comparison-r001'
+```
+
+Compare the new masks *visually* with the originals; cross-view score changes
+alone cannot establish geometry or anatomy accuracy. A separate candidate
+revision never overwrites the prior masks, photographs or sparse cameras.
+
+The bundled detector choice is Hugging Face
+`IDEA-Research/grounding-dino-tiny` at immutable revision
+`a2bb814dd30d776dcf7e30523b00659f4f141c71` (Apache-2.0 model card).
+The first enabled run downloads approximately 689 MB of `safetensors` weights
+plus configuration/tokenizer files to the Hugging Face model cache. It never
+loads the pickle checkpoint or executes remote model code. `--no-auto-model-download`
+requires that revision already be cached, or provide
+`--grounding-model-dir /path/to/pinned/snapshot`. Model weight SHA-256,
+prompt and device are part of the immutable revision settings and cache identity.
+
+On Apple Silicon, `--grounding-device auto` tries MPS first and retries the
+detector on CPU if an MPS inference operator fails; `--grounding-device cpu`
+forces CPU. The main SAM2 model still uses `--sam2-device` independently.
+Grounding detections are cached by exact image content, model weights and text
+prompt, and are reused independently of SAM2 mask caches. A missed detection
+falls back to a broad **unverified** SAM2 candidate and explicitly blocks
+the mask QA gate until reviewed. Normalized RGB photographs are never cut out.
+No automatic majority-vote correction is applied to reconstructed 3D tracks.
+Do not judge improvements solely from a lower cross-view disagreement rate;
+inspect mask contact sheets and real photographs before continuing to dense 3D.
+
 `--front-photo` is optional. The pipeline looks for a registered photo with an
 unambiguous front-facing filename hint and marks it **tentative**, never a
 verified anatomical orientation. If none can be identified, camera angles are
@@ -135,8 +204,11 @@ kumiki-blender recover-registered-cameras \
   --output .review/great-sphinx/manual-camera-recovery-r01
 ```
 
-If no guide file is supplied, SAM2 automatically samples conservative blue-sky
-negative points and starts with a broad subject prompt. Those mask candidates
+If no guide file or Grounding DINO detector is supplied, SAM2 automatically
+samples conservative blue-sky negative points and starts with a broad subject
+prompt. When Grounding DINO is enabled, its text-conditioned candidate box
+replaces the broad box when it confidently detects the requested subject.
+Those mask candidates
 are reviewed by cross-view and contamination QA, not treated as hand-labeled
 statue parts. The output remains **private and unverified** even after automated
 gates pass. Optional `--mask-guides /private/guides.json` supplies head/headdress/torso/

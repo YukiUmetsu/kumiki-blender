@@ -20,6 +20,44 @@ from kumiki_blender.reconstruction.statue_pipeline import (
 
 
 class StatuePipelineTests(unittest.TestCase):
+    def test_grounding_failure_is_a_mask_quality_blocker(self):
+        issues = _mask_warnings({"images": [{"filename": "photo-0001.png",
+                                              "foreground_fraction": 0.25,
+                                              "warnings": [], "missing_parts": [],
+                                              "background_seed_violations": 0,
+                                              "subject_detection": {
+                                                  "status": "uncertain / no-confident-detection"}}]},
+                                {"mixed_label_fraction": 0.02}, 0.12)
+        self.assertTrue(any("no reliable subject" in issue for issue in issues))
+
+    def test_grounded_sam2_is_passed_to_preprocessing_and_rectified_masks(self):
+        run, _ = self.runner()
+        command_lines = {}
+
+        def observed(argv, log, env):
+            command_lines[log.stem] = argv
+            return run(argv, log, env)
+
+        model_dir = self.root / "grounding-model"
+        model_dir.mkdir()
+        (model_dir / "model.safetensors").write_bytes(b"pinned")
+        settings = StatuePipelineSettings(
+            front_photo="image-0.png", sam2_checkpoint=self.model,
+            subject_detector="grounding-dino", grounding_prompt="stone sphinx statue.",
+            grounding_model_dir=model_dir)
+        with (patch("kumiki_blender.reconstruction.subject_grounding.resolve_grounding_model",
+                    return_value=model_dir),
+              patch("kumiki_blender.reconstruction.subject_grounding.grounding_identity",
+                    return_value="pinned:sha")):
+            self.build(observed, settings)
+        for phase in ("photo_preprocess", "masks"):
+            argv = command_lines[phase]
+            self.assertIn("--subject-detector", argv)
+            self.assertEqual(argv[argv.index("--subject-detector") + 1], "grounding-dino")
+            self.assertEqual(argv[argv.index("--grounding-prompt") + 1], "stone sphinx statue.")
+        receipt = json.loads((self.output / "statue-pipeline-report.json").read_text())
+        self.assertEqual(receipt["status"], "private-GLB-candidate / review-required")
+
     def setUp(self):
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)

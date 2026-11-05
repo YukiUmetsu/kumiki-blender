@@ -24,6 +24,40 @@ from kumiki_blender.reconstruction.references import ReferenceError
 
 
 class DenseMaskTests(unittest.TestCase):
+    def test_grounded_sam2_receipts_and_mask_cache_are_separate(self):
+        weights = self.root / "sam2-small.pt"
+        weights.write_bytes(b"unit-test-checkpoint")
+        model_dir = self.root / "grounding"
+        model_dir.mkdir()
+        (model_dir / "model.safetensors").write_bytes(b"fake-grounding")
+        cache = self.root / "shared-mask-cache"
+        binary = np.zeros((256, 320), dtype=np.uint8)
+        binary[20:220, 108:225] = 255
+        from kumiki_blender.reconstruction.masking import _guide
+        proposed = _guide({"box": [0.25, 0.1, 0.75, 0.93]}, default_box=(0.12, 0.04, 0.88, 0.96))
+        with (patch("kumiki_blender.reconstruction.subject_grounding.resolve_grounding_model",
+                    return_value=model_dir),
+              patch("kumiki_blender.reconstruction.subject_grounding.grounding_identity",
+                    return_value="pinned:test-sha"),
+              patch("kumiki_blender.reconstruction.subject_grounding.grounded_guide",
+                    return_value=(proposed, {"status": "candidate / text-grounded-box", "cache_hit": True})),
+              patch("kumiki_blender.reconstruction.masking._load_sam2_predictor",
+                    return_value=(object(), "mps")),
+              patch("kumiki_blender.reconstruction.masking._sam2_mask",
+                    return_value=(binary, {"components": ["subject"], "missing_parts": [],
+                                           "background_seed_violations": 0})) as inference):
+            first = generate_rectified_masks(
+                self.sparse, self.root / "grounded-masks", segmenter="sam2",
+                sam2_checkpoint=weights, sam2_device="mps", cache_dir=cache,
+                subject_detector="grounding-dino", grounding_prompt="sphinx statue.",
+                grounding_model_dir=model_dir)
+        self.assertEqual(first["subject_detector"], "grounding-dino")
+        self.assertEqual(first["grounding_identity"], "pinned:test-sha")
+        self.assertEqual(first["images"][0]["guide"]["box"], proposed["box"])
+        self.assertEqual(first["images"][0]["guide_source"], "grounding-dino / candidate")
+        self.assertEqual(first["cache"]["hits"], 3)
+        self.assertEqual(inference.call_count, 1)
+
     def test_sam2_checkpoint_path_survives_progress_reporting(self):
         weights = self.root / "sam2-small.pt"
         weights.write_bytes(b"unit-test-checkpoint")

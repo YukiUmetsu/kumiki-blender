@@ -212,9 +212,12 @@ def _run_rembg_isolated(normalized: Path, checkpoint: Path, output: Path, *,
 
 
 def _foreground_key(normalized_sha: str, checkpoint_sha: str, size: str,
-                    auxiliary_sha: str | None = None) -> str:
+                    auxiliary_sha: str | None = None,
+                    grounding_identity: str | None = None,
+                    grounding_prompt: str | None = None) -> str:
     fields = json.dumps([FOREGROUND_SCHEMA, normalized_sha, checkpoint_sha,
-                         size, 1280, auxiliary_sha])
+                         size, 1280, auxiliary_sha] +
+                        ([grounding_identity, grounding_prompt] if grounding_identity else []))
     return hashlib.sha256(fields.encode()).hexdigest()
 
 
@@ -227,8 +230,10 @@ def _foreground_preview(normalized: Path, cache: Path, source_sha: str,
     from .source_mask_refinement import (mask_agreement, propose_refinement_guide,
                                          select_refined_candidate)
 
-    key = _foreground_key(_digest(normalized), checkpoint_sha, size,
-                          state.get("auxiliary_model_sha256"))
+    normalized_sha = _digest(normalized)
+    key = _foreground_key(normalized_sha, checkpoint_sha, size,
+                          state.get("auxiliary_model_sha256"),
+                          state.get("grounding_identity"), state.get("grounding_prompt"))
     folder = _folder(cache, source_sha)
     mask = folder / f"foreground-{key}.png"
     preview = folder / f"isolated-{key}.png"
@@ -272,7 +277,17 @@ def _foreground_preview(normalized: Path, cache: Path, source_sha: str,
         state["predictor"], state["device"] = predictor_loader(checkpoint, size, device)
     with Image.open(normalized) as source:
         photo = source.convert("RGB")
-    guide = _auto_sam2_guide(photo, _DEFAULT_BOX)
+    subject_detection = None
+    if state.get("grounding_identity"):
+        from .subject_grounding import grounded_guide
+        guide, subject_detection = grounded_guide(
+            photo, image_sha256=normalized_sha, cache_root=cache,
+            model_dir=state["grounding_model_dir"],
+            model_identity=state["grounding_identity"],
+            prompt=state["grounding_prompt"], device=state["grounding_device"],
+            state=state, default_box=_DEFAULT_BOX)
+    else:
+        guide = _auto_sam2_guide(photo, _DEFAULT_BOX)
     mask_array, details = _sam2_mask(photo, guide, state["predictor"])
     refinement = {"status": "unavailable / no-independent-background-candidate",
                   "attempted": False, "accepted": False}
@@ -296,7 +311,9 @@ def _foreground_preview(normalized: Path, cache: Path, source_sha: str,
                           auxiliary_file)
             addition, refinement = propose_refinement_guide(mask_array, independent)
             if addition is not None:
-                guided = _guide({"foreground_points": addition["foreground_points"],
+                guided = _guide({"box": guide["box"],
+                                 "foreground_points": (guide["foreground_points"] +
+                                                       addition["foreground_points"])[:100],
                                  "background_points": (guide["background_points"] +
                                                        addition["background_points"])[:36]},
                                 default_box=_DEFAULT_BOX)
@@ -331,6 +348,8 @@ def _foreground_preview(normalized: Path, cache: Path, source_sha: str,
               "device": state["device"], "mask_sha256": _digest(mask),
               "isolated_sha256": _digest(preview),
               "auxiliary_model_sha256": state.get("auxiliary_model_sha256"),
+              "subject_detection": subject_detection,
+              "grounding_identity": state.get("grounding_identity"),
               "auxiliary_mask_path": str(auxiliary_file) if auxiliary_file else None,
               "refinement": refinement,
               "foreground_fraction": round(occupied, 6),
@@ -345,6 +364,10 @@ def _foreground_preview(normalized: Path, cache: Path, source_sha: str,
 def prepare_statue_photo_cache(references: ReferenceSet, cache: Path, output: Path, *,
                                checkpoint: Path | None = None, sam2_size: str = "small",
                                sam2_device: str = "mps", foreground: bool = True,
+                               subject_detector: str = "none",
+                               grounding_model_dir: Path | None = None,
+                               grounding_prompt: str | None = None,
+                               grounding_device: str = "auto",
                                predictor_loader: Callable[..., Any] | None = None,
                                background_proposer: Callable[..., Any] | None = None,
                                progress: Callable[[int, int, bool], None] | None = None,
@@ -360,6 +383,16 @@ def prepare_statue_photo_cache(references: ReferenceSet, cache: Path, output: Pa
         raise ReferenceError("SAM2 foreground preparation needs an existing checkpoint")
     if sam2_size not in ("tiny", "small", "base_plus", "large"):
         raise ReferenceError("Invalid SAM2 checkpoint size")
+    if subject_detector not in ("none", "grounding-dino") or grounding_device not in ("auto", "cpu", "mps"):
+        raise ReferenceError("Unsupported subject detector or device")
+    if subject_detector != "none" and (not foreground or not grounding_prompt):
+        raise ReferenceError("Grounding DINO needs foreground masks and a text prompt")
+    grounding_folder = None
+    grounding_id = None
+    if subject_detector == "grounding-dino":
+        from .subject_grounding import grounding_identity, resolve_grounding_model
+        grounding_folder = resolve_grounding_model(grounding_model_dir)
+        grounding_id = grounding_identity(grounding_folder)
     cache.mkdir(parents=True, exist_ok=True)
     sha = _digest(checkpoint) if foreground and checkpoint is not None else None
     auxiliary_path, auxiliary_status = (_offline_isnet_model()
@@ -373,7 +406,10 @@ def prepare_statue_photo_cache(references: ReferenceSet, cache: Path, output: Pa
         prior = _read_entry(output / "photo-preprocess-report.json")
         if (not output.is_dir() or prior is None or
                 prior.get("source_manifest_sha256") != references.manifest_sha256 or
-                prior.get("foreground_model_sha256") != sha):
+                prior.get("foreground_model_sha256") != sha or
+                prior.get("subject_detector", "none") != subject_detector or
+                prior.get("grounding_identity") != grounding_id or
+                prior.get("grounding_prompt") != grounding_prompt):
             raise ReferenceError("Cannot resume preprocessing with changed photos or model")
         if prior.get("auxiliary_model_sha256") != auxiliary_identity:
             # A native abort during the previous optional-model probe can
@@ -387,11 +423,16 @@ def prepare_statue_photo_cache(references: ReferenceSet, cache: Path, output: Pa
         "auxiliary_model_sha256": auxiliary_identity,
         "auxiliary_model_path": auxiliary_path,
         "background_proposer": background_proposer,
+        "grounding_model_dir": grounding_folder, "grounding_identity": grounding_id,
+        "grounding_prompt": grounding_prompt, "grounding_device": grounding_device,
     }
     report: dict[str, Any] = {"schema_version": 1, "asset_id": references.asset_id,
                               "status": "running", "cache_root": str(cache.resolve()),
                               "source_manifest_sha256": references.manifest_sha256,
                               "foreground_model_sha256": sha, "source_images": len(references.images),
+                              "subject_detector": subject_detector,
+                              "grounding_identity": grounding_id,
+                              "grounding_prompt": grounding_prompt,
                               "images": [], "normalized_hits": 0, "normalized_misses": 0,
                               "foreground_hits": 0, "foreground_misses": 0,
                               "qa_hits": 0, "qa_misses": 0,

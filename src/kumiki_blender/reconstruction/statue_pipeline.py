@@ -32,6 +32,10 @@ class StatuePipelineSettings:
     sam2_checkpoint: Path | None = None
     sam2_size: str = "small"
     sam2_device: str = "mps"
+    subject_detector: str = "none"
+    grounding_prompt: str | None = None
+    grounding_device: str = "auto"
+    grounding_model_dir: Path | None = None
     matching_device: str = "mps"
     mask_guides: Path | None = None
     masks_dir: Path | None = None
@@ -58,6 +62,17 @@ class StatuePipelineSettings:
             raise ReferenceError("Unsupported SAM2 model size")
         if self.sam2_device not in ("mps", "cpu", "auto"):
             raise ReferenceError("Unsupported SAM2 device")
+        if self.subject_detector not in ("none", "grounding-dino"):
+            raise ReferenceError("Unsupported subject detector")
+        if self.grounding_device not in ("auto", "mps", "cpu"):
+            raise ReferenceError("Unsupported Grounding DINO device")
+        if self.grounding_prompt is not None and (not self.grounding_prompt.strip() or len(self.grounding_prompt) > 400):
+            raise ReferenceError("Grounding DINO prompt needs 1–400 characters")
+        if self.subject_detector != "none" and self.masks_dir is not None:
+            raise ReferenceError("Grounding DINO is not used with --masks-dir reviewed masks")
+        if self.grounding_model_dir is not None and (
+                self.grounding_model_dir.is_symlink() or not self.grounding_model_dir.is_dir()):
+            raise ReferenceError("Grounding DINO weights must be in an existing directory")
         if self.matching_device not in ("mps", "torch-cpu"):
             raise ReferenceError("Statue LightGlue matching device must be mps or torch-cpu")
         if not 1024 <= self.max_colmap_rss_mb <= 131072:
@@ -252,6 +267,9 @@ def _mask_warnings(mask_report: dict[str, Any], audit: dict[str, Any],
             warnings.append(f"{name}: foreground extent looks implausible")
         if item.get("missing_parts") or item.get("background_seed_violations"):
             warnings.append(f"{name}: anatomy missing or background prompts violated")
+        detection = item.get("subject_detection")
+        if isinstance(detection, dict) and str(detection.get("status", "")).startswith("uncertain"):
+            warnings.append(f"{name}: text grounding found no reliable subject; review this mask")
         if any("Foreground touches photo border" in warning
                for warning in item.get("warnings", [])):
             warnings.append(f"{name}: segmentation needs guided anatomy/boundary review")
@@ -322,6 +340,18 @@ def build_statue_glb(
                                      "tick", "preflight", "Downloading official SAM2 weights: "
                                      + (f"{count * 100 // total}% ({count // 1048576} MiB)"
                                         if total else f"{count // 1048576} MiB"))))
+    grounding_folder = None
+    grounding_id = None
+    effective_prompt = None
+    if settings.subject_detector == "grounding-dino":
+        if importlib.util.find_spec("transformers") is None:
+            raise ReferenceError("Grounding DINO requires pip install -e '.[mask-grounding]'")
+        from .subject_grounding import grounding_identity, resolve_grounding_model
+        effective_prompt = settings.grounding_prompt or asset_id.replace("-", " ") + "."
+        emit("tick", "preflight", "Resolving pinned Grounding DINO model")
+        grounding_folder = resolve_grounding_model(
+            settings.grounding_model_dir, allow_download=settings.auto_download_model)
+        grounding_id = grounding_identity(grounding_folder)
     refs = load_photo_folder(photos, asset_id)
     audit_reference_set(refs)
     target = output.resolve()
@@ -347,6 +377,11 @@ def build_statue_glb(
         "ai_bridge_workflow_sha256": (_sha256_file(settings.ai_bridge_workflow)
                                       if settings.ai_bridge_workflow else None),
     }
+    if grounding_id is not None:
+        settings_payload.update(subject_detector=settings.subject_detector,
+                                grounding_identity=grounding_id,
+                                grounding_prompt=effective_prompt,
+                                grounding_device=settings.grounding_device)
     # Preserve compatibility with immutable older MPS revision fingerprints.
     if settings.matching_device != "mps":
         settings_payload["matching_device"] = settings.matching_device
@@ -402,6 +437,13 @@ def build_statue_glb(
                   "model_glb": None}
     report["model_checkpoint"] = ({"path": str(checkpoint_file), "source": checkpoint_source,
                                     "sha256": _sha256_file(checkpoint_file)} if checkpoint_file else None)
+    if grounding_id is not None:
+        from .subject_grounding import MODEL_ID, MODEL_REVISION
+        report["subject_detector"] = {
+            "kind": "grounding-dino", "model": MODEL_ID, "revision": MODEL_REVISION,
+            "identity": grounding_id, "prompt": effective_prompt,
+            "device": settings.grounding_device,
+            "status": "candidate / not-verified-foreground-or-geometry"}
 
     def checkpoint(status: str, stage: str | None = None, warnings: list[str] | None = None):
         report.update(status=status, stopped_stage=stage, warnings=warnings or [])
@@ -482,6 +524,11 @@ def build_statue_glb(
         prep_argv.append("--no-foreground")
     elif checkpoint_file is not None:
         prep_argv += ["--sam2-checkpoint", str(checkpoint_file)]
+    if grounding_folder is not None:
+        prep_argv += ["--subject-detector", "grounding-dino",
+                      "--grounding-model-dir", str(grounding_folder),
+                      "--grounding-prompt", effective_prompt,
+                      "--grounding-device", settings.grounding_device]
     if resume and prepared.exists() and "photo_preprocess" not in report["completed_stages"]:
         prep_argv.append("--resume")
     prepared_report = run_stage("photo_preprocess", prep_argv,
@@ -664,6 +711,11 @@ def build_statue_glb(
             "--sam2-size", settings.sam2_size, "--sam2-device", settings.sam2_device,
             "--sam2-checkpoint", str(checkpoint_file),
             "--cache-dir", str(shared_cache)]
+        if grounding_folder is not None:
+            mask_args += ["--subject-detector", "grounding-dino",
+                          "--grounding-model-dir", str(grounding_folder),
+                          "--grounding-prompt", effective_prompt,
+                          "--grounding-device", settings.grounding_device]
         if settings.mask_guides:
             mask_args += ["--guides", str(settings.mask_guides.resolve())]
         if resume and mask_dir.exists() and "masks" not in report["completed_stages"]:

@@ -394,6 +394,10 @@ def generate_rectified_masks(reconstruction: str | Path, output: str | Path, *,
                              sam2_size: str = "small",
                              sam2_device: str = "auto",
                              cache_dir: str | Path | None = None,
+                             subject_detector: str = "none",
+                             grounding_prompt: str | None = None,
+                             grounding_model_dir: str | Path | None = None,
+                             grounding_device: str = "auto",
                              resume: bool = False) -> dict[str, Any]:
     """Make immutable mask candidates, overlays and QA metrics for every photo."""
     if type(max_side) is not int or not 256 <= max_side <= 4096:
@@ -406,6 +410,10 @@ def generate_rectified_masks(reconstruction: str | Path, output: str | Path, *,
         raise ReferenceError("Rembg uses semantic inference; use grabcut for manual per-photo box/point guides")
     if sam2_size not in _SAM2_CONFIGS or sam2_device not in ("auto", "cpu", "mps"):
         raise ReferenceError("SAM 2.1 size must be tiny/small/base_plus/large and device auto/cpu/mps")
+    if subject_detector not in ("none", "grounding-dino") or grounding_device not in ("auto", "cpu", "mps"):
+        raise ReferenceError("Unsupported subject detector or Grounding DINO device")
+    if subject_detector != "none" and (segmenter != "sam2" or not grounding_prompt):
+        raise ReferenceError("Grounding DINO needs SAM2 and --grounding-prompt")
     cache_root = Path(cache_dir).resolve() if cache_dir is not None else None
     if cache_root is not None and (Path(cache_dir).is_symlink() or
                                    (cache_root.exists() and not cache_root.is_dir())):
@@ -428,6 +436,14 @@ def generate_rectified_masks(reconstruction: str | Path, output: str | Path, *,
     model_sha = None
     predictor = None
     device = None
+    grounding_folder = None
+    grounding_id = None
+    grounding_state: dict[str, Any] = {}
+    if subject_detector == "grounding-dino":
+        from .subject_grounding import grounding_identity, resolve_grounding_model
+        grounding_folder = resolve_grounding_model(
+            Path(grounding_model_dir) if grounding_model_dir is not None else None)
+        grounding_id = grounding_identity(grounding_folder)
     if segmenter == "sam2":
         assert checkpoint is not None
         model_sha = _sha256(checkpoint)
@@ -483,6 +499,9 @@ def generate_rectified_masks(reconstruction: str | Path, output: str | Path, *,
                 prior.get("segmentation_model") != expected_model or
                 prior.get("segmentation_model_sha256") != model_sha or
                 prior.get("max_side") != max_side or prior.get("iterations") != iterations or
+                prior.get("subject_detector", "none") != subject_detector or
+                prior.get("grounding_identity") != grounding_id or
+                prior.get("grounding_prompt") != grounding_prompt or
                 prior.get("cache", {}).get("directory") !=
                 (str(cache_root) if cache_root else None)):
             raise ReferenceError("Cannot resume masks with changed photos, model, or settings")
@@ -504,6 +523,9 @@ def generate_rectified_masks(reconstruction: str | Path, output: str | Path, *,
         "segmentation_model_sha256": model_sha,
         "segmentation_model_checkpoint": str(checkpoint) if checkpoint else None,
         "segmentation_device": device,
+        "subject_detector": subject_detector,
+        "grounding_identity": grounding_id,
+        "grounding_prompt": grounding_prompt,
         "automatic_guidance": segmenter == "sam2" and guides is None,
         "requires_anatomy_inventory": segmenter == "sam2",
         "cache": {"directory": str(cache_root) if cache_root else None,
@@ -525,17 +547,32 @@ def generate_rectified_masks(reconstruction: str | Path, output: str | Path, *,
                 expected = images[filename]["dimensions"]
                 if list(original.size) != expected:
                     raise ReferenceError(f"Rectified photo size changed: {filename}")
-                active_guide = (_auto_sam2_guide(original, default_box)
-                                if segmenter == "sam2" and guides is None
-                                else guide_map[filename])
-                fingerprint = hashlib.sha256(json.dumps({
+                detection = None
+                if segmenter == "sam2" and guides is None and grounding_folder is not None:
+                    from .subject_grounding import grounded_guide
+                    assert grounding_id is not None and grounding_prompt is not None
+                    active_guide, detection = grounded_guide(
+                        original, image_sha256=images[filename]["sha256"],
+                        cache_root=cache_root or target.parent / "_grounding_detection_cache",
+                        model_dir=grounding_folder, model_identity=grounding_id,
+                        prompt=grounding_prompt, device=grounding_device,
+                        state=grounding_state, default_box=default_box)
+                else:
+                    active_guide = (_auto_sam2_guide(original, default_box)
+                                    if segmenter == "sam2" and guides is None
+                                    else guide_map[filename])
+                fingerprint_input = {
                     "schema": _MASK_CACHE_SCHEMA,
                     "source_sha256": images[filename]["sha256"],
                     "dimensions": expected, "segmenter": segmenter,
                     "model_sha256": model_sha, "model_size": sam2_size if segmenter == "sam2" else None,
                     "guide": active_guide if segmenter != "rembg" else None,
                     "max_side": max_side, "iterations": iterations if segmenter == "grabcut" else None,
-                }, sort_keys=True).encode()).hexdigest()
+                }
+                if grounding_id is not None:
+                    fingerprint_input["grounding_identity"] = grounding_id
+                    fingerprint_input["grounding_prompt"] = grounding_prompt
+                fingerprint = hashlib.sha256(json.dumps(fingerprint_input, sort_keys=True).encode()).hexdigest()
                 cached = _cached_mask(cache_root, fingerprint, expected)
                 details: dict[str, Any] = {}
                 if cached is not None:
@@ -565,7 +602,11 @@ def generate_rectified_masks(reconstruction: str | Path, output: str | Path, *,
                 if segmenter == "sam2" and not active_guide["part_points"]:
                     warnings.append("No visible-anatomy landmarks: mark head/torso/paws/tail where visible")
                 if segmenter == "sam2" and guides is None:
-                    warnings.append("SAM 2.1 used automatically generated background prompts and an unverified subject box")
+                    warnings.append("Automatic subject prompts are candidates, not verified anatomy")
+                if detection is not None and detection["status"].startswith("uncertain"):
+                    warnings.append("Grounding DINO could not confidently identify the subject; used broad SAM2 box")
+                if details.get("sam2_candidate_disagreement_fraction", 0) > 0.10:
+                    warnings.append("SAM2 mask candidates disagree; inspect anatomy and boundaries")
                 for part in details.get("missing_parts", []):
                     warnings.append(f"Missing {part} landmark: correct the box, prompts, or include polygon")
                 if details.get("background_seed_violations", 0):
@@ -599,9 +640,13 @@ def generate_rectified_masks(reconstruction: str | Path, output: str | Path, *,
                     "preview": str(preview.relative_to(target)),
                     "foreground_fraction": occupancy,
                     "guide": active_guide, "warnings": warnings,
-                    "guide_source": ("auto-sky-negative-prompts / tentative"
+                    "guide_source": ("grounding-dino / candidate" if detection and
+                                     detection["status"].startswith("candidate") else
+                                     "grounding-dino / no-detection" if detection else
+                                     "auto-sky-negative-prompts / tentative"
                                      if segmenter == "sam2" and guides is None else
                                      "user-guides" if guides is not None else "default-box"),
+                    "subject_detection": detection,
                     "missing_parts": details.get("missing_parts", []),
                     "background_seed_violations": details.get("background_seed_violations", 0),
                     "parts_verified": sorted(active_guide["part_points"]),

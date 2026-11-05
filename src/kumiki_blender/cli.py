@@ -294,6 +294,13 @@ def main(argv: list[str] | None = None) -> int:
                            help="Never download missing model weights; search local caches only")
     statue_glb.add_argument("--sam2-size", choices=("tiny", "small", "base_plus", "large"), default="small")
     statue_glb.add_argument("--sam2-device", choices=("auto", "mps", "cpu"), default="mps")
+    statue_glb.add_argument("--subject-detector", choices=("none", "grounding-dino"), default="none",
+                           help="Optional text-grounded subject boxes to guide SAM2; never verified masks")
+    statue_glb.add_argument("--grounding-prompt",
+                           help="Object noun phrase(s), e.g. 'great sphinx statue. stone sphinx.'")
+    statue_glb.add_argument("--grounding-model-dir", type=Path,
+                           help="Existing pinned Grounding DINO model snapshot; otherwise auto-download/cache")
+    statue_glb.add_argument("--grounding-device", choices=("auto", "mps", "cpu"), default="auto")
     statue_glb.add_argument("--matching-device", choices=("mps", "torch-cpu"), default="mps",
                            help="Use Apple MPS LightGlue or PyTorch CPU fallback")
     statue_glb.add_argument("--mask-guides", type=Path,
@@ -327,6 +334,10 @@ def main(argv: list[str] | None = None) -> int:
     photo_cache_parser.add_argument("--sam2-checkpoint", type=Path)
     photo_cache_parser.add_argument("--sam2-size", choices=("tiny", "small", "base_plus", "large"), default="small")
     photo_cache_parser.add_argument("--sam2-device", choices=("auto", "mps", "cpu"), default="mps")
+    photo_cache_parser.add_argument("--subject-detector", choices=("none", "grounding-dino"), default="none")
+    photo_cache_parser.add_argument("--grounding-prompt")
+    photo_cache_parser.add_argument("--grounding-model-dir", type=Path)
+    photo_cache_parser.add_argument("--grounding-device", choices=("auto", "mps", "cpu"), default="auto")
     photo_cache_parser.add_argument("--no-foreground", action="store_true")
     photo_cache_parser.add_argument("--resume", action="store_true")
     recovery_parser = subcommands.add_parser(
@@ -515,6 +526,10 @@ def main(argv: list[str] | None = None) -> int:
     photo_mask_parser.add_argument("--sam2-size", choices=("tiny", "small", "base_plus", "large"),
                                    default="small")
     photo_mask_parser.add_argument("--sam2-device", choices=("auto", "mps", "cpu"), default="auto")
+    photo_mask_parser.add_argument("--subject-detector", choices=("none", "grounding-dino"), default="none")
+    photo_mask_parser.add_argument("--grounding-prompt")
+    photo_mask_parser.add_argument("--grounding-model-dir", type=Path)
+    photo_mask_parser.add_argument("--grounding-device", choices=("auto", "mps", "cpu"), default="auto")
     photo_mask_parser.add_argument("--cache-dir", type=Path,
                                    help="Optional content-addressed cache of masks for identical rectified photos")
     photo_mask_parser.add_argument("--resume", action="store_true",
@@ -847,6 +862,10 @@ def main(argv: list[str] | None = None) -> int:
                     iterations=args.iterations, segmenter=args.segmenter,
                     sam2_checkpoint=args.sam2_checkpoint, sam2_size=args.sam2_size,
                     sam2_device=args.sam2_device, cache_dir=args.cache_dir,
+                    subject_detector=args.subject_detector,
+                    grounding_prompt=args.grounding_prompt,
+                    grounding_model_dir=args.grounding_model_dir,
+                    grounding_device=args.grounding_device,
                     resume=args.resume)
             except ReferenceError as error:
                 raise RecipeError(str(error)) from error
@@ -1264,6 +1283,10 @@ def main(argv: list[str] | None = None) -> int:
                     load_photo_folder(args.photos, args.asset_id), args.cache_dir, args.output,
                     checkpoint=args.sam2_checkpoint, sam2_size=args.sam2_size,
                     sam2_device=args.sam2_device, foreground=not args.no_foreground,
+                    subject_detector=args.subject_detector,
+                    grounding_model_dir=args.grounding_model_dir,
+                    grounding_prompt=args.grounding_prompt,
+                    grounding_device=args.grounding_device,
                     progress=lambda count, total, hit: print(
                         f"Photo QA {count}/{total}: normalized {'cache hit' if hit else 'processed'}",
                         file=sys.stderr, flush=True),
@@ -1294,6 +1317,10 @@ def main(argv: list[str] | None = None) -> int:
                     sam2_checkpoint=args.sam2_checkpoint,
                     auto_download_model=not args.no_auto_model_download,
                     sam2_size=args.sam2_size, sam2_device=args.sam2_device,
+                    subject_detector=args.subject_detector,
+                    grounding_prompt=args.grounding_prompt,
+                    grounding_device=args.grounding_device,
+                    grounding_model_dir=args.grounding_model_dir,
                     matching_device=args.matching_device,
                     mask_guides=args.mask_guides, masks_dir=args.masks_dir,
                     mask_cache_dir=args.mask_cache_dir, photo_cache_dir=args.photo_cache_dir,

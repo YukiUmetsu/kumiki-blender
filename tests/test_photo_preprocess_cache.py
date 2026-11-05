@@ -27,6 +27,41 @@ from kumiki_blender.reconstruction.splat_input import load_photo_folder
 
 
 class PhotoPreprocessCacheTests(unittest.TestCase):
+    def test_grounded_foreground_cache_only_processes_new_photos(self):
+        model_dir = self.root / "grounding"
+        model_dir.mkdir()
+        (model_dir / "model.safetensors").write_bytes(b"pinned-weights")
+        calls = []
+
+        def grounded(photo, **kwargs):
+            calls.append(kwargs["image_sha256"])
+            from kumiki_blender.reconstruction.masking import _guide
+            return (_guide({"box": [0.1, 0.05, 0.9, 0.95]},
+                           default_box=(0.12, 0.04, 0.88, 0.96)),
+                    {"status": "candidate / text-grounded-box", "cache_hit": False})
+
+        def run(ordinal):
+            return prepare_statue_photo_cache(
+                load_photo_folder(self.photos, "great-sphinx"), self.cache,
+                self.root / f"grounded-{ordinal}", checkpoint=self.checkpoint,
+                subject_detector="grounding-dino", grounding_model_dir=model_dir,
+                grounding_prompt="sphinx statue.", predictor_loader=lambda *_: (object(), "mps"))
+
+        with (patch("kumiki_blender.reconstruction.subject_grounding.resolve_grounding_model",
+                    return_value=model_dir),
+              patch("kumiki_blender.reconstruction.subject_grounding.grounding_identity",
+                    return_value="pinned:sha"),
+              patch("kumiki_blender.reconstruction.subject_grounding.grounded_guide", side_effect=grounded),
+              patch("kumiki_blender.reconstruction.masking._sam2_mask", side_effect=self.fake_mask)):
+            first = run(1)
+            second = run(2)
+            Image.new("RGB", (96, 80), (20, 60, 100)).save(self.photos / "photo-09.jpg")
+            third = run(3)
+        self.assertEqual((first["foreground_hits"], first["foreground_misses"]), (0, 8))
+        self.assertEqual((second["foreground_hits"], second["foreground_misses"]), (8, 0))
+        self.assertEqual((third["foreground_hits"], third["foreground_misses"]), (8, 1))
+        self.assertEqual(len(calls), 9)
+
     def setUp(self):
         root = tempfile.TemporaryDirectory()
         self.addCleanup(root.cleanup)
