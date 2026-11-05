@@ -22,7 +22,7 @@ from .mask_track_guidance import (SCHEMA as TRACK_SCHEMA,
 from .references import ReferenceError
 
 
-SCHEMA = "track-guided-mask-revision-v2"
+SCHEMA = "track-guided-mask-revision-v3"
 # Inference results depend on the actual guide and checkpoint, not the QA
 # algorithm version. Keep the original prompt-cache namespace so unchanged
 # guides reuse prior MPS work; new negative clicks alter the cache key.
@@ -197,6 +197,7 @@ def refine_masks_from_tracks(reconstruction: str | Path, mask_revision: str | Pa
         shutil.copyfile(selected_file, output_mask)
         seeds = evidence["images"][name]["seed_points"]
         holdout = evidence["images"][name]["holdout_points"]
+        context = evidence["images"][name]["foreground_context_points"]
         background_seeds = evidence["images"][name]["background_seed_points"]
         background_holdouts = evidence["images"][name]["background_holdout_points"]
         receipt = {"status": "abstained / insufficient-triangulated-subject-evidence",
@@ -206,12 +207,29 @@ def refine_masks_from_tracks(reconstruction: str | Path, mask_revision: str | Pa
                    "background_holdout_count": len(background_holdouts),
                    "source_evidence": "track-evidence-report.json"}
         candidate_file = None
-        if len(seeds) >= 3 and len(holdout) >= 5:
+        # Missing-body recovery or independently verifiable ground repair can
+        # trigger an automatic retry. Neither requires human approval.
+        can_recover = len(seeds) >= 3 and len(holdout) >= 5
+        can_repair = False
+        if len(context) >= 3 and len(background_seeds) >= 2 and len(
+                background_holdouts) >= 2 and len(holdout) >= 5:
+            with Image.open(selected_file) as selected_for_repair:
+                def originally_masked(row: dict[str, Any]) -> bool:
+                    u, v = row["normalized_xy"]
+                    pixel = (min(selected_for_repair.width-1, round(u *
+                        (selected_for_repair.width-1))),
+                        min(selected_for_repair.height-1, round(v *
+                            (selected_for_repair.height-1))))
+                    return selected_for_repair.getpixel(pixel) >= 128
+
+                can_repair = sum(map(originally_masked, background_seeds)) >= 2
+        if can_recover or can_repair:
             with Image.open(source_photo) as original_photo, Image.open(selected_file) as base_mask:
                 photo = original_photo.convert("RGB")
                 original_binary = base_mask.copy()
                 guide_base = _auto_sam2_guide(photo, _DEFAULT_BOX)
-                points = [row["normalized_xy"] for row in seeds]
+                positive_rows = seeds + context[:8] if can_repair else seeds
+                points = [row["normalized_xy"] for row in positive_rows]
                 if len({(int(x*5), int(y*5)) for x, y in points}) < 2:
                     receipt["reasons"].append("subject-seed-points-are-spatially-degenerate")
                 else:
@@ -258,9 +276,19 @@ def refine_masks_from_tracks(reconstruction: str | Path, mask_revision: str | Pa
                         _save_mask_cache(cache_root, cache_key, candidate_file,
                                          list(photo.size), details)
                     receipt = evaluate_track_resegmentation(
-                        original_binary, refined, seeds, holdout,
+                        original_binary, refined, positive_rows, holdout,
                         background_seeds=used_background,
-                        background_holdouts=background_holdouts)
+                        background_holdouts=background_holdouts,
+                        ground_repair=can_repair,
+                        foreground_context_count=len(context[:8]) if can_repair else 0)
+                    from .mask_ground_plane import evaluate_local_ground_spill
+                    ground_spill = evaluate_local_ground_spill(
+                        photo, original_binary, refined, used_background)
+                    receipt["ground_appearance_qa"] = ground_spill
+                    if ground_spill["rejected"]:
+                        receipt["accepted"] = False
+                        receipt["status"] = "rejected / ground-plane-appearance-spill"
+                        receipt["reasons"].append("ground-plane-appearance-spill")
                     receipt.update(cache_key=cache_key, cache_hit=cache is not None,
                                    proposed_mask="candidates/" + candidate_file.name,
                                    proposed_mask_sha256=_sha256(candidate_file),

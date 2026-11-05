@@ -168,11 +168,24 @@ observed from at least four photographs and that several *other* camera views
 agree inside both SAM2 candidates and the detector guide. A second, stricter
 test looks for **negative background tracks** outside both masks, well clear
 of their contours and outside Grounding DINO detections in at least four
-other registered views. These become optional SAM2 background prompts.
+other registered views. When COLMAP camera rotations and triangulated 3D
+points are available, a second route fits a **low, horizontal ground-plane
+candidate** from exterior points observed in several photos. It does not
+require DINO's part boxes to exclude ground (those boxes can cover almost the
+entire frame). A point on the plane may veto a mask that incorrectly includes
+it in the current photo if other camera views identify it as exterior. These
+become SAM2 negative clicks or independent held-out background checks.
 
 Both foreground and background tracks have *independent, never-prompted*
 held-out subsets. A retry must recover foreground holdouts without losing any,
 violate no background holdouts, and add no confidently blue-sky foreground.
+Local color/appearance segmentation near the measured ground points provides
+another conservative veto on ground-colored mask expansions. It cannot label
+the full image as sand based on color alone. When a mask already includes
+ground, trusted existing foreground clicks can also guide an automatic SAM2
+ground-removal retry; only improvement on independent held-out ground points,
+with no loss of held-out statue tracks, can approve it.
+
 The ordinary 20% maximum growth remains the fallback. Expansion up to 55%
 (or 90% with substantially stronger evidence) is allowed **only** with enough
 spatially independent background checks and when the added pixels are near
@@ -195,7 +208,7 @@ For an independent A/B test without rerunning COLMAP or Grounding DINO:
 ```bash
 RUN='.review/great-sphinx/statue-hq-r005'
 BASE='.review/great-sphinx/grounded-masks-r003'
-IMPROVED='.review/great-sphinx/track-guided-masks-r001' # must not exist
+IMPROVED='.review/great-sphinx/track-guided-masks-r004' # must not exist
 
 kumiki-blender improve-dense-masks \
   --reconstruction "$RUN/cameras" \
@@ -208,7 +221,8 @@ kumiki-blender improve-dense-masks \
 open "$IMPROVED/mask-contact-sheet.jpg"
 jq '{status, summary, changed: [.images[] | select(.track_guided_replaced) |
   {filename, evidence: .track_guidance}]}' "$IMPROVED/mask-report.json"
-jq '{viable_track_ids, viable_background_track_ids, rejected, limitations}' "$IMPROVED/track-evidence-report.json"
+jq '{viable_track_ids, viable_background_track_ids, geometric_ground_plane,
+     rejected, limitations}' "$IMPROVED/track-evidence-report.json"
 ```
 
 If interrupted, use the same arguments plus `--resume`. A finished revision

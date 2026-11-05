@@ -17,6 +17,7 @@ from kumiki_blender.cli import main
 from kumiki_blender.reconstruction.mask_track_guidance import (
     _seed_class, evaluate_track_resegmentation, extract_track_guidance,
 )
+from kumiki_blender.reconstruction.mask_ground_plane import evaluate_local_ground_spill
 from kumiki_blender.reconstruction.mask_track_resegmentation import refine_masks_from_tracks
 from kumiki_blender.reconstruction.mask_track_selection import select_track_mask_candidates
 from kumiki_blender.reconstruction.references import ReferenceError
@@ -203,6 +204,116 @@ class TrackGuidanceTests(unittest.TestCase):
         result = extract_track_guidance(self.sparse, self.mask_revision, self.report)
         self.assertEqual(result["viable_background_track_ids"], 0)
 
+    def test_low_triangulated_ground_plane_identifies_leak_inside_target_mask(self):
+        # In real images a DINO part box can cover the entire floor. Ground
+        # geometry must still work when that box is too broad, and must catch
+        # one image in which both SAM2 candidates mistakenly include ground.
+        ground = [(x, y, 5000+i) for i, (x, y) in enumerate(
+            (x, y) for x in range(15, 86, 5) for y in range(40, 66, 5))]
+        for item in self.images:
+            name = item["filename"]
+            mask = Image.new("L", (100, 80), 0)
+            mask.paste(255, (25, 10, 75, 35))
+            if name == "view-05.png":
+                mask.paste(255, (40, 50, 65, 64))  # false foreground on floor
+            for filename in (item["mask"], item["candidate_masks"]["broad"]["path"],
+                             item["candidate_masks"]["grounded"]["path"]):
+                mask.save(self.mask_revision / filename)
+            item["mask_sha256"] = digest(self.mask_revision / item["mask"])
+            for alternative in item["candidate_masks"].values():
+                alternative["sha256"] = digest(self.mask_revision / alternative["path"])
+            item["detector_guide"] = {"component_boxes": {"part_01": [0, 0, 1, 1]}}
+
+        images = bytearray(struct.pack("<Q", 6))
+        for camera in range(6):
+            name = f"view-{camera:02d}.png"
+            images.extend(struct.pack("<i7di", camera+1, 1, 0, 0, 0,
+                                      camera*.2, 0, 0, 1))
+            images.extend(name.encode() + b"\0")
+            images.extend(struct.pack("<Q", len(self.features) + len(ground)))
+            for x, y, point_id in [*self.features, *ground]:
+                images.extend(struct.pack("<ddq", x, y, point_id))
+        (self.model_dir / "images.bin").write_bytes(images)
+        points = bytearray(struct.pack("<Q", len(ground)))
+        for index, (x, y, point_id) in enumerate(ground):
+            # World up from identity camera rotation is -Y: floor Y=3.
+            points.extend(struct.pack("<QdddBBBdQ", point_id, x*.05, 3.0,
+                                      y*.05, 140, 120, 95, .1, 6))
+            for camera in range(6):
+                points.extend(struct.pack("<II", camera+1, len(self.features)+index))
+        (self.model_dir / "points3D.bin").write_bytes(points)
+        evidence = extract_track_guidance(self.sparse, self.mask_revision, self.report)
+        self.assertEqual(evidence["points3d_model_sha256"], digest(self.model_dir / "points3D.bin"))
+        self.assertEqual(evidence["geometric_ground_plane"]["status"],
+                         "candidate / low-camera-up-aligned-3d-plane")
+        self.assertGreater(evidence["geometric_ground_plane"]["heldout_inlier_tracks"], 0)
+        self.assertGreater(evidence["viable_background_track_ids"], 20)
+        negatives = (evidence["images"]["view-05.png"]["background_seed_points"] +
+                     evidence["images"]["view-05.png"]["background_holdout_points"])
+        self.assertTrue(any(.40 <= row["normalized_xy"][0] <= .65 and
+                            .62 <= row["normalized_xy"][1] <= .80 for row in negatives))
+        self.assertTrue(all(row["source"] == "triangulated-low-ground-plane"
+                            for row in negatives))
+        self.assertTrue(all("view-05.png" not in row["source_views"] for row in negatives))
+
+    def test_existing_ground_leak_in_holdout_is_not_acceptable(self):
+        old = np.zeros((100, 100), dtype=np.uint8)
+        old[20:80, 20:70] = 255
+        proposed = old.copy()
+        proposed[20:80, 70:95] = 255
+        negatives = [{"normalized_xy": [.25, .75]}]
+        receipt = evaluate_track_resegmentation(
+            old, proposed,
+            [{"normalized_xy": [x, .4]} for x in (.74, .78, .82, .86, .9)],
+            [{"normalized_xy": [x, .5]} for x in (.75, .8, .85, .9, .95)],
+            background_seeds=[], background_holdouts=negatives)
+        self.assertFalse(receipt["accepted"])
+        self.assertEqual(receipt["background_holdout_new_foreground"], 0)
+        self.assertEqual(receipt["background_holdout_foreground"], 1)
+        self.assertIn("independent-background-tracks-became-foreground", receipt["reasons"])
+
+    def test_measured_ground_appearance_vetoes_spill_but_not_stone_body(self):
+        photo = Image.new("RGB", (200, 160), (130, 130, 125))
+        ImageDraw.Draw(photo).rectangle((0, 107, 199, 159), fill=(185, 158, 120))
+        before = Image.new("L", photo.size, 0)
+        before.paste(255, (35, 30, 160, 105))
+        floor_spill = before.copy()
+        floor_spill.paste(255, (20, 114, 195, 145))
+        ground_seed = [{"source": "triangulated-low-ground-plane",
+                        "normalized_xy": [x, .80]} for x in (.24, .43, .62, .83)]
+        rejected = evaluate_local_ground_spill(photo, before, floor_spill, ground_seed)
+        self.assertTrue(rejected["rejected"])
+        self.assertGreater(rejected["ground_region_added_fraction"], .16)
+        body = before.copy()
+        body.paste(255, (162, 35, 185, 90))
+        accepted = evaluate_local_ground_spill(photo, before, body, ground_seed)
+        self.assertFalse(accepted["rejected"])
+        self.assertEqual(accepted["ground_region_added_fraction"], 0)
+
+    def test_independent_heldout_ground_repair_can_shrink_mask_without_new_body(self):
+        old = np.zeros((100, 100), dtype=np.uint8)
+        old[20:80, 20:70] = 255
+        fixed = old.copy()
+        fixed[73:80, 20:70] = 0
+        context = [{"normalized_xy": [x, .4]} for x in (.3, .4, .5, .6)]
+        subject_holdouts = [{"normalized_xy": [x, .5]} for x in
+                            (.3, .35, .4, .45, .5, .55)]
+        negatives = [{"normalized_xy": [x, .75]} for x in (.3, .5)]
+        bg_holdouts = [{"normalized_xy": [x, .75]} for x in (.4, .6)]
+        repaired = evaluate_track_resegmentation(
+            old, fixed, context, subject_holdouts, negatives, bg_holdouts,
+            ground_repair=True, foreground_context_count=4)
+        self.assertTrue(repaired["accepted"])
+        self.assertTrue(repaired["ground_repair_verified"])
+        self.assertEqual(repaired["status"], "candidate / heldout-ground-repair")
+        # A repair cannot erase a held-out subject point, even if it removes ground.
+        damaged = fixed.copy()
+        damaged[45:55, 30:60] = 0
+        rejected = evaluate_track_resegmentation(
+            old, damaged, context, subject_holdouts, negatives, bg_holdouts,
+            ground_repair=True, foreground_context_count=4)
+        self.assertFalse(rejected["accepted"])
+
     def test_targeted_resegmentation_produces_new_revision_without_touching_original(self):
         original_hashes = [item["mask_sha256"] for item in self.images]
         cached = self.root / "shared-masks"
@@ -254,6 +365,42 @@ class TrackGuidanceTests(unittest.TestCase):
         self.assertIn([.02, .77], inference.call_args.args[1]["background_points"])
         revised = next(item for item in report["images"] if item["filename"] == "view-05.png")
         self.assertEqual(revised["track_guidance"]["background_seed_count"], 1)
+
+    def test_automatic_ground_repair_retries_without_missing_body_seeds(self):
+        evidence = extract_track_guidance(self.sparse, self.mask_revision, self.report)
+        image = evidence["images"]["view-05.png"]
+        image["seed_points"] = []
+        image["foreground_context_points"] = [
+            {"normalized_xy": [x, y]} for x, y in ((.22, .35), (.32, .4), (.4, .42))]
+        image["holdout_points"] = [
+            {"normalized_xy": [x, y]} for x, y in (
+                (.2, .25), (.3, .25), (.4, .25), (.25, .45), (.35, .5), (.4, .55))]
+        image["background_seed_points"] = [
+            {"normalized_xy": [x, .8], "source": "triangulated-low-ground-plane"}
+            for x in (.25, .35)]
+        image["background_holdout_points"] = [
+            {"normalized_xy": [x, .8], "source": "triangulated-low-ground-plane"}
+            for x in (.28, .38)]
+        selected = self.mask_revision / self.images[-1]["mask"]
+        with Image.open(selected) as current:
+            fixed = np.asarray(current).copy()
+        fixed[57:69, 20:45] = 0  # remove supported ground only
+        with (patch("kumiki_blender.reconstruction.mask_track_resegmentation.extract_track_guidance",
+                    return_value=evidence),
+              patch("kumiki_blender.reconstruction.masking._load_sam2_predictor",
+                    return_value=(object(), "mps")),
+              patch("kumiki_blender.reconstruction.masking._sam2_mask",
+                    return_value=(fixed, {"components": ["subject"]})) as inference):
+            report = refine_masks_from_tracks(self.sparse, self.mask_revision,
+                                              self.root / "automatic-ground-repair",
+                                              sam2_checkpoint=self.weights)
+        self.assertEqual(inference.call_count, 1)
+        selected_entry = next(item for item in report["images"]
+                              if item["filename"] == "view-05.png")
+        self.assertTrue(selected_entry["track_guided_replaced"])
+        self.assertTrue(selected_entry["track_guidance"]["ground_repair_verified"])
+        self.assertEqual(selected_entry["track_guidance"]["status"],
+                         "candidate / heldout-ground-repair")
 
     def test_modified_source_mask_prevents_any_new_revision(self):
         path = self.mask_revision / self.images[0]["mask"]
