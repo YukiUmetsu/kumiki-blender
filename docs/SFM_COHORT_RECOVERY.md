@@ -312,3 +312,18 @@ seven selected pairs without subject-confidence filtering likewise recovered
 none of the tested previously unverified pairs. Neither experiment changes the
 source database or justifies disabling subject filtering. See the private audit
 and experiment directories for the images and raw database evidence.
+
+### Preserve established tracks during camera recovery
+
+The automatic PnP recovery loop calls COLMAP `point_triangulator` with
+`--clear_points 0`. COLMAP otherwise defaults to deleting the existing points
+and observations before retriangulating. Completion can still filter points,
+and its candidate is never promoted solely for adding tracks: every new camera
+must pass the existing camera, track and baseline-drift checks.
+
+In the Sphinx investigation, the original default dropped both newly registered
+cameras to zero 3D observations. The isolated preservation trial retained 36
+and 90 observations, passed the unchanged baseline-camera check, and changed
+the top-view candidate's conservative one-to-one track support from 21 to 25.
+It also reduced some other support counts, so it is not a guarantee of improvement
+and does not validate an overhead camera.

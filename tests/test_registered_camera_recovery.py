@@ -163,9 +163,11 @@ class RecoveryTests(unittest.TestCase):
                                    in zip(sorted(source_names), self.original)] +
                                   [("photo-0004.png", (0.5, 0.5, 1), 38)])
             calls = []
+            commands = []
 
             def runner(argv, _log, _timeout):
                 calls.append(argv[1])
+                commands.append(argv)
                 if argv[1] == "image_registrator":
                     for suffix in ("cameras.bin", "images.bin", "points3D.bin"):
                         (target / "registered" / suffix).write_bytes(b"fake-model")
@@ -185,6 +187,8 @@ class RecoveryTests(unittest.TestCase):
                     source, target, runner=runner, model_loader=model_loader)
             self.assertTrue(result["initial_validation"]["accepted"])
             self.assertIn("point_triangulator", calls)
+            triangulator = next(command for command in commands if command[1] == "point_triangulator")
+            self.assertEqual(triangulator[triangulator.index("--clear_points") + 1], "0")
             self.assertIn("cohort_error", result)
             self.assertEqual(result["remaining_elevated_filename_hints"], ["photo-0005.png"])
             self.assertIn("photo-0005.png", result["elevated_filename_hints"])

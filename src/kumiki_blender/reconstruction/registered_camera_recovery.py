@@ -328,7 +328,8 @@ def recover_registered_cameras(
         if not execute("point_triangulator", ["--database_path", str(database),
                                                "--image_path", str(images),
                                                "--input_path", str(best),
-                                               "--output_path", str(triangulated)]):
+                                               "--output_path", str(triangulated),
+                                               "--clear_points", "0"]):
             break
         if not candidate_model(triangulated):
             break
