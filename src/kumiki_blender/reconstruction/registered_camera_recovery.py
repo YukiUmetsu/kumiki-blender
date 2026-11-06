@@ -167,6 +167,12 @@ def recover_registered_cameras(
             or not isinstance(staged.get("images"), list)
             or source_report.get("engine") not in (None, "colmap")):
         raise ReferenceError("Source must be a verified COLMAP camera revision")
+    # Keep the source pixel grid. With another size, the unchanged cameras get
+    # different rectified photos, and their reviewed masks no longer fit.
+    rectified_max_side = source_report.get("max_image_size", 3200)
+    if type(rectified_max_side) is not int or not 256 <= rectified_max_side <= 16384:
+        raise ReferenceError("Source reconstruction report has an invalid max_image_size; "
+                             "expected an integer from 256 to 16384")
     best_model_name = str(source_report.get("source_sparse_model", "0"))
     if not best_model_name.isdigit() or len(best_model_name) > 4:
         raise ReferenceError("Source sparse model index is invalid")
@@ -492,7 +498,8 @@ def recover_registered_cameras(
     if not execute("image_undistorter", ["--image_path", str(target / "images"),
                                         "--input_path", str(saved_model),
                                         "--output_path", str(rectified),
-                                        "--output_type", "COLMAP", "--max_image_size", "3200"]):
+                                        "--output_type", "COLMAP",
+                                        "--max_image_size", str(rectified_max_side)]):
         return fail("image-undistorter-failed")
     undistorted_text = rectified / "text-model"
     undistorted_text.mkdir()

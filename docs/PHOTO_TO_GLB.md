@@ -370,6 +370,28 @@ The policy names are `min_foreground_holdouts`, `min_background_tracks`,
 name stops the command. `photos_without_proposal` lists the other photos, with
 the lowest cross-view agreement first. These photos need new prompts.
 
+#### Keep reviewed masks after camera recovery
+
+`recover-registered-cameras` writes a new camera revision. It rectifies photos
+at the size of the source revision, so the photos of unchanged cameras stay
+byte-identical and their reviewed masks stay valid. Generate masks for the new
+revision, then keep each reviewed mask whose photo did not change:
+
+```bash
+kumiki-blender prepare-dense-masks --reconstruction "$RECOVERED" \
+  --output "$GENERATED" --segmenter sam2 --sam2-checkpoint "$SAM2_CHECKPOINT" \
+  --cache-dir "$MASK_CACHE"
+kumiki-blender carry-dense-masks \
+  --reconstruction "$RECOVERED" \
+  --reviewed-masks "$REVIEWED" \
+  --generated-masks "$GENERATED" \
+  --output "$CARRIED"
+```
+
+`mask-report.json` in the output gives the origin of each mask. A generated
+mask is automatic and unreviewed, so inspect each one. Give
+`"$CARRIED/masks"` to `build-dense-photos --rectified-masks`.
+
 #### Promote reviewed proposals (not needed for automatic mode)
 
 If someone inspects a withheld proposal and prefers it to the automatically

@@ -663,6 +663,16 @@ def main(argv: list[str] | None = None) -> int:
                                    help="Promote a withheld candidate. KIND is track-guided (default) or component-guided")
     choose_mask_parser.add_argument("--edits", type=Path,
                                    help="Optional normalized include/exclude polygons for specific photos")
+    carry_mask_parser = subcommands.add_parser(
+        "carry-dense-masks", help="Keep reviewed masks of unchanged photos for a camera revision with new photos")
+    carry_mask_parser.add_argument("--reconstruction", type=Path, required=True,
+                                   help="Camera revision that needs masks, such as a recovered revision")
+    carry_mask_parser.add_argument("--reviewed-masks", type=Path, required=True,
+                                   help="Mask revision with reviewed masks for an earlier camera revision")
+    carry_mask_parser.add_argument("--generated-masks", type=Path,
+                                   help="prepare-dense-masks revision of --reconstruction, for new or changed photos")
+    carry_mask_parser.add_argument("--output", type=Path, required=True,
+                                   help="Unused folder outside every input")
     rank_mask_parser = subcommands.add_parser(
         "rank-mask-proposals", help="Rank withheld mask proposals for review; never approves a mask")
     rank_mask_parser.add_argument("--reconstruction", type=Path, required=True)
@@ -1040,6 +1050,16 @@ def main(argv: list[str] | None = None) -> int:
                         f"Track-guided mask QA {count}/{total}: {outcome}",
                         file=sys.stderr, flush=True))
             except (ReferenceError, OSError, ValueError) as error:
+                raise RecipeError(str(error)) from error
+            print(json.dumps(report, indent=2))
+            return 0
+        if args.command == "carry-dense-masks":
+            from .reconstruction.mask_carry_forward import carry_masks_forward
+            from .reconstruction.references import ReferenceError
+            try:
+                report = carry_masks_forward(args.reconstruction, args.reviewed_masks, args.output,
+                                             generated_masks=args.generated_masks)
+            except (ReferenceError, OSError, ValueError, KeyError) as error:
                 raise RecipeError(str(error)) from error
             print(json.dumps(report, indent=2))
             return 0

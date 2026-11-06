@@ -193,6 +193,46 @@ class RecoveryTests(unittest.TestCase):
             self.assertEqual(result["remaining_elevated_filename_hints"], ["photo-0005.png"])
             self.assertIn("photo-0005.png", result["elevated_filename_hints"])
 
+    def test_recovered_revision_keeps_the_source_rectified_pixel_grid(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            source, target = Path(temporary) / "source", Path(temporary) / "recovered"
+            (source / "sparse" / "0").mkdir(parents=True)
+            (source / "images").mkdir()
+            (source / "database.db").write_bytes(b"database")
+            (source / "staged-reference-index.json").write_text(json.dumps({"images": []}))
+            report = {"status": "candidate / visual-review-required", "engine": "colmap",
+                      "source_sparse_model": "0", "max_image_size": 4000}
+            (source / "reconstruction-report.json").write_text(json.dumps(report))
+            originals = FakeModel(self.original)
+            recovered = FakeModel(self.original + [("photo-new.png", (0.5, 0.5, 1), 38)])
+            undistort = []
+
+            def runner(argv, _log, _timeout):
+                if argv[1] == "image_registrator":
+                    for suffix in ("cameras.bin", "images.bin", "points3D.bin"):
+                        (target / "registered" / suffix).write_bytes(b"fake-model")
+                if argv[1] == "image_undistorter":
+                    undistort.append(argv)
+                    return 1
+                return 0
+
+            with patch("kumiki_blender.reconstruction.registered_camera_recovery.shutil.which",
+                       return_value="/usr/bin/colmap"), \
+                 patch("kumiki_blender.reconstruction.sfm_cohort_recovery.recover_cohort",
+                       side_effect=ValueError("no valid independent cohort")), \
+                 patch("kumiki_blender.reconstruction.learned_camera_hypotheses.build_learned_camera_hypotheses",
+                       return_value={"status": "unavailable / model-not-installed"}):
+                recover_registered_cameras(
+                    source, target, runner=runner,
+                    model_loader=lambda path: originals if path.name == "0" else recovered)
+                self.assertEqual(len(undistort), 1)
+                self.assertEqual(undistort[0][undistort[0].index("--max_image_size") + 1], "4000")
+                report["max_image_size"] = "huge"
+                (source / "reconstruction-report.json").write_text(json.dumps(report))
+                with self.assertRaisesRegex(Exception, "max_image_size"):
+                    recover_registered_cameras(source, Path(temporary) / "second",
+                                               runner=runner, model_loader=lambda _path: originals)
+
     def test_elevated_photos_rank_before_generic_missing_views(self):
         staged = [{"filename": "generic.png", "original_filename": "sphinx-side.jpg"},
                   {"filename": "top.png", "original_filename": "sphinx-top-right.jpg"}]

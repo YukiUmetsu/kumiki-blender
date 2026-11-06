@@ -749,6 +749,21 @@ review image. Do not remove tiny mask islands automatically: in a check of
 these masks, other cameras labelled island tracks as foreground as often as
 background.
 
+`recover-registered-cameras` rectifies at the `max_image_size` of the source
+revision. An earlier fixed size of 3200 changed the rectified photos of 34
+unchanged Sphinx cameras, so their masks did not fit the recovered revision.
+With the source size, all 49 photos are byte-identical, and
+`carry-dense-masks` keeps their reviewed masks (see `PHOTO_TO_GLB.md`).
+
+The recovered Sphinx revision adds `photo-0013` and `photo-0055`, two face
+close-ups registered from measured COLMAP features (42 and 134 track points,
+zero drift of the 49 baseline cameras). As an independent check, the 49-camera
+mesh was projected into each new camera, and it matches the face outline in
+both photos. The 51-camera mesh has about 10% more face vertices, but its
+outline and its face surface are the same as the 49-camera mesh (median
+change 0.02% of the model size). The nine top and rear photos are still not
+registered.
+
 macOS Gatekeeper can block a downloaded OpenMVS binary. The stage then fails
 with exit code -9 and an empty log. Do not remove the quarantine flag. Put a
 local build first on `PATH`, for example `.review/tools/openmvs-build4/bin`.
