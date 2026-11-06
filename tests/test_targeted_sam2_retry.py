@@ -76,6 +76,9 @@ class TargetedSAM2RetryTests(unittest.TestCase):
         report = self.run_retry()
         self.assertEqual(report["status"], "review-only-sam2-candidates / manual-photo-qa-required")
         self.assertFalse(report["approved_for_reconstruction"])
+        saved_guide = self.root / "output" / report["guides_copy"]
+        self.assertEqual(saved_guide.read_bytes(), self.guide_file.read_bytes())
+        self.assertEqual(hashlib.sha256(saved_guide.read_bytes()).hexdigest(), report["guides_sha256"])
         self.assertEqual(report["images"][0]["status"], "candidate / human-photo-review-required")
         self.assertEqual(report["images"][0]["prompt_qa"]["missing_positive_points"], 0)
         self.assertEqual(report["images"][0]["original_prompt_qa"]["missing_positive_points"], 2)

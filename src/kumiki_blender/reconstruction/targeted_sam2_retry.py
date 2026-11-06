@@ -6,6 +6,7 @@ outputs are *not* dense-ready masks and require photographic QA before use.
 from __future__ import annotations
 
 import json
+import hashlib
 import math
 import os
 import tempfile
@@ -95,8 +96,8 @@ def retry_sam2_masks(reconstruction: str | Path, source_masks: str | Path,
     subject pixels. The command cannot replace production masks.
     """
     from PIL import Image
-    from .masking import (_DEFAULT_BOX, _load_guides, _load_sam2_predictor,
-                          _sam2_mask)
+    from .masking import (_DEFAULT_BOX, SAM2_SELECTION_VERSION, _load_guides,
+                          _load_sam2_predictor, _sam2_mask)
 
     if (not isinstance(targets, list) or not 1 <= len(targets) <= 12 or
             len(set(targets)) != len(targets) or
@@ -149,12 +150,18 @@ def retry_sam2_masks(reconstruction: str | Path, source_masks: str | Path,
     masks_index = {item["filename"]: item["sha256"] for item in plan["rectified_masks"]}
     photos_index = {item["filename"]: item["sha256"] for item in
                     _json(source / "undistorted-reference-index.json")["images"]}
+    guide_bytes = guide_path.read_bytes()
+    if hashlib.sha256(guide_bytes).hexdigest() != guide_sha:
+        raise ReferenceError("SAM2 guide changed during preflight; retry with a stable guide")
     destination.mkdir(parents=True, exist_ok=False)
+    (destination / "guides.json").write_bytes(guide_bytes)
     (destination / "candidates").mkdir()
     (destination / "review").mkdir()
     report = {"status": "incomplete / human-photo-review-required",
               "source_revision": str(source), "source_mask_directory": str(original_masks),
-              "guides_sha256": guide_sha, "sam2_checkpoint_sha256": _sha256(checkpoint),
+              "guides_sha256": guide_sha, "guides_copy": "guides.json",
+              "sam2_selection_version": SAM2_SELECTION_VERSION,
+              "sam2_checkpoint_sha256": _sha256(checkpoint),
               "sam2_size": sam2_size, "sam2_device": sam2_device, "max_side": max_side,
               "requested_targets": targets, "images": [],
               "approved_for_reconstruction": False, "distribution_allowed": False,

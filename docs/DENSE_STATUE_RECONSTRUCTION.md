@@ -1148,3 +1148,21 @@ and bottom. Interior discrepancy is evidence for review, not a probability of
 a defect: incorrect masks and camera registration also produce interior errors.
 Regions in different views are not automatically associated in 3D; a ranking
 does not establish physical location, cause, or confidence in the mesh.
+
+### SAM2 candidate selection and cache compatibility
+
+When two SAM2 masks satisfy the same number of prompts, the selector now
+prefers the one that violates fewer explicit background prompts before using
+SAM2's confidence score. This tie-break does not override a higher total prompt
+compliance, erase pixels, or turn a candidate into a reviewed mask. A global
+subject prompt is passed once, even when its part is named `subject`.
+
+This changes candidate pixels, so rectified SAM2 cache keys and source-foreground
+cache schema include a new selection version. Incomplete revisions made by the
+previous selector cannot be resumed under the new one; start a new revision.
+A passing prompt check still cannot establish complete anatomy or distinguish
+stone from scaffolding. Inspect the source photo and candidate at full resolution.
+
+Targeted SAM2 retry receipts now preserve a hash-checked copy of the exact
+prompt guide and the candidate-selection version. The guide documents the
+experiment; its prompts and the resulting masks still require photographic QA.

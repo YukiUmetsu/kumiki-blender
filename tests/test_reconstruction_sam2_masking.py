@@ -94,6 +94,35 @@ class Sam2MaskTests(TestCase):
         self.assertEqual(details["components"], ["head", "torso", "paws"])
         self.assertEqual(details["missing_parts"], [])
 
+    def test_tied_prompt_compliance_prefers_candidate_without_negative_violation(self):
+        class TiePredictor:
+            def set_image(self, rgb):
+                self.shape = rgb.shape[:2]
+            def predict(self, **kwargs):
+                masks = np.zeros((2, *self.shape), dtype=bool)
+                # Both candidates satisfy one of two prompts: the first loses
+                # an anatomical point, the second includes background.
+                masks[0, 20, 20] = True
+                masks[1, 20, 20] = True
+                masks[1, 50, 50] = True
+                masks[1, 80, 80] = True
+                return masks, np.array([0.4, 0.9]), None
+        guide = {'box':[0,0,1,1], 'component_boxes':{},
+                 'part_points': {'subject': [[20/99,20/99],[50/99,50/99]]},
+                 'foreground_points':[], 'background_points':[[80/99,80/99]]}
+        mask, details = _sam2_mask(Image.new('RGB', (100,100)), guide, TiePredictor())
+        self.assertEqual(mask[80,80],0)
+        self.assertIn('subject', details['missing_parts'])
+        self.assertEqual(details['background_seed_violations'], 0)
+
+    def test_global_subject_landmark_is_not_sent_twice(self):
+        guide = {"box": [0.1, 0.1, 0.9, 0.9], "component_boxes": {},
+                 "part_points": {"subject": [[0.5, 0.5]]},
+                 "foreground_points": [], "background_points": [[0.05, 0.05]]}
+        predictor = FakePredictor()
+        _sam2_mask(Image.new("RGB", (100, 100)), guide, predictor)
+        self.assertEqual(predictor.calls[0][2], [1, 0])
+
     def test_guide_rejects_invalid_coordinates_and_outside_component_landmarks(self):
         bad = self.root / "bad-guides.json"
         for value in (
