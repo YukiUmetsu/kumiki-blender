@@ -4,6 +4,7 @@ import contextlib
 import io
 import json
 import hashlib
+import shutil
 import tempfile
 import unittest
 from pathlib import Path
@@ -68,6 +69,8 @@ class StatuePipelineTests(unittest.TestCase):
             self.assertEqual([argv[i + 1] for i, flag in enumerate(argv)
                               if flag == "--grounding-part-prompt"],
                              ["stone torso.", "stone sphinx head."])
+        self.assertIn("mask_track_guidance", command_lines)
+        self.assertIn("improve-dense-masks", command_lines["mask_track_guidance"])
         receipt = json.loads((self.output / "statue-pipeline-report.json").read_text())
         self.assertEqual(receipt["status"], "private-GLB-candidate / review-required")
 
@@ -166,6 +169,16 @@ class StatuePipelineTests(unittest.TestCase):
                                    "missing_parts": (["head"] if mask_bad else []),
                                    "background_seed_violations": 0})
                 (folder / "mask-report.json").write_text(json.dumps({"images": images}))
+            elif stage == "mask_track_guidance":
+                folder = self.output / "track-guided-masks"
+                (folder / "masks").mkdir(parents=True)
+                source_masks = self.output / "masks/masks"
+                for file in source_masks.glob("*.mask.png"):
+                    shutil.copyfile(file, folder / "masks" / file.name)
+                original = json.loads((self.output / "masks/mask-report.json").read_text())
+                (folder / "mask-report.json").write_text(json.dumps({
+                    **original, "status": "candidate / automatic-track-guided-qa",
+                    "summary": {"accepted": 0, "abstained": 8}}))
             elif stage.startswith("mask-audit-"):
                 folder = self.output / stage
                 folder.mkdir()
@@ -180,6 +193,14 @@ class StatuePipelineTests(unittest.TestCase):
                 self.assertIn("--rectified-masks", argv)
                 (folder / "dense-report.json").write_text(json.dumps({
                     "status": "dense-mesh-candidate / review-required"}))
+            elif stage == "surface_coverage":
+                folder = self.output / "surface-coverage"
+                folder.mkdir()
+                self.assertIn("audit-dense-surface-coverage", argv)
+                (folder / "surface-coverage-report.json").write_text(json.dumps({
+                    "status": "coverage-gap-detected / review-required",
+                    "possible_view_support": {"weak_fraction": 0.3},
+                    "topology": {"boundary_edges": 10}}))
             elif stage == "review":
                 folder = self.output / "review"
                 folder.mkdir()
@@ -208,7 +229,7 @@ class StatuePipelineTests(unittest.TestCase):
         self.build(run, progress_callback=events.append)
         started = [item["phase"] for item in events if item["kind"] == "start"]
         self.assertEqual(started, ["preflight", "photo_preprocess", "cameras", "coverage", "masks",
-                                   "mask_audit", "dense", "review", "export"])
+                                   "mask_audit", "dense", "surface_coverage", "review", "export"])
         self.assertEqual([item["phase"] for item in events if item["kind"] == "done"],
                          started)
         self.assertEqual(events[-1]["kind"], "finished")
@@ -286,7 +307,8 @@ class StatuePipelineTests(unittest.TestCase):
         run, calls = self.runner()
         report = self.build(run)
         self.assertEqual(calls[:4], ["photo_preprocess", "cameras", "coverage", "masks"])
-        self.assertEqual(calls[-2:], ["dense", "review"])
+        self.assertEqual(calls[-3:], ["dense", "surface_coverage", "review"])
+        self.assertFalse(report["surface_coverage"]["photographic_fidelity_verified"])
         self.assertEqual((self.output / "model.glb").read_bytes(), b"fake-audited-glb")
         self.assertTrue(report["status"].startswith("private-GLB-candidate"))
         self.assertEqual(report["glb_audit"]["meshes"], 1)
@@ -381,7 +403,7 @@ class StatuePipelineTests(unittest.TestCase):
                                          sam2_checkpoint=self.model, masks_dir=corrected)
         run2, calls2 = self.runner()
         report = self.build(run2, revised, resume=True)
-        self.assertEqual(len(calls2), 3)
+        self.assertEqual(len(calls2), 4)
         self.assertTrue(calls2[0].startswith("mask-audit-"))
         self.assertTrue(report["status"].startswith("private-GLB-candidate"))
 

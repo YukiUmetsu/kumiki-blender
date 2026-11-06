@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
 import re
 import shutil
 import subprocess
@@ -35,10 +36,18 @@ class DenseSettings:
     resolution_level: int = 0
     max_resolution: int = 3200
     number_views: int = 5
+    # OpenMVS skips a camera with no error message if no neighbor reaches this
+    # score. The score grows with shared sparse points, so the default of 2.0
+    # drops elevated and low-resolution photos: 12 of 55 Sphinx cameras gave
+    # no depth map. Keep every camera unless a user sets a limit.
+    view_min_score: float = 0.0
     refine_decimate: float = 1.0
     texture_decimate: float = 1.0
-    texture_global_seam_leveling: bool = True
-    texture_local_seam_leveling: bool = True
+    # OpenMVS 2.4 has a known texture sampling/seam-leveling regression that
+    # turns valid photographs into black/rainbow atlas patches. Preserve
+    # original photographed color by default; users can opt in on fixed builds.
+    texture_global_seam_leveling: bool = False
+    texture_local_seam_leveling: bool = False
 
     def validate(self) -> "DenseSettings":
         if self.backend not in ("openmvs", "colmap"):
@@ -59,6 +68,9 @@ class DenseSettings:
             raise ReferenceError("resolution_level must be 0–4")
         if type(self.max_resolution) is not int or not 640 <= self.max_resolution <= 16384:
             raise ReferenceError("max_resolution must be 640–16384")
+        if (type(self.view_min_score) not in (float, int) or
+                not math.isfinite(self.view_min_score) or self.view_min_score < 0):
+            raise ReferenceError("view_min_score must be a finite number of at least 0")
         if type(self.number_views) is not int or not 2 <= self.number_views <= 32:
             raise ReferenceError("number_views must be 2–32")
         if (type(self.refine_decimate) not in (int, float)
@@ -97,12 +109,47 @@ def _check_regular(path: Path, root: Path) -> None:
         raise ReferenceError(f"Required reconstruction file is missing or linked outside the revision: {path.name}")
 
 
+def _stage_openmvs_mask_aliases(image_root: Path, masks: list[dict[str, Any]]) -> None:
+    """Make OpenMVS stem-based mask paths alongside hash-pinned snapshots.
+
+    The rectified-mask contract names a mask ``photo-0003.png.mask.png``,
+    whereas OpenMVS 2.4 looks for ``photo-0003.mask.png``. Preserve the
+    original snapshot for resume validation and link an identical alias in
+    the private workspace. This can also repair a previously failed stage.
+    """
+    for entry in masks:
+        original = image_root / (entry["filename"] + ".mask.png")
+        alias = image_root / (Path(entry["filename"]).stem + ".mask.png")
+        _check_regular(original, image_root)
+        if _sha256(original) != entry["sha256"]:
+            raise ReferenceError(f"OpenMVS mask snapshot changed: {entry['filename']}")
+        if alias.exists() or alias.is_symlink():
+            _check_regular(alias, image_root)
+            if _sha256(alias) != entry["sha256"]:
+                raise ReferenceError(f"OpenMVS mask alias changed: {alias.name}")
+            continue
+        try:
+            os.link(original, alias)
+        except OSError:
+            # Exclusive creation prevents replacing another alias if a
+            # concurrent process created it after the existence check.
+            with original.open("rb") as source, alias.open("xb") as destination:
+                shutil.copyfileobj(source, destination)
+        _check_regular(alias, image_root)
+        if _sha256(alias) != entry["sha256"]:
+            raise ReferenceError(f"OpenMVS mask alias changed during staging: {alias.name}")
+
+
 def plan_dense_reconstruction(reconstruction: str | Path, output: str | Path,
                               settings: DenseSettings, *,
                               rectified_masks: str | Path | None = None,
                               executables: dict[str, str] | None = None) -> dict[str, Any]:
     """Non-mutating preflight; requires registered, rectified camera evidence."""
     settings.validate()
+    if rectified_masks is not None and settings.backend != "openmvs":
+        raise ReferenceError(
+            "Rectified subject masks are supported only by the OpenMVS backend; "
+            "COLMAP PatchMatch does not consume these mask arguments")
     source = Path(reconstruction).resolve()
     target = Path(output).resolve()
     if Path(output).is_symlink() or target.exists():
@@ -156,6 +203,9 @@ def plan_dense_reconstruction(reconstruction: str | Path, output: str | Path,
     masks = []
     mask_source = None
     if rectified_masks is not None:
+        stems = [Path(name).stem for name in verified]
+        if len(stems) != len(set(stems)):
+            raise ReferenceError("OpenMVS masks require unique rectified image stems")
         mask_source = Path(rectified_masks).resolve()
         if (Path(rectified_masks).is_symlink() or not mask_source.is_dir()
                 or mask_source.is_relative_to(source / "undistorted/images")):
@@ -204,6 +254,12 @@ def plan_dense_reconstruction(reconstruction: str | Path, output: str | Path,
         "undistorted_images": verified,
         "rectified_mask_source": str(mask_source) if mask_source is not None else None,
         "rectified_masks": masks,
+        # OpenMVS's mask-label default is -1 (disabled). Merely copying
+        # .mask.png files next to photos does NOT apply foreground filtering.
+        "mask_application": ({"densify": "ignore-background-label-0",
+                              "texture": "ignore-background-label-0" if settings.texture else None,
+                              "refine": "not-supported-by-openmvs-2.4" if settings.refine else None}
+                             if masks else None),
         "executables": executables,
         "timeout_seconds": settings.timeout_seconds,
         "min_mesh_faces": settings.min_mesh_faces,
@@ -212,6 +268,7 @@ def plan_dense_reconstruction(reconstruction: str | Path, output: str | Path,
         "resolution_level": settings.resolution_level if settings.backend == "openmvs" else None,
         "max_resolution": settings.max_resolution if settings.backend == "openmvs" else None,
         "number_views": settings.number_views if settings.backend == "openmvs" else None,
+        "view_min_score": settings.view_min_score if settings.backend == "openmvs" else None,
         "refine_decimate": settings.refine_decimate if settings.backend == "openmvs" else None,
         "texture_decimate": settings.texture_decimate if settings.backend == "openmvs" else None,
         "texture_global_seam_leveling": (
@@ -264,6 +321,43 @@ def _execute(command: list[str], log: Path, timeout_seconds: int) -> int:
         return 124 if isinstance(error, subprocess.TimeoutExpired) else 127
 
 
+def rerun_dense_from_stage(reconstruction: str | Path, rectified_masks: str | Path,
+                           source: str | Path, output: str | Path, *, stage: str,
+                           without: tuple[str, ...], prepare: Any,
+                           executables: dict[str, str] | None = None) -> dict[str, Any]:
+    """Copy a finished dense revision, change its workspace, and rerun from one stage.
+
+    `without` names file prefixes to leave out of the copy. Depth maps and logs are
+    always left out. `prepare` receives the new workspace before the stages run.
+    """
+    origin, target = Path(source).resolve(), Path(output).resolve()
+    report = _json(origin / "dense-report.json")
+
+    def ignored(_folder: str, names: list[str]) -> list[str]:
+        return [name for name in names if name.endswith((".dmap", ".log")) or
+                name.startswith(without)]
+
+    target.mkdir(parents=True)
+    (target / "logs").mkdir()
+    shutil.copytree(origin / "workspace", target / "workspace", ignore=ignored)
+    prepare(target / "workspace")
+    stale = ("texture_images", "textured_obj", "texture_atlases", "refined_face_retention")
+    if stage == "mesh":
+        stale += ("mesh", "raw_mesh")
+    interrupted = {key: value for key, value in report.items() if key not in stale}
+    interrupted.update(status="review-required", failed_stage=stage, exit_code=None,
+                       output=str(target))
+    (target / "dense-report.json").write_text(json.dumps(interrupted, indent=2) + "\n",
+                                              encoding="utf-8")
+    keys = ("timeout_seconds", "min_mesh_faces", "refine", "texture", "resolution_level",
+            "max_resolution", "number_views", "view_min_score", "refine_decimate",
+            "texture_decimate", "texture_global_seam_leveling", "texture_local_seam_leveling")
+    return build_dense_reconstruction(
+        reconstruction, target, DenseSettings(**{key: report[key] for key in keys},
+                                              min_registered_images=3, min_registered_fraction=.25),
+        rectified_masks=rectified_masks, executables=executables, resume=True)
+
+
 def build_dense_reconstruction(reconstruction: str | Path, output: str | Path,
                                settings: DenseSettings, *,
                                rectified_masks: str | Path | None = None,
@@ -294,6 +388,14 @@ def build_dense_reconstruction(reconstruction: str | Path, output: str | Path,
                 raise ReferenceError(f"Resume cannot change existing dense input/settings: {key}")
         prior = {step.get("stage") for step in report["commands"]
                  if isinstance(step, dict)}
+        if plan["rectified_masks"] and any(
+                step.get("stage") == "densify" and (
+                    "--mask-path" not in step.get("argv", [])
+                    or "--ignore-mask-label" not in step.get("argv", []))
+                for step in report["commands"] if isinstance(step, dict)):
+            raise ReferenceError(
+                "This dense revision previously ran without subject-mask filtering. "
+                "Start a new dense output revision; resuming would reuse contaminated depth maps")
         # Later, unstarted stages may be explicitly disabled after a failure
         # without invalidating the expensive camera/dense/mesh computation.
         failed_texturing = report.get("failed_stage") in (
@@ -336,6 +438,7 @@ def build_dense_reconstruction(reconstruction: str | Path, output: str | Path,
             _check_regular(snapshot, target)
             if _sha256(snapshot) != entry["sha256"]:
                 raise ReferenceError(f"Resume rectified mask changed: {entry['filename']}")
+        _stage_openmvs_mask_aliases(workspace / "images", plan["rectified_masks"])
         report["resumed_from"] = {"failed_stage": report.get("failed_stage"),
                                   "exit_code": report.get("exit_code")}
         report.update({"status": "review-required", "failed_stage": None,
@@ -344,6 +447,7 @@ def build_dense_reconstruction(reconstruction: str | Path, output: str | Path,
                        "texture_global_seam_leveling": plan["texture_global_seam_leveling"],
                        "texture_local_seam_leveling": plan["texture_local_seam_leveling"],
                        "refine": plan["refine"], "texture": plan["texture"],
+                       "mask_application": plan["mask_application"],
                        "rectified_mask_source": plan["rectified_mask_source"],
                        "rectified_masks": plan["rectified_masks"]})
         report.pop("error", None)
@@ -399,12 +503,25 @@ def build_dense_reconstruction(reconstruction: str | Path, output: str | Path,
                 shutil.copy2(mask["path"], destination)
                 if _sha256(destination) != mask["sha256"]:
                     raise ReferenceError(f"Rectified mask changed while staging: {mask['filename']}")
+            _stage_openmvs_mask_aliases(workspace / "images", plan["rectified_masks"])
         except (OSError, ReferenceError) as error:
             report.update(failed_stage="copy_workspace", error=str(error), exit_code=2)
             return checkpoint()
     if settings.backend == "openmvs":
+        # OpenMVS 2.4 DensifyPointCloud accepts --mask-path and requires an
+        # explicit --ignore-mask-label 0 for black background / white subject.
+        # TextureMesh reads the mask filenames embedded in scene_dense.mvs and
+        # accepts --ignore-mask-label, but NOT --mask-path in OpenMVS 2.4.
+        # RefineMesh 2.4 has neither option; do not send unsupported flags.
+        mask_dir = str(workspace / "images") + "/"
+        dense_mask_args = (["--mask-path", mask_dir,
+                            "--ignore-mask-label", "0"] if plan["rectified_masks"] else [])
+        texture_mask_args = (["--ignore-mask-label", "0"]
+                             if plan["rectified_masks"] else [])
         scene = workspace / "scene.mvs"
         dense = workspace / "scene_dense.mvs"
+        densify_config = workspace / "densify.ini"
+        densify_config.write_text(f"View Min Score = {settings.view_min_score}\n", encoding="utf-8")
         mesh = workspace / "scene_dense_mesh.mvs"
         refined = workspace / "scene_dense_mesh_refined.mvs"
         textured_obj = workspace / "scene_dense_mesh_refined_texture.obj"
@@ -416,7 +533,11 @@ def build_dense_reconstruction(reconstruction: str | Path, output: str | Path,
                                              "--resolution-level", str(settings.resolution_level),
                                              "--max-resolution", str(settings.max_resolution),
                                              "--number-views", str(settings.number_views),
-                                             "--tower-mode", "0"]),
+                                             "--dense-config-file", str(densify_config),
+                                             # Masks define the subject. An estimated region
+                                             # can crop its far ends.
+                                             "--estimate-roi", "0",
+                                             "--tower-mode", "0", *dense_mask_args]),
             ("mesh", "ReconstructMesh", ["--input-file", str(dense),
                                         "--output-file", str(mesh)]),
         ]
@@ -435,7 +556,8 @@ def build_dense_reconstruction(reconstruction: str | Path, output: str | Path,
                 "--decimate", str(settings.texture_decimate),
                 "--global-seam-leveling", str(int(settings.texture_global_seam_leveling)),
                 "--local-seam-leveling", str(int(settings.texture_local_seam_leveling)),
-                "--resolution-level", str(settings.resolution_level)]))
+                "--resolution-level", str(settings.resolution_level),
+                *texture_mask_args]))
         ply = workspace / "scene_dense_mesh.ply"
         # OpenMVS 2.4 normally exports ReconstructMesh/RefineMesh as PLY even
         # when --output-file ends in .mvs. Requiring an .mvs archive here

@@ -159,6 +159,286 @@ the Sphinx. When the sparse reconstruction remains blocked by insufficient
 elevated/side camera coverage, mask experiments can continue independently but
 do **not** bypass the camera-coverage gate or prove a GLB is ready.
 
+### Track-guided SAM2 retries (separate immutable revision)
+
+When broad and grounded candidates disagree, `improve-dense-masks` uses
+existing *registered, triangulated COLMAP tracks* to suggest extra positive
+SAM2 clicks in areas omitted by the selected mask. It checks that a track is
+observed from at least four photographs and that several *other* camera views
+agree inside both SAM2 candidates and the detector guide. A second, stricter
+route can recover a visible chest or torso point which **both** candidates
+missed in the target photo, but only if at least four other registered views
+independently confirm the same 3D point as statue in at least 80% of its
+observations. The low-plane ground classifier vetoes conflicting background
+geometry, and held-out foreground/background checks still decide acceptance.
+Neither an AI-generated photograph nor an untriangulated detection qualifies.
+
+A separate background
+test looks for **negative background tracks** outside both masks, well clear
+of their contours and outside Grounding DINO detections in at least four
+other registered views. When COLMAP camera rotations and triangulated 3D
+points are available, a second route fits a **low, horizontal ground-plane
+candidate** from exterior points observed in several photos. It does not
+require DINO's part boxes to exclude ground (those boxes can cover almost the
+entire frame). A point on the plane may veto a mask that incorrectly includes
+it in the current photo if other camera views identify it as exterior. These
+become SAM2 negative clicks or independent held-out background checks.
+
+Both foreground and background tracks have *independent, never-prompted*
+held-out subsets. A retry must recover foreground holdouts without losing any,
+violate no background holdouts, and add no confidently blue-sky foreground.
+Local color/appearance segmentation near the measured ground points provides
+another conservative veto on ground-colored mask expansions. It cannot label
+the full image as sand based on color alone. When a mask already includes
+ground, trusted existing foreground clicks can also guide an automatic SAM2
+ground-removal retry; only improvement on independent held-out ground points,
+with no loss of held-out statue tracks, can approve it. The fitted plane must
+also sit below most camera centers and agree with the height of verified statue
+tracks; otherwise the system abstains rather than treating a flat torso or
+wall as ground.
+
+The ordinary 20% maximum growth remains the fallback. Expansion up to 55%
+(or 90% with substantially stronger evidence) is allowed **only** with enough
+spatially independent background checks and when the added pixels are near
+recovered positive tracks. Otherwise the prior mask is kept and the reason is
+recorded. Background stone and Sphinx stone can still look alike: sparse
+tracks are *not* verified semantic labels, so the algorithm abstains when
+support is ambiguous rather than silently admitting ground.
+
+**Automatic is the default.** The pipeline chooses each candidate when it has
+adequate independent evidence and otherwise keeps the original mask or
+abstains. For a difficult close-up with too few COLMAP foreground/ground
+tracks, there is now a separate **image-only fragmentation fallback**. It is
+eligible only when at least 85% of a small broad mask is contained in a much
+larger grounded SAM2 candidate. It closes small repeated holes, preserves the
+largest connected body, requires near-identical silhouettes at two neighboring
+filter sizes, and vetoes new sky or known background-track coverage. This can
+recover a chest or paw that SAM2 spotted only in disconnected stone-texture
+fragments. It cannot distinguish adjacent sandstone architecture from the
+statue or prove that unverified sand has been removed. Its `image_repair`
+receipt records those limits separately from `track_guidance`.
+No person needs to click through the photos for this stage to run.
+The result is still a *candidate*, not certified statue anatomy: normal
+automatic mask-consistency and camera-coverage gates may block a weak dataset.
+Visual inspection is recommended, and optional overrides are supported below.
+Grounded `build-statue-glb` runs invoke this stage automatically;
+`--no-track-guided-masks` opts out. Original revisions are never overwritten.
+
+For an independent A/B test without rerunning COLMAP or Grounding DINO:
+
+```bash
+RUN='.review/great-sphinx/statue-hq-r005'
+BASE='.review/great-sphinx/grounded-masks-r003'
+IMPROVED='.review/great-sphinx/track-guided-masks-r005' # must not exist
+
+kumiki-blender improve-dense-masks \
+  --reconstruction "$RUN/cameras" \
+  --mask-revision "$BASE" \
+  --output "$IMPROVED" \
+  --sam2-device mps \
+  --sam2-checkpoint "$HOME/.cache/kumiki-blender/models/sam2.1_hiera_small.pt" \
+  --cache-dir '.review/great-sphinx/_statue_mask_cache'
+
+open "$IMPROVED/mask-contact-sheet.jpg"
+jq '{status, summary, changed: [.images[] |
+  select(.track_guided_replaced or .image_repair_replaced or .component_guided_replaced) |
+  {filename, track: .track_guidance, image_repair, component: .component_guidance}]}' \
+  "$IMPROVED/mask-report.json"
+jq '{viable_track_ids, viable_background_track_ids, geometric_ground_plane,
+     rejected, limitations}' "$IMPROVED/track-evidence-report.json"
+```
+
+If interrupted, use the same arguments plus `--resume`. A finished revision
+cannot be overwritten. Inspect `candidates/` for proposals that failed the
+held-out tests and `masks/` for the chosen output. Existing alternatives are
+copied and pinned by SHA-256. Without enough trustworthy multi-view overlap,
+the track-guided route abstains; the image-fragmentation fallback and the new
+region-guided SAM2 retry can still propose conservative changes. Neither invents
+viewpoints or certifies statue anatomy.
+The stronger background-evidence algorithm creates a new revision fingerprint.
+Identical SAM2 prompts still reuse the existing MPS mask cache; new background
+clicks produce distinct content-addressed cache entries. Never resume an
+incomplete older algorithm revision using this new version.
+
+#### Generic visible-region discovery (automatic, experimental)
+
+When a selected **broad** or previously fragmentation-repaired candidate is
+likely missing pieces and the track-recovery path has insufficient evidence,
+the default pipeline also discovers
+several *visible 2D regions* from the existing grounded candidate. It uses the
+largest connected mask region, image-space principal direction and spatial
+partitions to generate bounded boxes with positive SAM2 clicks. Genuine
+localized Grounding DINO component boxes can supplement these; nearly
+full-frame boxes cannot. The labels `region_01`, `region_02`, etc. are
+object-neutral and **do not imply semantic knowledge** of a Sphinx, statue,
+person, plant, or other object. No extra text model or subject-specific prompt
+is required. It works with the existing SAM 2.1 checkpoint and `mps` device.
+Independently corroborated COLMAP foreground tracks can add extra positive
+clicks, including a small local box for a nearby part missing from *both*
+original masks. Tracks far from the visible object are not accepted as
+automatic part anchors; withheld tracks remain reserved for QA.
+
+For photographs with visually distinct surrounding ground or scenery, the
+system may also propose a few *unverified image-exterior negatives* from the
+lower scene. They must be outside both original candidates, spatially far from
+the subject, and substantially darker or different in color than the subject
+core. Bright variations of the same stone material are deliberately excluded.
+These clicks guide SAM2 but are **never treated as ground truth** or as
+independent evidence for choosing a smaller final mask.
+
+Each region receives an independent SAM2 prediction; proposals are merged,
+then screened for connectedness, substantial retention of the original subject,
+reasonable bounded growth, foreground holdouts, negative ground tracks, sky
+leakage, and expansion outside the original grounded candidate. If the retry
+does not clearly improve the silhouette, the prior mask stays selected.
+For already selected grounded candidates, a separate **ground-trim** path may
+replace a smaller silhouette *only* when at least two corroborated ground
+training points were covered by the old mask and excluded by the new mask,
+and three held-out foreground points remain intact. Unverified photo colors
+alone never authorize a trim. The `operation` field distinguishes this path
+from body recovery.
+`images[].component_guidance` records discovery, prompts, cache keys, raw
+candidates, and QA verdicts. Raw and reviewed proposals are retained under
+`candidates/`. `summary.component_recovery_attempted` and
+`summary.component_recovery_accepted` count retries and selections. Reruns
+with identical settings reuse the content-addressed SAM2 cache.
+
+This path **does not remove arbitrary adjacent sandstone or ground**: without
+verified negative points, foreground labels, or clear optical boundaries,
+silhouette truth cannot be established from these photos alone. Parts absent
+from both source candidates need independently verified 3D track anchors or
+other external evidence; 2D overlap cannot establish their presence. The
+system abstains rather than inventing pixels or
+silently relaxing quality gates. For a strict track/shape-only comparison, pass
+`--no-component-recovery` to `improve-dense-masks`. Manual polygon overrides
+remain optional and never block automatic operation.
+
+To inspect which photos actually changed:
+
+```bash
+jq '{status, summary, discovered: [.images[] |
+  select(.component_guidance.attempted == true) |
+  {filename, component: .component_guidance.status,
+   accepted: .component_guidance.accepted,
+   regions: .component_guidance.discovery.discovered_regions}]}' \
+  "$IMPROVED/mask-report.json"
+```
+
+#### Review withheld proposals
+
+The automatic gates compare each proposal with the current mask, so they must
+refuse large changes. When the current mask is the broken one, this also
+withholds good proposals. Each `improve-dense-masks` revision therefore writes
+`review-queue/mask-review-queue.json` and side-by-side images in
+`review-queue/review/`. Each image shows the photo, the kept mask, the proposal
+and the difference (red removed, cyan added).
+
+Photos outside automatic recovery also get a review-only SAM2 proposal. It can
+never replace a mask without a person. Add `--no-review-proposals` to skip this
+SAM2 work.
+
+The queue compares each proposal with the labels from the *other* cameras, and
+with held-out tracks that did not create it:
+
+| Decision | Meaning |
+| --- | --- |
+| `review-recommended` | Cross-view agreement improved, and no independent evidence contradicts it |
+| `improved-leakage-untested` | Same, but too few background tracks exist to test for leakage |
+| `insufficient-evidence` | Too few foreground holdouts or consensus tracks to judge |
+| `no-cross-view-improvement` | Other cameras do not support the change |
+| `vetoed-by-independent-evidence` | A background track, foreground holdout, negative prompt or sky check contradicts it |
+
+A decision sets the review order only. It never approves a mask, and it does
+not change the automatic gates. Peer cameras can share one mask error, so
+inspect each image. A proposal can gain the subject and also gain ground.
+
+To change the limits, or to rank an older revision, write a JSON policy that
+contains only the values to change, and rank into an unused folder:
+
+```bash
+echo '{"min_background_tracks": 2, "min_agreement_gain": 0.05}' > review-policy.json
+kumiki-blender rank-mask-proposals \
+  --reconstruction "$RUN/cameras" \
+  --mask-revision "$IMPROVED" \
+  --output '.review/great-sphinx/review-queue-r001' \
+  --policy review-policy.json
+```
+
+The policy names are `min_foreground_holdouts`, `min_background_tracks`,
+`min_consensus_tracks`, `min_peer_cameras`, `min_peer_agreement`,
+`min_agreement_gain`, `max_new_sky_pixels` and `max_review_images`. An unknown
+name stops the command. `photos_without_proposal` lists the other photos, with
+the lowest cross-view agreement first. These photos need new prompts.
+
+#### Keep reviewed masks after camera recovery
+
+`recover-registered-cameras` writes a new camera revision. It rectifies photos
+at the size of the source revision, so the photos of unchanged cameras stay
+byte-identical and their reviewed masks stay valid. Generate masks for the new
+revision, then keep each reviewed mask whose photo did not change:
+
+```bash
+kumiki-blender prepare-dense-masks --reconstruction "$RECOVERED" \
+  --output "$GENERATED" --segmenter sam2 --sam2-checkpoint "$SAM2_CHECKPOINT" \
+  --cache-dir "$MASK_CACHE"
+kumiki-blender carry-dense-masks \
+  --reconstruction "$RECOVERED" \
+  --reviewed-masks "$REVIEWED" \
+  --generated-masks "$GENERATED" \
+  --output "$CARRIED"
+```
+
+`mask-report.json` in the output gives the origin of each mask. A generated
+mask is automatic and unreviewed, so inspect each one. Give
+`"$CARRIED/masks"` to `build-dense-photos --rectified-masks`.
+
+#### Promote reviewed proposals (not needed for automatic mode)
+
+If someone inspects a withheld proposal and prefers it to the automatically
+selected mask, `select-track-masks` can promote *only those explicitly named*
+photos into another immutable revision. It does not re-run SAM2. Use the
+`promote_with` value from the queue. A photo without a suffix uses its
+track-guided proposal:
+
+```bash
+CHOICES='.review/great-sphinx/track-masks-user-choice-r001' # must not exist
+kumiki-blender select-track-masks \
+  --reconstruction "$RUN/cameras" \
+  --mask-revision "$IMPROVED" \
+  --output "$CHOICES" \
+  --use-proposal photo-0021.png photo-0015.png:component-guided
+```
+
+For an automatically repaired image with a little unwanted ground, use
+`--edits /path/to/edits.json` **without** `--use-proposal`. Use the latter
+only to promote a separate withheld candidate. The edits JSON
+contains image-specific normalized include/exclude polygons:
+
+```json
+{
+  "images": {
+    "photo-0012.png": {
+      "exclude_polygons": [
+        [[0.10, 0.90], [0.20, 0.90], [0.20, 0.95], [0.10, 0.95]]
+      ]
+    }
+  }
+}
+```
+
+The coordinates are illustrative only; trace the actual unwanted region in
+the original rectified photo. Exclusions are applied *after* inclusions.
+Both selected proposals and edits retain source hashes and require the usual
+mask QA. Users can continue without ever invoking this optional command.
+
+```bash
+kumiki-blender select-track-masks \
+  --reconstruction "$RUN/cameras" \
+  --mask-revision "$IMPROVED" \
+  --output '.review/great-sphinx/user-edits-r001' \
+  --edits /path/to/edits.json
+```
+
 The bundled detector choice is Hugging Face
 `IDEA-Research/grounding-dino-tiny` at immutable revision
 `a2bb814dd30d776dcf7e30523b00659f4f141c71` (Apache-2.0 model card).

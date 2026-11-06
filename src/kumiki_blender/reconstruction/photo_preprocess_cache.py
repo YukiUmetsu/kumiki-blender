@@ -19,7 +19,7 @@ from typing import Any, Callable
 from .references import ReferenceError, ReferenceImage, ReferenceSet
 
 SCHEMA = "source-photo-preprocess-v1"
-FOREGROUND_SCHEMA = "source-foreground-sam2-consensus-v3"
+FOREGROUND_SCHEMA = "source-foreground-sam2-consensus-v4"
 
 
 def _digest(path: Path) -> str:
@@ -440,6 +440,7 @@ def prepare_statue_photo_cache(references: ReferenceSet, cache: Path, output: Pa
         if (not output.is_dir() or prior is None or
                 prior.get("source_manifest_sha256") != references.manifest_sha256 or
                 prior.get("foreground_model_sha256") != sha or
+                prior.get("foreground_schema") != (FOREGROUND_SCHEMA if foreground else None) or
                 prior.get("subject_detector", "none") != subject_detector or
                 prior.get("grounding_identity") != grounding_id or
                 prior.get("grounding_prompt") != grounding_prompt or
@@ -468,6 +469,7 @@ def prepare_statue_photo_cache(references: ReferenceSet, cache: Path, output: Pa
                               "status": "running", "cache_root": str(cache.resolve()),
                               "source_manifest_sha256": references.manifest_sha256,
                               "foreground_model_sha256": sha, "source_images": len(references.images),
+                              "foreground_schema": FOREGROUND_SCHEMA if foreground else None,
                               "subject_detector": subject_detector,
                               "grounding_identity": grounding_id,
                               "grounding_prompt": grounding_prompt,

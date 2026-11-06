@@ -343,6 +343,8 @@ def main(argv: list[str] | None = None) -> int:
     statue_glb.add_argument("--grounding-model-dir", type=Path,
                            help="Existing pinned Grounding DINO model snapshot; otherwise auto-download/cache")
     statue_glb.add_argument("--grounding-device", choices=("auto", "mps", "cpu"), default="auto")
+    statue_glb.add_argument("--no-track-guided-masks", action="store_true",
+                           help="Disable conservative COLMAP-track-guided SAM2 re-prompting")
     statue_glb.add_argument("--matching-device", choices=("mps", "torch-cpu"), default="mps",
                            help="Use Apple MPS LightGlue or PyTorch CPU fallback")
     statue_glb.add_argument("--mask-guides", type=Path,
@@ -390,6 +392,111 @@ def main(argv: list[str] | None = None) -> int:
     recovery_parser.add_argument("--output", type=Path, required=True)
     recovery_parser.add_argument("--colmap", default="colmap")
     recovery_parser.add_argument("--timeout-seconds", type=int, default=1800)
+    match_audit = subcommands.add_parser("audit-sfm-matches", help="Inspect tentative, verified and track-linked photo matches")
+    match_audit.add_argument("--revision", type=Path, required=True)
+    match_audit.add_argument("--output", type=Path, required=True)
+    match_audit.add_argument("--model", type=int, default=0)
+    match_audit.add_argument("--max-pairs-per-target", type=int, default=2)
+    roma_import = subcommands.add_parser("prepare-roma-candidate-database", help="Import RoMa track candidates into a separate COLMAP database")
+    roma_import.add_argument("--revision", type=Path, required=True)
+    roma_import.add_argument("--predictions", type=Path, required=True)
+    roma_import.add_argument("--output", type=Path, required=True)
+    roma_import.add_argument("--model", type=int, default=0)
+    roma_import.add_argument("--base-database", type=Path,
+                             help="Earlier candidate database of this revision; adds one more target photo to it")
+    refine_cameras = subcommands.add_parser(
+        "refine-cameras-with-matches",
+        help="Refine registered cameras with verified dense matches; rectified photos and their masks stay valid")
+    refine_cameras.add_argument("--revision", type=Path, required=True)
+    refine_cameras.add_argument("--rectified-masks", type=Path, required=True,
+                                help="Folder of <photo>.mask.png files; matches are kept on the subject")
+    refine_cameras.add_argument("--output", type=Path, required=True)
+    refine_cameras.add_argument("--exclude-camera", action="append", default=[],
+                                help="Registered camera to leave out; repeat")
+    refine_cameras.add_argument("--pairs-per-camera", type=int, default=6)
+    refine_cameras.add_argument("--refine-principal-point", action="store_true",
+                                help="Also refine principal points; unsafe for long lenses")
+    refine_cameras.add_argument("--device", choices=("auto", "mps", "cpu"), default="auto")
+    refine_cameras.add_argument("--cache-dir", type=Path,
+                                help="Keep verified matches here, so a repeated run needs no model")
+    fragments = subcommands.add_parser(
+        "remove-mesh-fragments", help="Remove floating pieces from a dense mesh, then texture it again")
+    fragments.add_argument("--reconstruction", type=Path, required=True)
+    fragments.add_argument("--rectified-masks", type=Path, required=True)
+    fragments.add_argument("--dense-revision", type=Path, required=True)
+    fragments.add_argument("--output", type=Path, required=True, help="New dense revision")
+    match_dense = subcommands.add_parser(
+        "densify-with-matches",
+        help="Fill gaps in a dense cloud with triangulated verified matches, then mesh again")
+    match_dense.add_argument("--reconstruction", type=Path, required=True,
+                             help="Camera revision of the dense revision")
+    match_dense.add_argument("--rectified-masks", type=Path, required=True)
+    match_dense.add_argument("--dense-revision", type=Path, required=True)
+    match_dense.add_argument("--output", type=Path, required=True, help="New dense revision")
+    match_dense.add_argument("--pairs-per-camera", type=int, default=6)
+    match_dense.add_argument("--max-mask-veto-fraction", type=float, default=.5,
+                             help="Remove a point if more than this share of reviewed masks call it background")
+    match_dense.add_argument("--device", choices=("auto", "mps", "cpu"), default="auto")
+    locate_photos = subcommands.add_parser(
+        "locate-new-photos",
+        help="Add new photos to a refined camera revision without solving the other cameras again")
+    locate_photos.add_argument("--revision", type=Path, required=True)
+    locate_photos.add_argument("--photos", type=Path, required=True,
+                               help="JSON list of objects with path and filename, plus optional source fields")
+    locate_photos.add_argument("--output", type=Path, required=True)
+    locate_photos.add_argument("--device", choices=("auto", "mps", "cpu"), default="auto")
+    predicted_stage = subcommands.add_parser(
+        "stage-predicted-cameras",
+        help="Register predicted-match photos against the unchanged baseline and write a labelled dense-ready revision")
+    predicted_stage.add_argument("--revision", type=Path, required=True)
+    predicted_stage.add_argument("--candidate-database", type=Path, required=True,
+                                 help="database.db from prepare-roma-candidate-database")
+    predicted_stage.add_argument("--output", type=Path, required=True)
+    predicted_stage.add_argument("--colmap", default="colmap")
+    predicted_stage.add_argument("--timeout-seconds", type=int, default=1800)
+    roma_predict = subcommands.add_parser("predict-roma-tracks", help="Generate isolated RoMa multiview predictions for missing views (not verified observations)")
+    roma_predict.add_argument("--revision", type=Path, required=True)
+    roma_predict.add_argument("--output", type=Path, required=True)
+    roma_predict.add_argument("--target", action="append", required=True, help="Unregistered staged photo; repeat for other views")
+    roma_predict.add_argument("--anchor", action="append", required=True, help="Registered staged photo; repeat for at least two")
+    roma_predict.add_argument("--model", type=int, default=0)
+    roma_predict.add_argument("--min-confidence", type=float, default=0.05)
+    roma_predict.add_argument("--max-tracks-per-anchor", type=int, default=4000)
+    roma_predict.add_argument("--device", choices=("auto", "mps", "cpu"), default="auto")
+    roma_predict.add_argument("--coarse-resolution", type=int, default=420)
+    roma_predict.add_argument("--refine-resolution", type=int, default=560)
+    roma_predict.add_argument("--resume", action="store_true",
+                              help="Resume an interrupted identical prediction batch after SHA-verifying completed targets")
+    roma_audit = subcommands.add_parser("audit-roma-camera", help="Audit synthetic-vs-real observations in isolated RoMa registration")
+    roma_audit.add_argument("--revision", type=Path, required=True)
+    roma_audit.add_argument("--candidate", type=Path, required=True)
+    roma_audit.add_argument("--output", type=Path, required=True)
+    roma_audit.add_argument("--model", type=int, default=0)
+    roma_audit.add_argument("--outlier-px", type=float, default=8.0)
+    roma_audit.add_argument("--remove-index", action="append", type=int, default=[],
+                            help="Explicit high-error point2D index to prune in a separate model; repeat")
+    roma_repair = subcommands.add_parser("repair-roma-sparse-camera", help="Create an isolated, guarded COLMAP model with one reviewed new view")
+    roma_repair.add_argument("--baseline-model", type=Path, required=True)
+    roma_repair.add_argument("--candidate-model", type=Path, required=True)
+    roma_repair.add_argument("--output", type=Path, required=True)
+    roma_repair.add_argument("--target", required=True)
+    roma_repair.add_argument("--remove-index", action="append", required=True, type=int)
+    roma_repair.add_argument("--remove-duplicate-index", action="append", type=int, default=[],
+                             help="Explicit reviewed duplicate point2D index to remove, even if below outlier threshold; repeat")
+    roma_repair.add_argument("--exclude-camera", action="append", required=True)
+    roma_repair.add_argument("--outlier-px", type=float, default=8.0)
+    roma_repair.add_argument("--allow-duplicate-repair", action="store_true",
+                             help="Permit explicitly reviewed duplicate repair while preserving surviving native tracks")
+    roma_dense = subcommands.add_parser(
+        "stage-roma-dense-candidate",
+        help="Stage separately repaired RoMa cameras and matching rectified images for an exploratory dense A/B run")
+    roma_dense.add_argument("--source-reconstruction", type=Path, required=True,
+                            help="Exact source_revision from the experiment's dense-report.json, not a guessed r01/r02 folder")
+    roma_dense.add_argument("--repair", type=Path, required=True,
+                            help="Isolated repair-roma-sparse-camera output with its approval receipt")
+    roma_dense.add_argument("--output", type=Path, required=True,
+                            help="New private dense-input revision; source images and models remain unchanged")
+    roma_dense.add_argument("--colmap", default="colmap")
     camera_compare_parser = subcommands.add_parser(
         "compare-camera-registrations",
         help="Read-only before/after registration coverage for two COLMAP revisions")
@@ -463,14 +570,25 @@ def main(argv: list[str] | None = None) -> int:
                                   help="OpenMVS maximum depth map image dimension")
         dense_parser.add_argument("--number-views", type=int, default=5,
                                   help="OpenMVS neighboring views per depth estimate")
+        dense_parser.add_argument("--view-min-score", type=float, default=0.0,
+                                  help="OpenMVS minimum neighbor score; a camera below it gives no depth map (0 keeps every camera)")
         dense_parser.add_argument("--refine-decimate", type=float, default=1.0,
                                   help="OpenMVS pre-refinement face retention; 1 preserves high-poly detail")
         dense_parser.add_argument("--texture-decimate", type=float, default=1.0,
                                   help="OpenMVS texture OBJ face retention; lower for faster atlas LOD while PLY stays high-poly")
-        dense_parser.add_argument("--no-global-seam-leveling", action="store_true",
-                                  help="OpenMVS: disable global texture seam equalization if it creates dark artifacts")
-        dense_parser.add_argument("--no-local-seam-leveling", action="store_true",
-                                  help="OpenMVS: disable local texture seam blending if it creates dark artifacts")
+        global_seam = dense_parser.add_mutually_exclusive_group()
+        global_seam.add_argument("--global-seam-leveling", dest="global_seam_leveling",
+                                 action="store_true",
+                                 help="Opt into OpenMVS global texture seam equalization (broken in 2.4.0)")
+        global_seam.add_argument("--no-global-seam-leveling", dest="global_seam_leveling",
+                                 action="store_false", help="Keep global texture seam equalization off (default)")
+        local_seam = dense_parser.add_mutually_exclusive_group()
+        local_seam.add_argument("--local-seam-leveling", dest="local_seam_leveling",
+                                action="store_true",
+                                help="Opt into OpenMVS local texture seam blending (broken in 2.4.0)")
+        local_seam.add_argument("--no-local-seam-leveling", dest="local_seam_leveling",
+                                action="store_false", help="Keep local texture seam blending off (default)")
+        dense_parser.set_defaults(global_seam_leveling=False, local_seam_leveling=False)
         dense_parser.add_argument("--timeout-seconds", type=int, default=7200)
         dense_parser.add_argument("--no-refine", action="store_true",
                                   help="OpenMVS: skip refined topology")
@@ -479,6 +597,25 @@ def main(argv: list[str] | None = None) -> int:
         if command == "build-dense-photos":
             dense_parser.add_argument("--resume", action="store_true",
                                       help="Resume an incomplete OpenMVS revision without repeating completed stages")
+    for command in ("plan-dense-surface-coverage", "audit-dense-surface-coverage"):
+        surface_parser = subcommands.add_parser(
+            command, help="Map weak camera support and open mesh boundaries without inventing geometry")
+        surface_parser.add_argument("--dense-revision", type=Path, required=True)
+        surface_parser.add_argument("--output", type=Path, required=True,
+                                    help="New private surface QA revision")
+        surface_parser.add_argument("--max-samples", type=int, default=40_000)
+        surface_parser.add_argument("--min-views", type=int, default=2)
+        surface_parser.add_argument("--max-cameras", type=int, default=256)
+        surface_parser.add_argument("--no-masks", action="store_true",
+                                    help="Geometry-only camera support without foreground-mask intersections")
+    photo_qa = subcommands.add_parser("audit-dense-photographs", help="Compare ray-occluded mesh with registered photographs")
+    photo_qa.add_argument("--dense-revision", type=Path, required=True)
+    photo_qa.add_argument("--output", type=Path, required=True)
+    photo_qa.add_argument("--blender", default="blender")
+    photo_qa.add_argument("--side", type=int, default=256)
+    photo_qa.add_argument("--max-samples", type=int, default=10000)
+    photo_qa.add_argument("--max-cameras", type=int, default=256)
+    photo_qa.add_argument("--min-views", type=int, default=2)
     for command in ("plan-splats", "build-splats"):
         splat_parser = subcommands.add_parser(
             command, help="Train private Gaussian splats from multi-angle photos or COLMAP cameras")
@@ -578,6 +715,67 @@ def main(argv: list[str] | None = None) -> int:
                                    help="Optional content-addressed cache of masks for identical rectified photos")
     photo_mask_parser.add_argument("--resume", action="store_true",
                                    help="Resume an incomplete masks revision with identical inputs")
+    targeted_sam2 = subcommands.add_parser(
+        "retry-sam2-mask-candidates",
+        help="Generate isolated anatomy-guided SAM2 candidates for a few damaged masks (never auto-promote)")
+    targeted_sam2.add_argument("--reconstruction", type=Path, required=True)
+    targeted_sam2.add_argument("--source-masks", type=Path, required=True)
+    targeted_sam2.add_argument("--guides", type=Path, required=True)
+    targeted_sam2.add_argument("--image", action="append", required=True,
+                               help="Registered photo filename, repeat for 1–12 targets")
+    targeted_sam2.add_argument("--sam2-checkpoint", type=Path, required=True)
+    targeted_sam2.add_argument("--sam2-size", choices=("tiny", "small", "base_plus", "large"), default="small")
+    targeted_sam2.add_argument("--sam2-device", choices=("auto", "mps", "cpu"), default="auto")
+    targeted_sam2.add_argument("--max-side", type=int, default=1280)
+    targeted_sam2.add_argument("--output", type=Path, required=True)
+    track_mask_parser = subcommands.add_parser(
+        "improve-dense-masks", help="Safely re-prompt ambiguous SAM2 masks using independent COLMAP feature tracks")
+    track_mask_parser.add_argument("--reconstruction", type=Path, required=True)
+    track_mask_parser.add_argument("--mask-revision", type=Path, required=True,
+                                   help="Completed grounded-SAM2 mask revision with both alternatives")
+    track_mask_parser.add_argument("--output", type=Path, required=True,
+                                   help="New immutable revision; never overwrites source masks")
+    track_mask_parser.add_argument("--sam2-checkpoint", type=Path, required=True)
+    track_mask_parser.add_argument("--sam2-size", choices=("tiny", "small", "base_plus", "large"),
+                                   default="small")
+    track_mask_parser.add_argument("--sam2-device", choices=("auto", "mps", "cpu"), default="auto")
+    track_mask_parser.add_argument("--max-side", type=int, default=1280)
+    track_mask_parser.add_argument("--cache-dir", type=Path)
+    track_mask_parser.add_argument("--no-component-recovery", action="store_true",
+                                   help="Skip automatic object-neutral visible-region SAM2 retry")
+    track_mask_parser.add_argument("--no-review-proposals", action="store_true",
+                                   help="Skip review-only proposals for photos outside automatic recovery; saves SAM2 time")
+    track_mask_parser.add_argument("--resume", action="store_true")
+    choose_mask_parser = subcommands.add_parser(
+        "select-track-masks", help="Optionally promote reviewed SAM2 proposals and correct polygons in a new mask revision")
+    choose_mask_parser.add_argument("--reconstruction", type=Path, required=True)
+    choose_mask_parser.add_argument("--mask-revision", type=Path, required=True,
+                                   help="Completed automatic improve-dense-masks revision")
+    choose_mask_parser.add_argument("--output", type=Path, required=True,
+                                   help="Unused immutable output revision")
+    choose_mask_parser.add_argument("--use-proposal", nargs="+", default=[], metavar="PHOTO[:KIND]",
+                                   help="Promote a withheld candidate. KIND is track-guided (default) or component-guided")
+    choose_mask_parser.add_argument("--edits", type=Path,
+                                   help="Optional normalized include/exclude polygons for specific photos")
+    carry_mask_parser = subcommands.add_parser(
+        "carry-dense-masks", help="Keep reviewed masks of unchanged photos for a camera revision with new photos")
+    carry_mask_parser.add_argument("--reconstruction", type=Path, required=True,
+                                   help="Camera revision that needs masks, such as a recovered revision")
+    carry_mask_parser.add_argument("--reviewed-masks", type=Path, required=True,
+                                   help="Mask revision with reviewed masks for an earlier camera revision")
+    carry_mask_parser.add_argument("--generated-masks", type=Path,
+                                   help="prepare-dense-masks revision of --reconstruction, for new or changed photos")
+    carry_mask_parser.add_argument("--output", type=Path, required=True,
+                                   help="Unused folder outside every input")
+    rank_mask_parser = subcommands.add_parser(
+        "rank-mask-proposals", help="Rank withheld mask proposals for review; never approves a mask")
+    rank_mask_parser.add_argument("--reconstruction", type=Path, required=True)
+    rank_mask_parser.add_argument("--mask-revision", type=Path, required=True,
+                                  help="Completed automatic improve-dense-masks revision")
+    rank_mask_parser.add_argument("--output", type=Path, required=True,
+                                  help="Unused folder outside the revision")
+    rank_mask_parser.add_argument("--policy", type=Path,
+                                  help="Optional JSON file that overrides ReviewPolicy evidence limits")
     refine_mask_parser = subcommands.add_parser(
         "refine-dense-masks", help="Remove tiny mask islands/holes or apply camera-specific polygon cleanup")
     refine_mask_parser.add_argument("--reconstruction", type=Path, required=True)
@@ -784,6 +982,8 @@ def main(argv: list[str] | None = None) -> int:
     mask_parser.add_argument("--renders", type=Path, required=True)
     mask_parser.add_argument("--output", type=Path, required=True)
     mask_parser.add_argument("--min-iou", type=float, default=0.8)
+    mask_parser.add_argument("--regions", type=Path,
+                             help="Optional manually annotated camera-local face/paw/rear/top boxes for regional IoU")
     landmark_parser = subcommands.add_parser(
         "landmark-qa", help="Measure sculpt 3D landmark reprojection error in registered photos")
     landmark_parser.add_argument("--plan", type=Path, required=True)
@@ -968,6 +1168,69 @@ def main(argv: list[str] | None = None) -> int:
                     grounding_device=args.grounding_device,
                     resume=args.resume)
             except ReferenceError as error:
+                raise RecipeError(str(error)) from error
+            print(json.dumps(report, indent=2))
+            return 0
+        if args.command == "retry-sam2-mask-candidates":
+            from .reconstruction.targeted_sam2_retry import retry_sam2_masks
+            from .reconstruction.references import ReferenceError
+            try:
+                report = retry_sam2_masks(
+                    args.reconstruction, args.source_masks, args.guides, args.output,
+                    targets=args.image, sam2_checkpoint=args.sam2_checkpoint,
+                    sam2_size=args.sam2_size, sam2_device=args.sam2_device,
+                    max_side=args.max_side)
+            except ReferenceError as error:
+                raise RecipeError(str(error)) from error
+            print(json.dumps(report, indent=2))
+            return 0
+        if args.command == "improve-dense-masks":
+            from .reconstruction.mask_track_resegmentation import refine_masks_from_tracks
+            from .reconstruction.references import ReferenceError
+            try:
+                report = refine_masks_from_tracks(
+                    args.reconstruction, args.mask_revision, args.output,
+                    sam2_checkpoint=args.sam2_checkpoint, sam2_size=args.sam2_size,
+                    sam2_device=args.sam2_device, max_side=args.max_side,
+                    cache_dir=args.cache_dir, resume=args.resume,
+                    component_recovery=not args.no_component_recovery,
+                    review_proposals=not args.no_review_proposals,
+                    progress=lambda count, total, outcome: print(
+                        f"Track-guided mask QA {count}/{total}: {outcome}",
+                        file=sys.stderr, flush=True))
+            except (ReferenceError, OSError, ValueError) as error:
+                raise RecipeError(str(error)) from error
+            print(json.dumps(report, indent=2))
+            return 0
+        if args.command == "carry-dense-masks":
+            from .reconstruction.mask_carry_forward import carry_masks_forward
+            from .reconstruction.references import ReferenceError
+            try:
+                report = carry_masks_forward(args.reconstruction, args.reviewed_masks, args.output,
+                                             generated_masks=args.generated_masks)
+            except (ReferenceError, OSError, ValueError, KeyError) as error:
+                raise RecipeError(str(error)) from error
+            print(json.dumps(report, indent=2))
+            return 0
+        if args.command == "rank-mask-proposals":
+            from .reconstruction.mask_proposal_review import ReviewPolicy, rank_mask_proposals
+            from .reconstruction.references import ReferenceError
+            try:
+                policy = ReviewPolicy.from_json(args.policy) if args.policy else None
+                report = rank_mask_proposals(args.reconstruction, args.mask_revision,
+                                             args.output, policy=policy)
+            except (ReferenceError, OSError, ValueError) as error:
+                raise RecipeError(str(error)) from error
+            print(json.dumps(report, indent=2))
+            return 0
+        if args.command == "select-track-masks":
+            from .reconstruction.mask_track_selection import select_track_mask_candidates
+            from .reconstruction.references import ReferenceError
+            try:
+                report = select_track_mask_candidates(
+                    args.reconstruction, args.mask_revision, args.output,
+                    use_proposals=args.use_proposal, edits=args.edits)
+            except (ReferenceError, OSError, ValueError) as error:
                 raise RecipeError(str(error)) from error
             print(json.dumps(report, indent=2))
             return 0
@@ -1285,10 +1548,10 @@ def main(argv: list[str] | None = None) -> int:
                     timeout_seconds=args.timeout_seconds, min_mesh_faces=args.min_mesh_faces,
                     resolution_level=args.resolution_level,
                     max_resolution=args.max_resolution, number_views=args.number_views,
-                    refine_decimate=args.refine_decimate,
+                    view_min_score=args.view_min_score, refine_decimate=args.refine_decimate,
                     texture_decimate=args.texture_decimate,
-                    texture_global_seam_leveling=not args.no_global_seam_leveling,
-                    texture_local_seam_leveling=not args.no_local_seam_leveling,
+                    texture_global_seam_leveling=args.global_seam_leveling,
+                    texture_local_seam_leveling=args.local_seam_leveling,
                     refine=not args.no_refine, texture=not args.no_texture)
                 report = (plan_dense_reconstruction(args.reconstruction, args.output, settings,
                                                     rectified_masks=args.rectified_masks)
@@ -1301,6 +1564,162 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(report, indent=2))
             return (0 if args.command == "plan-dense-photos" or
                     report["status"].startswith("dense-mesh-candidate") else 3)
+        if args.command in ("plan-dense-surface-coverage", "audit-dense-surface-coverage"):
+            from .reconstruction.surface_coverage import (audit_surface_coverage,
+                                                          plan_surface_coverage)
+            from .reconstruction.references import ReferenceError
+            try:
+                operation = (plan_surface_coverage if args.command.startswith("plan-")
+                             else audit_surface_coverage)
+                report = operation(args.dense_revision, args.output,
+                                   max_samples=args.max_samples, min_views=args.min_views,
+                                   max_cameras=args.max_cameras, use_masks=not args.no_masks)
+            except ReferenceError as error:
+                raise RecipeError(str(error)) from error
+            print(json.dumps(report, indent=2))
+            # A report with gaps remains a successful diagnostic, never a
+            # declaration that the surface is complete or distribution-ready.
+            return 0
+        if args.command == "audit-dense-photographs":
+            from .reconstruction.photographic_qa import audit_photographs
+            from .reconstruction.references import ReferenceError
+            try:
+                report = audit_photographs(args.dense_revision, args.output, blender=args.blender,
+                                           side=args.side, max_samples=args.max_samples,
+                                           max_cameras=args.max_cameras, min_views=args.min_views)
+            except ReferenceError as error:
+                raise RecipeError(str(error)) from error
+            print(json.dumps(report, indent=2))
+            return 0
+        if args.command == "audit-sfm-matches":
+            from .reconstruction.sfm_pair_diagnostics import audit_matching_revision
+            try:
+                report = audit_matching_revision(args.revision, args.output, model=args.model,
+                                                 max_pairs_per_target=args.max_pairs_per_target)
+            except ValueError as error:
+                raise RecipeError(str(error)) from error
+            print(json.dumps(report, indent=2))
+            return 0
+        if args.command == "prepare-roma-candidate-database":
+            from .reconstruction.roma_candidate_database import prepare_roma_candidate_database
+            try:
+                report = prepare_roma_candidate_database(args.revision, args.predictions,
+                                                          args.output, model=args.model,
+                                                          base_database=args.base_database)
+            except (ValueError, OSError) as error:
+                raise RecipeError(str(error)) from error
+            print(json.dumps(report, indent=2))
+            return 0
+        if args.command == "locate-new-photos":
+            from .reconstruction.match_photo_location import add_located_photos
+            from .reconstruction.references import ReferenceError
+            try:
+                report = add_located_photos(
+                    args.revision, json.loads(args.photos.read_text(encoding="utf-8")), args.output,
+                    device=args.device, log=lambda line: print(line, file=sys.stderr, flush=True))
+            except (ReferenceError, ValueError, ImportError, OSError, RuntimeError, KeyError) as error:
+                raise RecipeError(str(error)) from error
+            print(json.dumps(report, indent=2))
+            return 0 if report["accepted"] else 3
+        if args.command == "remove-mesh-fragments":
+            from .reconstruction.mesh_fragments import remove_mesh_fragments
+            from .reconstruction.references import ReferenceError
+            try:
+                report = remove_mesh_fragments(args.reconstruction, args.rectified_masks,
+                                               args.dense_revision, args.output)
+            except (ReferenceError, ValueError, ImportError, OSError) as error:
+                raise RecipeError(str(error)) from error
+            print(json.dumps(report, indent=2))
+            return 0 if str(report.get("status", "")).startswith("dense-mesh-candidate") else 3
+        if args.command == "densify-with-matches":
+            from .reconstruction.match_densification import DensificationSettings, densify_with_matches
+            from .reconstruction.references import ReferenceError
+            try:
+                report = densify_with_matches(
+                    args.reconstruction, args.rectified_masks, args.dense_revision, args.output,
+                    settings=DensificationSettings(pairs_per_camera=args.pairs_per_camera,
+                                                   max_mask_veto_fraction=args.max_mask_veto_fraction),
+                    device=args.device, log=lambda line: print(line, file=sys.stderr, flush=True))
+            except (ReferenceError, ValueError, ImportError, OSError, RuntimeError) as error:
+                raise RecipeError(str(error)) from error
+            print(json.dumps(report, indent=2))
+            return 0 if str(report.get("status", "")).startswith("dense-mesh-candidate") else 3
+        if args.command == "refine-cameras-with-matches":
+            from .reconstruction.match_camera_refinement import (RefinementSettings,
+                                                                 refine_cameras_with_matches)
+            from .reconstruction.references import ReferenceError
+            try:
+                report = refine_cameras_with_matches(
+                    args.revision, args.rectified_masks, args.output,
+                    settings=RefinementSettings(pairs_per_camera=args.pairs_per_camera,
+                                                refine_principal_point=args.refine_principal_point),
+                    device=args.device, exclude_cameras=args.exclude_camera,
+                    cache_dir=args.cache_dir,
+                    log=lambda line: print(line, file=sys.stderr, flush=True))
+            except (ReferenceError, ValueError, ImportError, OSError, RuntimeError) as error:
+                raise RecipeError(str(error)) from error
+            print(json.dumps(report, indent=2))
+            return 0
+        if args.command == "stage-predicted-cameras":
+            from .reconstruction.predicted_camera_staging import stage_predicted_cameras
+            from .reconstruction.references import ReferenceError
+            try:
+                report = stage_predicted_cameras(args.revision, args.candidate_database, args.output,
+                                                 colmap=args.colmap,
+                                                 timeout_seconds=args.timeout_seconds)
+            except (ReferenceError, ValueError, ImportError, OSError) as error:
+                raise RecipeError(str(error)) from error
+            print(json.dumps(report, indent=2))
+            return 0
+        if args.command == "predict-roma-tracks":
+            from .reconstruction.roma_predictions import generate_roma_predictions
+            try:
+                report = generate_roma_predictions(args.revision, args.output,
+                                                   targets=args.target, anchors=args.anchor,
+                                                   model=args.model, min_confidence=args.min_confidence,
+                                                   max_tracks_per_anchor=args.max_tracks_per_anchor,
+                                                   device=args.device,
+                                                   coarse_resolution=args.coarse_resolution,
+                                                   refine_resolution=args.refine_resolution,
+                                                   resume=args.resume)
+            except (ValueError, OSError, RuntimeError) as error:
+                raise RecipeError(str(error)) from error
+            print(json.dumps(report, indent=2))
+            return 0
+        if args.command == "audit-roma-camera":
+            from .reconstruction.roma_camera_audit import audit_roma_candidate_camera
+            try:
+                report = audit_roma_candidate_camera(args.revision, args.candidate, args.output,
+                                                      outlier_px=args.outlier_px,
+                                                      remove_indices=args.remove_index, model=args.model)
+            except (ValueError, OSError, RuntimeError) as error:
+                raise RecipeError(str(error)) from error
+            print(json.dumps(report, indent=2))
+            return 0
+        if args.command == "repair-roma-sparse-camera":
+            from .reconstruction.roma_sparse_repair import repair_roma_sparse_model
+            try:
+                report = repair_roma_sparse_model(args.baseline_model, args.candidate_model,
+                                                   args.output, target=args.target,
+                                                   remove_indices=args.remove_index,
+                                                   remove_duplicate_indices=args.remove_duplicate_index,
+                                                   exclude_cameras=args.exclude_camera,
+                                                   outlier_px=args.outlier_px,
+                                                   allow_duplicate_repair=args.allow_duplicate_repair)
+            except (ValueError, OSError, RuntimeError) as error:
+                raise RecipeError(str(error)) from error
+            print(json.dumps(report, indent=2))
+            return 0
+        if args.command == "stage-roma-dense-candidate":
+            from .reconstruction.roma_dense_staging import stage_repaired_roma_dense_revision
+            from .reconstruction.references import ReferenceError
+            try:
+                report = stage_repaired_roma_dense_revision(
+                    args.source_reconstruction, args.repair, args.output, colmap=args.colmap)
+            except (ReferenceError, ValueError, OSError, ImportError, RuntimeError) as error:
+                raise RecipeError(str(error)) from error
+            print(json.dumps(report, indent=2))
+            return 0
         if args.command == "compare-camera-registrations":
             from .reconstruction.camera_compare import compare_camera_registrations
             from .reconstruction.references import ReferenceError
@@ -1423,6 +1842,7 @@ def main(argv: list[str] | None = None) -> int:
                     grounding_part_prompts=tuple(args.grounding_part_prompt),
                     grounding_device=args.grounding_device,
                     grounding_model_dir=args.grounding_model_dir,
+                    track_guided_masks=not args.no_track_guided_masks,
                     matching_device=args.matching_device,
                     mask_guides=args.mask_guides, masks_dir=args.masks_dir,
                     mask_cache_dir=args.mask_cache_dir, photo_cache_dir=args.photo_cache_dir,
@@ -1744,7 +2164,7 @@ def main(argv: list[str] | None = None) -> int:
             from .reconstruction.silhouettes import compare_silhouettes
             try:
                 report = compare_silhouettes(args.plan, args.renders, args.output,
-                                             min_iou=args.min_iou)
+                                             min_iou=args.min_iou, regions_file=args.regions)
             except ReferenceError as error:
                 raise RecipeError(str(error)) from error
             print(json.dumps(report, indent=2))

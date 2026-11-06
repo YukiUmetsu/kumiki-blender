@@ -8,20 +8,28 @@ from pathlib import Path
 from unittest.mock import patch
 
 from kumiki_blender.reconstruction.registered_camera_recovery import (
-    prioritize_missing_camera_views, recover_registered_cameras, validate_camera_recovery,
-    copy_subject_qa_provenance,
+    find_implausible_cameras, prioritize_missing_camera_views, recover_registered_cameras,
+    remove_implausible_cameras, validate_camera_recovery, copy_subject_qa_provenance,
 )
 from kumiki_blender.reconstruction.learned_camera_hypotheses import (
     align_learned_camera_hypotheses, select_learned_views,
 )
 
 
+class FakeCamera:
+    def __init__(self, focal=1000.0, width=1000, height=800):
+        self.params = [focal, width / 2, height / 2]
+        self.width, self.height = width, height
+
+
 class FakeImage:
-    def __init__(self, name, center, direction=(0.0, 0.0, 1.0), tracks=50):
+    def __init__(self, name, center, direction=(0.0, 0.0, 1.0), tracks=50, focal=1000.0):
         self.name = name
         self.center = center
         self.direction = direction
         self.num_points3D = tracks
+        self.camera = FakeCamera(focal)
+        self.camera_id = name
 
     def projection_center(self):
         return self.center
@@ -37,6 +45,10 @@ class FakeModel:
 
     def reg_image_ids(self):
         return list(self.images)
+
+    @property
+    def cameras(self):
+        return {image.camera_id: image.camera for image in self.images.values()}
 
 
 class RecoveryTests(unittest.TestCase):
@@ -137,7 +149,8 @@ class RecoveryTests(unittest.TestCase):
 
     def test_existing_pnp_success_does_not_skip_missing_elevated_cohort(self):
         with tempfile.TemporaryDirectory() as temporary:
-            source, target = Path(temporary) / "source", Path(temporary) / "recovered"
+            root = Path(temporary).resolve()  # macOS temporary paths are symlinks.
+            source, target = root / "source", root / "recovered"
             model = source / "sparse" / "0"
             model.mkdir(parents=True)
             (source / "images").mkdir()
@@ -163,9 +176,11 @@ class RecoveryTests(unittest.TestCase):
                                    in zip(sorted(source_names), self.original)] +
                                   [("photo-0004.png", (0.5, 0.5, 1), 38)])
             calls = []
+            commands = []
 
             def runner(argv, _log, _timeout):
                 calls.append(argv[1])
+                commands.append(argv)
                 if argv[1] == "image_registrator":
                     for suffix in ("cameras.bin", "images.bin", "points3D.bin"):
                         (target / "registered" / suffix).write_bytes(b"fake-model")
@@ -185,9 +200,80 @@ class RecoveryTests(unittest.TestCase):
                     source, target, runner=runner, model_loader=model_loader)
             self.assertTrue(result["initial_validation"]["accepted"])
             self.assertIn("point_triangulator", calls)
+            triangulator = next(command for command in commands if command[1] == "point_triangulator")
+            self.assertEqual(triangulator[triangulator.index("--clear_points") + 1], "0")
             self.assertIn("cohort_error", result)
             self.assertEqual(result["remaining_elevated_filename_hints"], ["photo-0005.png"])
             self.assertIn("photo-0005.png", result["elevated_filename_hints"])
+
+    def test_recovered_revision_keeps_the_source_rectified_pixel_grid(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            source, target = Path(temporary) / "source", Path(temporary) / "recovered"
+            (source / "sparse" / "0").mkdir(parents=True)
+            (source / "images").mkdir()
+            (source / "database.db").write_bytes(b"database")
+            (source / "staged-reference-index.json").write_text(json.dumps({"images": []}))
+            report = {"status": "candidate / visual-review-required", "engine": "colmap",
+                      "source_sparse_model": "0", "max_image_size": 4000}
+            (source / "reconstruction-report.json").write_text(json.dumps(report))
+            originals = FakeModel(self.original)
+            recovered = FakeModel(self.original + [("photo-new.png", (0.5, 0.5, 1), 38)])
+            undistort = []
+
+            def runner(argv, _log, _timeout):
+                if argv[1] == "image_registrator":
+                    for suffix in ("cameras.bin", "images.bin", "points3D.bin"):
+                        (target / "registered" / suffix).write_bytes(b"fake-model")
+                if argv[1] == "image_undistorter":
+                    undistort.append(argv)
+                    return 1
+                return 0
+
+            with patch("kumiki_blender.reconstruction.registered_camera_recovery.shutil.which",
+                       return_value="/usr/bin/colmap"), \
+                 patch("kumiki_blender.reconstruction.sfm_cohort_recovery.recover_cohort",
+                       side_effect=ValueError("no valid independent cohort")), \
+                 patch("kumiki_blender.reconstruction.learned_camera_hypotheses.build_learned_camera_hypotheses",
+                       return_value={"status": "unavailable / model-not-installed"}):
+                recover_registered_cameras(
+                    source, target, runner=runner,
+                    model_loader=lambda path: originals if path.name == "0" else recovered)
+                self.assertEqual(len(undistort), 1)
+                self.assertEqual(undistort[0][undistort[0].index("--max_image_size") + 1], "4000")
+                report["max_image_size"] = "huge"
+                (source / "reconstruction-report.json").write_text(json.dumps(report))
+                with self.assertRaisesRegex(Exception, "max_image_size"):
+                    recover_registered_cameras(source, Path(temporary) / "second",
+                                               runner=runner, model_loader=lambda _path: originals)
+
+    def test_degenerate_new_camera_is_named_and_a_good_one_is_not(self):
+        baseline = FakeModel(self.original)
+        candidate = FakeModel(self.original + [("telephoto.png", (20, 20, 20), 40),
+                                               ("degenerate.png", (900, 900, 900), 40)])
+        candidate.images[5].camera = FakeCamera(focal=10000.0)
+        candidate.images[6].camera = FakeCamera(focal=5_000_000.0)
+        self.assertEqual(find_implausible_cameras(baseline, candidate), {
+            "degenerate.png": ["focal-length-too-long", "camera-too-far-from-other-cameras"]})
+
+    def test_removing_implausible_cameras_keeps_a_clean_model_untouched(self):
+        baseline = FakeModel(self.original)
+        clean = FakeModel(self.original + [("good.png", (2, 2, 2), 40)])
+        bad = FakeModel(self.original + [("good.png", (2, 2, 2), 40),
+                                         ("degenerate.png", (900, 900, 900), 40)])
+        bad.images[6].camera = FakeCamera(focal=5_000_000.0)
+        calls, report = [], {}
+
+        def dropper(model, names, output):
+            calls.append((model, names))
+            return output
+
+        self.assertEqual(remove_implausible_cameras(baseline, Path("clean"), Path("out"), report,
+                                                    lambda _path: clean, dropper), Path("clean"))
+        self.assertEqual(calls, [])
+        self.assertEqual(remove_implausible_cameras(baseline, Path("bad"), Path("out"), report,
+                                                    lambda _path: bad, dropper), Path("out"))
+        self.assertEqual(calls, [(Path("bad"), ["degenerate.png"])])
+        self.assertIn("degenerate.png", report["implausible_new_cameras"])
 
     def test_elevated_photos_rank_before_generic_missing_views(self):
         staged = [{"filename": "generic.png", "original_filename": "sphinx-side.jpg"},

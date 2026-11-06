@@ -28,6 +28,7 @@ _SPHINX_PARTS = frozenset({"head", "headdress", "neck", "torso", "paws", "tail"}
 _PART_NAME = re.compile(r"[a-z][a-z0-9_-]{0,31}\Z")
 _SAM2_CONFIGS = {"tiny": "t", "small": "s", "base_plus": "b+", "large": "l"}
 _MASK_CACHE_SCHEMA = "rectified-mask-v1"
+SAM2_SELECTION_VERSION = "prompt-ties-prefer-negative-v1"
 
 
 def _cached_mask(cache_root: Path | None, key: str, dimensions: list[int]):
@@ -239,9 +240,10 @@ def _sam2_mask(photo: Any, guide: dict[str, Any], predictor: Any,
         # another component. Negative clicks apply everywhere.
         positives = [point for point in guide["foreground_points"]
                      if x0 <= point[0] <= x1 and y0 <= point[1] <= y1]
-        positives += guide.get("part_points", {}).get(name, [])
-        if name == "subject":
+        if not guide.get("component_boxes"):
             positives += [point for part in guide.get("part_points", {}).values() for point in part]
+        else:
+            positives += guide.get("part_points", {}).get(name, [])
         negatives = guide["background_points"]
         points = positives + negatives
         coords = (np.asarray([[x*(w-1), y*(h-1)] for x, y in points], dtype=np.float32)
@@ -257,24 +259,25 @@ def _sam2_mask(photo: Any, guide: dict[str, Any], predictor: Any,
         scores = np.asarray(scores).reshape(-1)
         if masks.ndim != 3 or masks.shape[1:] != (h, w) or len(scores) != len(masks):
             raise ReferenceError("SAM 2.1 returned unexpected candidate mask dimensions")
-        def grade(index: int) -> tuple[int, float]:
+        def grade(index: int) -> tuple[int, int, float]:
             candidate = masks[index] > 0
-            compliance = 0
+            compliance = negative_violations = 0
             if coords is not None:
                 for (x, y), label in zip(coords, labels):
                     match = bool(candidate[min(h-1, round(float(y))), min(w-1, round(float(x)))])
                     compliance += int(match == bool(label))
-            return compliance, float(scores[index]) if np.isfinite(scores[index]) else -1.0
+                    negative_violations += int(not label and match)
+            return compliance, -negative_violations, float(scores[index]) if np.isfinite(scores[index]) else -1.0
         best = max(range(len(masks)), key=grade)
-        best_compliance, best_score = grade(best)
+        best_compliance, best_negatives, best_score = grade(best)
         # SAM2's mask-score ranking is not evidence that another plausible
         # silhouette is wrong. If equally prompt-compliant candidates disagree
         # strongly, mark the image uncertain in early QA instead of pushing
         # potentially background-based features into the "subject" class.
         for index in range(len(masks)):
-            compliance, score = grade(index)
+            compliance, negative_score, score = grade(index)
             if (index != best and compliance == best_compliance and
-                    score >= best_score - 0.12):
+                    negative_score == best_negatives and score >= best_score - 0.12):
                 disagreement = float(np.mean((masks[best] > 0) != (masks[index] > 0)))
                 maximum_candidate_disagreement = max(maximum_candidate_disagreement,
                                                       disagreement)
@@ -509,6 +512,7 @@ def generate_rectified_masks(reconstruction: str | Path, output: str | Path, *,
                 prior.get("segmenter") != segmenter or
                 prior.get("segmentation_model") != expected_model or
                 prior.get("segmentation_model_sha256") != model_sha or
+                prior.get("sam2_selection_version") != (SAM2_SELECTION_VERSION if segmenter == "sam2" else None) or
                 prior.get("max_side") != max_side or prior.get("iterations") != iterations or
                 prior.get("subject_detector", "none") != subject_detector or
                 prior.get("grounding_identity") != grounding_id or
@@ -537,6 +541,7 @@ def generate_rectified_masks(reconstruction: str | Path, output: str | Path, *,
         "schema_version": 1, "source_revision": str(source),
         "guide_sha256": guide_sha, "max_side": max_side, "iterations": iterations,
         "segmenter": segmenter,
+        "sam2_selection_version": SAM2_SELECTION_VERSION if segmenter == "sam2" else None,
         "segmentation_model": ("isnet-general-use" if segmenter == "rembg" else
                                f"sam2.1_hiera_{sam2_size}" if segmenter == "sam2" else None),
         "segmentation_model_sha256": model_sha,
@@ -572,6 +577,8 @@ def generate_rectified_masks(reconstruction: str | Path, output: str | Path, *,
             "guide": guide if segmenter != "rembg" else None,
             "max_side": max_side, "iterations": iterations if segmenter == "grabcut" else None,
         }
+        if segmenter == "sam2":
+            fingerprint_input["sam2_selection_version"] = SAM2_SELECTION_VERSION
         if grounded and grounding_id is not None:
             fingerprint_input.update(grounding_identity=grounding_id,
                                      grounding_prompt=grounding_prompt,

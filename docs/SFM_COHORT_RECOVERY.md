@@ -265,3 +265,697 @@ python -c 'import pycolmap; print(pycolmap.__version__)'
 For upstream behavior and limitations, see
 [COLMAP PyCOLMAP options](https://colmap.github.io/pycolmap/pycolmap.html) and
 [COLMAP merging FAQ](https://colmap.github.io/faq.html#merge-disconnected-models).
+
+## Inspect matching failures before retrying
+
+`plan-sfm-cohort-recovery` includes `pair_stage_diagnostics` when the database
+retains tentative matches. It distinguishes missing match records (attempt
+status unknown), recorded zero tentative matches, a missing verification
+record, rejected verification, and verified 2D matches. For verified matches
+it counts observations on an existing anchor's 3D tracks; these are **candidate**
+2D–3D associations, not PnP inliers. Use the recovery report for actual pose
+estimation and validation results. A count alone does not identify matches on
+the object or establish pose accuracy.
+
+To produce a separate private report and photo-pair visualizations:
+
+```sh
+kumiki-blender audit-sfm-matches --revision /path/to/camera-revision \
+  --output /path/to/new-match-audit --max-pairs-per-target 2
+```
+
+Each visualization shows tentative-only matches in red, geometrically
+verified matches in yellow, and verified matches whose anchor observation is
+on an existing 3D track in green. All colors require visual review: even a
+verified track may belong to the background. The diagrams do not imply that
+the target camera registered or that a match is a PnP inlier. The JSON includes
+all target/registered pairs, including those without a visualization. A missing
+match record does not prove a matcher attempted or skipped the pair; inspect
+pair-list progress and logs for that determination.
+
+### Viewpoint robustness experiments
+
+The existing pipeline uses SIFT + LightGlue on MPS or a CPU fallback. COLMAP
+also supports affine-shape and domain-size-pooled SIFT; its [FAQ](https://colmap.github.io/faq.html#increase-number-of-matches-sparse-3d-points)
+recommends them for difficult matching. Treat alternative extractors as
+experiments: match counts alone do not justify adding poses or tracks.
+Detector-free matchers such as [LoFTR](https://openaccess.thecvf.com/content/CVPR2021/html/Sun_LoFTR_Detector-Free_Local_Feature_Matching_With_Transformers_CVPR_2021_paper.html)
+are another candidate, but introduce different dependencies and still need the
+same geometric and object-region validation.
+
+On the local Sphinx data, an isolated CPU affine/DSP-SIFT experiment for
+`photo-0041` / `photo-0057` produced zero verified matches; MPS SIFT-LightGlue
+on those newly extracted features produced nine tentative and zero verified
+matches. The original pair had 23 tentative and zero verified matches. This is
+one pair, not a general comparison of the algorithms. An independent retry of
+seven selected pairs without subject-confidence filtering likewise recovered
+none of the tested previously unverified pairs. Neither experiment changes the
+source database or justifies disabling subject filtering. See the private audit
+and experiment directories for the images and raw database evidence.
+
+### Preserve established tracks during camera recovery
+
+The automatic PnP recovery loop calls COLMAP `point_triangulator` with
+`--clear_points 0`. COLMAP otherwise defaults to deleting the existing points
+and observations before retriangulating. Completion can still filter points,
+and its candidate is never promoted solely for adding tracks: every new camera
+must pass the existing camera, track and baseline-drift checks.
+
+In the Sphinx investigation, the original default dropped both newly registered
+cameras to zero 3D observations. The isolated preservation trial retained 36
+and 90 observations, passed the unchanged baseline-camera check, and changed
+the top-view candidate's conservative one-to-one track support from 21 to 25.
+It also reduced some other support counts, so it is not a guarantee of improvement
+and does not validate an overhead camera.
+
+### RoMa multiview track experiment
+
+`reconstruction.roma_track_consensus.agree_track_predictions` groups predicted
+image positions by an existing 3D track. At least two distinct anchor photos must
+agree within four target-image pixels; conflicting predictions are discarded.
+Subject labels exclude only confident background. Unknown labels are retained,
+so they do not prove a match is on the object. The result is a PnP candidate,
+not a verified observation, independent image measurement, or registered pose.
+It does not mutate the reconstruction.
+
+A private Sphinx experiment used the official RoMa outdoor model on MPS (420px
+coarse, 560px refinement) and six existing registered anchors. With prediction
+confidence above 0.05, the previously unregistered `photo-0060.png` had 39
+consensus tracks and 37 PnP inliers at COLMAP's 12px threshold. Holding out
+anchor predictions showed mixed agreement, including some large residuals.
+The original masks include unknown areas and the candidate has not passed the
+normal registration and object-surface checks. Five other tested targets did
+not provide enough consensus tracks. No camera or mesh was promoted. These are
+preliminary findings from one dataset, not accuracy measurements or proof that
+RoMa can recover an unobserved surface.
+
+To test agreed RoMa predictions without touching the camera revision:
+
+```sh
+kumiki-blender prepare-roma-candidate-database \
+  --revision /path/to/camera-revision --predictions /path/to/predictions.json \
+  --output /path/to/new-candidate
+colmap geometric_verifier --database_path /path/to/new-candidate/database.db --num_threads 1
+mkdir /path/to/new-candidate/registered
+colmap image_registrator --database_path /path/to/new-candidate/database.db \
+  --input_path /path/to/camera-revision/sparse/0 \
+  --output_path /path/to/new-candidate/registered
+```
+
+The JSON contains `target` and a `predictions` list with `anchor`, integer
+`track_id`, `xyz`, target `pixel` and boolean `subject_candidate`. The importer
+checks source photo hashes and that each anchor actually observes each track.
+It accepts only multiview-consistent candidates and invalidates the affected
+pair verification records so COLMAP must reverify them. It adds zero descriptor
+placeholders for predicted target points: **the experimental database must not
+be used for feature matching or rematching**. Successful registration still
+requires pose, reprojection, subject and independent-view validation.
+
+#### Reusable RoMa recovery experiment (MPS or CPU)
+
+`predict-roma-tracks` replaces one-off model notebooks. It reads only the
+hash-pinned staged photos and *existing registered 3D points*, samples official
+RoMa outdoor A-to-B warps at each real anchor observation, rejects low-confidence
+predictions and pixels explicitly labeled background, and writes separate JSON
+files for multiple missing rear/overhead targets. Ambiguous/unknown mask regions
+are **not** proof of foreground. No candidate changes the sparse source.
+
+Install `romatch` and a compatible PyTorch build in the existing local MPS
+reconstruction environment before the first run. RoMa loads its outdoor
+checkpoint on first use. The registered image names are normalized
+`photo-XXXX.png` filenames from the revision, not original web photo names.
+
+```sh
+kumiki-blender predict-roma-tracks \
+  --revision /private/sphinx/cameras-r005 \
+  --anchor photo-0003.png --anchor photo-0014.png \
+  --anchor photo-0020.png \
+  --target photo-0060.png --target photo-0057.png \
+  --output /private/sphinx/roma-predictions-r01 \
+  --device mps --coarse-resolution 420 --refine-resolution 560
+```
+
+Choose registered anchors with *actual shared statue surface*, ideally at
+different azimuths, and change target names using the source camera audit.
+The names in this example are illustrative; verify registration status first.
+Inspect `roma-report.json` for each target's `agreed_tracks`. Two RoMa warps
+agreeing is a **prediction-consistency check**, not independent geometric proof.
+The command requires at least two different registered anchors and rejects
+changed input photos and modified subject-confidence rasters.
+
+Long MPS batches now checkpoint **each finished target** with a SHA-256
+receipt. If interrupted, repeat the *identical* command and add `--resume`,
+keeping the same `--output` directory. The runner rechecks source COLMAP
+database, source 2D/3D tracks, staged photo index, and subject-confidence
+index, plus every completed target JSON hash and prediction count. It skips
+only verified completed targets; it will never overwrite a changed or
+unrecorded JSON file. Changes to anchors, targets, order, model settings, or
+source data require a **new output directory**. Pre-checkpoint runs lacking
+these fingerprints are deliberately not eligible for resume.
+
+```sh
+kumiki-blender predict-roma-tracks \
+  --revision /private/sphinx/cameras-r005 \
+  --anchor photo-0003.png --anchor photo-0014.png --anchor photo-0020.png \
+  --target photo-0060.png --target photo-0057.png \
+  --output /private/sphinx/roma-predictions-r01 \
+  --device mps --coarse-resolution 420 --refine-resolution 560 \
+  --resume
+```
+
+Resuming makes the expensive experiment durable, **not** its camera poses
+more credible. RoMa matches stay unverified until the independent checks below.
+
+For one target with agreement, run the existing isolated importer and COLMAP
+experiment (do not rematch its zero-placeholder descriptors):
+
+```sh
+kumiki-blender prepare-roma-candidate-database \
+  --revision /private/sphinx/cameras-r005 \
+  --predictions /private/sphinx/roma-predictions-r01/photo-0060.png.roma.json \
+  --output /private/sphinx/roma-candidate-0060-r01
+colmap geometric_verifier \
+  --database_path /private/sphinx/roma-candidate-0060-r01/database.db --num_threads 1
+mkdir /private/sphinx/roma-candidate-0060-r01/registered
+colmap image_registrator \
+  --database_path /private/sphinx/roma-candidate-0060-r01/database.db \
+  --input_path /private/sphinx/cameras-r005/sparse/0 \
+  --output_path /private/sphinx/roma-candidate-0060-r01/registered
+kumiki-blender audit-roma-camera \
+  --revision /private/sphinx/cameras-r005 \
+  --candidate /private/sphinx/roma-candidate-0060-r01 \
+  --output /private/sphinx/roma-audit-0060-r01 --outlier-px 8
+```
+
+The audit distinguishes original measured COLMAP keypoints from RoMa-created
+synthetic ones, measures native calibrated reprojection errors, and reports
+camera baseline drift. The registration and audit still **cannot certify** a
+new view: small reprojection error on a *predicted* keypoint is circular
+evidence. Confirm the face/paws/top/rear-left alignment visually and evaluate
+independent, actually measured target-to-registered correspondences. Hold out
+anchors from matching when possible; do not count them as independent proof.
+The report also lists `unused_verified_matches`: original database matches to
+baseline 3D tracks that are absent from the candidate's current observations.
+Conflicting feature-to-track associations are excluded. Large errors identify
+items to inspect, not automatic pose failures: repetitive texture can produce
+incorrect matches even after pairwise verification. These observations may
+also have influenced an earlier fitting step, so "unused" does not mean
+independently held out. Missing source tracks are reported as unavailable.
+
+If exactly two bad observation indices have been inspected and found in
+`high_error_observations`, prune only those indices into a **new** model:
+
+```sh
+kumiki-blender audit-roma-camera \
+  --revision /private/sphinx/cameras-r005 \
+  --candidate /private/sphinx/roma-candidate-0060-r01 \
+  --output /private/sphinx/roma-audit-0060-pruned-r01 \
+  --outlier-px 8 --remove-index 123 --remove-index 456
+```
+
+Indices `123` and `456` are placeholders: copy real `point2D_idx` values from
+the first audit, never assume there are only two. Removal is rejected unless
+each observation exceeds the threshold. Only `pruned-model/` changes; the
+original registration and historical 49-view reconstruction remain intact.
+Pruning also refuses an observation whose 3D point is duplicated elsewhere in
+the same target image, or whose native track has only two members (deleting it
+would remove the entire 3D point). Inspect the track instead of forcing the
+operation. On the November 5 Sphinx test, `photo-0060.png` observations 855
+and 1462 both referred to 3D point 18295; do not automatically delete 1462.
+
+For a previously created **separate sparse COLMAP model** without a RoMa
+candidate receipt, `repair-roma-sparse-camera` offers a guarded, explicit
+alternative. It is appropriate only after the duplicate target tracks have
+been inspected in the native model. The November 5 Sphinx audit found **three**
+duplicated target point IDs:
+
+| 3D point | Target indices | Explicit choice | Evidence / limitation |
+| --- | --- | --- | --- |
+| 18140 | 1353, 1354 | Drop 1354; keep 1353 | Both pixels exactly identical (3.315px error) |
+| 18295 | 855, 1462 | Drop 1462; keep 855 | 855 has lower reprojection error (7.536 vs 8.167px) |
+| 18304 | 553, 1465 | Drop 1465; keep 553 | Retain earlier existing index provisionally; 1465 is slightly lower-error (2.983 vs 3.342px), so this is **not** an automatic confidence decision |
+
+Also remove high-error index 1463 (11.960px). The 49 baseline poses had
+exactly zero measured center/orientation drift before repair. Selecting an
+observation to preserve must never be mistaken for independent pose validation.
+
+```sh
+RUN=.review/great-sphinx/statue-hq-r005
+kumiki-blender repair-roma-sparse-camera \
+  --baseline-model "$RUN/dense-masked-fixed-r01/workspace/sparse" \
+  --candidate-model "$RUN/roma-dense-r01/workspace/sparse" \
+  --target photo-0060.png \
+  --remove-index 1462 --remove-index 1463 \
+  --remove-duplicate-index 1354 --remove-duplicate-index 1465 \
+  --exclude-camera photo-0013.png --exclude-camera photo-0055.png \
+  --outlier-px 8 --allow-duplicate-repair \
+  --output "$RUN/roma-top-only-r01"
+```
+
+This requires exactly the three added cameras named above, zero baseline
+pose drift, both high-error removals above 8px, both additional removals
+confirmed as duplicates, exactly one surviving target observation per 3D
+point, consistent native track links, surviving multi-view tracks, and at
+least 30 remaining target observations. `--remove-duplicate-index` is
+separate from `--remove-index`: it permits removing an explicitly reviewed
+low-residual duplicate, even when it does not have the higher reprojection
+error. Both kinds require `--allow-duplicate-repair` for duplicate tracks.
+The report records the removed indices and which duplicate indices survived.
+It refuses to deregister a shared multi-camera frame. Native PyCOLMAP 4.x
+`deregister_frame` is used to exclude the two unverified views; neither the
+original 49-camera model nor the 52-camera experiment is edited. The output
+contains `sparse/` and `roma-sparse-repair-report.json`, **not** a dense-ready
+rectified reconstruction. Evaluate independent object-surface matches and
+calibrated view overlays before preparing a separate rectified/masked 50-view
+workspace. Do not rerun OpenMVS solely because this gate passes.
+
+### Stage the isolated 50-camera RoMa dense input
+
+The November 5 Sphinx experiment separately produced a 52-camera dense mesh
+(`roma-dense-r02`), including two **unverified** views. Its 519,436 vertices and
+1,038,245 faces are useful for a visual comparison but **do not** validate the
+two extra registrations. The orange top-view overlay projected the **old
+49-camera mesh**, not the new SAM2 foreground mask; missing projected paws or
+rear geometry in that overlay must not be mistaken for a mask-only defect.
+
+The repaired 50-camera sparse model was taken from the private workspace of
+`roma-dense-r01`. Do **not** infer its camera-revision origin from `r01`/`r02`
+folder names: the authoritative source is `source_revision` in that dense
+run's receipt. Prepare the new input from **that exact rectified revision**:
+
+```sh
+RUN=.review/great-sphinx/statue-hq-r005
+SOURCE=$(jq -r '.source_revision' "$RUN/roma-dense-r01/dense-report.json")
+kumiki-blender stage-roma-dense-candidate \
+  --source-reconstruction "$SOURCE" \
+  --repair "$RUN/roma-top-only-r01" \
+  --output "$RUN/roma-cameras-top-only-r01"
+```
+
+The staging command checks all 52 input rectified-image hashes, compares the
+original candidate sparse binary hashes against the sparse model recorded by
+the repair receipt, rejects mismatched camera poses and intrinsics, and copies
+**only the 50 selected registered images** alongside the repaired sparse model.
+It regenerates a COLMAP text model and the pinned 50-image source index for
+`plan-dense-photos`. It neither writes to its source nor certifies the RoMa
+pose. **Do not** substitute a differently rectified image or mask grid; the
+staging and dense preflight commands enforce exact calibration and pixel
+dimensions regardless of revision names.
+
+```sh
+kumiki-blender plan-dense-photos \
+  --reconstruction "$RUN/roma-cameras-top-only-r01" \
+  --rectified-masks "$RUN/roma-dense-r01/workspace/images" \
+  --output "$RUN/roma-dense-top-only-r01" \
+  --backend openmvs --resolution-level 2 --max-resolution 1600 \
+  --number-views 3 --no-texture
+```
+
+The plan is **read-only**. Before running `build-dense-photos`, visually audit
+all 50 mask boundaries, especially the upper body, full forelegs and paws,
+rear, and tail. The r02 top-view mask included the paws but had missing black
+interior regions and some foreground ground; r01 masks may have similar
+defects. Produce a new mask correction revision rather than silently widening
+the entire Sphinx silhouette or accepting ground. Then build the 50-camera
+mesh into a **new** directory with precisely the same preflight settings and
+the corrected r01 masks. Compare photographed geometry and holes against both
+the 49- and 52-camera experiments before publishing a GLB.
+
+### Do not convert weak mask votes into SAM2 negative points
+
+The November 6 photographic 50-view audit compared **12,551 shared 3D tracks**;
+**6,228 (49.62%)** had mixed foreground labels. This is a serious inconsistency
+signal, not a statistic about what fraction of the real Sphinx is missing:
+ground, wall, shadow, and predicted RoMa tracks can also contribute.
+
+On `photo-0060.png`, the old report found three red possible-background marks
+with only **3:2** negative majorities. Inspection of the actual photograph
+shows those red markers on the **stone chest**, not on sand. Turning them into
+background SAM2 points could **erase genuine statue geometry**. The strongest
+cyan mark near the headdress has **6:1** positive votes, but even this is
+cross-view mask agreement, not independent surface truth.
+
+The updated `audit-dense-masks` now separates strong cross-view agreement
+(at least four *other* camera votes and 80% agreement) from weak majority
+review marks, ranks stronger evidence first even under marker budgets, and
+explicitly forbids automatic prompt conversion. Original photos and masks
+remain untouched. The report also includes `shape_qa` per image: bounded,
+non-mutating measurements of **enclosed black regions**, detached foreground,
+and boundary contact. The supplied 636×1043 top-view mask contained roughly
+**50 significant enclosed black regions occupying 1.94% of its image area**
+when sampled at 384px. Some may be real shadow or gaps between limbs; the
+measurements **do not authorize hole filling**. Confirm each anatomical region
+and ground boundary on the full-resolution photograph before regenerating a
+candidate mask.
+
+To regenerate QA after pulling the new branch, use a fresh output path:
+
+```sh
+kumiki-blender audit-dense-masks \
+  --reconstruction "$RUN/roma-cameras-top-only-r01" \
+  --rectified-masks "$RUN/roma-dense-r01/workspace/images" \
+  --output "$RUN/roma-top-only-mask-audit-r02"
+```
+
+Inspect `images[].shape_qa`, `images[].review_score`, and the new
+`evidence_strength` and `automatic_prompt_allowed` fields on each suggestion.
+Neither a high consensus score nor a successful sparse camera repair means the
+mesh or mask is ready for production. Keep the 49-, 50- and 52-camera revisions
+separate until real-photo QA demonstrates a geometric improvement.
+
+**Before attempting an A/B dense mesh:** independent object-feature support,
+stable original poses, calibrated overlays, and reviewed masks must pass. Use a
+new complete rectified sparse reconstruction revision and new masks, then the
+existing `plan-dense-photos` / `build-dense-photos` commands with the same
+OpenMVS settings as the 49-view baseline. A raw `pruned-model/` folder does
+not satisfy the dense reconstruction's rectified-image provenance contract.
+Compare both meshes with `audit-dense-photographs` and Blender calibrated
+reviews, prioritizing top, rear-left, face and paws. Run `audit-dense-masks`,
+`refine-dense-masks`, and `finish-dense-textures` on *new* revisions after
+reviewing foreground leakage, atlas dark patches, white balance and seams.
+Do not overwrite `dense-masked-fixed-r01`, and do not publish a GLB until
+photographic fidelity and texture quality pass human inspection.
+
+### Repair severely incomplete masks with anatomy-guided SAM2 (review only)
+
+Visual inspection of the November 5 photo/mask pairs for `photo-0007.png`,
+`photo-0031.png`, and `photo-0040.png` found severe false-background regions
+across faces, headdresses, paws, and body. Some scenery and scaffolding also
+remains marked foreground. The high multi-view disagreement is therefore **not**
+safe to fix by blindly turning COLMAP disagreement votes into prompts. Do not
+mesh the 50-camera revision with these masks as if they were verified.
+
+For an *isolated experimental retry*, use the anatomical sample guides
+`examples/sphinx-sam2-retry-3-views.example.json`. They are manually estimated
+from the supplied images and need visual confirmation before interpreting a
+new candidate. The full 50-view preflight, photo hashes, and original mask
+dimensions are checked first. SAM2 only runs on the three selected photos;
+all input photographs, original masks, and the 49/50/52-camera reconstructions
+stay untouched.
+
+```sh
+RUN=".review/great-sphinx/statue-hq-r005"
+# Replace with the location of your installed official SAM2.1 hiera-small weights.
+SAM2_CHECKPOINT="/path/to/sam2.1_hiera_small.pt"
+PYTHONPATH=src python -m kumiki_blender retry-sam2-mask-candidates \
+  --reconstruction "$RUN/roma-cameras-top-only-r01" \
+  --source-masks "$RUN/roma-dense-r01/workspace/images" \
+  --guides examples/sphinx-sam2-retry-3-views.example.json \
+  --image photo-0007.png \
+  --image photo-0031.png \
+  --image photo-0040.png \
+  --sam2-checkpoint "$SAM2_CHECKPOINT" \
+  --sam2-size small --sam2-device mps --max-side 1280 \
+  --output "$RUN/sam2-anatomy-retry-r01"
+```
+
+Check `targeted-sam2-report.json` for `original_prompt_qa`,
+`prompt_qa.anatomical_parts`,
+`pixel_change_qa`, `original_shape`, and `candidate_shape`. Open
+`review/photo-XXXX.png.jpg` alongside the original photograph and candidate
+`candidates/photo-XXXX.png.mask.png`. Inspect actual face features, complete
+forelegs and paws, body/rear, ground, sky, and scaffolding. Point compliance,
+shape metrics, and newly included pixels are **diagnostic only**; they do not
+demonstrate photo-faithful 3D geometry. This command intentionally emits **no
+ready-to-use `masks/` revision**. If acceptable, review all remaining photo
+masks and construct a new explicitly approved complete 50-view mask revision
+before a separately staged dense A/B run. Never modify source masks in place.
+
+For the local November 5 follow-up, review-only candidates for `photo-0015`,
+`photo-0022`, `photo-0027`, `photo-0028`, `photo-0029`, `photo-0038`, and
+`photo-0039` are in the private `sam2-priority-retry-r02` through `r04`
+revisions. Their corresponding candidate mask sets and comparison reports
+are under `mask-photo-candidate-r03` through `r05` and
+`mask-photo-comparison-r03` through `r05`. The first four candidates reduced
+mixed-label tracks from 5,476 to 4,545; shared segmentation mistakes can also
+improve agreement, so this is not a photographic accuracy measurement.
+Further trials for `photo-0034` and `photo-0017` are recorded in
+`sam2-priority-retry-r05`, with the combined nine-photo candidate in
+`mask-photo-candidate-r07` and comparisons through `r07`: 3,814 mixed tracks
+remain. A `photo-0026` scaffold retry violated a negative click and is
+excluded from `r07`; `mask-photo-candidate-r06` contains that failed mask and
+must not be used. These numbers include an experimental camera and are review
+hints, not independent ground truth.
+The later `sam2-top-paws-retry-r01` and `sam2-profile-retry-r01` revisions
+add review candidates for `photo-0060` and `photo-0030`. Their selected masks
+are recorded in `mask-photo-candidate-r08` and `r09`; the top photograph's
+camera is still unverified and the candidate set remains unapproved.
+The final comparison reports 3,643 mixed tracks; the profile candidate also
+increased possible background-leak votes by 10, so inspect those locations.
+
+Further private review candidates for `photo-0012`, `photo-0053`,
+`photo-0020`, `photo-0023`, and `photo-0018` are recorded through
+`mask-photo-candidate-r12` and `mask-photo-comparison-r12`. They reduce the
+mixed-track count from 3,643 to 2,777; scaffold-covered regions still need
+careful review. The `photo-0018` retry retained its original positive click
+and added nearby clicks after the first candidate missed it.
+`mask-photo-candidate-r13` adds a `photo-0005` candidate and yields 2,670
+mixed tracks. Two `photo-0024` attempts failed different prompt checks and
+are excluded; the second removed ground but also missed subject clicks. A
+subsequent polygon trial also removed subject clicks and is rejected as
+`sam2-ground-polygon-r01`; do not use it for reconstruction.
+The close-up face and profile candidates in `sam2-face-retry-r01` are included
+in `mask-photo-candidate-r14`; its comparison reports 2,469 mixed tracks.
+
+For a separate pose sanity check, `roma-top-original-mesh-overlay-r01` projects
+the original 49-view dense mesh into the experimental `photo-0060` camera.
+The head and chest roughly overlap the photo; the candidate silhouette recall
+is 0.517 and precision 0.940 at the sampled resolution. These numbers combine
+missing original mesh, imperfect masks and possible pose error. The mesh and
+camera also share the original sparse reconstruction, so this is not fully
+independent pose evidence and does not authorize the 50th camera.
+
+Track-guided mask recovery discards every observation of a 3D point when that
+point occurs more than once in one camera; the file order cannot determine a
+prompt. Its acceptance gate also rejects missing, duplicated or shared track
+IDs across positive prompts, negative prompts and held-out observations. These
+checks prevent evidence reuse but do not make track labels ground truth. The
+50-camera Sphinx model contained 2,879 ambiguous camera/track pairs (5,822
+observations), recorded locally in `mask-duplicate-track-audit-r01.json`.
+Existing immutable revisions are not rewritten; make a new revision to apply
+the updated gate.
+
+Automatic gates compare a proposal with the current mask, so they also withheld
+good proposals for badly damaged masks. The review queue in `PHOTO_TO_GLB.md`
+makes these proposals available without changing a gate. On the 49-camera
+Sphinx masks, automatic output did not change. The queue put 14 of 43 proposals
+in its two review tiers. Twelve of these photos had earlier hand review. If all
+14 proposals are promoted, mean IoU on the 23 hand-reviewed photos increases
+from 0.610 to 0.755, and no reviewed photo becomes worse. Mixed tracks decrease
+from 5,984 to 3,828, but the queue ranks with similar evidence, so that decrease
+is not independent. The reviewed masks are unapproved SAM2 candidates, not
+ground truth. Promoted masks can include ground or scaffolding, so inspect each
+review image. Do not remove tiny mask islands automatically: in a check of
+these masks, other cameras labelled island tracks as foreground as often as
+background.
+
+`recover-registered-cameras` rectifies at the `max_image_size` of the source
+revision. An earlier fixed size of 3200 changed the rectified photos of 34
+unchanged Sphinx cameras, so their masks did not fit the recovered revision.
+With the source size, all 49 photos are byte-identical, and
+`carry-dense-masks` keeps their reviewed masks (see `PHOTO_TO_GLB.md`).
+
+The recovered Sphinx revision adds `photo-0013` and `photo-0055`, two face
+close-ups registered from measured COLMAP features (42 and 134 track points,
+zero drift of the 49 baseline cameras). As an independent check, the 49-camera
+mesh was projected into each new camera, and it matches the face outline in
+both photos. The 51-camera mesh has about 10% more face vertices, but its
+outline and its face surface are the same as the 49-camera mesh (median
+change 0.02% of the model size). The nine top and rear photos are still not
+registered.
+
+#### Stage several predicted-match cameras for dense reconstruction
+
+Choose the anchors of each target from the match evidence of that target
+(`audit-sfm-matches`), not one fixed list. On the Sphinx photos, one list of
+six anchors gave 0 or 1 agreed tracks for `photo-0002` and `photo-0057`.
+Eight anchors per target, ranked by verified and tentative matches, gave 104
+and 314. `photo-0043` gave 50.
+
+Add each target to one candidate database, then stage the result:
+
+```sh
+kumiki-blender prepare-roma-candidate-database --revision "$CAMERAS" \
+  --predictions "$PREDICTIONS_A" --output "$CANDIDATE_A"
+kumiki-blender prepare-roma-candidate-database --revision "$CAMERAS" \
+  --predictions "$PREDICTIONS_B" --base-database "$CANDIDATE_A/database.db" \
+  --output "$CANDIDATE_B"
+kumiki-blender stage-predicted-cameras --revision "$CAMERAS" \
+  --candidate-database "$CANDIDATE_B/database.db" --output "$STAGED"
+```
+
+`stage-predicted-cameras` verifies and registers in a private copy of the
+database. It stops if a baseline camera moves or a new camera has fewer than
+10 track points. `predicted-camera-staging-report.json` and
+`reconstruction-report.json` name each `predicted_match_cameras` entry. These
+cameras are hypotheses. Before a dense build, project the existing mesh into
+each one and compare it with the photo. Then generate masks, run
+`carry-dense-masks`, and build into a new dense revision.
+
+On the Sphinx photos, this staged a 54-camera revision: the 49 baseline
+cameras with zero drift, two measured face cameras, and the predicted-match
+cameras `photo-0002` (rear), `photo-0043` (left rear) and `photo-0057`
+(aerial). The 49-camera mesh, projected into each of the three, matches the
+statue outline in its photo. The 54-camera mesh is almost the same as the
+49-camera mesh: 0.07% of its vertices are more than 1% of the model size from
+the old surface, and the hole on the top of the back is still there. Dense
+stereo needs two or more views of a surface, and `photo-0057` is the only
+registered camera that sees the top. More registered aerial views, or new
+photos of the top, are necessary.
+
+`photo-0060` (front, elevated) was then staged as camera 55 with 48 track
+points. The 55-camera mesh is also almost the same as the 49-camera mesh.
+In the `photo-0060` view, the mesh covers 40% of the statue mask, and both
+front paws are absent. They are already absent from the dense point cloud,
+although `photo-0057` and `photo-0060` see them. The cause is in the dense
+stage and is not yet known. `photo-0001`, `0049`, `0056`, `0058` and `0059`
+got 0 to 4 agreed tracks and are not registered.
+
+Known defect: `photo-0013` passed `recover-registered-cameras` with a focal
+length of 5,451 times its image size and a camera center about 1,000 times
+farther away than the other cameras. This is a degenerate near-orthographic
+solution. `validate_camera_recovery` checks baseline drift and track counts
+only. It needs a focal-length and distance check that excludes one camera
+without rejecting the others. Do not rely on `photo-0013` until then.
+
+#### Refine cameras when dense stereo misses a surface
+
+Added cameras did not change the Sphinx mesh. The cause was camera calibration.
+Sparse features cluster on textured stone, so a registered camera can fit those
+areas and be wrong elsewhere. For the same photo pairs, one fundamental matrix
+fit RoMa matches on the chest and paws to under 1 px, while the registered
+cameras missed the paw matches by 26 to 42 px. Patch-based stereo then fails on
+those surfaces, and fusion correctly rejects the result. If an audit shows a
+surface that photographs see but the dense cloud lacks, compare the two
+residuals before you add photos.
+
+```sh
+kumiki-blender refine-cameras-with-matches --revision "$CAMERAS" \
+  --rectified-masks "$MASKS" --output "$REFINED" \
+  --exclude-camera photo-with-a-degenerate-pose.png \
+  --device mps --cache-dir "$MATCH_CACHE"
+```
+
+Run this in the environment with `romatch`, and put its folder on `PYTHONPATH`.
+The command matches camera pairs on the subject, verifies each pair without the
+current cameras, and refines poses and one focal length per camera. Rectified
+photos do not change, so `carry-dense-masks` keeps every mask. A share of the
+matches is held out, and the revision is written only if they improve.
+A camera whose focal length becomes negative or changes more than 3 times is
+removed and listed in `dropped_cameras`. These checks show consistency with a
+learned matcher, not ground truth, so compare the new mesh with the photographs.
+
+On the 53 usable Sphinx cameras, held-out error fell from 1.21 to 0.67 px per
+pair. `photo-0041` to `photo-0060` fell from 34 to under 1 px. `photo-0048`
+started with a 120 degree focal length and was removed. Compared with the
+earlier calibration, mesh faces rose from 1.25 to 1.95 million and statue
+coverage on shared cameras rose from 87.0% to 88.9%. Precision fell from 81.3%
+to 80.5%. The second foreleg now exists, but its toes are missing, and a new gap
+appeared at the left rear in `photo-0026`.
+
+`build-dense-photos` now keeps every camera. OpenMVS skips a camera with no
+message if no neighbor reaches `View Min Score` (default 2.0), and that score
+grows with shared sparse points. This removed 12 of 55 Sphinx cameras, including
+all new elevated cameras, so added cameras could not help. The command sets the
+score to 0 (see `--view-min-score`) and turns off estimated-region cropping.
+
+#### Fill stereo gaps with triangulated matches
+
+Good cameras are not enough on every surface. Patch stereo compares brightness,
+so it fails between photos with different light, resolution or date. A dense
+matcher can connect those photos, so `densify-with-matches` triangulates its
+matches. It does not predict depth.
+
+```sh
+kumiki-blender densify-with-matches --reconstruction "$REFINED" \
+  --rectified-masks "$MASKS" --dense-revision "$DENSE" --output "$MATCHED" \
+  --device mps
+```
+
+Each point must pass a fundamental-matrix check that does not use the cameras,
+a reprojection check and a minimum ray angle of 3 degrees. A point is kept only
+in a gap of the dense cloud, more than 0.3% of the model size from it. It is
+removed if more than half of the reviewed masks of the cameras that see it (at
+least 3) call it background. Existing stereo points do not change. The command writes a
+new dense revision and runs the normal mesh, refine and texture stages.
+
+On the Sphinx, this added 114,509 points to 1,296,181 stereo points, and the
+mask check removed 90,055 candidates. Both forelegs now reach the toes, and most
+of the hole on top of the back closed. Statue coverage on 53 cameras rose from
+88.9% to 92.4%, and improved in 31 cameras and fell in none. Precision fell from
+80.5% to 79.2%, so some non-statue surface was added. Surface area rose 22% with
+almost the same vertex count, so these areas have larger triangles, and the
+paws still have holes. On the paws, measured sparse points were a median 0.6% of
+the model size from a two-photo test cloud, against 0.06% on the chest. This
+surface is real, but it is coarser than stereo. Many points have only two views,
+so inspect them in the photographs.
+
+#### Add new photos without solving all cameras again
+
+A full reconstruction solves every camera again and changes rectified pixels,
+so reviewed masks stop fitting. `locate-new-photos` keeps the refined model. A
+dense matcher connects each new photo to registered anchors, and the anchors'
+3D tracks give 2D-3D matches for a pose solve with an unknown focal length. The
+pose is tested on anchors that the solve did not use. The photo also joins the
+confirmed tracks, because depth stereo chooses neighbors from shared tracks.
+
+```sh
+kumiki-blender locate-new-photos --revision "$REFINED" --photos photos.json \
+  --output "$LOCATED" --device mps
+```
+
+`photos.json` is a list of objects with `path` and `filename`, plus source and
+licence fields, which go to `photo-location-report.json`. Then generate masks,
+run `carry-dense-masks`, `refine-cameras-with-matches`, `build-dense-photos` and
+`densify-with-matches`. Masks of new photos are automatic and need review.
+
+To measure this method, 8 registered cameras were hidden and located without
+their own observations. All 8 were found: rotation error had a median near
+0.2 degrees and a maximum of 2.6, center error was at most 9% of the camera
+spread, and focal length was within 9%. This is slightly optimistic, because
+the 3D tracks were built with these cameras. The camera with the worst
+held-out score also had the worst true error.
+
+On the Sphinx, 14 free-licence photos were tried and 13 were located. Refinement
+then removed `added-013`, where the statue is very small. With 65 cameras, the
+hole on top of the back closed, more of the left rear filled, and the paws
+improved. Measured by mesh vertices projected into 53 shared cameras, statue
+coverage rose from 90.7% to 91.6%, and improved in 17 cameras and fell in none.
+Precision stayed near 80%. Surface area fell from 14.27 to 12.78, so the mesh
+has less bridging. No free photo looked steeply down on the statue, so the top
+of the statue still has few views.
+
+More cameras can make a mesh worse if their masks vote. With 24 new photos and
+automatic masks, the mask check removed 70% of candidate points, and the paws
+and back lost surface. Those masks were too small: the mesh had 57% precision
+against them, but it fit the same photos well. Masks of located photos now have
+no vote. This restored removal to 49% and added 114,000 points, against 68,000.
+With 77 cameras, the paws are much fuller and statue coverage on 65 shared
+cameras rose from 91.7% to 92.2%, but small holes returned on the back.
+
+Reviewed masks can also miss part of a subject, so a veto limit of 30% was too
+strict. At 50%, the mask check removed only 19,885 of 280,968 candidates, and the
+hole on the back closed again. In the audit on 53 shared cameras, coverage rose
+from 93.4% to 94.3%, precision fell from 79.2% to 78.8%, and IoU rose from 0.750
+to 0.752. Small stray fragments appeared near the statue, and the share of weakly
+seen surface rose from 1.1% to 2.6%.
+
+#### Remove floating pieces
+
+`remove-mesh-fragments` keeps the main body and each piece that touches it or
+has at least 5% of its area, and then textures the mesh again. Masks do not find
+floating pieces, because few cameras see them, so this check uses geometry. On
+the Sphinx, it removed 6 pieces with 8,442 of 2,036,025 faces. Statue coverage
+stayed at 94.3%, weakly seen surface fell from 2.6% to 1.0%, and open edges fell
+from 691 to 465.
+
+macOS Gatekeeper can block a downloaded OpenMVS binary. The stage then fails
+with exit code -9 and an empty log. Do not remove the quarantine flag. Put a
+local build first on `PATH`, for example `.review/tools/openmvs-build4/bin`.
+A mesh from a different OpenMVS build is not a fair comparison, so rebuild the
+baseline masks with the same binary as a control.
+
+Scaffolding, nearby masonry and the remaining images still need review. In
+particular, the long restored forepaws can resemble unrelated walls: the
+experimental `mask-photo-candidate-r02` erased possible paw surfaces and was
+rejected. Do not use that revision. The 50th camera remains unverified.

@@ -36,6 +36,15 @@ if app == "InterfaceCOLMAP":
     assert (flag("--input-file") / "images").is_dir()
 elif app == "DensifyPointCloud":
     assert flag("--input-file").name == "scene.mvs"
+    if "--mask-path" in args:
+        mask_dir = flag("--mask-path")
+        assert mask_dir.is_dir()
+        assert args[args.index("--ignore-mask-label") + 1] == "0"
+        assert len(list(mask_dir.glob("view-*.jpg.mask.png"))) == 10
+        for number in range(10):
+            original = mask_dir / f"view-{number:02d}.jpg.mask.png"
+            openmvs_name = mask_dir / f"view-{number:02d}.mask.png"
+            assert original.read_bytes() == openmvs_name.read_bytes()
 elif app == "ReconstructMesh":
     assert flag("--input-file").name == "scene_dense.mvs"
     out = flag("--output-file")
@@ -55,6 +64,9 @@ elif app == "TextureMesh":
     assert flag("--mesh-file").name in ("scene_dense_mesh_refined.ply", "scene_dense_mesh.ply")
     assert flag("--export-type") == Path("obj")
     assert float(args[args.index("--decimate")+1]) > 0
+    if "--ignore-mask-label" in args:
+        assert args[args.index("--ignore-mask-label") + 1] == "0"
+        assert "--mask-path" not in args  # Unsupported by OpenMVS 2.4 TextureMesh.
     if "SKIP_MVS_ATLAS" not in os.environ:
         (flag("--output-file").parent / "scene_dense_mesh_refined_texture_0.png").write_bytes(b"fake atlas data")
 else:
@@ -149,12 +161,16 @@ class DenseMvsTests(unittest.TestCase):
         self.assertEqual(densify[densify.index("--resolution-level") + 1], "0")
         self.assertEqual(densify[densify.index("--max-resolution") + 1], "3200")
         self.assertEqual(densify[densify.index("--tower-mode") + 1], "0")
+        # OpenMVS otherwise drops cameras with few sparse points, without an error.
+        config = Path(densify[densify.index("--dense-config-file") + 1])
+        self.assertEqual(config.read_text(), "View Min Score = 0.0\n")
+        self.assertEqual(densify[densify.index("--estimate-roi") + 1], "0")
         refinement = report["commands"][3]["argv"]
         self.assertEqual(refinement[refinement.index("--decimate") + 1], "1.0")
         texturing = report["commands"][4]["argv"]
         self.assertEqual(texturing[texturing.index("--decimate") + 1], "1.0")
-        self.assertEqual(texturing[texturing.index("--global-seam-leveling") + 1], "1")
-        self.assertEqual(texturing[texturing.index("--local-seam-leveling") + 1], "1")
+        self.assertEqual(texturing[texturing.index("--global-seam-leveling") + 1], "0")
+        self.assertEqual(texturing[texturing.index("--local-seam-leveling") + 1], "0")
         self.assertEqual(len(list((output / "logs").glob("*.log"))), 5)
         self.assertEqual(json.loads((output / "dense-report.json").read_text()), report)
         self.assertTrue((output / "workspace/scene_dense_mesh_refined_texture.obj").is_file())
@@ -220,9 +236,16 @@ class DenseMvsTests(unittest.TestCase):
             self.sparse, output, DenseSettings(refine=False, texture=False),
             rectified_masks=masks, executables=self.executables)
         self.assertTrue(result["status"].startswith("dense-mesh-candidate"), result)
-        self.assertEqual(len(list((output / "workspace/images").glob("*.mask.png"))), 10)
+        self.assertEqual(len(list((output / "workspace/images").glob("*.mask.png"))), 20)
         self.assertEqual((output / "workspace/images/view-00.jpg.mask.png").read_bytes(),
                          (masks / "view-00.jpg.mask.png").read_bytes())
+        self.assertEqual((output / "workspace/images/view-00.mask.png").read_bytes(),
+                         (masks / "view-00.jpg.mask.png").read_bytes())
+        densify = result["commands"][1]["argv"]
+        self.assertEqual(densify[densify.index("--ignore-mask-label") + 1], "0")
+        self.assertEqual(densify[densify.index("--mask-path") + 1],
+                         str(output / "workspace/images") + "/")
+        self.assertEqual(result["mask_application"]["densify"], "ignore-background-label-0")
 
         (masks / "view-01.jpg.mask.png").unlink()
         with self.assertRaisesRegex(ReferenceError, "missing or linked"):
@@ -232,6 +255,58 @@ class DenseMvsTests(unittest.TestCase):
         with self.assertRaisesRegex(ReferenceError, "both black and white"):
             plan_dense_reconstruction(self.sparse, self.root / "badmask", DenseSettings(),
                                       rectified_masks=masks, executables=self.executables)
+
+    def test_openmvs_mask_filtering_survives_texturing_without_unsupported_refine_flags(self):
+        masks = self._make_binary_masks()
+        output = self.root / "mask-all-stages"
+        report = build_dense_reconstruction(self.sparse, output, DenseSettings(),
+                                            rectified_masks=masks, executables=self.executables)
+        self.assertTrue(report["status"].startswith("dense-mesh-candidate"), report)
+        self.assertEqual(report["mask_application"], {
+            "densify": "ignore-background-label-0", "texture": "ignore-background-label-0",
+            "refine": "not-supported-by-openmvs-2.4"})
+        stage_args = {step["stage"]: step["argv"] for step in report["commands"]}
+        self.assertIn("--mask-path", stage_args["densify"])
+        self.assertIn("--ignore-mask-label", stage_args["densify"])
+        self.assertNotIn("--ignore-mask-label", stage_args["refine"])
+        self.assertNotIn("--mask-path", stage_args["refine"])
+        self.assertEqual(stage_args["texture"][stage_args["texture"].index("--ignore-mask-label") + 1], "0")
+        self.assertNotIn("--mask-path", stage_args["texture"])
+
+    def test_legacy_masked_dense_stages_cannot_resume_contaminated_depth_maps(self):
+        masks = self._make_binary_masks()
+        output = self.root / "masked-legacy"
+        with patch.dict(os.environ, {"FAIL_MVS_STAGE": "RefineMesh"}):
+            result = build_dense_reconstruction(self.sparse, output, DenseSettings(),
+                                                rectified_masks=masks, executables=self.executables)
+        self.assertEqual(result["failed_stage"], "refine")
+        report_path = output / "dense-report.json"
+        legacy = json.loads(report_path.read_text())
+        legacy["commands"][1]["argv"] = [arg for arg in legacy["commands"][1]["argv"]
+                                          if arg not in ("--mask-path", "--ignore-mask-label", "0",
+                                                         str(output / "workspace/images") + "/")]
+        report_path.write_text(json.dumps(legacy))
+        with self.assertRaisesRegex(ReferenceError, "previously ran without subject-mask filtering"):
+            build_dense_reconstruction(self.sparse, output, DenseSettings(),
+                                       rectified_masks=masks, executables=self.executables,
+                                       resume=True)
+
+    def test_colmap_cannot_silently_accept_unused_rectified_masks(self):
+        masks = self._make_binary_masks()
+        with self.assertRaisesRegex(ReferenceError, "only by the OpenMVS backend"):
+            plan_dense_reconstruction(self.sparse, self.root / "colmap-mask",
+                                      DenseSettings(backend="colmap"), rectified_masks=masks,
+                                      executables=self.executables)
+
+    def test_texture_seam_leveling_requires_explicit_opt_in(self):
+        report = build_dense_reconstruction(
+            self.sparse, self.root / "seam-opt-in",
+            DenseSettings(texture_global_seam_leveling=True,
+                          texture_local_seam_leveling=True),
+            executables=self.executables)
+        argv = report["commands"][-1]["argv"]
+        self.assertEqual(argv[argv.index("--global-seam-leveling") + 1], "1")
+        self.assertEqual(argv[argv.index("--local-seam-leveling") + 1], "1")
 
     def test_resume_rejects_changed_private_mask_snapshot(self):
         masks = self._make_binary_masks()
@@ -246,6 +321,59 @@ class DenseMvsTests(unittest.TestCase):
             build_dense_reconstruction(self.sparse, output, DenseSettings(),
                                        rectified_masks=masks, executables=self.executables,
                                        resume=True)
+
+    def test_resume_repairs_missing_openmvs_mask_aliases_without_repeating_interface(self):
+        masks = self._make_binary_masks()
+        output = self.root / "masked-legacy-alias"
+        settings = DenseSettings(refine=False, texture=False)
+        with patch.dict(os.environ, {"FAIL_MVS_STAGE": "DensifyPointCloud"}):
+            failed = build_dense_reconstruction(
+                self.sparse, output, settings, rectified_masks=masks,
+                executables=self.executables)
+        self.assertEqual(failed["failed_stage"], "densify")
+        for number in range(10):
+            (output / f"workspace/images/view-{number:02d}.mask.png").unlink()
+        self.assertFalse((output / "workspace/images/view-00.mask.png").exists())
+
+        repaired = build_dense_reconstruction(
+            self.sparse, output, settings, rectified_masks=masks,
+            executables=self.executables, resume=True)
+        self.assertTrue(repaired["status"].startswith("dense-mesh-candidate"), repaired)
+        self.assertEqual(repaired["resume_skipped_stages"], ["interface"])
+        self.assertEqual((output / "workspace/images/view-00.mask.png").read_bytes(),
+                         (masks / "view-00.jpg.mask.png").read_bytes())
+
+    def test_openmvs_rejects_colliding_mask_stems_before_creating_output(self):
+        masks = self._make_binary_masks()
+        root = self.sparse / "undistorted/images"
+        renamed = "view-00.png"
+        (root / renamed).write_bytes((root / "view-01.jpg").read_bytes())
+        index_path = self.sparse / "undistorted-reference-index.json"
+        index = json.loads(index_path.read_text())
+        index["images"][1]["filename"] = renamed
+        index_path.write_text(json.dumps(index))
+        output = self.root / "colliding-aliases"
+        with self.assertRaisesRegex(ReferenceError, "unique rectified image stems"):
+            plan_dense_reconstruction(self.sparse, output, DenseSettings(),
+                                      rectified_masks=masks, executables=self.executables)
+        self.assertFalse(output.exists())
+
+    def test_resume_rejects_conflicting_openmvs_mask_alias(self):
+        masks = self._make_binary_masks()
+        output = self.root / "masked-conflicting-alias"
+        settings = DenseSettings(refine=False, texture=False)
+        with patch.dict(os.environ, {"FAIL_MVS_STAGE": "DensifyPointCloud"}):
+            failed = build_dense_reconstruction(
+                self.sparse, output, settings, rectified_masks=masks,
+                executables=self.executables)
+        self.assertEqual(failed["failed_stage"], "densify")
+        alias = output / "workspace/images/view-00.mask.png"
+        alias.unlink()  # Do not modify the hardlinked canonical mask snapshot.
+        alias.write_bytes(b"stale mask")
+        with self.assertRaisesRegex(ReferenceError, "OpenMVS mask alias changed"):
+            build_dense_reconstruction(self.sparse, output, settings,
+                                       rectified_masks=masks,
+                                       executables=self.executables, resume=True)
 
     def test_gpu_colmap_always_copies_undistorted_workspace(self):
         output = self.root / "dense-r02"
@@ -432,11 +560,22 @@ class DenseMvsTests(unittest.TestCase):
             planned = json.loads(plan_stdout.getvalue())
             self.assertFalse(planned["texture_global_seam_leveling"])
             self.assertFalse(planned["texture_local_seam_leveling"])
+            opt_in_stdout = io.StringIO()
+            with contextlib.redirect_stdout(opt_in_stdout):
+                self.assertEqual(main(["plan-dense-photos", "--reconstruction", str(self.sparse),
+                                       "--output", str(output),
+                                       "--global-seam-leveling", "--local-seam-leveling"]), 0)
+            opted_in = json.loads(opt_in_stdout.getvalue())
+            self.assertTrue(opted_in["texture_global_seam_leveling"])
+            self.assertTrue(opted_in["texture_local_seam_leveling"])
             with contextlib.redirect_stdout(io.StringIO()):
                 self.assertFalse(output.exists())
                 self.assertEqual(main(["build-dense-photos", "--reconstruction", str(self.sparse),
                                        "--output", str(output)]), 0)
         self.assertTrue((output / "workspace/scene_dense_mesh.ply").is_file())
+        final_report = json.loads((output / "dense-report.json").read_text())
+        self.assertFalse(final_report["texture_global_seam_leveling"])
+        self.assertFalse(final_report["texture_local_seam_leveling"])
 
 
 if __name__ == "__main__":

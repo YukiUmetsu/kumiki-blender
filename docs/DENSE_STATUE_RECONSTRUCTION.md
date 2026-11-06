@@ -126,7 +126,9 @@ private texture projection to produce a mesh for artistic inspection.
       --candidate-masks .review/statue/masks-r03/masks \
       --output .review/statue/mask-compare-r02-r03
 
-    # Use only reviewed masks; OpenMVS consumes <rectified-filename>.mask.png.
+    # Use only reviewed masks; OpenMVS excludes binary label 0 (background)
+    # during densification and texturing. Use a NEW dense revision after
+    # updating the code: older depth maps were computed without this filter.
     kumiki-blender build-dense-photos \
       --reconstruction .review/statue/sparse-r01 \
       --rectified-masks .review/statue/masks-r02/masks \
@@ -137,8 +139,9 @@ private texture projection to produce a mesh for artistic inspection.
       --reconstruction .review/statue/sparse-r01 \
       --output .review/statue/dense-r01 --backend openmvs
 
-    # Only if OpenMVS creates black/dark texture patches: try a separate
-    # reconstruction with seam leveling disabled and compare in Blender.
+    # OpenMVS 2.4.0's seam-leveling bug can create black/colorful texture
+    # patches. Both seam levelers are now OFF by default; this command is
+    # equivalent to the default, retained to show the explicit flags.
     kumiki-blender build-dense-photos \
       --reconstruction .review/statue/sparse-r01 \
       --rectified-masks .review/statue/masks-r02/masks \
@@ -149,11 +152,36 @@ private texture projection to produce a mesh for artistic inspection.
     # exact-size rectified mask for EVERY undistorted registered image:
     # /private/masks/img-0001.jpg.mask.png, etc. Use grayscale 255=keep,
     # 0=exclude. Verify edges manually in the rectified image coordinate
-    # frame. OpenMVS reads these alongside the private image snapshot.
+    # frame. The pipeline explicitly passes --mask-path and
+    # --ignore-mask-label 0 to OpenMVS densification, and the mask label to
+    # texturing. OpenMVS 2.4 RefineMesh does not support an equivalent option.
+    # OpenMVS looks for img-0001.mask.png (without the photo extension).
+    # The pipeline creates this stem-based alias automatically in its private
+    # workspace while retaining the original img-0001.jpg.mask.png snapshot.
+    # If an older masked revision failed during densify because these aliases
+    # were missing, rerun the identical command with --resume; it repairs the
+    # aliases and reuses the completed InterfaceCOLMAP stage.
     kumiki-blender build-dense-photos \
       --reconstruction .review/statue/sparse-r01 \
       --rectified-masks /private/masks \
       --output .review/statue/dense-subject-only-r01 --backend openmvs
+
+    # Automatic, object-agnostic geometry coverage QA. Camera projections
+    # are checked against the verified binary masks when available. The
+    # sampled view-support point cloud highlights weakly photographed mesh
+    # patches; magenta boundary points expose mesh openings (e.g. an empty
+    # upper surface or missing side). This creates no replacement geometry.
+    # The reader accepts OpenMVS 2.4's binary PLY face declaration
+    # `property list uint8 uint32 vertex_indices` as well as equivalent
+    # uchar/uint and signed 32-bit index spellings.
+    kumiki-blender audit-dense-surface-coverage \
+      --dense-revision .review/statue/dense-subject-only-r01 \
+      --output .review/statue/surface-coverage-r01 \
+      --min-views 2 --max-samples 40000
+
+    # Import the following PLY clouds beside the real scan in Blender:
+    # surface-coverage-r01/view-support-points.ply
+    # surface-coverage-r01/open-boundary-points.ply
 
     # On a supported GPU, use COLMAP PatchMatch instead.
     kumiki-blender build-dense-photos \
@@ -265,16 +293,34 @@ modifying the high-poly PLY**. An interrupted texture stage can be resumed
 with a lower texture decimation factor; the immutable dense/mesh stages are
 reused, not recomputed. This does not replace the original high-poly detail
 review or prove that the UV LOD captures thin features.
-OpenMVS already performs global and local texture seam leveling by default.
-Its upstream [2.4.0 black-patch regression](https://github.com/cdcseacave/openMVS/issues/1251)
-can make otherwise usable masked textures appear black; first try a newer
-fixed build. If necessary, use `--no-global-seam-leveling` and/or
-`--no-local-seam-leveling` for a **new private reconstruction revision**.
+OpenMVS's upstream [2.4.0 black-patch regression](https://github.com/cdcseacave/openMVS/issues/1251)
+can make otherwise usable textures appear black or unnaturally colored.
+This pipeline disables global and local seam leveling by default to avoid
+silently corrupting textures on that common Mac build. On a newer fixed
+OpenMVS build, opt into `--global-seam-leveling` and/or
+`--local-seam-leveling` for a **new private reconstruction revision**.
 Both options are recorded in the report and may change during `--resume`
 only when the texture stage failed. Disabling leveling may restore colored
 surfaces but increase UV seams; compare textured Blender reviews.
 Post-hoc exposure correction cannot repair black texture patches created
-during projection.
+during projection. Likewise, foreground masks cannot reconstruct the top,
+back-left, or facial side if those surfaces lack registered overlapping
+photographs. Review camera registration and render multiple calibrated
+views; unobserved geometry must remain flagged, not silently invented.
+
+`audit-dense-surface-coverage` reports optimistic per-triangle camera support,
+intersected with the foreground masks when present. The colors are **red**
+(zero plausible views), **orange** (one), **yellow** (two), and **green**
+(three or more). An object's mesh may have holes where there are no triangles
+to sample at all. `open-boundary-points.ply` marks these boundaries in
+**magenta**. The audit also reports non-manifold edges and the densest weak
+coverage regions in normalized COLMAP coordinate bins; the axes are not
+automatically labeled as face, top, left, or rear. With fewer than all
+registered cameras the report is explicitly a partial-view audit. Neither
+green points nor a zero-boundary count prove real-world shape fidelity, and
+the output remains a private candidate requiring photographic comparison.
+`build-statue-glb` runs this QA automatically between dense reconstruction
+and its Blender review, preserving both overlays alongside the GLB.
 Rectified mask files must be genuine grayscale PNGs (binary 0/255, both
 present, exact dimensions), with exact `<photo filename>.mask.png` names.
 `prepare-dense-masks` generates those files with an `approved_for_reconstruction:
@@ -1047,3 +1093,76 @@ Generated output stays private pending manual review and a valid attribution
 notice. A full OpenMVS/Blender reconstruction on this source remains a future
 benchmark; availability of photographs is not a claim that its camera
 registration or mesh appearance has already been verified.
+
+### Silhouette comparison foundation
+
+`reconstruction.silhouette_qa.compare_silhouettes` compares two already
+registered binary masks. It reports strict pixel IoU, precision (rendered
+pixels inside the reference), and recall (reference pixels covered by the
+render). Empty denominators are reported as null. Its RGB map marks reference-only
+pixels red, render-only pixels blue, overlap gray, and discrepancies within a
+configurable reference-boundary band yellow. The band flags uncertain mask
+edges; it does not change or excuse the strict metrics. Mask errors and camera
+misregistration can cause either discrepancy. An excess pixel is not by itself
+proof of ground leakage, and a missing pixel does not localize a surface in 3D.
+This function does not render or verify camera alignment or depth visibility.
+
+### Occlusion-aware photographic diagnostic
+
+Run with a new output directory, outside both source revisions:
+
+```sh
+kumiki-blender audit-dense-photographs \
+  --dense-revision .review/great-sphinx/statue-hq-r005/dense-masked-fixed-r01 \
+  --output .review/great-sphinx/statue-hq-r005/photo-qa-ray-r05 \
+  --blender /Applications/Blender.app/Contents/MacOS/Blender \
+  --side 256 --max-samples 10000
+```
+
+Blender builds a CPU BVH of the pinned mesh and casts calibrated camera rays
+at pixel centers to obtain a silhouette, then casts rays to sampled surface points
+for occlusion-aware support. Face samples count only when the first intersection
+is at the sample and its projection is inside the foreground mask. The output
+contains per-camera comparisons, a contact sheet, strict silhouette metrics,
+4×4 image discrepancy tiles, ranked connected image discrepancy regions, normalized 3D support grid cells, and PLY point
+clouds of visible support and open boundaries. Red/orange points have fewer
+than two observations by default; magenta marks sampled open edges. Image-space
+red and blue indicate reference-only and render-only pixels, yellow indicates
+a two-pixel mask-boundary uncertainty band. Camera poses, reference photos,
+masks and mesh are checked against the existing revision records.
+
+Results are diagnostics, not a fidelity certificate. Area-stratified barycentric sampling weights by surface area, but remains approximate at a finite sample count; the grid measures only existing faces. Rays do not establish
+whether the surface has the correct depth or appearance. A completely absent
+surface has no sample and can only be suspected from photo discrepancies or
+boundaries. Imperfect masks, occluders, pose error, low resolution, thin geometry,
+and pixel quantization affect comparisons. Reference-only and render-only
+pixels are not automatically missing object and ground. Review original photos
+and masks before assigning a cause. Region counts are not probabilities or
+confidence in reconstruction accuracy. The BVH method is CPU-based; Blender
+is required. Increase `--side` for finer silhouette detail at greater cost.
+
+Connected discrepancy regions are ranked by the fraction of the image occupied
+by pixels outside the reference-mask boundary band, then by total image
+fraction. Bounding boxes use `[left, top, right, bottom]` with exclusive right
+and bottom. Interior discrepancy is evidence for review, not a probability of
+a defect: incorrect masks and camera registration also produce interior errors.
+Regions in different views are not automatically associated in 3D; a ranking
+does not establish physical location, cause, or confidence in the mesh.
+
+### SAM2 candidate selection and cache compatibility
+
+When two SAM2 masks satisfy the same number of prompts, the selector now
+prefers the one that violates fewer explicit background prompts before using
+SAM2's confidence score. This tie-break does not override a higher total prompt
+compliance, erase pixels, or turn a candidate into a reviewed mask. A global
+subject prompt is passed once, even when its part is named `subject`.
+
+This changes candidate pixels, so rectified SAM2 cache keys and source-foreground
+cache schema include a new selection version. Incomplete revisions made by the
+previous selector cannot be resumed under the new one; start a new revision.
+A passing prompt check still cannot establish complete anatomy or distinguish
+stone from scaffolding. Inspect the source photo and candidate at full resolution.
+
+Targeted SAM2 retry receipts now preserve a hash-checked copy of the exact
+prompt guide and the candidate-selection version. The guide documents the
+experiment; its prompts and the resulting masks still require photographic QA.

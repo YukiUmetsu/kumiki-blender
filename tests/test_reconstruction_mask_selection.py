@@ -24,7 +24,9 @@ class HybridMaskTests(unittest.TestCase):
     def setUp(self):
         temp = tempfile.TemporaryDirectory()
         self.addCleanup(temp.cleanup)
-        self.root = Path(temp.name)
+        # macOS exposes /var as a symlink to /private/var. Real mask reports
+        # store canonical source revisions, so the fixture must do the same.
+        self.root = Path(temp.name).resolve()
         self.sparse = self.root / "sparse"
         photos = self.sparse / "undistorted/images"
         photos.mkdir(parents=True)

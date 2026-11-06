@@ -80,6 +80,62 @@ class SilhouetteTests(unittest.TestCase):
         self.assertEqual(report["scored_cameras"], 2)
         self.assertEqual(report["status"], "review-required")
 
+    def test_regional_paw_failure_blocks_global_silhouette_pass(self):
+        # Removing a small paw/bottom band leaves IoU > 0.8 overall, but
+        # an annotated paw region reveals severe missing reference geometry.
+        clay = Image.open(self.render_root / "view-0.png").convert("RGBA")
+        alpha = clay.getchannel("A")
+        ImageDraw.Draw(alpha).rectangle((0, 66, 119, 89), fill=0)
+        clay.putalpha(alpha)
+        clay.save(self.render_root / "view-0.png")
+        global_only = compare_silhouettes(self.plan, self.render_root,
+                                          self.root / "global")
+        self.assertEqual(global_only["status"], "mask-threshold-candidate / artistic-review-required")
+        config = self.root / "regions.json"
+        config.write_text(json.dumps({"schema_version": 1, "views": {
+            "view-0": [
+                {"label": "front_paws", "box_norm": [0.23, 0.71, 0.69, 0.87]},
+                {"label": "face", "box_norm": [0.23, 0.11, 0.69, 0.45]},
+            ]}}))
+        report = compare_silhouettes(self.plan, self.render_root,
+                                     self.root / "regional", regions_file=config)
+        self.assertEqual(report["status"], "review-required")
+        self.assertEqual(report["review_regions_scored"], 2)
+        paw, face = report["views"][0]["regions"]
+        self.assertLess(paw["iou"], 0.4)
+        self.assertGreater(paw["missing_reference_fraction"], 0.6)
+        self.assertEqual(face["iou"], 1)
+        self.assertTrue((self.root / "regional" / paw["overlay"]).is_file())
+        self.assertNotIn("overlay_image", paw)
+
+    def test_unscored_region_or_unscored_view_prevents_promotion(self):
+        config = self.root / "regions.json"
+        config.write_text(json.dumps({"schema_version": 1, "views": {
+            "view-1": [{"label": "no_statue", "box_norm": [0, 0, 0.1, 0.1]}],
+            "view-2": [{"label": "rear", "box_norm": [0.2, 0.2, 0.8, 0.8]}],
+        }}))
+        (self.render_root / "view-2.png").unlink()
+        report = compare_silhouettes(self.plan, self.render_root,
+                                     self.root / "regional", regions_file=config)
+        self.assertEqual(report["status"], "review-required")
+        self.assertEqual(report["review_regions_requested"], 2)
+        self.assertEqual(report["review_regions_scored"], 0)
+        self.assertEqual(report["views"][1]["regions"][0]["status"], "unscored")
+
+    def test_rejects_malformed_or_unknown_region_annotations(self):
+        config = self.root / "regions.json"
+        for views in (
+            {"unknown-view": [{"label": "paws", "box_norm": [0, 0, 1, 1]}]},
+            {"view-0": [{"label": "paws", "box_norm": [0, 0, 1.2, 1]}]},
+            {"view-0": [{"label": "paws", "box_norm": [0, 0, 1, 1]},
+                         {"label": "paws", "box_norm": [0, 0, 1, 1]}]},
+            {"view-0": [{"label": "paws", "box_norm": [0, False, 1, 1]}]},
+        ):
+            config.write_text(json.dumps({"schema_version": 1, "views": views}))
+            with self.subTest(views=views), self.assertRaises(ReferenceError):
+                compare_silhouettes(self.plan, self.render_root, self.root / "regional",
+                                    regions_file=config)
+
 
 if __name__ == "__main__":
     unittest.main()

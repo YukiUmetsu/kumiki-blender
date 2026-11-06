@@ -14,7 +14,9 @@ from PIL import Image
 
 from kumiki_blender.cli import main
 from kumiki_blender.reconstruction.mask_comparison import compare_multiview_masks
-from kumiki_blender.reconstruction.mask_consistency import audit_multiview_masks
+from kumiki_blender.reconstruction.mask_consistency import (
+    _keep_bounded_mark, _mark_review_rank, _peer_evidence, audit_multiview_masks,
+)
 from kumiki_blender.reconstruction.references import ReferenceError
 from scripts.validate_foreground_splat_pipeline import validate_foreground_pipeline
 
@@ -272,6 +274,10 @@ class MaskConsistencyTests(unittest.TestCase):
         self.assertEqual(proposal["kind"], "possible_missing_subject")
         self.assertEqual(proposal["prompt_type"], "foreground_points")
         self.assertTrue(proposal["human_confirmation_required"])
+        self.assertFalse(proposal["automatic_prompt_allowed"])
+        self.assertEqual(proposal["evidence_strength"], "review-only-weak-votes")
+        self.assertIn("shape_qa", result["images"][2])
+        self.assertIsNone(result["experimental_unverified_camera"])
         self.assertTrue((target / "mask-correction-recommendations.json").is_file())
         self.assertEqual(result["images"][0]["review_priority"], "medium")
         self.assertTrue((target / result["contact_sheet"]).is_file())
@@ -353,6 +359,45 @@ class MaskConsistencyTests(unittest.TestCase):
         self.assertGreater(red[0], red[2] * 1.5)
         self.assertGreater(masked[0], outside[0])
         self.assertLess(masked[1], outside[1])
+
+    def test_weak_background_votes_do_not_outrank_strong_subject_evidence(self):
+        # The actual top-view Sphinx image had red 3:2 votes ON the stone
+        # chest. The cyan 6:1 head signal has stronger held-out support.
+        red_peers, red_fraction, red_strength = _peer_evidence(
+            "possible_background_leak", 2, 3)
+        cyan_peers, cyan_fraction, cyan_strength = _peer_evidence(
+            "possible_missing_subject", 6, 1)
+        self.assertEqual((red_peers, red_fraction, red_strength),
+                         (4, 0.75, "review-only-weak-votes"))
+        self.assertEqual((cyan_peers, cyan_fraction, cyan_strength),
+                         (6, 1.0, "strong-cross-view-mask-votes"))
+        self.assertEqual(_peer_evidence("ambiguous_tie", 1, 1),
+                         (1, 0.0, "review-only-weak-votes"))
+        red = {"kind": "possible_background_leak", "point3d_id": 18116,
+               "evidence_strength": red_strength,
+               "peer_agreement_fraction": red_fraction, "other_camera_votes": red_peers}
+        cyan = {"kind": "possible_missing_subject", "point3d_id": 20364,
+                "evidence_strength": cyan_strength,
+                "peer_agreement_fraction": cyan_fraction, "other_camera_votes": cyan_peers}
+        self.assertGreater(_mark_review_rank(cyan), _mark_review_rank(red))
+        budget = []
+        _keep_bounded_mark(budget, red, 1)
+        _keep_bounded_mark(budget, cyan, 1)
+        self.assertEqual(budget[0][1]["point3d_id"], 20364)
+
+    def test_experimental_camera_source_is_labeled_unverified(self):
+        (self.sparse / "roma-dense-staging-report.json").write_text(json.dumps({
+            "status": "isolated-experimental-dense-input / independent-qa-required",
+            "target": "view-02.jpg",
+        }))
+        report = audit_multiview_masks(self.sparse, self.masks,
+                                       self.root / "experimental-audit")
+        self.assertEqual(report["experimental_unverified_camera"], "view-02.jpg")
+        self.assertIn("independent-pose-qa-pending",
+                      report["images"][2]["camera_evidence"])
+        self.assertTrue(all(mark["automatic_prompt_allowed"] is False
+                            for image in report["images"]
+                            for mark in image["review_targets"]))
 
     def test_detail_review_preserves_full_resolution_near_sparse_features(self):
         index_path = self.sparse / "undistorted-reference-index.json"

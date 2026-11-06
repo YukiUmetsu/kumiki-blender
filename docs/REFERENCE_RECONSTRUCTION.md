@@ -174,6 +174,47 @@ scored cameras, missing renders, poor masks or low IoU require review. Even
 perfect IoU is **not** a photorealism or historical-fidelity certificate:
 sculptors still need face, eyes, hair, drapery, and authentic close-up study.
 
+### Check small anatomy separately from the overall silhouette
+
+A mostly accurate torso can hide **missing paws, face outline or rear-body
+geometry** in the whole-photo IoU. Optionally supply hand-annotated crop boxes
+in the **same rectified camera pixels** as the clay renders. For example, a
+private `regions.json` file containing (illustrative IDs/coordinates only):
+
+```json
+{
+  "schema_version": 1,
+  "views": {
+    "view-front": [
+      {"label": "front_paws", "box_norm": [0.2, 0.68, 0.82, 0.95]},
+      {"label": "face_outline", "box_norm": [0.36, 0.08, 0.64, 0.4]}
+    ],
+    "view-rear-left": [
+      {"label": "rear_body", "box_norm": [0.45, 0.28, 0.95, 0.8]}
+    ]
+  }
+}
+```
+
+Use actual `image_id` values from `camera-plan.json`. Box coordinates are
+`[left, top, right, bottom]` as fractions of image width/height; **measure
+them on your photographs** rather than copying the illustrative numbers.
+
+```bash
+kumiki-blender silhouette-qa \
+  --plan .review/monument/camera-plan-r01/camera-plan.json \
+  --renders .review/monument/blender-review-r01/renders \
+  --regions /path/to/private/regions.json \
+  --output .review/monument/region-silhouette-qa-r01 --min-iou 0.80
+```
+
+The report includes each region's IoU, missing-reference and extra-render
+fractions, plus cropped red/blue diagnostic overlays. A missing render, region
+with no reference foreground, or a region below the threshold prevents an
+overall candidate status, **even when the full silhouette passes**. Region
+annotations are a human review aid; neither a perfect region IoU nor a
+consistent but incorrect input mask proves the historical anatomy is right.
+
 ## Measure region-specific facial, hair and drapery likeness
 
 Silhouette IoU can miss a completely wrong face inside a correct head outline.
