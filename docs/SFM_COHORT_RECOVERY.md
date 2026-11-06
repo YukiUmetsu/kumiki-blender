@@ -403,6 +403,29 @@ agreeing is a **prediction-consistency check**, not independent geometric proof.
 The command requires at least two different registered anchors and rejects
 changed input photos and modified subject-confidence rasters.
 
+Long MPS batches now checkpoint **each finished target** with a SHA-256
+receipt. If interrupted, repeat the *identical* command and add `--resume`,
+keeping the same `--output` directory. The runner rechecks source COLMAP
+database, source 2D/3D tracks, staged photo index, and subject-confidence
+index, plus every completed target JSON hash and prediction count. It skips
+only verified completed targets; it will never overwrite a changed or
+unrecorded JSON file. Changes to anchors, targets, order, model settings, or
+source data require a **new output directory**. Pre-checkpoint runs lacking
+these fingerprints are deliberately not eligible for resume.
+
+```sh
+kumiki-blender predict-roma-tracks \
+  --revision /private/sphinx/cameras-r005 \
+  --anchor photo-0003.png --anchor photo-0014.png --anchor photo-0020.png \
+  --target photo-0060.png --target photo-0057.png \
+  --output /private/sphinx/roma-predictions-r01 \
+  --device mps --coarse-resolution 420 --refine-resolution 560 \
+  --resume
+```
+
+Resuming makes the expensive experiment durable, **not** its camera poses
+more credible. RoMa matches stay unverified until the independent checks below.
+
 For one target with agreement, run the existing isolated importer and COLMAP
 experiment (do not rematch its zero-placeholder descriptors):
 

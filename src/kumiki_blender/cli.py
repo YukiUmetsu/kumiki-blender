@@ -373,6 +373,8 @@ def main(argv: list[str] | None = None) -> int:
     roma_predict.add_argument("--device", choices=("auto", "mps", "cpu"), default="auto")
     roma_predict.add_argument("--coarse-resolution", type=int, default=420)
     roma_predict.add_argument("--refine-resolution", type=int, default=560)
+    roma_predict.add_argument("--resume", action="store_true",
+                              help="Resume an interrupted identical prediction batch after SHA-verifying completed targets")
     roma_audit = subcommands.add_parser("audit-roma-camera", help="Audit synthetic-vs-real observations in isolated RoMa registration")
     roma_audit.add_argument("--revision", type=Path, required=True)
     roma_audit.add_argument("--candidate", type=Path, required=True)
@@ -1398,7 +1400,8 @@ def main(argv: list[str] | None = None) -> int:
                                                    max_tracks_per_anchor=args.max_tracks_per_anchor,
                                                    device=args.device,
                                                    coarse_resolution=args.coarse_resolution,
-                                                   refine_resolution=args.refine_resolution)
+                                                   refine_resolution=args.refine_resolution,
+                                                   resume=args.resume)
             except (ValueError, OSError, RuntimeError) as error:
                 raise RecipeError(str(error)) from error
             print(json.dumps(report, indent=2))

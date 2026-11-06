@@ -91,9 +91,12 @@ def prepare_roma_candidate_database(revision, predictions_path, output, *, model
     registered = _registered_names(paths['text'])
     with closing(sqlite3.connect(paths['database'].resolve().as_uri() + '?mode=ro', uri=True)) as source:
         names = {name: image_id for image_id, name in source.execute('SELECT image_id,name FROM images')}
-        _verify_staged_images(paths, set(names))
+        staged = _verify_staged_images(paths, set(names))
         if name not in names or name in registered:
             raise ValueError('RoMa target must be an unregistered staged image')
+        if ('source_photo_sha256' in evidence and
+                evidence['source_photo_sha256'] != staged[name]['sha256']):
+            raise ValueError('RoMa predictions refer to a different target photo revision')
         predictions = evidence['predictions']
         if len(predictions) > 200000:
             raise ValueError('RoMa prediction count exceeds the import limit')

@@ -10,6 +10,8 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
+import tempfile
 from collections import defaultdict
 from pathlib import Path
 
@@ -116,6 +118,77 @@ def _not_background(raster, point) -> bool:
     return raster.getpixel((int(x), int(y))) != 0
 
 
+def _fingerprint_file(path: Path) -> str:
+    if path.is_symlink() or not path.is_file():
+        raise ValueError(f'Unsafe or missing RoMa source file: {path}')
+    with path.open('rb') as stream:
+        return hashlib.file_digest(stream, 'sha256').hexdigest()
+
+
+def _atomic_json(path: Path, payload: dict) -> None:
+    """Write a complete receipt before atomically making it visible."""
+    temp = None
+    try:
+        with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8',
+                                         prefix='.roma-', suffix='.tmp', dir=path.parent,
+                                         delete=False) as stream:
+            temp = Path(stream.name)
+            json.dump(payload, stream, indent=2)
+            stream.write('\n')
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temp, path)
+    finally:
+        if temp is not None:
+            temp.unlink(missing_ok=True)
+
+
+def _check_resumable_predictions(destination: Path, report: dict, expected: dict,
+                                 staged: dict[str, dict]) -> set[str]:
+    """Skip only hash-verified target predictions from an identical run."""
+    for key in ('source_revision', 'anchors', 'requested_targets', 'source_sha256',
+                'model', 'min_confidence', 'max_tracks_per_anchor', 'device',
+                'coarse_resolution', 'refine_resolution'):
+        if report.get(key) != expected[key]:
+            raise ValueError(f'RoMa resume mismatch for {key}; start a new output revision')
+    if report.get('status') not in ('running-unverified-roma-predictions',
+                                     'unverified-roma-predictions'):
+        raise ValueError('RoMa resume receipt has an unexpected status')
+    completed = report.get('targets')
+    if not isinstance(completed, dict) or not set(completed) <= set(expected['requested_targets']):
+        raise ValueError('RoMa resume receipt contains unexpected targets')
+    for name in expected['requested_targets']:
+        path = destination / f'{name}.roma.json'
+        if name not in completed:
+            if path.exists() or path.is_symlink():
+                raise ValueError(f'Unrecorded RoMa output exists for {name}; do not overwrite it')
+            continue
+        record = completed[name]
+        if (not isinstance(record, dict) or record.get('file') != path.name or
+                not isinstance(record.get('sha256'), str) or
+                type(record.get('predictions')) is not int or
+                type(record.get('agreed_tracks')) is not int or
+                _fingerprint_file(path) != record['sha256']):
+            raise ValueError(f'Incomplete or changed RoMa receipt for {name}')
+        try:
+            payload = json.loads(path.read_text(encoding='utf-8'))
+        except (OSError, ValueError) as error:
+            raise ValueError(f'Invalid resumed RoMa predictions for {name}') from error
+        if (not isinstance(payload, dict) or payload.get('target') != name or
+                payload.get('status') != 'predictions-not-measurements' or
+                payload.get('source_photo_sha256') != staged[name]['sha256'] or
+                not isinstance(payload.get('predictions'), list) or
+                len(payload['predictions']) != record['predictions']):
+            raise ValueError(f'RoMa resume payload does not match its receipt: {name}')
+        try:
+            agreed_count = len(agree_track_predictions(payload['predictions']))
+        except (ValueError, TypeError, KeyError, OverflowError) as error:
+            raise ValueError(f'Invalid stored RoMa predictions for {name}') from error
+        if agreed_count != record['agreed_tracks']:
+            raise ValueError(f'RoMa resume agreement count changed for {name}')
+    return set(completed)
+
+
 class RoMaPredictor:
     """Optional MPS/CPU RoMa inference; Torch and romatch are loaded on demand."""
 
@@ -167,7 +240,7 @@ def generate_roma_predictions(revision: Path, output: Path, *, targets: list[str
                               anchors: list[str], model: int = 0, min_confidence: float = 0.05,
                               max_tracks_per_anchor: int = 4000, device: str = 'auto',
                               coarse_resolution: int = 420, refine_resolution: int = 560,
-                              predictor=None) -> dict:
+                              predictor=None, resume: bool = False) -> dict:
     """Generate isolated JSON candidates for one or more unregistered photos.
 
     No predicted correspondence is promoted to a registered camera or used to
@@ -177,9 +250,11 @@ def generate_roma_predictions(revision: Path, output: Path, *, targets: list[str
     paths = _source_paths(Path(revision), model)
     requested, destination = Path(output), Path(output).resolve()
     original = paths['revision'].resolve()
-    if (requested.is_symlink() or destination.exists() or
+    if (requested.is_symlink() or (destination.exists() and not resume) or
             destination.is_relative_to(original) or original.is_relative_to(destination)):
         raise ValueError('RoMa output must be a new directory separate from the source')
+    if resume and not destination.is_dir():
+        raise ValueError('RoMa resume requires the existing output directory')
     if not (1 <= len(targets) <= 24 and 2 <= len(anchors) <= 12 and
             len(set(targets)) == len(targets) and len(set(anchors)) == len(anchors)):
         raise ValueError('Require 1–24 unique targets and 2–12 distinct anchors')
@@ -207,19 +282,52 @@ def generate_roma_predictions(revision: Path, output: Path, *, targets: list[str
     for name, raster in rasters.items():
         if raster.size != dimensions[name]:
             raise ValueError(f'Subject QA raster size differs from original: {name}')
-    if predictor is None:
+    model_points = paths['sparse'] / 'text-models' / str(model) / 'points3D.txt'
+    db_wal = Path(str(paths['database']) + '-wal')
+    if db_wal.is_symlink():
+        raise ValueError('Unsafe linked RoMa source database WAL')
+    source_sha256 = {
+        'database': _fingerprint_file(paths['database']),
+        'database_wal': _fingerprint_file(db_wal) if db_wal.exists() else None,
+        'model_images': _fingerprint_file(paths['text']),
+        'model_points': _fingerprint_file(model_points),
+        'staged_index': _fingerprint_file(paths['index']),
+        'subject_index': (_fingerprint_file(paths['sparse'] / 'subject-feature-index.json')
+                          if (paths['sparse'] / 'subject-feature-index.json').exists() else None),
+    }
+    expected = {'source_revision': str(original), 'anchors': anchors,
+                'requested_targets': targets, 'source_sha256': source_sha256,
+                'model': model, 'min_confidence': min_confidence,
+                'max_tracks_per_anchor': max_tracks_per_anchor,
+                'device': device, 'coarse_resolution': coarse_resolution,
+                'refine_resolution': refine_resolution}
+    report_file = destination / 'roma-report.json'
+    if resume:
+        if report_file.is_symlink() or not report_file.is_file():
+            raise ValueError('RoMa resume requires a regular roma-report.json')
+        try:
+            report = json.loads(report_file.read_text(encoding='utf-8'))
+        except (OSError, ValueError) as error:
+            raise ValueError('Cannot parse RoMa resume receipt') from error
+        if not isinstance(report, dict):
+            raise ValueError('RoMa resume receipt must be an object')
+        completed = _check_resumable_predictions(destination, report, expected, staged)
+    else:
+        destination.mkdir(parents=True, exist_ok=False)
+        report = {**expected, 'status': 'running-unverified-roma-predictions',
+                  'targets': {}, 'subject_qa_available': sorted(rasters), 'limitations':
+                  'Predicted pixels are not independent keypoints or accepted camera observations.'}
+        _atomic_json(report_file, report)
+        completed = set()
+    if len(completed) < len(targets) and predictor is None:
         predictor = RoMaPredictor(device=device, coarse_resolution=coarse_resolution,
                                   refine_resolution=refine_resolution)
-    destination.mkdir(parents=True, exist_ok=False)
-    report = {'status': 'running-unverified-roma-predictions', 'source_revision': str(original),
-              'anchors': anchors, 'targets': {}, 'min_confidence': min_confidence,
-              'device': device, 'coarse_resolution': coarse_resolution,
-              'refine_resolution': refine_resolution,
-              'subject_qa_available': sorted(rasters), 'limitations':
-              'Predicted pixels are not independent keypoints or accepted camera observations.'}
-    report_file = destination / 'roma-report.json'
-    report_file.write_text(json.dumps(report, indent=2) + '\n', encoding='utf-8')
+    report['resumed_completed_targets'] = sorted(completed)
+    report['status'] = 'running-unverified-roma-predictions'
+    _atomic_json(report_file, report)
     for target in targets:
+        if target in completed:
+            continue
         guesses = []
         for anchor in anchors:
             # Bound inference and keep sampling deterministic by 3D track ID.
@@ -246,13 +354,19 @@ def generate_roma_predictions(revision: Path, output: Path, *, targets: list[str
                                 'subject_candidate': True,
                                 'confidence': confidence})
         consensus = agree_track_predictions(guesses)
+        # The outdoor model may take minutes per pair on MPS. Detect a photo
+        # edited or replaced during inference before issuing a valid-looking
+        # SHA-pinned prediction receipt for stale pixels.
+        for name in set(anchors + [target]):
+            if _fingerprint_file(paths['images'] / name) != staged[name]['sha256']:
+                raise ValueError(f'Changed staged photo during RoMa prediction: {name}')
         payload = {'target': target, 'predictions': guesses, 'status': 'predictions-not-measurements',
                    'source_photo_sha256': staged[target]['sha256']}
         output_file = destination / f'{target}.roma.json'
-        output_file.write_text(json.dumps(payload, indent=2) + '\n', encoding='utf-8')
+        _atomic_json(output_file, payload)
         report['targets'][target] = {'predictions': len(guesses), 'agreed_tracks': len(consensus),
-                                      'file': output_file.name}
-        report_file.write_text(json.dumps(report, indent=2) + '\n', encoding='utf-8')
+                                      'file': output_file.name, 'sha256': _fingerprint_file(output_file)}
+        _atomic_json(report_file, report)
     report['status'] = 'unverified-roma-predictions'
-    report_file.write_text(json.dumps(report, indent=2) + '\n', encoding='utf-8')
+    _atomic_json(report_file, report)
     return report

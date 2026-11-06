@@ -71,6 +71,18 @@ class PredictionGenerationTests(unittest.TestCase):
         self.assertEqual(hashlib.sha256((self.source / 'database.db').read_bytes()).hexdigest(), before)
         self.assertEqual(len(list((self.root / 'predictions').glob('*.roma.json'))), 2)
 
+    def test_import_rejects_predictions_pinned_to_different_target_photo(self):
+        generate_roma_predictions(self.source, self.root / 'predictions',
+                                  targets=['target.png'], anchors=['a.png', 'b.png'],
+                                  predictor=StubPredictor())
+        evidence = self.root / 'predictions/target.png.roma.json'
+        payload = json.loads(evidence.read_text())
+        payload['source_photo_sha256'] = '0' * 64
+        evidence.write_text(json.dumps(payload))
+        with self.assertRaisesRegex(ValueError, 'different target photo revision'):
+            prepare_roma_candidate_database(self.source, evidence, self.root / 'invalid')
+        self.assertFalse((self.root / 'invalid').exists())
+
     def test_refuses_registered_target_and_output_inside_source(self):
         with self.assertRaisesRegex(ValueError, 'unregistered'):
             generate_roma_predictions(self.source, self.root / 'invalid',
@@ -103,6 +115,19 @@ class PredictionGenerationTests(unittest.TestCase):
         self.assertEqual(report['targets']['target.png']['agreed_tracks'], 0)
         self.assertEqual(report['targets']['target.png']['predictions'], 0)
 
+    def test_staged_photo_changed_during_long_inference_cannot_be_receipted(self):
+        class ChangeDuringInference(StubPredictor):
+            def predict(self, anchor, target, pixels, anchor_size):
+                Image.new('RGB', (100, 100), 'purple').save(target)
+                return super().predict(anchor, target, pixels, anchor_size)
+        output = self.root / 'unstable'
+        with self.assertRaisesRegex(ValueError, 'Changed staged photo during RoMa'):
+            generate_roma_predictions(self.source, output,
+                                      targets=['target.png'], anchors=['a.png', 'b.png'],
+                                      predictor=ChangeDuringInference())
+        self.assertFalse((output / 'target.png.roma.json').exists())
+        self.assertEqual(json.loads((output / 'roma-report.json').read_text())['targets'], {})
+
     def test_partial_batch_keeps_completed_target_receipts(self):
         class InterruptedPredictor(StubPredictor):
             def predict(self, anchor, target, pixels, anchor_size):
@@ -119,6 +144,80 @@ class PredictionGenerationTests(unittest.TestCase):
         self.assertEqual(report['status'], 'running-unverified-roma-predictions')
         self.assertIn('target.png', report['targets'])
         self.assertNotIn('rear.png', report['targets'])
+
+        # No re-inference for the completed target: its hashed predictions
+        # survive the interruption byte-for-byte.
+        first = output / 'target.png.roma.json'
+        before = hashlib.sha256(first.read_bytes()).hexdigest()
+        resumed = StubPredictor()
+        result = generate_roma_predictions(self.source, output, resume=True,
+                                           targets=['target.png', 'rear.png'],
+                                           anchors=['a.png', 'b.png'], predictor=resumed)
+        self.assertEqual(resumed.pairs, [('a.png', 'rear.png'), ('b.png', 'rear.png')])
+        self.assertEqual(hashlib.sha256(first.read_bytes()).hexdigest(), before)
+        self.assertEqual(result['status'], 'unverified-roma-predictions')
+        self.assertEqual(result['resumed_completed_targets'], ['target.png'])
+        self.assertEqual(set(result['targets']), {'target.png', 'rear.png'})
+        # A complete resume must not load RoMa, even if optional deps are absent.
+        again = generate_roma_predictions(self.source, output, resume=True,
+                                          targets=['target.png', 'rear.png'],
+                                          anchors=['a.png', 'b.png'])
+        self.assertEqual(again['status'], 'unverified-roma-predictions')
+
+    def test_resume_refuses_changed_source_configuration_and_completed_payload(self):
+        output = self.root / 'predictions'
+        params = dict(targets=['target.png'], anchors=['a.png', 'b.png'])
+        generate_roma_predictions(self.source, output, predictor=StubPredictor(), **params)
+        existing = output / 'target.png.roma.json'
+        before = existing.read_bytes()
+        with self.assertRaisesRegex(ValueError, 'mismatch for min_confidence'):
+            generate_roma_predictions(self.source, output, resume=True,
+                                      min_confidence=0.2, predictor=StubPredictor(), **params)
+        with self.assertRaisesRegex(ValueError, 'mismatch for requested_targets'):
+            generate_roma_predictions(self.source, output, resume=True,
+                                      targets=['target.png', 'rear.png'],
+                                      anchors=['a.png', 'b.png'], predictor=StubPredictor())
+        self.assertEqual(existing.read_bytes(), before)
+
+        with sqlite3.connect(self.source / 'database.db') as db:
+            db.execute('UPDATE cameras SET width=101 WHERE camera_id=1')
+        with self.assertRaisesRegex(ValueError, 'mismatch for source_sha256'):
+            generate_roma_predictions(self.source, output, resume=True,
+                                      predictor=StubPredictor(), **params)
+        with sqlite3.connect(self.source / 'database.db') as db:
+            db.execute('UPDATE cameras SET width=100 WHERE camera_id=1')
+        # SQLite may not return to its byte-identical file hash after UPDATE.
+        # Use a fresh isolated source/output to check payload tampering below.
+
+    def test_resume_rejects_modified_prediction_without_overwriting_it(self):
+        output = self.root / 'predictions'
+        params = dict(targets=['target.png'], anchors=['a.png', 'b.png'])
+        generate_roma_predictions(self.source, output, predictor=StubPredictor(), **params)
+        target = output / 'target.png.roma.json'
+        target.write_text('{"untrusted":true}')
+        modified = target.read_bytes()
+        with self.assertRaisesRegex(ValueError, 'Incomplete or changed RoMa receipt'):
+            generate_roma_predictions(self.source, output, resume=True,
+                                      predictor=StubPredictor(), **params)
+        self.assertEqual(target.read_bytes(), modified)
+
+    def test_resume_fails_on_unrecorded_target_output(self):
+        output = self.root / 'predictions'
+        params = dict(targets=['target.png', 'rear.png'], anchors=['a.png', 'b.png'])
+        class FailAtRear(StubPredictor):
+            def predict(self, anchor, target, pixels, anchor_size):
+                if target.name == 'rear.png':
+                    raise RuntimeError('interrupted')
+                return super().predict(anchor, target, pixels, anchor_size)
+        with self.assertRaisesRegex(RuntimeError, 'interrupted'):
+            generate_roma_predictions(self.source, output,
+                                      predictor=FailAtRear(), **params)
+        unrecorded = output / 'rear.png.roma.json'
+        unrecorded.write_text('{}')
+        with self.assertRaisesRegex(ValueError, 'Unrecorded RoMa output exists'):
+            generate_roma_predictions(self.source, output, resume=True,
+                                      predictor=StubPredictor(), **params)
+        self.assertEqual(unrecorded.read_text(), '{}')
 
 
 if __name__ == '__main__':
