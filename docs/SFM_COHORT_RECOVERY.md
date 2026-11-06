@@ -859,6 +859,37 @@ grows with shared sparse points. This removed 12 of 55 Sphinx cameras, including
 all new elevated cameras, so added cameras could not help. The command sets the
 score to 0 (see `--view-min-score`) and turns off estimated-region cropping.
 
+#### Fill stereo gaps with triangulated matches
+
+Good cameras are not enough on every surface. Patch stereo compares brightness,
+so it fails between photos with different light, resolution or date. A dense
+matcher can connect those photos, so `densify-with-matches` triangulates its
+matches. It does not predict depth.
+
+```sh
+kumiki-blender densify-with-matches --reconstruction "$REFINED" \
+  --rectified-masks "$MASKS" --dense-revision "$DENSE" --output "$MATCHED" \
+  --device mps
+```
+
+Each point must pass a fundamental-matrix check that does not use the cameras,
+a reprojection check and a minimum ray angle of 3 degrees. A point is kept only
+in a gap of the dense cloud, more than 0.3% of the model size from it. It is
+removed if more than 30% of the masks of the cameras that see it (at least 3)
+call it background. Existing stereo points do not change. The command writes a
+new dense revision and runs the normal mesh, refine and texture stages.
+
+On the Sphinx, this added 114,509 points to 1,296,181 stereo points, and the
+mask check removed 90,055 candidates. Both forelegs now reach the toes, and most
+of the hole on top of the back closed. Statue coverage on 53 cameras rose from
+88.9% to 92.4%, and improved in 31 cameras and fell in none. Precision fell from
+80.5% to 79.2%, so some non-statue surface was added. Surface area rose 22% with
+almost the same vertex count, so these areas have larger triangles, and the
+paws still have holes. On the paws, measured sparse points were a median 0.6% of
+the model size from a two-photo test cloud, against 0.06% on the chest. This
+surface is real, but it is coarser than stereo. Many points have only two views,
+so inspect them in the photographs.
+
 macOS Gatekeeper can block a downloaded OpenMVS binary. The stage then fails
 with exit code -9 and an empty log. Do not remove the quarantine flag. Put a
 local build first on `PATH`, for example `.review/tools/openmvs-build4/bin`.

@@ -379,6 +379,16 @@ def main(argv: list[str] | None = None) -> int:
     refine_cameras.add_argument("--device", choices=("auto", "mps", "cpu"), default="auto")
     refine_cameras.add_argument("--cache-dir", type=Path,
                                 help="Keep verified matches here, so a repeated run needs no model")
+    match_dense = subcommands.add_parser(
+        "densify-with-matches",
+        help="Fill gaps in a dense cloud with triangulated verified matches, then mesh again")
+    match_dense.add_argument("--reconstruction", type=Path, required=True,
+                             help="Camera revision of the dense revision")
+    match_dense.add_argument("--rectified-masks", type=Path, required=True)
+    match_dense.add_argument("--dense-revision", type=Path, required=True)
+    match_dense.add_argument("--output", type=Path, required=True, help="New dense revision")
+    match_dense.add_argument("--pairs-per-camera", type=int, default=6)
+    match_dense.add_argument("--device", choices=("auto", "mps", "cpu"), default="auto")
     predicted_stage = subcommands.add_parser(
         "stage-predicted-cameras",
         help="Register predicted-match photos against the unchanged baseline and write a labelled dense-ready revision")
@@ -1489,6 +1499,18 @@ def main(argv: list[str] | None = None) -> int:
                 raise RecipeError(str(error)) from error
             print(json.dumps(report, indent=2))
             return 0
+        if args.command == "densify-with-matches":
+            from .reconstruction.match_densification import DensificationSettings, densify_with_matches
+            from .reconstruction.references import ReferenceError
+            try:
+                report = densify_with_matches(
+                    args.reconstruction, args.rectified_masks, args.dense_revision, args.output,
+                    settings=DensificationSettings(pairs_per_camera=args.pairs_per_camera),
+                    device=args.device, log=lambda line: print(line, file=sys.stderr, flush=True))
+            except (ReferenceError, ValueError, ImportError, OSError, RuntimeError) as error:
+                raise RecipeError(str(error)) from error
+            print(json.dumps(report, indent=2))
+            return 0 if str(report.get("status", "")).startswith("dense-mesh-candidate") else 3
         if args.command == "refine-cameras-with-matches":
             from .reconstruction.match_camera_refinement import (RefinementSettings,
                                                                  refine_cameras_with_matches)
