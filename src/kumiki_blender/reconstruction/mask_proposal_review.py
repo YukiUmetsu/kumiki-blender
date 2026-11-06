@@ -212,10 +212,10 @@ def _queue_order(item: dict[str, Any]) -> tuple:
     return rank, -item["cross_view"]["agreement_gain"], item["filename"], item["proposal"]
 
 
-def _write_review_image(photo: Any, kept: Any, proposal: Any, path: Path) -> None:
-    """Show the photo, the kept mask, the proposal and the difference side by side."""
+def _write_review_image(photo: Any, kept: Any, proposal: Any, path: Path, title: str) -> None:
+    """Show the photo, the kept mask, the proposal and the difference, with labels."""
     import numpy as np
-    from PIL import Image
+    from PIL import Image, ImageDraw, ImageFont
 
     preview = photo.copy()
     preview.thumbnail((640, 640))
@@ -237,10 +237,16 @@ def _write_review_image(photo: Any, kept: Any, proposal: Any, path: Path) -> Non
     difference[new & ~old] = (0, 230, 255)
     tiles = [preview, tinted(old), tinted(new),
              Image.fromarray(difference.astype("uint8"), "RGB")]
-    sheet = Image.new("RGB", (sum(tile.width+4 for tile in tiles), preview.height), "white")
+    header = 62
+    sheet = Image.new("RGB", (sum(tile.width+4 for tile in tiles), preview.height+header), "white")
+    draw = ImageDraw.Draw(sheet)
+    font = ImageFont.load_default(size=18)
+    draw.text((6, 4), title, fill="black", font=font)
     x = 0
-    for tile in tiles:
-        sheet.paste(tile, (x, 0))
+    for tile, label in zip(tiles, ("1. PHOTO", "2. CURRENT MASK (orange)", "3. PROPOSED MASK (orange)",
+                                   "4. CHANGE: cyan added, red removed")):
+        draw.text((x+6, 32), label, fill="black", font=font)
+        sheet.paste(tile, (x, header))
         x += tile.width + 4
     sheet.save(path, "JPEG", quality=86)
 
@@ -313,12 +319,13 @@ def write_review_queue(sparse: Path, revision: Path, report: dict[str, Any],
     queue.sort(key=_queue_order)
     no_proposal.sort(key=lambda row: (row["kept_agreement"], row["filename"]))
 
-    for item in queue[:policy.max_review_images]:
+    for rank, item in enumerate(queue[:policy.max_review_images], 1):
         key = (item["filename"], item["proposal"])
-        relative = f"review/{item['filename']}.{item['proposal']}.jpg"
+        relative = f"review/{rank:02d}-{item['filename']}.{item['proposal']}.jpg"
         with Image.open(sparse / "undistorted/images" / item["filename"]) as source:
             _write_review_image(source.convert("RGB"), kept_masks[item["filename"]],
-                                _load_mask(pending_images[key]), output / relative)
+                                _load_mask(pending_images[key]), output / relative,
+                                f"#{rank} {item['filename']} ({item['proposal']}): {item['decision']}")
         item["review_image"] = relative
 
     counts = Counter(item["decision"] for item in queue)

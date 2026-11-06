@@ -749,6 +749,12 @@ review image. Do not remove tiny mask islands automatically: in a check of
 these masks, other cameras labelled island tracks as foreground as often as
 background.
 
+macOS Gatekeeper can block a downloaded OpenMVS binary. The stage then fails
+with exit code -9 and an empty log. Do not remove the quarantine flag. Put a
+local build first on `PATH`, for example `.review/tools/openmvs-build4/bin`.
+A mesh from a different OpenMVS build is not a fair comparison, so rebuild the
+baseline masks with the same binary as a control.
+
 Scaffolding, nearby masonry and the remaining images still need review. In
 particular, the long restored forepaws can resemble unrelated walls: the
 experimental `mask-photo-candidate-r02` erased possible paw surfaces and was
