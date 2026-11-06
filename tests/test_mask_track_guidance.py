@@ -440,10 +440,10 @@ class TrackGuidanceTests(unittest.TestCase):
                     return_value=(correct, details)) as inference):
             first = refine_masks_from_tracks(
                 self.sparse, self.mask_revision, self.root / "track-masks-r001",
-                sam2_checkpoint=self.weights, cache_dir=cached)
+                sam2_checkpoint=self.weights, review_proposals=False, cache_dir=cached)
             second = refine_masks_from_tracks(
                 self.sparse, self.mask_revision, self.root / "track-masks-r002",
-                sam2_checkpoint=self.weights, cache_dir=cached)
+                sam2_checkpoint=self.weights, review_proposals=False, cache_dir=cached)
         self.assertEqual(first["status"], "candidate / automatic-track-guided-qa")
         self.assertEqual(first["selection_mode"], "automatic")
         self.assertGreaterEqual(first["summary"]["inference_count"], 1)
@@ -530,10 +530,10 @@ class TrackGuidanceTests(unittest.TestCase):
                        "component-guided-mask-qa-v4"):
                 first = refine_masks_from_tracks(
                     self.sparse, self.mask_revision, self.root / "component-mask-r001",
-                    sam2_checkpoint=self.weights, cache_dir=cache)
+                    sam2_checkpoint=self.weights, review_proposals=False, cache_dir=cache)
             second = refine_masks_from_tracks(
                 self.sparse, self.mask_revision, self.root / "component-mask-r002",
-                sam2_checkpoint=self.weights, cache_dir=cache)
+                sam2_checkpoint=self.weights, review_proposals=False, cache_dir=cache)
         self.assertEqual(first["summary"]["component_recovery_accepted"], 1)
         self.assertEqual(first["summary"]["inference_count"], 1)
         self.assertEqual(second["summary"]["cache_hits"], 1)
@@ -596,7 +596,7 @@ class TrackGuidanceTests(unittest.TestCase):
                                    "operation": "ground-trim", "verified_background_hits": 0})) as qa):
             result = refine_masks_from_tracks(
                 self.sparse, self.mask_revision, self.root / "trim-grounded",
-                sam2_checkpoint=self.weights)
+                sam2_checkpoint=self.weights, review_proposals=False)
         self.assertEqual(result["summary"]["selected_component"], 1)
         self.assertEqual(result["summary"]["selected_unchanged"], 5)
         selected = result["images"][0]
@@ -659,7 +659,7 @@ class TrackGuidanceTests(unittest.TestCase):
                     return_value=(fixed, {"components": ["subject"]})) as inference):
             report = refine_masks_from_tracks(self.sparse, self.mask_revision,
                                               self.root / "automatic-ground-repair",
-                                              sam2_checkpoint=self.weights)
+                                              sam2_checkpoint=self.weights, review_proposals=False)
         self.assertEqual(inference.call_count, 1)
         selected_entry = next(item for item in report["images"]
                               if item["filename"] == "view-05.png")
@@ -712,6 +712,31 @@ class TrackGuidanceTests(unittest.TestCase):
             refine_masks_from_tracks(self.sparse, self.mask_revision, target,
                                      sam2_checkpoint=self.weights, resume=True)
 
+    def test_review_only_proposal_never_replaces_a_mask_even_if_it_passes_the_gate(self):
+        correct = np.zeros((80, 100), dtype=np.uint8)
+        correct[10:75, 10:90] = 255
+        passing = Image.fromarray(correct, "L")
+        with (patch("kumiki_blender.reconstruction.masking._load_sam2_predictor",
+                    return_value=(object(), "mps")),
+              patch("kumiki_blender.reconstruction.masking._sam2_mask",
+                    return_value=(correct, {"components": ["subject"]})),
+              patch("kumiki_blender.reconstruction.mask_object_recovery.evaluate_component_recovery",
+                    return_value=(passing, {"accepted": True, "status": "candidate / synthetic-qa"}))):
+            report = refine_masks_from_tracks(self.sparse, self.mask_revision,
+                                              self.root / "review-only",
+                                              sam2_checkpoint=self.weights)
+        withheld = [entry for entry in report["images"] if entry["component_guidance"]["status"]
+                    == "withheld / review-only-proposal"]
+        self.assertTrue(withheld)
+        for entry in withheld:
+            self.assertFalse(entry["component_guidance"]["accepted"])
+            self.assertFalse(entry["component_guided_replaced"])
+            source = next(item for item in self.images if item["filename"] == entry["filename"])
+            self.assertEqual(entry["mask_sha256"], digest(self.mask_revision / source["mask"]))
+        queued = {row["filename"] for row in json.loads(
+            (self.root / "review-only" / report["review_queue"]["report"]).read_text())["queue"]}
+        self.assertTrue({entry["filename"] for entry in withheld} <= queued)
+
     def test_review_queue_ranks_and_promotes_a_withheld_component_proposal(self):
         refined_root = self.root / "automatic"
         correct = np.zeros((80, 100), dtype=np.uint8)
@@ -748,7 +773,8 @@ class TrackGuidanceTests(unittest.TestCase):
         queue = json.loads((queue_root / "mask-review-queue.json").read_text())
         self.assertFalse(queue["approved_for_reconstruction"])
         self.assertEqual(queue["policy"]["max_review_images"], 1)
-        item = next(row for row in queue["queue"] if row["proposal"] == "component-guided")
+        item = next(row for row in queue["queue"] if row["filename"] == "view-02.png"
+                    and row["proposal"] == "component-guided")
         self.assertEqual(item["promote_with"], "view-02.png:component-guided")
         self.assertEqual(sum("review_image" in row for row in queue["queue"]), 1)
         self.assertTrue((queue_root / queue["queue"][0]["review_image"]).is_file())

@@ -333,6 +333,10 @@ withholds good proposals. Each `improve-dense-masks` revision therefore writes
 `review-queue/review/`. Each image shows the photo, the kept mask, the proposal
 and the difference (red removed, cyan added).
 
+Photos outside automatic recovery also get a review-only SAM2 proposal. It can
+never replace a mask without a person. Add `--no-review-proposals` to skip this
+SAM2 work.
+
 The queue compares each proposal with the labels from the *other* cameras, and
 with held-out tracks that did not create it:
 

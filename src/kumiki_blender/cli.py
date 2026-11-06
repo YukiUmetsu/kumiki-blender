@@ -649,6 +649,8 @@ def main(argv: list[str] | None = None) -> int:
     track_mask_parser.add_argument("--cache-dir", type=Path)
     track_mask_parser.add_argument("--no-component-recovery", action="store_true",
                                    help="Skip automatic object-neutral visible-region SAM2 retry")
+    track_mask_parser.add_argument("--no-review-proposals", action="store_true",
+                                   help="Skip review-only proposals for photos outside automatic recovery; saves SAM2 time")
     track_mask_parser.add_argument("--resume", action="store_true")
     choose_mask_parser = subcommands.add_parser(
         "select-track-masks", help="Optionally promote reviewed SAM2 proposals and correct polygons in a new mask revision")
@@ -1033,6 +1035,7 @@ def main(argv: list[str] | None = None) -> int:
                     sam2_device=args.sam2_device, max_side=args.max_side,
                     cache_dir=args.cache_dir, resume=args.resume,
                     component_recovery=not args.no_component_recovery,
+                    review_proposals=not args.no_review_proposals,
                     progress=lambda count, total, outcome: print(
                         f"Track-guided mask QA {count}/{total}: {outcome}",
                         file=sys.stderr, flush=True))

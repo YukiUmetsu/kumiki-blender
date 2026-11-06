@@ -22,11 +22,11 @@ from .mask_track_guidance import (SCHEMA as TRACK_SCHEMA,
 from .references import ReferenceError
 
 
-SCHEMA = "track-guided-mask-revision-v8"
+SCHEMA = "track-guided-mask-revision-v9"
 # Completed revisions that can still supply proposals. The evidence gate of
 # older revisions was weaker, so a new revision is needed to apply new gates.
 TRACK_REVISION_SCHEMAS = (SCHEMA, *(f"track-guided-mask-revision-v{version}"
-                                    for version in range(1, 8)))
+                                    for version in range(1, 9)))
 # Inference results depend on the actual guide and checkpoint, not the QA
 # algorithm version. Keep the original prompt-cache namespace so unchanged
 # guides reuse prior MPS work; new negative clicks alter the cache key.
@@ -53,6 +53,7 @@ def refine_masks_from_tracks(reconstruction: str | Path, mask_revision: str | Pa
                              cache_dir: str | Path | None = None,
                              max_side: int = 1280, resume: bool = False,
                              component_recovery: bool = True,
+                             review_proposals: bool = True,
                              progress: Callable[[int, int, str], None] | None = None
                              ) -> dict[str, Any]:
     """Build a new candidate mask revision using strict held-out feature QA."""
@@ -73,8 +74,8 @@ def refine_masks_from_tracks(reconstruction: str | Path, mask_revision: str | Pa
         raise ReferenceError("Track guidance needs existing SAM2 weights and a valid model/device")
     if not 256 <= max_side <= 4096:
         raise ReferenceError("Track guidance max_side must be 256–4096")
-    if type(component_recovery) is not bool:
-        raise ReferenceError("Component recovery must be enabled or disabled")
+    if type(component_recovery) is not bool or type(review_proposals) is not bool:
+        raise ReferenceError("Component recovery and review proposals must be enabled or disabled")
     if cache_dir is not None:
         cache_root = Path(cache_dir).resolve()
         if (Path(cache_dir).is_symlink() or cache_root.is_relative_to(target) or
@@ -91,7 +92,7 @@ def refine_masks_from_tracks(reconstruction: str | Path, mask_revision: str | Pa
     evidence = extract_track_guidance(source, original, prior)
     model_sha = _sha256(checkpoint)
     config = hashlib.sha256(json.dumps([
-        SCHEMA, component_recovery, _sha256(report_path), evidence, model_sha, sam2_size, sam2_device,
+        SCHEMA, component_recovery, review_proposals, _sha256(report_path), evidence, model_sha, sam2_size, sam2_device,
         max_side, [item["mask_sha256"] for item in prior["images"]],
         [[i["candidate_masks"][key]["sha256"] for key in ("broad", "grounded")]
          for i in prior["images"]]], sort_keys=True).encode()).hexdigest()
@@ -157,7 +158,7 @@ def refine_masks_from_tracks(reconstruction: str | Path, mask_revision: str | Pa
         "approved_for_reconstruction": False, "distribution_allowed": False,
         "requires_anatomy_inventory": True,
         "selection_mode": "automatic", "optional_manual_corrections": True,
-        "component_recovery": component_recovery,
+        "component_recovery": component_recovery, "review_proposals": review_proposals,
         "images": [], "summary": {"accepted": 0, "rejected": 0, "abstained": 0,
                                  "cache_hits": 0, "inference_count": 0,
                                  "cross_view_only_prompted_photos": 0,
@@ -390,9 +391,12 @@ def refine_masks_from_tracks(reconstruction: str | Path, mask_revision: str | Pa
         candidate_choice = item.get("candidate_comparison", {}).get("selected")
         can_trim_grounded = (candidate_choice == "grounded" and
                              len(background_seeds) >= 2 and len(holdout) >= 3)
+        # Other photos still get a proposal for the review queue, so that they
+        # do not need hand-placed prompts, but it can never replace their mask.
+        automatic_recovery_allowed = (candidate_choice in ("broad", "grounded-connected-body")
+                                      or can_trim_grounded)
         if (component_recovery and not (can_recover or can_repair) and
-                (candidate_choice in ("broad", "grounded-connected-body") or
-                 can_trim_grounded)):
+                (automatic_recovery_allowed or review_proposals)):
             from .mask_object_components import discover_visible_regions
             from .mask_object_recovery import SCHEMA as COMPONENT_QA_SCHEMA
             from .mask_object_recovery import evaluate_component_recovery
@@ -465,9 +469,13 @@ def refine_masks_from_tracks(reconstruction: str | Path, mask_revision: str | Pa
                                 foreground_holdouts=holdout,
                                 background_seeds=background_seeds,
                                 background_holdouts=background_holdouts)
-                        component_receipt.update(status=qa["status"], evaluation=qa,
-                                                 accepted=reviewed is not None)
-                        if reviewed is not None:
+                        passed_gate = reviewed is not None
+                        accepted = passed_gate and automatic_recovery_allowed
+                        component_receipt.update(
+                            status=("withheld / review-only-proposal"
+                                    if passed_gate and not accepted else qa["status"]),
+                            evaluation=qa, accepted=accepted)
+                        if accepted:
                             reviewed_path = candidate_dir / (name + ".component-reviewed.png")
                             reviewed.save(reviewed_path, format="PNG", optimize=True)
                             component_receipt.update(

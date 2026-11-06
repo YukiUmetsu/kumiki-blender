@@ -735,6 +735,20 @@ observations), recorded locally in `mask-duplicate-track-audit-r01.json`.
 Existing immutable revisions are not rewritten; make a new revision to apply
 the updated gate.
 
+Automatic gates compare a proposal with the current mask, so they also withheld
+good proposals for badly damaged masks. The review queue in `PHOTO_TO_GLB.md`
+makes these proposals available without changing a gate. On the 49-camera
+Sphinx masks, automatic output did not change. The queue put 14 of 43 proposals
+in its two review tiers. Twelve of these photos had earlier hand review. If all
+14 proposals are promoted, mean IoU on the 23 hand-reviewed photos increases
+from 0.610 to 0.755, and no reviewed photo becomes worse. Mixed tracks decrease
+from 5,984 to 3,828, but the queue ranks with similar evidence, so that decrease
+is not independent. The reviewed masks are unapproved SAM2 candidates, not
+ground truth. Promoted masks can include ground or scaffolding, so inspect each
+review image. Do not remove tiny mask islands automatically: in a check of
+these masks, other cameras labelled island tracks as foreground as often as
+background.
+
 Scaffolding, nearby masonry and the remaining images still need review. In
 particular, the long restored forepaws can resemble unrelated walls: the
 experimental `mask-photo-candidate-r02` erased possible paw surfaces and was
