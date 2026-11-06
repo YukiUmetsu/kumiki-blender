@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
+import signal
 import sqlite3
 import subprocess
 import sys
@@ -24,6 +26,9 @@ from .geography.fuji import load_dem
 from .glb_audit import AuditError, audit_glb
 from .glb_motion import MotionExportError, write_glb_motion
 from .physics_plan import PhysicsPlanError, load_physics_plan
+from .shot_plan import ShotPlanError, load_shot_plan
+from .actor_plan import ActorPlanError, load_actor
+from .document_face import DocumentFaceError, load_document_face
 from .deformation_plan import DeformationPlanError, load_deformation_plan
 from .lattice import make_lattice_tower
 from .landmark_scan import prepare_sphinx_scan
@@ -40,6 +45,21 @@ from .reconstruction.completion_generation import GenerationError
 from .reconstruction.completion_image_generation import ImageGenerationError
 from .head_sources.makehuman import MakeHumanSourceError
 from .vintage_biplane import make_biplane
+
+
+def _run_cancellable(command: list[str]) -> int:
+    """Run a child and pass cancellation to it, so a cancelled render does not keep running."""
+    process = subprocess.Popen(command)
+
+    def forward(signum: int, _frame: object) -> None:
+        process.send_signal(signum)
+
+    previous = {name: signal.signal(name, forward) for name in (signal.SIGTERM, signal.SIGINT)}
+    try:
+        return process.wait()
+    finally:
+        for name, handler in previous.items():
+            signal.signal(name, handler)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -160,6 +180,26 @@ def main(argv: list[str] | None = None) -> int:
         if command == "build-deformation":
             deform_parser.add_argument("--output", type=Path, required=True,
                                       help="New GLB/manifest bundle (requires Blender background with a saved .blend)")
+    for command in ("plan-shot", "build-shot", "preview-frame"):
+        shot_parser = subcommands.add_parser(command, help="Validate or render one shot from a set, cast and Kumiki bake")
+        shot_parser.add_argument("--spec", type=Path, required=True)
+        if command == "preview-frame":
+            shot_parser.add_argument("--frame", type=int, required=True, help="Zero-based frame to render as PNG")
+            shot_parser.add_argument("--output", type=Path, required=True, help="PNG path")
+            shot_parser.add_argument("--blender", default=os.environ.get("KUMIKI_BLENDER", "blender"))
+        if command == "build-shot":
+            shot_parser.add_argument("--output", type=Path, required=True,
+                                     help="New shot bundle (run under Blender through scripts/blender_entry.py)")
+            shot_parser.add_argument("--no-blend", action="store_true", help="Skip saving the editable .blend")
+            shot_parser.add_argument("--blender", default=os.environ.get("KUMIKI_BLENDER", "blender"),
+                                     help="Blender executable, when not already running inside Blender")
+    document_parser = subcommands.add_parser("render-document", help="Render an exact printed document face from data blocks")
+    document_parser.add_argument("--spec", type=Path, required=True)
+    document_parser.add_argument("--output", type=Path, required=True)
+    actor_parser = subcommands.add_parser("describe-actor", help="Report rest reach geometry for a Character Studio pack and profile")
+    actor_parser.add_argument("--pack", type=Path, required=True)
+    actor_parser.add_argument("--profile", type=Path, required=True)
+    actor_parser.add_argument("--blender", default=os.environ.get("KUMIKI_BLENDER", "blender"))
     revision_parser = subcommands.add_parser("audit-revision")
     revision_parser.add_argument("--root", type=Path, required=True)
     visual_parser = subcommands.add_parser("visual-qa", help="Contact sheet and optional render regression")
@@ -1026,6 +1066,61 @@ def main(argv: list[str] | None = None) -> int:
                 raise DeformationPlanError("build-deformation needs Blender: blender -b source.blend --python scripts/blender_entry.py -- build-deformation --spec plan.json --output new-revision") from error
             from .blender_deformation import build_deformation_shot
             print(json.dumps(build_deformation_shot(bpy, shot, args.output), indent=2))
+            return 0
+        if args.command == "render-document":
+            print(json.dumps(load_document_face(args.spec, args.output), indent=2))
+            return 0
+        if args.command == "describe-actor":
+            plan = load_actor(args.pack, args.profile)
+            try:
+                import bpy  # type: ignore[import-not-found]
+            except ImportError:
+                executable = shutil.which(args.blender)
+                if not executable:
+                    raise RuntimeError(f"Blender executable not found: {args.blender}")
+                entry = Path(__file__).resolve().parents[2] / "scripts/blender_entry.py"
+                return subprocess.run([executable, "--background", "--factory-startup", "--python-exit-code", "1",
+                                       "--python", str(entry), "--", "describe-actor", "--pack", str(args.pack.resolve()),
+                                       "--profile", str(args.profile.resolve())], check=False).returncode
+            from .blender_actor import build_actor, describe_actor
+            bpy.ops.wm.read_homefile(use_factory_startup=True, use_empty=True)
+            print(json.dumps(describe_actor(build_actor(bpy, plan))))
+            return 0
+        if args.command in ("plan-shot", "build-shot", "preview-frame"):
+            shot = load_shot_plan(args.spec)
+            if args.command == "preview-frame":
+                try:
+                    import bpy  # type: ignore[import-not-found]
+                except ImportError:
+                    executable = shutil.which(args.blender)
+                    if not executable:
+                        raise RuntimeError(f"Blender executable not found: {args.blender}")
+                    entry = Path(__file__).resolve().parents[2] / "scripts/blender_entry.py"
+                    return _run_cancellable([executable, "--background", "--factory-startup", "--python-exit-code", "1",
+                                             "--python", str(entry), "--", "preview-frame", "--spec", str(args.spec.resolve()),
+                                             "--frame", str(args.frame), "--output", str(args.output.resolve())])
+                from .blender_shot import preview_frame
+                print(json.dumps(preview_frame(bpy, shot, args.frame, args.output)))
+                return 0
+            if args.command == "plan-shot":
+                print(json.dumps({"shot_id": shot.shot_id, "frames": shot.bake.duration_frames,
+                                  "actors": [actor.id for actor in shot.actors], "profile": shot.profile}, indent=2))
+                return 0
+            try:
+                import bpy  # type: ignore[import-not-found]
+            except ImportError:
+                executable = shutil.which(args.blender)
+                if not executable:
+                    raise RuntimeError(f"Blender executable not found: {args.blender}")
+                entry = Path(__file__).resolve().parents[2] / "scripts/blender_entry.py"
+                command = [executable, "--background", "--factory-startup", "--python-exit-code", "1",
+                           "--python", str(entry), "--", "build-shot", "--spec", str(args.spec.resolve()),
+                           "--output", str(args.output.resolve())]
+                if args.no_blend:
+                    command.append("--no-blend")
+                return _run_cancellable(command)
+            from .blender_shot import build_shot
+            print(json.dumps(build_shot(bpy, shot, args.spec, args.output, save_blend=not args.no_blend), indent=2))
             return 0
         if args.command in ("plan-physics", "build-physics"):
             shot = load_physics_plan(args.spec)
@@ -2567,7 +2662,7 @@ def main(argv: list[str] | None = None) -> int:
         manifest = build_scene(recipe, plan, output, bpy_module=bpy)
         print(json.dumps(manifest, indent=2))
         return 0
-    except (CatalogError, RecipeError, PorticoError, FacadeError, MonumentError, GeometryError, AssetImportError, HeadFitError, CompletionError, GenerationError, ImageGenerationError, MakeHumanSourceError, RenderProfileError, RevisionAuditError, AuditError, ExportAuditError, MotionExportError, PhysicsPlanError, DeformationPlanError,
+    except (CatalogError, RecipeError, PorticoError, FacadeError, MonumentError, GeometryError, AssetImportError, HeadFitError, CompletionError, GenerationError, ImageGenerationError, MakeHumanSourceError, RenderProfileError, RevisionAuditError, AuditError, ExportAuditError, MotionExportError, PhysicsPlanError, DeformationPlanError, ShotPlanError, ActorPlanError, DocumentFaceError,
             SurfaceError, RuntimeError, OSError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 2
