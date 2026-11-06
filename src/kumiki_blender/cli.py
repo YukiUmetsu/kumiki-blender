@@ -852,6 +852,8 @@ def main(argv: list[str] | None = None) -> int:
     mask_parser.add_argument("--renders", type=Path, required=True)
     mask_parser.add_argument("--output", type=Path, required=True)
     mask_parser.add_argument("--min-iou", type=float, default=0.8)
+    mask_parser.add_argument("--regions", type=Path,
+                             help="Optional manually annotated camera-local face/paw/rear/top boxes for regional IoU")
     landmark_parser = subcommands.add_parser(
         "landmark-qa", help="Measure sculpt 3D landmark reprojection error in registered photos")
     landmark_parser.add_argument("--plan", type=Path, required=True)
@@ -1879,7 +1881,7 @@ def main(argv: list[str] | None = None) -> int:
             from .reconstruction.silhouettes import compare_silhouettes
             try:
                 report = compare_silhouettes(args.plan, args.renders, args.output,
-                                             min_iou=args.min_iou)
+                                             min_iou=args.min_iou, regions_file=args.regions)
             except ReferenceError as error:
                 raise RecipeError(str(error)) from error
             print(json.dumps(report, indent=2))
