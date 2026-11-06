@@ -702,6 +702,26 @@ are recorded in `mask-photo-candidate-r08` and `r09`; the top photograph's
 camera is still unverified and the candidate set remains unapproved.
 The final comparison reports 3,643 mixed tracks; the profile candidate also
 increased possible background-leak votes by 10, so inspect those locations.
+
+Further private review candidates for `photo-0012`, `photo-0053`,
+`photo-0020`, `photo-0023`, and `photo-0018` are recorded through
+`mask-photo-candidate-r12` and `mask-photo-comparison-r12`. They reduce the
+mixed-track count from 3,643 to 2,777; scaffold-covered regions still need
+careful review. The `photo-0018` retry retained its original positive click
+and added nearby clicks after the first candidate missed it.
+`mask-photo-candidate-r13` adds a `photo-0005` candidate and yields 2,670
+mixed tracks. Two `photo-0024` attempts failed different prompt checks and
+are excluded; the second removed ground but also missed subject clicks. A
+subsequent polygon trial also removed subject clicks and is rejected as
+`sam2-ground-polygon-r01`; do not use it for reconstruction.
+
+For a separate pose sanity check, `roma-top-original-mesh-overlay-r01` projects
+the original 49-view dense mesh into the experimental `photo-0060` camera.
+The head and chest roughly overlap the photo; the candidate silhouette recall
+is 0.517 and precision 0.940 at the sampled resolution. These numbers combine
+missing original mesh, imperfect masks and possible pose error. The mesh and
+camera also share the original sparse reconstruction, so this is not fully
+independent pose evidence and does not authorize the 50th camera.
 Scaffolding, nearby masonry and the remaining images still need review. In
 particular, the long restored forepaws can resemble unrelated walls: the
 experimental `mask-photo-candidate-r02` erased possible paw surfaces and was
