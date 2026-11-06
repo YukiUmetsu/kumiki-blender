@@ -419,6 +419,12 @@ def main(argv: list[str] | None = None) -> int:
     refine_cameras.add_argument("--device", choices=("auto", "mps", "cpu"), default="auto")
     refine_cameras.add_argument("--cache-dir", type=Path,
                                 help="Keep verified matches here, so a repeated run needs no model")
+    fragments = subcommands.add_parser(
+        "remove-mesh-fragments", help="Remove floating pieces from a dense mesh, then texture it again")
+    fragments.add_argument("--reconstruction", type=Path, required=True)
+    fragments.add_argument("--rectified-masks", type=Path, required=True)
+    fragments.add_argument("--dense-revision", type=Path, required=True)
+    fragments.add_argument("--output", type=Path, required=True, help="New dense revision")
     match_dense = subcommands.add_parser(
         "densify-with-matches",
         help="Fill gaps in a dense cloud with triangulated verified matches, then mesh again")
@@ -1615,6 +1621,16 @@ def main(argv: list[str] | None = None) -> int:
                 raise RecipeError(str(error)) from error
             print(json.dumps(report, indent=2))
             return 0 if report["accepted"] else 3
+        if args.command == "remove-mesh-fragments":
+            from .reconstruction.mesh_fragments import remove_mesh_fragments
+            from .reconstruction.references import ReferenceError
+            try:
+                report = remove_mesh_fragments(args.reconstruction, args.rectified_masks,
+                                               args.dense_revision, args.output)
+            except (ReferenceError, ValueError, ImportError, OSError) as error:
+                raise RecipeError(str(error)) from error
+            print(json.dumps(report, indent=2))
+            return 0 if str(report.get("status", "")).startswith("dense-mesh-candidate") else 3
         if args.command == "densify-with-matches":
             from .reconstruction.match_densification import DensificationSettings, densify_with_matches
             from .reconstruction.references import ReferenceError

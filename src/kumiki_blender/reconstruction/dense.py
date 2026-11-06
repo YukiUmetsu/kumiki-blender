@@ -321,6 +321,43 @@ def _execute(command: list[str], log: Path, timeout_seconds: int) -> int:
         return 124 if isinstance(error, subprocess.TimeoutExpired) else 127
 
 
+def rerun_dense_from_stage(reconstruction: str | Path, rectified_masks: str | Path,
+                           source: str | Path, output: str | Path, *, stage: str,
+                           without: tuple[str, ...], prepare: Any,
+                           executables: dict[str, str] | None = None) -> dict[str, Any]:
+    """Copy a finished dense revision, change its workspace, and rerun from one stage.
+
+    `without` names file prefixes to leave out of the copy. Depth maps and logs are
+    always left out. `prepare` receives the new workspace before the stages run.
+    """
+    origin, target = Path(source).resolve(), Path(output).resolve()
+    report = _json(origin / "dense-report.json")
+
+    def ignored(_folder: str, names: list[str]) -> list[str]:
+        return [name for name in names if name.endswith((".dmap", ".log")) or
+                name.startswith(without)]
+
+    target.mkdir(parents=True)
+    (target / "logs").mkdir()
+    shutil.copytree(origin / "workspace", target / "workspace", ignore=ignored)
+    prepare(target / "workspace")
+    stale = ("texture_images", "textured_obj", "texture_atlases", "refined_face_retention")
+    if stage == "mesh":
+        stale += ("mesh", "raw_mesh")
+    interrupted = {key: value for key, value in report.items() if key not in stale}
+    interrupted.update(status="review-required", failed_stage=stage, exit_code=None,
+                       output=str(target))
+    (target / "dense-report.json").write_text(json.dumps(interrupted, indent=2) + "\n",
+                                              encoding="utf-8")
+    keys = ("timeout_seconds", "min_mesh_faces", "refine", "texture", "resolution_level",
+            "max_resolution", "number_views", "view_min_score", "refine_decimate",
+            "texture_decimate", "texture_global_seam_leveling", "texture_local_seam_leveling")
+    return build_dense_reconstruction(
+        reconstruction, target, DenseSettings(**{key: report[key] for key in keys},
+                                              min_registered_images=3, min_registered_fraction=.25),
+        rectified_masks=rectified_masks, executables=executables, resume=True)
+
+
 def build_dense_reconstruction(reconstruction: str | Path, output: str | Path,
                                settings: DenseSettings, *,
                                rectified_masks: str | Path | None = None,

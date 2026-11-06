@@ -940,6 +940,15 @@ from 93.4% to 94.3%, precision fell from 79.2% to 78.8%, and IoU rose from 0.750
 to 0.752. Small stray fragments appeared near the statue, and the share of weakly
 seen surface rose from 1.1% to 2.6%.
 
+#### Remove floating pieces
+
+`remove-mesh-fragments` keeps the main body and each piece that touches it or
+has at least 5% of its area, and then textures the mesh again. Masks do not find
+floating pieces, because few cameras see them, so this check uses geometry. On
+the Sphinx, it removed 6 pieces with 8,442 of 2,036,025 faces. Statue coverage
+stayed at 94.3%, weakly seen surface fell from 2.6% to 1.0%, and open edges fell
+from 691 to 465.
+
 macOS Gatekeeper can block a downloaded OpenMVS binary. The stage then fails
 with exit code -9 and an empty log. Do not remove the quarantine flag. Put a
 local build first on `PATH`, for example `.review/tools/openmvs-build4/bin`.

@@ -18,7 +18,6 @@ photographs.
 from __future__ import annotations
 
 import json
-import shutil
 from dataclasses import asdict, dataclass
 from importlib.util import find_spec
 from pathlib import Path
@@ -276,7 +275,7 @@ def densify_with_matches(
     from PIL import Image
     from scipy.spatial import cKDTree
 
-    from .dense import DenseSettings, _json, build_dense_reconstruction
+    from .dense import _json, rerun_dense_from_stage
 
     settings = settings or DensificationSettings()
     sparse = Path(reconstruction).resolve()
@@ -359,30 +358,15 @@ def densify_with_matches(
                   masks_without_a_vote=sorted(unreviewed),
                   existing_dense_points=len(offsets))
 
-    # The new revision reruns meshing on the merged cloud. Depth maps are not needed.
-    def ignored(_folder: str, names: list[str]) -> list[str]:
-        return [name for name in names if name.endswith((".dmap", ".log")) or
-                name.startswith(("scene_dense_mesh", DENSE_CLOUD))]
+    # The new revision reruns meshing on the merged cloud.
+    def replace_cloud(workspace_copy: Path) -> None:
+        write_dense_cloud(workspace_copy / DENSE_CLOUD, header, body, len(offsets),
+                          encode_points(points, colors, normals, views), len(points))
+        (target / REPORT).write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
 
-    target.mkdir(parents=True)
-    (target / "logs").mkdir()
-    shutil.copytree(workspace, target / "workspace", ignore=ignored)
-    write_dense_cloud(target / "workspace" / DENSE_CLOUD, header, body, len(offsets),
-                      encode_points(points, colors, normals, views), len(points))
-    interrupted = {key: value for key, value in dense_report.items()
-                   if key not in ("mesh", "raw_mesh", "texture_images", "textured_obj",
-                                  "texture_atlases", "refined_face_retention")}
-    interrupted.update(status="review-required", failed_stage="mesh", exit_code=None,
-                       output=str(target))
-    (target / "dense-report.json").write_text(json.dumps(interrupted, indent=2) + "\n", encoding="utf-8")
-    (target / REPORT).write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
-    keys = ("timeout_seconds", "min_mesh_faces", "refine", "texture", "resolution_level",
-            "max_resolution", "number_views", "view_min_score", "refine_decimate", "texture_decimate",
-            "texture_global_seam_leveling", "texture_local_seam_leveling")
-    build_dense_reconstruction(
-        sparse, target, DenseSettings(**{key: dense_report[key] for key in keys},
-                                      min_registered_images=3, min_registered_fraction=.25),
-        rectified_masks=masks_root, executables=executables, resume=True)
+    rerun_dense_from_stage(sparse, masks_root, source, target, stage="mesh",
+                           without=("scene_dense_mesh", DENSE_CLOUD), prepare=replace_cloud,
+                           executables=executables)
     meshed = _json(target / "dense-report.json")
     report.update(status=meshed["status"], failed_stage=meshed.get("failed_stage"),
                   mesh=meshed.get("mesh"),
