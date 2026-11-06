@@ -925,6 +925,14 @@ Precision stayed near 80%. Surface area fell from 14.27 to 12.78, so the mesh
 has less bridging. No free photo looked steeply down on the statue, so the top
 of the statue still has few views.
 
+More cameras can make a mesh worse if their masks vote. With 24 new photos and
+automatic masks, the mask check removed 70% of candidate points, and the paws
+and back lost surface. Those masks were too small: the mesh had 57% precision
+against them, but it fit the same photos well. Masks of located photos now have
+no vote. This restored removal to 49% and added 114,000 points, against 68,000.
+With 77 cameras, the paws are much fuller and statue coverage on 65 shared
+cameras rose from 91.7% to 92.2%, but small holes returned on the back.
+
 macOS Gatekeeper can block a downloaded OpenMVS binary. The stage then fails
 with exit code -9 and an empty log. Do not remove the quarantine flag. Put a
 local build first on `PATH`, for example `.review/tools/openmvs-build4/bin`.

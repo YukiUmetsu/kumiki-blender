@@ -6,7 +6,7 @@ from pathlib import Path
 import numpy as np
 
 from kumiki_blender.reconstruction.match_densification import (
-    DensificationSettings, encode_points, mask_veto, read_dense_cloud, scene_image_order,
+    DensificationSettings, cameras_that_can_veto, encode_points, mask_veto, read_dense_cloud, scene_image_order,
     thin_to_voxels, triangulate_matches, views_agree_with_cameras, views_of_record, write_dense_cloud)
 from kumiki_blender.reconstruction.references import ReferenceError
 
@@ -128,6 +128,18 @@ class MaskVetoTests(unittest.TestCase):
     def test_too_few_cameras_cannot_veto(self):
         cameras = {name: self.cameras[name] for name in "ab"}
         self.assertFalse(mask_veto(self.point, cameras, self.masks("ab"), self.settings)[0])
+
+
+class VetoVoterTests(unittest.TestCase):
+    def test_automatic_masks_cannot_vote(self):
+        cameras = {name: camera((index * .3, 0, 0)) for index, name in enumerate("abcde")}
+        voters = cameras_that_can_veto(cameras, ["d", "e"])
+        self.assertEqual(sorted(voters), ["a", "b", "c"])
+        point = np.array([[.5, 0., 6.]])
+        masks = {name: np.full((800, 1000), name not in "de") for name in cameras}
+        settings = DensificationSettings()
+        self.assertTrue(mask_veto(point, cameras, masks, settings)[0])
+        self.assertFalse(mask_veto(point, voters, masks, settings)[0])
 
 
 class ThinningTests(unittest.TestCase):

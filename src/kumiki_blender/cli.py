@@ -388,6 +388,8 @@ def main(argv: list[str] | None = None) -> int:
     match_dense.add_argument("--dense-revision", type=Path, required=True)
     match_dense.add_argument("--output", type=Path, required=True, help="New dense revision")
     match_dense.add_argument("--pairs-per-camera", type=int, default=6)
+    match_dense.add_argument("--max-mask-veto-fraction", type=float, default=.3,
+                             help="Remove a point if more than this share of reviewed masks call it background")
     match_dense.add_argument("--device", choices=("auto", "mps", "cpu"), default="auto")
     locate_photos = subcommands.add_parser(
         "locate-new-photos",
@@ -1524,7 +1526,8 @@ def main(argv: list[str] | None = None) -> int:
             try:
                 report = densify_with_matches(
                     args.reconstruction, args.rectified_masks, args.dense_revision, args.output,
-                    settings=DensificationSettings(pairs_per_camera=args.pairs_per_camera),
+                    settings=DensificationSettings(pairs_per_camera=args.pairs_per_camera,
+                                                   max_mask_veto_fraction=args.max_mask_veto_fraction),
                     device=args.device, log=lambda line: print(line, file=sys.stderr, flush=True))
             except (ReferenceError, ValueError, ImportError, OSError, RuntimeError) as error:
                 raise RecipeError(str(error)) from error

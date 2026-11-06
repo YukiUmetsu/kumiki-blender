@@ -205,6 +205,17 @@ def mask_veto(points: Any, cameras: dict[str, dict[str, Any]], masks: dict[str, 
         outside > settings.max_mask_veto_fraction * np.maximum(votes, 1))
 
 
+def cameras_that_can_veto(cameras: dict[str, dict[str, Any]], unreviewed: list[str]
+                          ) -> dict[str, dict[str, Any]]:
+    """Leave out cameras with automatic masks.
+
+    An automatic mask that misses part of the subject reads as a vote for
+    background. On the Sphinx, 24 such masks raised the rejected points from 45%
+    to 70%, and removed real surface on the paws and the back.
+    """
+    return {name: camera for name, camera in cameras.items() if name not in unreviewed}
+
+
 def thin_to_voxels(points: Any, size: float) -> Any:
     """Return the indexes of one point per voxel, so a surface is not sampled twice."""
     import numpy as np
@@ -335,11 +346,15 @@ def densify_with_matches(
     points, colors = np.concatenate(kept_points), np.concatenate(kept_colors)
     normals, views = np.concatenate(kept_normals), np.concatenate(kept_views)
     gap_points = len(points)
-    vetoed = mask_veto(points, cameras, masks, settings)
+    from .registered_camera_recovery import _read_json
+
+    unreviewed = _read_json(sparse / "reconstruction-report.json").get("located_photos", [])
+    vetoed = mask_veto(points, cameras_that_can_veto(cameras, unreviewed), masks, settings)
     points, colors, normals, views = points[~vetoed], colors[~vetoed], normals[~vetoed], views[~vetoed]
     chosen = thin_to_voxels(points, settings.voxel_fraction * diagonal)
     points, colors, normals, views = points[chosen], colors[chosen], normals[chosen], views[chosen]
     report.update(gap_points=gap_points, mask_vetoed_points=int(vetoed.sum()), added_points=len(points),
+                  masks_without_a_vote=sorted(unreviewed),
                   existing_dense_points=len(offsets))
 
     # The new revision reruns meshing on the merged cloud. Depth maps are not needed.
