@@ -724,6 +724,17 @@ is 0.517 and precision 0.940 at the sampled resolution. These numbers combine
 missing original mesh, imperfect masks and possible pose error. The mesh and
 camera also share the original sparse reconstruction, so this is not fully
 independent pose evidence and does not authorize the 50th camera.
+
+Track-guided mask recovery discards every observation of a 3D point when that
+point occurs more than once in one camera; the file order cannot determine a
+prompt. Its acceptance gate also rejects missing, duplicated or shared track
+IDs across positive prompts, negative prompts and held-out observations. These
+checks prevent evidence reuse but do not make track labels ground truth. The
+50-camera Sphinx model contained 2,879 ambiguous camera/track pairs (5,822
+observations), recorded locally in `mask-duplicate-track-audit-r01.json`.
+Existing immutable revisions are not rewritten; make a new revision to apply
+the updated gate.
+
 Scaffolding, nearby masonry and the remaining images still need review. In
 particular, the long restored forepaws can resemble unrelated walls: the
 experimental `mask-photo-candidate-r02` erased possible paw surfaces and was

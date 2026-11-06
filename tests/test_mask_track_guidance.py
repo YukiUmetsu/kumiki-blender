@@ -15,7 +15,7 @@ from PIL import Image, ImageDraw
 
 from kumiki_blender.cli import main
 from kumiki_blender.reconstruction.mask_track_guidance import (
-    _seed_class, evaluate_track_resegmentation, extract_track_guidance,
+    _seed_class, evaluate_track_resegmentation as evaluate_with_provenance, extract_track_guidance,
 )
 from kumiki_blender.reconstruction.mask_ground_plane import evaluate_local_ground_spill
 from kumiki_blender.reconstruction.mask_ground_plane import fit_ground_plane
@@ -26,6 +26,16 @@ from kumiki_blender.reconstruction.references import ReferenceError
 
 def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def evaluate_track_resegmentation(initial, proposed, seeds, holdouts,
+                                   background_seeds=None, background_holdouts=None, **kwargs):
+    """Give synthetic geometric samples distinct track identities."""
+    groups = [seeds, holdouts, background_seeds or [], background_holdouts or []]
+    rows = [[{**row, "point3d_id": row.get("point3d_id", group * 10000 + i)}
+             for i, row in enumerate(group_rows)]
+            for group, group_rows in enumerate(groups, 1)]
+    return evaluate_with_provenance(initial, proposed, *rows, **kwargs)
 
 
 class TrackGuidanceTests(unittest.TestCase):
@@ -104,6 +114,25 @@ class TrackGuidanceTests(unittest.TestCase):
         self.assertTrue(all(len(row["source_views"]) >= 3
                             for row in entry["seed_points"]))
         self.assertEqual(evidence["compared_track_ids"], len(self.features))
+
+    def test_duplicate_observations_do_not_supply_camera_support(self):
+        point_id = next(i for i in range(1000, 1100) if _seed_class(i) == "seed")
+        tracks = {item["filename"]: [(point_id, 50, 30)] for item in self.images}
+        for name in sorted(tracks)[:5]:
+            # The same track cannot occupy two image positions. Whichever
+            # comes first, neither should be used as evidence from this view.
+            tracks[name].append((point_id, 75, 60))
+        with patch("kumiki_blender.reconstruction.mask_track_guidance._binary_image_tracks",
+                   return_value=tracks):
+            report = extract_track_guidance(self.sparse, self.mask_revision, self.report)
+        self.assertEqual(report["viable_track_ids"], 0)
+        self.assertFalse(report["images"]["view-05.png"]["seed_points"])
+        self.assertEqual(report["rejected"]["duplicate_observation"], 10)
+        with patch("kumiki_blender.reconstruction.mask_track_guidance._binary_image_tracks",
+                   return_value={name: list(reversed(rows)) for name, rows in tracks.items()}):
+            reversed_report = extract_track_guidance(self.sparse, self.mask_revision, self.report)
+        self.assertEqual(reversed_report["images"], report["images"])
+        self.assertEqual(reversed_report["rejected"], report["rejected"])
 
     def test_five_other_views_recover_chest_points_missed_by_both_target_masks(self):
         target = self.images[-1]
@@ -497,7 +526,7 @@ class TrackGuidanceTests(unittest.TestCase):
                     return_value=(Image.fromarray(restored, "L"),
                                   {"accepted": True, "status": "candidate / synthetic-qa"}))):
             with patch("kumiki_blender.reconstruction.mask_object_recovery.SCHEMA",
-                       "component-guided-mask-qa-v3"):
+                       "component-guided-mask-qa-v4"):
                 first = refine_masks_from_tracks(
                     self.sparse, self.mask_revision, self.root / "component-mask-r001",
                     sam2_checkpoint=self.weights, cache_dir=cache)
@@ -613,6 +642,10 @@ class TrackGuidanceTests(unittest.TestCase):
         image["background_holdout_points"] = [
             {"normalized_xy": [x, .8], "source": "triangulated-low-ground-plane"}
             for x in (.28, .38)]
+        for group, key in enumerate(("foreground_context_points", "holdout_points",
+                                     "background_seed_points", "background_holdout_points"), 1):
+            for index, row in enumerate(image[key]):
+                row["point3d_id"] = group * 10000 + index
         selected = self.mask_revision / self.images[-1]["mask"]
         with Image.open(selected) as current:
             fixed = np.asarray(current).copy()
@@ -720,6 +753,17 @@ class TrackGuidanceTests(unittest.TestCase):
             self.assertEqual(after.getpixel((65, 55)), 0)
             self.assertEqual(before.getpixel((65, 55)), 255)
         self.assertTrue((chosen_root / "mask-contact-sheet.jpg").is_file())
+        # Older completed revisions remain usable for optional corrections;
+        # the new evidence gate applies when a new revision is generated.
+        parent_report = refined_root / "mask-report.json"
+        legacy = json.loads(parent_report.read_text())
+        for version in (5, 6, 7):
+            legacy["schema"] = f"track-guided-mask-revision-v{version}"
+            parent_report.write_text(json.dumps(legacy))
+            old_result = select_track_mask_candidates(
+                self.sparse, refined_root, self.root / f"legacy-v{version}-selection",
+                use_proposals=["view-05.png"])
+            self.assertFalse(old_result["approved_for_reconstruction"])
         cli_root = self.root / "cli-selection"
         with redirect_stdout(io.StringIO()):
             result = main(["select-track-masks", "--reconstruction", str(self.sparse),

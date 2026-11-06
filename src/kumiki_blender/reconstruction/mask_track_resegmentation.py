@@ -22,7 +22,7 @@ from .mask_track_guidance import (SCHEMA as TRACK_SCHEMA,
 from .references import ReferenceError
 
 
-SCHEMA = "track-guided-mask-revision-v7"
+SCHEMA = "track-guided-mask-revision-v8"
 # Inference results depend on the actual guide and checkpoint, not the QA
 # algorithm version. Keep the original prompt-cache namespace so unchanged
 # guides reuse prior MPS work; new negative clicks alter the cache key.
@@ -417,12 +417,12 @@ def refine_masks_from_tracks(reconstruction: str | Path, mask_revision: str | Pa
                         inference_inputs, sort_keys=True).encode()).hexdigest()
                     cached = _cached_mask(cache_root, cache_key, list(photo.size))
                     # QA rules do not affect the SAM2 prediction. Reuse the
-                    # verified v3 prediction while upgrading acceptance logic;
+                    # verified v4 prediction while upgrading acceptance logic;
                     # do not force 28+ redundant MPS inferences on this dataset.
                     legacy_cache_hit = False
-                    if cached is None and COMPONENT_QA_SCHEMA == "component-guided-mask-qa-v4":
+                    if cached is None and COMPONENT_QA_SCHEMA == "component-guided-mask-qa-v5":
                         legacy_inputs = [inference_inputs[0],
-                                         "component-guided-mask-qa-v3",
+                                         "component-guided-mask-qa-v4",
                                          *inference_inputs[2:]]
                         legacy_key = hashlib.sha256(json.dumps(
                             legacy_inputs, sort_keys=True).encode()).hexdigest()

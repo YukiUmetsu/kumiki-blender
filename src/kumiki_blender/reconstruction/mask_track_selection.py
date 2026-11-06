@@ -68,7 +68,10 @@ def select_track_mask_candidates(reconstruction: str | Path, mask_revision: str 
     if (previous.get("schema") not in (TRACK_SCHEMA, "track-guided-mask-revision-v1",
                                          "track-guided-mask-revision-v2",
                                          "track-guided-mask-revision-v3",
-                                         "track-guided-mask-revision-v4") or
+                                         "track-guided-mask-revision-v4",
+                                         "track-guided-mask-revision-v5",
+                                         "track-guided-mask-revision-v6",
+                                         "track-guided-mask-revision-v7") or
             previous.get("source_revision") != str(sparse) or
             not str(previous.get("status", "")).startswith("candidate / ") or
             not isinstance(previous.get("images"), list)):

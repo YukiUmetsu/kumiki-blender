@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 
-SCHEMA = "component-guided-mask-qa-v4"
+SCHEMA = "component-guided-mask-qa-v5"
 
 
 def evaluate_component_recovery(photo: Any, current: Any, proposed: Any,
@@ -44,7 +44,13 @@ def evaluate_component_recovery(photo: Any, current: Any, proposed: Any,
     small = np.asarray(proposed.convert("L").resize(
         small_dims, Image.Resampling.NEAREST)) >= 128
     kernel = max(3, round(max(small_dims)*.008)) | 1
-    # Closing with the default zero-valued boundary erases real object pixels\n    # whenever a cropped head, paw, or torso reaches the image edge. Extend\n    # observed boundary values before cleanup, then return to original size.\n    border = kernel // 2\n    padded = np.pad(small, border, mode="edge")\n    closed = ndi.binary_closing(\n        padded, structure=np.ones((kernel, kernel), dtype=bool))[border:-border, border:-border]
+    # Closing with the default zero-valued boundary erases real object pixels
+    # whenever a cropped head, paw, or torso reaches the image edge. Extend
+    # observed boundary values before cleanup, then return to original size.
+    border = kernel // 2
+    padded = np.pad(small, border, mode="edge")
+    closed = ndi.binary_closing(
+        padded, structure=np.ones((kernel, kernel), dtype=bool))[border:-border, border:-border]
     labels, groups = ndi.label(closed)
     if not groups:
         return reject("empty-connected-proposal")

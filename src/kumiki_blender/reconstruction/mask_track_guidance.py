@@ -12,7 +12,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-from collections import defaultdict
+from collections import Counter, defaultdict
 from pathlib import Path
 from typing import Any
 
@@ -22,7 +22,7 @@ from .mask_consistency import (_MAX_MODEL_BYTES, _binary_image_tracks,
 from .references import ReferenceError
 
 
-SCHEMA = "multi-view-subject-track-evidence-v4"
+SCHEMA = "multi-view-subject-track-evidence-v5"
 MIN_SUPPORTING_CAMERAS = 3
 MAX_SEEDS_PER_IMAGE = 12
 
@@ -156,12 +156,14 @@ def extract_track_guidance(reconstruction: Path, mask_revision: Path,
             # The text detector's part boxes can cover the full image. Use
             # independent SAM2 silhouettes for *ground-plane fitting*; the
             # geometric plane will still need a low, camera-up-aligned fit.
-            seen = set()
+            # A 3D track with multiple observations in the same image is
+            # ambiguous. Keeping the first would make the evidence depend on
+            # file order and could turn an incorrect location into a prompt.
+            point_counts = Counter(point_id for point_id, _, _ in tracks[name])
             for point_id, x, y in tracks[name]:
-                if point_id in seen:
+                if point_counts[point_id] != 1:
                     rejected["duplicate_observation"] += 1
                     continue
-                seen.add(point_id)
                 if not (8 <= x < dimensions[0]-8 and 8 <= y < dimensions[1]-8):
                     rejected["edge_or_out_of_frame"] += 1
                     continue
@@ -317,6 +319,10 @@ def evaluate_track_resegmentation(initial: Any, proposed: Any,
 
     background_seeds = background_seeds or []
     background_holdouts = background_holdouts or []
+    evidence_rows = seeds + holdouts + background_seeds + background_holdouts
+    point_ids = [row.get("point3d_id") for row in evidence_rows]
+    missing_provenance = any(type(point_id) is not int or point_id < 0 for point_id in point_ids)
+    duplicate_provenance = (not missing_provenance and len(set(point_ids)) != len(point_ids))
     old = np.asarray(initial) >= 128
     new = np.asarray(proposed) >= 128
     if old.shape != new.shape or old.ndim != 2:
@@ -366,6 +372,10 @@ def evaluate_track_resegmentation(initial: Any, proposed: Any,
                 len(seeds) >= 6 and supported_fraction >= .85):
             growth_limit = 1.90
     reasons = []
+    if missing_provenance:
+        reasons.append("missing-track-provenance")
+    if duplicate_provenance:
+        reasons.append("overlapping-or-duplicate-track-evidence")
     if len(seeds) < 3 or len(holdouts) < 5:
         reasons.append("insufficient-spatially-independent-seed-or-holdout-tracks")
     if old_count == 0 or area_ratio < .85 or area_ratio > growth_limit:
@@ -380,7 +390,8 @@ def evaluate_track_resegmentation(initial: Any, proposed: Any,
     # recovering a missed paw/torso feature. Verify that *held-out* ground was
     # removed while every held-out subject track remains, and keep the area
     # shrink modest. Ground prompts alone cannot certify their own success.
-    verified_repair = (ground_repair and foreground_context_count >= 3 and
+    verified_repair = (not missing_provenance and not duplicate_provenance and
+                       ground_repair and foreground_context_count >= 3 and
                        len(background_seeds) >= 2 and len(background_holdouts) >= 2 and
                        background_holdout_repaired >= 1 and not lost and
                        not missed_seeds and not background_violations and

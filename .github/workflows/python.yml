@@ -27,7 +27,13 @@ jobs:
       - name: Test photo-reference evidence and COLMAP worker boundary
         env:
           PYTHONPATH: src
-        run: python -m unittest tests.test_photo_model tests.test_reconstruction_references tests.test_reconstruction_colmap tests.test_reconstruction_pycolmap tests.test_reconstruction_dense tests.test_reconstruction_blender_dense tests.test_reconstruction_masking tests.test_subject_grounding tests.test_mask_candidate_ensemble tests.test_mask_track_guidance tests.test_reconstruction_mask_refinement tests.test_reconstruction_mask_consistency tests.test_reconstruction_texture_finish tests.test_reconstruction_scan_displacement tests.test_reconstruction_material_separation tests.test_reconstruction_texture_defects tests.test_reconstruction_illumination_guides tests.test_reconstruction_polarized_qa tests.test_surface_finishing tests.test_reconstruction_cli tests.test_reconstruction_cameras tests.test_feedforward_sparse tests.test_reconstruction_silhouettes tests.test_reconstruction_landmarks tests.test_prepare_pix4d_eagle tests.test_prepare_epfl_statue tests.test_prepare_cycladic_figurine -v
+        run: python -m unittest tests.test_photo_model tests.test_reconstruction_references tests.test_reconstruction_colmap tests.test_reconstruction_pycolmap tests.test_reconstruction_dense tests.test_reconstruction_blender_dense tests.test_reconstruction_masking tests.test_subject_grounding tests.test_mask_candidate_ensemble tests.test_mask_track_guidance tests.test_mask_track_provenance tests.test_reconstruction_mask_refinement tests.test_reconstruction_mask_consistency tests.test_reconstruction_texture_finish tests.test_reconstruction_scan_displacement tests.test_reconstruction_material_separation tests.test_reconstruction_texture_defects tests.test_reconstruction_illumination_guides tests.test_reconstruction_polarized_qa tests.test_surface_finishing tests.test_reconstruction_cli tests.test_reconstruction_cameras tests.test_feedforward_sparse tests.test_reconstruction_silhouettes tests.test_reconstruction_landmarks tests.test_prepare_pix4d_eagle tests.test_prepare_epfl_statue tests.test_prepare_cycladic_figurine -v
+      - name: Test scipy-backed automatic mask recovery
+        env:
+          PYTHONPATH: src
+        run: |
+          python -m pip install 'scipy>=1.13,<2'
+          python -m unittest tests.test_mask_object_components tests.test_mask_fragmentation_repair
       - name: Test multi-photo OpenSplat staging, training boundary and CLI (no GPU needed)
         env:
           PYTHONPATH: src
