@@ -132,11 +132,12 @@ class MaskVetoTests(unittest.TestCase):
 
 class VetoVoterTests(unittest.TestCase):
     def test_automatic_masks_cannot_vote(self):
-        cameras = {name: camera((index * .3, 0, 0)) for index, name in enumerate("abcde")}
-        voters = cameras_that_can_veto(cameras, ["d", "e"])
+        cameras = {name: camera((index * .3, 0, 0)) for index, name in enumerate("abcdefg")}
+        automatic = ["d", "e", "f", "g"]
+        voters = cameras_that_can_veto(cameras, automatic)
         self.assertEqual(sorted(voters), ["a", "b", "c"])
         point = np.array([[.5, 0., 6.]])
-        masks = {name: np.full((800, 1000), name not in "de") for name in cameras}
+        masks = {name: np.full((800, 1000), name not in automatic) for name in cameras}
         settings = DensificationSettings()
         self.assertTrue(mask_veto(point, cameras, masks, settings)[0])
         self.assertFalse(mask_veto(point, voters, masks, settings)[0])

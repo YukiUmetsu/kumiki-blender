@@ -388,7 +388,7 @@ def main(argv: list[str] | None = None) -> int:
     match_dense.add_argument("--dense-revision", type=Path, required=True)
     match_dense.add_argument("--output", type=Path, required=True, help="New dense revision")
     match_dense.add_argument("--pairs-per-camera", type=int, default=6)
-    match_dense.add_argument("--max-mask-veto-fraction", type=float, default=.3,
+    match_dense.add_argument("--max-mask-veto-fraction", type=float, default=.5,
                              help="Remove a point if more than this share of reviewed masks call it background")
     match_dense.add_argument("--device", choices=("auto", "mps", "cpu"), default="auto")
     locate_photos = subcommands.add_parser(

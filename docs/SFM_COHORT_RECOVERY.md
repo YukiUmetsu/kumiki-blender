@@ -875,8 +875,8 @@ kumiki-blender densify-with-matches --reconstruction "$REFINED" \
 Each point must pass a fundamental-matrix check that does not use the cameras,
 a reprojection check and a minimum ray angle of 3 degrees. A point is kept only
 in a gap of the dense cloud, more than 0.3% of the model size from it. It is
-removed if more than 30% of the masks of the cameras that see it (at least 3)
-call it background. Existing stereo points do not change. The command writes a
+removed if more than half of the reviewed masks of the cameras that see it (at
+least 3) call it background. Existing stereo points do not change. The command writes a
 new dense revision and runs the normal mesh, refine and texture stages.
 
 On the Sphinx, this added 114,509 points to 1,296,181 stereo points, and the
@@ -932,6 +932,13 @@ against them, but it fit the same photos well. Masks of located photos now have
 no vote. This restored removal to 49% and added 114,000 points, against 68,000.
 With 77 cameras, the paws are much fuller and statue coverage on 65 shared
 cameras rose from 91.7% to 92.2%, but small holes returned on the back.
+
+Reviewed masks can also miss part of a subject, so a veto limit of 30% was too
+strict. At 50%, the mask check removed only 19,885 of 280,968 candidates, and the
+hole on the back closed again. In the audit on 53 shared cameras, coverage rose
+from 93.4% to 94.3%, precision fell from 79.2% to 78.8%, and IoU rose from 0.750
+to 0.752. Small stray fragments appeared near the statue, and the share of weakly
+seen surface rose from 1.1% to 2.6%.
 
 macOS Gatekeeper can block a downloaded OpenMVS binary. The stage then fails
 with exit code -9 and an empty log. Do not remove the quarantine flag. Put a

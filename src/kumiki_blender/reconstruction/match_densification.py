@@ -49,7 +49,9 @@ class DensificationSettings:
     min_ray_angle_degrees: float = 3.0
     gap_radius_fraction: float = .003
     voxel_fraction: float = .001
-    max_mask_veto_fraction: float = .3
+    # A majority: reviewed masks can also miss part of a subject. At .3, holes
+    # stayed on the Sphinx back. At .5, they closed, but stray fragments appeared.
+    max_mask_veto_fraction: float = .5
     min_mask_votes: int = 3
     min_verified_matches: int = 200
 
