@@ -153,6 +153,13 @@ def retry_sam2_masks(reconstruction: str | Path, source_masks: str | Path,
     guide_bytes = guide_path.read_bytes()
     if hashlib.sha256(guide_bytes).hexdigest() != guide_sha:
         raise ReferenceError("SAM2 guide changed during preflight; retry with a stable guide")
+    checkpoint_sha = _sha256(checkpoint)
+    effective_device = None
+    if predictor is None:
+        predictor, effective_device = _load_sam2_predictor(
+            checkpoint.resolve(), sam2_size, sam2_device)
+        if _sha256(checkpoint) != checkpoint_sha:
+            raise ReferenceError("SAM2 checkpoint changed during model loading; retry with a stable checkpoint")
     destination.mkdir(parents=True, exist_ok=False)
     (destination / "guides.json").write_bytes(guide_bytes)
     (destination / "candidates").mkdir()
@@ -161,13 +168,15 @@ def retry_sam2_masks(reconstruction: str | Path, source_masks: str | Path,
               "source_revision": str(source), "source_mask_directory": str(original_masks),
               "guides_sha256": guide_sha, "guides_copy": "guides.json",
               "sam2_selection_version": SAM2_SELECTION_VERSION,
-              "sam2_checkpoint_sha256": _sha256(checkpoint),
+              "sam2_checkpoint_sha256": checkpoint_sha,
               "sam2_size": sam2_size, "sam2_device": sam2_device, "max_side": max_side,
               "requested_targets": targets, "images": [],
               "approved_for_reconstruction": False, "distribution_allowed": False,
               "limitations": ("Part-click agreement cannot prove a statue silhouette. "
                               "Candidates cannot be passed directly as a complete dense mask revision; "
                               "inspect photographic boundaries, sand, scaffolding and full anatomy first.")}
+    if effective_device is not None:
+        report["effective_sam2_device"] = effective_device
     receipt_path = destination / "targeted-sam2-report.json"
     _atomic_report(receipt_path, report)
     for name in targets:
@@ -182,10 +191,6 @@ def retry_sam2_masks(reconstruction: str | Path, source_masks: str | Path,
             original = raw_mask.convert("L")
         if original.size != photo.size:
             raise ReferenceError(f"Mismatched photo/mask dimensions for {name}")
-        if predictor is None:
-            predictor, effective_device = _load_sam2_predictor(
-                checkpoint.resolve(), sam2_size, sam2_device)
-            report["effective_sam2_device"] = effective_device
         output_pixels, details = _sam2_mask(photo, guide_map[name], predictor, max_side)
         proposed = Image.fromarray(output_pixels, mode="L")
         if proposed.size != photo.size:

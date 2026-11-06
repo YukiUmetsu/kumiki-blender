@@ -680,3 +680,23 @@ demonstrate photo-faithful 3D geometry. This command intentionally emits **no
 ready-to-use `masks/` revision**. If acceptable, review all remaining photo
 masks and construct a new explicitly approved complete 50-view mask revision
 before a separately staged dense A/B run. Never modify source masks in place.
+
+For the local November 5 follow-up, review-only candidates for `photo-0015`,
+`photo-0022`, `photo-0027`, `photo-0028`, `photo-0029`, `photo-0038`, and
+`photo-0039` are in the private `sam2-priority-retry-r02` through `r04`
+revisions. Their corresponding candidate mask sets and comparison reports
+are under `mask-photo-candidate-r03` through `r05` and
+`mask-photo-comparison-r03` through `r05`. The first four candidates reduced
+mixed-label tracks from 5,476 to 4,545; shared segmentation mistakes can also
+improve agreement, so this is not a photographic accuracy measurement.
+Further trials for `photo-0034` and `photo-0017` are recorded in
+`sam2-priority-retry-r05`, with the combined nine-photo candidate in
+`mask-photo-candidate-r07` and comparisons through `r07`: 3,814 mixed tracks
+remain. A `photo-0026` scaffold retry violated a negative click and is
+excluded from `r07`; `mask-photo-candidate-r06` contains that failed mask and
+must not be used. These numbers include an experimental camera and are review
+hints, not independent ground truth.
+Scaffolding, nearby masonry and the remaining images still need review. In
+particular, the long restored forepaws can resemble unrelated walls: the
+experimental `mask-photo-candidate-r02` erased possible paw surfaces and was
+rejected. Do not use that revision. The 50th camera remains unverified.

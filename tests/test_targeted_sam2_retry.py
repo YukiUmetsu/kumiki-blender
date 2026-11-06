@@ -19,7 +19,7 @@ class TargetedSAM2RetryTests(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
-        self.root = Path(temporary.name)
+        self.root = Path(temporary.name).resolve()
         self.source = self.root / "camera-revision"
         (self.source / "undistorted/images").mkdir(parents=True)
         self.masks = self.root / "current-masks"
@@ -101,6 +101,17 @@ class TargetedSAM2RetryTests(unittest.TestCase):
         self.assertFalse((self.root / "output").exists())
         with self.assertRaisesRegex(ReferenceError, "explicit anatomical guide"):
             self.run_retry(targets=["view-2.png"])
+        self.assertFalse((self.root / "output").exists())
+
+    def test_missing_model_runtime_does_not_create_output(self):
+        with (patch("kumiki_blender.reconstruction.targeted_sam2_retry.plan_dense_reconstruction",
+                    return_value=self.plan),
+              patch("kumiki_blender.reconstruction.masking._load_sam2_predictor",
+                    side_effect=ReferenceError("SAM2 runtime unavailable"))):
+            with self.assertRaisesRegex(ReferenceError, "runtime unavailable"):
+                retry_sam2_masks(self.source, self.masks, self.guide_file,
+                                 self.root / "output", targets=["view-1.png"],
+                                 sam2_checkpoint=self.checkpoint)
         self.assertFalse((self.root / "output").exists())
 
     def test_uploaded_sphinx_review_guide_is_schema_valid(self):
