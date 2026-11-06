@@ -364,6 +364,19 @@ def main(argv: list[str] | None = None) -> int:
     roma_import.add_argument("--model", type=int, default=0)
     roma_import.add_argument("--base-database", type=Path,
                              help="Earlier candidate database of this revision; adds one more target photo to it")
+    refine_cameras = subcommands.add_parser(
+        "refine-cameras-with-matches",
+        help="Refine registered cameras with verified dense matches; rectified photos and their masks stay valid")
+    refine_cameras.add_argument("--revision", type=Path, required=True)
+    refine_cameras.add_argument("--rectified-masks", type=Path, required=True,
+                                help="Folder of <photo>.mask.png files; matches are kept on the subject")
+    refine_cameras.add_argument("--output", type=Path, required=True)
+    refine_cameras.add_argument("--exclude-camera", action="append", default=[],
+                                help="Registered camera to leave out; repeat")
+    refine_cameras.add_argument("--pairs-per-camera", type=int, default=6)
+    refine_cameras.add_argument("--device", choices=("auto", "mps", "cpu"), default="auto")
+    refine_cameras.add_argument("--cache-dir", type=Path,
+                                help="Keep verified matches here, so a repeated run needs no model")
     predicted_stage = subcommands.add_parser(
         "stage-predicted-cameras",
         help="Register predicted-match photos against the unchanged baseline and write a labelled dense-ready revision")
@@ -1469,6 +1482,21 @@ def main(argv: list[str] | None = None) -> int:
                                                           args.output, model=args.model,
                                                           base_database=args.base_database)
             except (ValueError, OSError) as error:
+                raise RecipeError(str(error)) from error
+            print(json.dumps(report, indent=2))
+            return 0
+        if args.command == "refine-cameras-with-matches":
+            from .reconstruction.match_camera_refinement import (RefinementSettings,
+                                                                 refine_cameras_with_matches)
+            from .reconstruction.references import ReferenceError
+            try:
+                report = refine_cameras_with_matches(
+                    args.revision, args.rectified_masks, args.output,
+                    settings=RefinementSettings(pairs_per_camera=args.pairs_per_camera),
+                    device=args.device, exclude_cameras=args.exclude_camera,
+                    cache_dir=args.cache_dir,
+                    log=lambda line: print(line, file=sys.stderr, flush=True))
+            except (ReferenceError, ValueError, ImportError, OSError, RuntimeError) as error:
                 raise RecipeError(str(error)) from error
             print(json.dumps(report, indent=2))
             return 0

@@ -202,6 +202,58 @@ def prioritize_missing_camera_views(staged: list[dict], registered: set[str]) ->
     return [name for _, name in sorted(missing)]
 
 
+def find_implausible_cameras(baseline, candidate, *,
+                             max_focal_ratio: float = 60.0,
+                             max_distance_ratio: float = 200.0) -> dict[str, list[str]]:
+    """Name new cameras with a degenerate pose, and give the reason for each.
+
+    A pose can fit its tracks and still be physically impossible: with a nearly
+    flat set of tracks, the solver can move the camera far away and raise the
+    focal length without limit. A focal length of 60 image widths is about a
+    2000 mm lens on a full-frame camera. Telephoto aerial photos stay below it.
+    """
+    import numpy as np
+
+    before, after = _registered(baseline), _registered(candidate)
+    centers = np.asarray([item[1].projection_center() for item in before.values()], dtype=float)
+    spread = max(float(np.median(np.linalg.norm(centers - np.median(centers, axis=0), axis=1))), 1e-9)
+    middle = np.median(centers, axis=0)
+    implausible: dict[str, list[str]] = {}
+    for name in sorted(set(after) - set(before)):
+        image = after[name][1]
+        camera = candidate.cameras[image.camera_id]
+        reasons = []
+        if float(camera.params[0]) / max(camera.width, camera.height) > max_focal_ratio:
+            reasons.append("focal-length-too-long")
+        if float(np.linalg.norm(np.asarray(image.projection_center()) - middle)) / spread > max_distance_ratio:
+            reasons.append("camera-too-far-from-other-cameras")
+        if reasons:
+            implausible[name] = reasons
+    return implausible
+
+
+def drop_cameras(model_path: Path, names: list[str], output: Path) -> Path:
+    """Write a copy of a model without the named cameras, and return its folder."""
+    import pycolmap
+
+    model = pycolmap.Reconstruction(str(model_path))
+    for name in names:
+        model.deregister_frame(model.find_image_with_name(name).frame_id)
+    output.mkdir(parents=True)
+    model.write(str(output))
+    return output
+
+
+def remove_implausible_cameras(baseline, selected: Path, output: Path, report: dict[str, Any],
+                               model_loader: Callable[[Path], Any],
+                               dropper: Callable[[Path, list[str], Path], Path] = drop_cameras
+                               ) -> Path:
+    """Keep the good new cameras of a model when one new camera is degenerate."""
+    implausible = find_implausible_cameras(baseline, model_loader(selected))
+    report["implausible_new_cameras"] = implausible
+    return dropper(selected, sorted(implausible), output) if implausible else selected
+
+
 def validate_camera_recovery(baseline, candidate, *,
                              min_new_track_points: int = 10,
                              max_baseline_drift: float = 0.01,
@@ -567,7 +619,12 @@ def recover_registered_cameras(
             report["refined_validation"] = refined_validation
             if refined_validation["accepted"]:
                 selected = refined
+    selected = remove_implausible_cameras(baseline, selected, target / "plausible", report, model_loader)
     report["selected_model"] = selected.name
+    final_validation = check_candidate(selected, "plausible-cameras")
+    report["final_validation"] = final_validation
+    if not final_validation["accepted"]:
+        return fail("no-plausible-new-cameras")
 
     # Export exact registered camera/rectified photo revision consumed by SAM2
     # and OpenMVS. Never present an inferred pose as an accepted registration.

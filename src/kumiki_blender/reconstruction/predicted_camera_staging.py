@@ -19,8 +19,8 @@ from typing import Any, Callable
 
 from .references import ReferenceError
 from .registered_camera_recovery import (RevisionExportError, _read_json, _registered, _sha,
-                                         export_dense_ready_revision, run_colmap_stage,
-                                         validate_camera_recovery)
+                                         export_dense_ready_revision, remove_implausible_cameras,
+                                         run_colmap_stage, validate_camera_recovery)
 
 
 STAGING_REPORT = "predicted-camera-staging-report.json"
@@ -121,6 +121,10 @@ def stage_predicted_cameras(
     except (OSError, RuntimeError, ValueError, KeyError, TypeError) as error:
         report["error"] = f"{type(error).__name__}: {error}"[:240]
         return fail("image-registrator-produced-no-valid-model")
+    selected = remove_implausible_cameras(baseline, registered, target / "plausible", report,
+                                          model_loader)
+    if selected != registered:
+        validation = validate_camera_recovery(baseline, model_loader(selected))
     report["validation"] = validation
     predicted_cameras = sorted(predicted & set(validation["new_filenames"]))
     report["predicted_match_cameras"] = predicted_cameras
@@ -132,7 +136,7 @@ def stage_predicted_cameras(
         return fail("no-predicted-photo-was-registered")
     try:
         exported = export_dense_ready_revision(
-            source, target, registered, set(_registered(baseline)), staged=staged,
+            source, target, selected, set(_registered(baseline)), staged=staged,
             # A staged revision can be the source of the next staging; keep its labels.
             source_report={**source_report, "predicted_match_cameras": sorted(
                 set(source_report.get("predicted_match_cameras", [])) | set(predicted_cameras))},

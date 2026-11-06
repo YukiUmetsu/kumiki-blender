@@ -12,9 +12,14 @@ from kumiki_blender.reconstruction.predicted_camera_staging import (
 from kumiki_blender.reconstruction.references import ReferenceError
 
 
+class FakeCamera:
+    params, width, height = [1000.0, 500.0, 400.0], 1000, 800
+
+
 class FakeImage:
     def __init__(self, name, center, tracks):
         self.name, self.center, self.num_points3D = name, center, tracks
+        self.camera, self.camera_id = FakeCamera(), name
 
     def projection_center(self):
         return self.center
@@ -29,6 +34,10 @@ class FakeModel:
 
     def reg_image_ids(self):
         return list(self.images)
+
+    @property
+    def cameras(self):
+        return {image.camera_id: image.camera for image in self.images.values()}
 
 
 BASELINE = [("a.png", (0, 0, 0), 50), ("b.png", (1, 0, 0), 50), ("c.png", (0, 1, 0), 50)]

@@ -209,6 +209,20 @@ class RoMaPredictor:
         self.model = roma_outdoor(device=device, coarse_res=coarse_resolution,
                                   upsample_res=(refine_resolution, refine_resolution))
 
+    def dense_warp(self, anchor: Path, target: Path):
+        """Return the anchor-to-target warp and certainty as NumPy arrays on the model grid.
+
+        Each warp row holds normalized anchor x, y and target x, y in [-1, 1].
+        """
+        with self.torch.inference_mode():
+            warp, certainty = self.model.match(str(anchor), str(target), device=self.device)
+        if warp.ndim == 4 and certainty.ndim == 3 and len(warp) == 1 and len(certainty) == 1:
+            warp, certainty = warp[0], certainty[0]
+        if warp.ndim != 3 or warp.shape[-1] != 4 or certainty.shape != warp.shape[:2]:
+            raise ValueError('Unsupported RoMa dense warp/certainty layout')
+        width = warp.shape[1] // 2 if self.model.symmetric else warp.shape[1]
+        return (warp[:, :width].float().cpu().numpy(), certainty[:, :width].float().cpu().numpy())
+
     def predict(self, anchor: Path, target: Path, pixels: list[list[float]],
                 anchor_size: tuple[int, int]) -> list[tuple[list[float], float]]:
         """Sample A-to-B dense warp exactly at the original anchor keypoints."""
