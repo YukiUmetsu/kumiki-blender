@@ -389,6 +389,14 @@ def main(argv: list[str] | None = None) -> int:
     match_dense.add_argument("--output", type=Path, required=True, help="New dense revision")
     match_dense.add_argument("--pairs-per-camera", type=int, default=6)
     match_dense.add_argument("--device", choices=("auto", "mps", "cpu"), default="auto")
+    locate_photos = subcommands.add_parser(
+        "locate-new-photos",
+        help="Add new photos to a refined camera revision without solving the other cameras again")
+    locate_photos.add_argument("--revision", type=Path, required=True)
+    locate_photos.add_argument("--photos", type=Path, required=True,
+                               help="JSON list of objects with path and filename, plus optional source fields")
+    locate_photos.add_argument("--output", type=Path, required=True)
+    locate_photos.add_argument("--device", choices=("auto", "mps", "cpu"), default="auto")
     predicted_stage = subcommands.add_parser(
         "stage-predicted-cameras",
         help="Register predicted-match photos against the unchanged baseline and write a labelled dense-ready revision")
@@ -1499,6 +1507,17 @@ def main(argv: list[str] | None = None) -> int:
                 raise RecipeError(str(error)) from error
             print(json.dumps(report, indent=2))
             return 0
+        if args.command == "locate-new-photos":
+            from .reconstruction.match_photo_location import add_located_photos
+            from .reconstruction.references import ReferenceError
+            try:
+                report = add_located_photos(
+                    args.revision, json.loads(args.photos.read_text(encoding="utf-8")), args.output,
+                    device=args.device, log=lambda line: print(line, file=sys.stderr, flush=True))
+            except (ReferenceError, ValueError, ImportError, OSError, RuntimeError, KeyError) as error:
+                raise RecipeError(str(error)) from error
+            print(json.dumps(report, indent=2))
+            return 0 if report["accepted"] else 3
         if args.command == "densify-with-matches":
             from .reconstruction.match_densification import DensificationSettings, densify_with_matches
             from .reconstruction.references import ReferenceError

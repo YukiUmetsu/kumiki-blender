@@ -890,6 +890,41 @@ the model size from a two-photo test cloud, against 0.06% on the chest. This
 surface is real, but it is coarser than stereo. Many points have only two views,
 so inspect them in the photographs.
 
+#### Add new photos without solving all cameras again
+
+A full reconstruction solves every camera again and changes rectified pixels,
+so reviewed masks stop fitting. `locate-new-photos` keeps the refined model. A
+dense matcher connects each new photo to registered anchors, and the anchors'
+3D tracks give 2D-3D matches for a pose solve with an unknown focal length. The
+pose is tested on anchors that the solve did not use. The photo also joins the
+confirmed tracks, because depth stereo chooses neighbors from shared tracks.
+
+```sh
+kumiki-blender locate-new-photos --revision "$REFINED" --photos photos.json \
+  --output "$LOCATED" --device mps
+```
+
+`photos.json` is a list of objects with `path` and `filename`, plus source and
+licence fields, which go to `photo-location-report.json`. Then generate masks,
+run `carry-dense-masks`, `refine-cameras-with-matches`, `build-dense-photos` and
+`densify-with-matches`. Masks of new photos are automatic and need review.
+
+To measure this method, 8 registered cameras were hidden and located without
+their own observations. All 8 were found: rotation error had a median near
+0.2 degrees and a maximum of 2.6, center error was at most 9% of the camera
+spread, and focal length was within 9%. This is slightly optimistic, because
+the 3D tracks were built with these cameras. The camera with the worst
+held-out score also had the worst true error.
+
+On the Sphinx, 14 free-licence photos were tried and 13 were located. Refinement
+then removed `added-013`, where the statue is very small. With 65 cameras, the
+hole on top of the back closed, more of the left rear filled, and the paws
+improved. Measured by mesh vertices projected into 53 shared cameras, statue
+coverage rose from 90.7% to 91.6%, and improved in 17 cameras and fell in none.
+Precision stayed near 80%. Surface area fell from 14.27 to 12.78, so the mesh
+has less bridging. No free photo looked steeply down on the statue, so the top
+of the statue still has few views.
+
 macOS Gatekeeper can block a downloaded OpenMVS binary. The stage then fails
 with exit code -9 and an empty log. Do not remove the quarantine flag. Put a
 local build first on `PATH`, for example `.review/tools/openmvs-build4/bin`.
