@@ -628,3 +628,48 @@ reviews, prioritizing top, rear-left, face and paws. Run `audit-dense-masks`,
 reviewing foreground leakage, atlas dark patches, white balance and seams.
 Do not overwrite `dense-masked-fixed-r01`, and do not publish a GLB until
 photographic fidelity and texture quality pass human inspection.
+
+### Repair severely incomplete masks with anatomy-guided SAM2 (review only)
+
+Visual inspection of the November 5 photo/mask pairs for `photo-0007.png`,
+`photo-0031.png`, and `photo-0040.png` found severe false-background regions
+across faces, headdresses, paws, and body. Some scenery and scaffolding also
+remains marked foreground. The high multi-view disagreement is therefore **not**
+safe to fix by blindly turning COLMAP disagreement votes into prompts. Do not
+mesh the 50-camera revision with these masks as if they were verified.
+
+For an *isolated experimental retry*, use the anatomical sample guides
+`examples/sphinx-sam2-retry-3-views.example.json`. They are manually estimated
+from the supplied images and need visual confirmation before interpreting a
+new candidate. The full 50-view preflight, photo hashes, and original mask
+dimensions are checked first. SAM2 only runs on the three selected photos;
+all input photographs, original masks, and the 49/50/52-camera reconstructions
+stay untouched.
+
+```sh
+RUN=".review/great-sphinx/statue-hq-r005"
+# Replace with the location of your installed official SAM2.1 hiera-small weights.
+SAM2_CHECKPOINT="/path/to/sam2.1_hiera_small.pt"
+PYTHONPATH=src python -m kumiki_blender retry-sam2-mask-candidates \
+  --reconstruction "$RUN/roma-cameras-top-only-r01" \
+  --source-masks "$RUN/roma-dense-r01/workspace/images" \
+  --guides examples/sphinx-sam2-retry-3-views.example.json \
+  --image photo-0007.png \
+  --image photo-0031.png \
+  --image photo-0040.png \
+  --sam2-checkpoint "$SAM2_CHECKPOINT" \
+  --sam2-size small --sam2-device mps --max-side 1280 \
+  --output "$RUN/sam2-anatomy-retry-r01"
+```
+
+Check `targeted-sam2-report.json` for `original_prompt_qa`,
+`prompt_qa.anatomical_parts`,
+`pixel_change_qa`, `original_shape`, and `candidate_shape`. Open
+`review/photo-XXXX.png.jpg` alongside the original photograph and candidate
+`candidates/photo-XXXX.png.mask.png`. Inspect actual face features, complete
+forelegs and paws, body/rear, ground, sky, and scaffolding. Point compliance,
+shape metrics, and newly included pixels are **diagnostic only**; they do not
+demonstrate photo-faithful 3D geometry. This command intentionally emits **no
+ready-to-use `masks/` revision**. If acceptable, review all remaining photo
+masks and construct a new explicitly approved complete 50-view mask revision
+before a separately staged dense A/B run. Never modify source masks in place.

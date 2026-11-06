@@ -621,6 +621,19 @@ def main(argv: list[str] | None = None) -> int:
                                    help="Optional content-addressed cache of masks for identical rectified photos")
     photo_mask_parser.add_argument("--resume", action="store_true",
                                    help="Resume an incomplete masks revision with identical inputs")
+    targeted_sam2 = subcommands.add_parser(
+        "retry-sam2-mask-candidates",
+        help="Generate isolated anatomy-guided SAM2 candidates for a few damaged masks (never auto-promote)")
+    targeted_sam2.add_argument("--reconstruction", type=Path, required=True)
+    targeted_sam2.add_argument("--source-masks", type=Path, required=True)
+    targeted_sam2.add_argument("--guides", type=Path, required=True)
+    targeted_sam2.add_argument("--image", action="append", required=True,
+                               help="Registered photo filename, repeat for 1–12 targets")
+    targeted_sam2.add_argument("--sam2-checkpoint", type=Path, required=True)
+    targeted_sam2.add_argument("--sam2-size", choices=("tiny", "small", "base_plus", "large"), default="small")
+    targeted_sam2.add_argument("--sam2-device", choices=("auto", "mps", "cpu"), default="auto")
+    targeted_sam2.add_argument("--max-side", type=int, default=1280)
+    targeted_sam2.add_argument("--output", type=Path, required=True)
     track_mask_parser = subcommands.add_parser(
         "improve-dense-masks", help="Safely re-prompt ambiguous SAM2 masks using independent COLMAP feature tracks")
     track_mask_parser.add_argument("--reconstruction", type=Path, required=True)
@@ -984,6 +997,19 @@ def main(argv: list[str] | None = None) -> int:
                     grounding_model_dir=args.grounding_model_dir,
                     grounding_device=args.grounding_device,
                     resume=args.resume)
+            except ReferenceError as error:
+                raise RecipeError(str(error)) from error
+            print(json.dumps(report, indent=2))
+            return 0
+        if args.command == "retry-sam2-mask-candidates":
+            from .reconstruction.targeted_sam2_retry import retry_sam2_masks
+            from .reconstruction.references import ReferenceError
+            try:
+                report = retry_sam2_masks(
+                    args.reconstruction, args.source_masks, args.guides, args.output,
+                    targets=args.image, sam2_checkpoint=args.sam2_checkpoint,
+                    sam2_size=args.sam2_size, sam2_device=args.sam2_device,
+                    max_side=args.max_side)
             except ReferenceError as error:
                 raise RecipeError(str(error)) from error
             print(json.dumps(report, indent=2))

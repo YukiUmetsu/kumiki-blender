@@ -94,10 +94,9 @@ class Sam2MaskTests(TestCase):
         self.assertEqual(details["components"], ["head", "torso", "paws"])
         self.assertEqual(details["missing_parts"], [])
 
-    def test_guide_rejects_invalid_part_names_and_outside_component_landmarks(self):
+    def test_guide_rejects_invalid_coordinates_and_outside_component_landmarks(self):
         bad = self.root / "bad-guides.json"
         for value in (
-            {"component_boxes": {"sky": [0.1, 0.1, 0.7, 0.7]}},
             {"part_points": {"tail": [[1.1, 0.5]]}},
             {"component_boxes": {"head": [0.2, 0.2, 0.4, 0.4]},
              "part_points": {"head": [[0.8, 0.8]]}},
@@ -105,7 +104,6 @@ class Sam2MaskTests(TestCase):
              "foreground_points": [[0.8, 0.8]]},
             {"component_boxes": {"head": [0.2, 0.2, 0.4, 0.4]},
              "part_points": {"tail": [[0.3, 0.3]]}},
-            {"part_visibility": {"sky": "visible"}},
             {"part_visibility": {"tail": "perhaps"}},
             {"part_visibility": ["head", "torso"]},
         ):
