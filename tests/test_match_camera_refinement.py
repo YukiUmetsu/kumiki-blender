@@ -9,7 +9,7 @@ import numpy as np
 from PIL import Image
 
 from kumiki_blender.reconstruction.match_camera_refinement import (
-    RefinementSettings, epipolar_distance, find_unusable_focal_lengths,
+    _pair_cache_path, RefinementSettings, epipolar_distance, find_unusable_focal_lengths,
     fundamental_from_cameras, holdout_error, lattice_cells,
     merge_tracks, select_pairs, triangulate_rays)
 from kumiki_blender.reconstruction.references import ReferenceError
@@ -96,6 +96,17 @@ class GeometryTests(unittest.TestCase):
         first = lattice_cells(rows.ravel(), columns.ravel(), 5)
         self.assertEqual(int(first.sum()), 20)
         np.testing.assert_array_equal(first, lattice_cells(rows.ravel(), columns.ravel(), 5))
+
+
+class MatchCacheTests(unittest.TestCase):
+    def test_a_changed_photo_with_the_same_name_gets_a_new_cache_entry(self):
+        settings = RefinementSettings()
+        cache = Path("cache")
+        old = _pair_cache_path(cache, "a.png", "b.png", settings, {"a.png": "1", "b.png": "2"})
+        same = _pair_cache_path(cache, "a.png", "b.png", settings, {"a.png": "1", "b.png": "2"})
+        resized = _pair_cache_path(cache, "a.png", "b.png", settings, {"a.png": "9", "b.png": "2"})
+        self.assertEqual(old, same)
+        self.assertNotEqual(old, resized)
 
 
 class FocalLimitTests(unittest.TestCase):

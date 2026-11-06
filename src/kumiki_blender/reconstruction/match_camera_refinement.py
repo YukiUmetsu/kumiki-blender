@@ -375,8 +375,12 @@ def _align_to_source(refined: Any, source_cameras: dict[str, dict[str, Any]]) ->
                                      np.array(translation)))
 
 
-def _pair_cache_path(cache: Path, first: str, second: str, settings: RefinementSettings) -> Path:
-    key = hashlib.sha256(json.dumps([first, second, settings.coarse_resolution,
+def _pair_cache_path(cache: Path, first: str, second: str, settings: RefinementSettings,
+                     content: dict[str, str]) -> Path:
+    # Pixel coordinates belong to the exact photo and mask. A file name is not
+    # enough: a resized photo with the same name would reuse old coordinates.
+    key = hashlib.sha256(json.dumps([first, second, content[first], content[second],
+                                     settings.coarse_resolution,
                                      settings.refine_resolution, settings.lattice_step,
                                      settings.min_certainty, settings.max_verified_epipolar_px,
                                      settings.holdout_every]).encode()).hexdigest()[:24]
@@ -398,6 +402,7 @@ def refine_cameras_with_matches(
     import pycolmap
     from PIL import Image
 
+    from .dense import _sha256
     from .registered_camera_recovery import _read_json
 
     settings = settings or RefinementSettings()
@@ -444,9 +449,11 @@ def refine_cameras_with_matches(
     save()
     cache = Path(cache_dir).resolve() if cache_dir is not None else target / "match-cache"
     cache.mkdir(parents=True, exist_ok=True)
+    content = {name: _sha256(rectified / "images" / name) + _sha256(mask_root / (name + ".mask.png"))
+               for name in cameras}
     pairs = []
     for index, (first, second) in enumerate(pair_names, 1):
-        path = _pair_cache_path(cache, first, second, settings)
+        path = _pair_cache_path(cache, first, second, settings, content)
         if path.is_file():
             with np.load(path) as stored:
                 pair = {"first": first, "second": second, **{key: stored[key] for key in stored.files}}
