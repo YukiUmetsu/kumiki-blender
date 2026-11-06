@@ -133,7 +133,9 @@ def stage_predicted_cameras(
     try:
         exported = export_dense_ready_revision(
             source, target, registered, set(_registered(baseline)), staged=staged,
-            source_report={**source_report, "predicted_match_cameras": predicted_cameras},
+            # A staged revision can be the source of the next staging; keep its labels.
+            source_report={**source_report, "predicted_match_cameras": sorted(
+                set(source_report.get("predicted_match_cameras", [])) | set(predicted_cameras))},
             database=database, rectified_max_side=rectified_max_side, execute=execute,
             model_loader=model_loader)
     except RevisionExportError as error:

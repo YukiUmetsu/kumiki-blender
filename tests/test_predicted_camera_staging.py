@@ -5,6 +5,7 @@ import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from kumiki_blender.reconstruction.predicted_camera_staging import (
     STAGED_STATUS, STAGING_REPORT, photos_with_predicted_keypoints, stage_predicted_cameras)
@@ -107,6 +108,20 @@ class StagingTests(unittest.TestCase):
         self.assertEqual(report["reason"], "image-undistorter-failed")
         self.assertNotEqual(report["status"], STAGED_STATUS)
         self.assertEqual(json.loads((self.target / STAGING_REPORT).read_text()), report)
+
+    def test_labels_of_an_earlier_staging_are_kept(self):
+        report_path = self.source / "reconstruction-report.json"
+        earlier = json.loads(report_path.read_text())
+        earlier["predicted_match_cameras"] = ["c.png"]
+        report_path.write_text(json.dumps(earlier))
+        with patch("kumiki_blender.reconstruction.predicted_camera_staging."
+                   "export_dense_ready_revision",
+                   return_value={"registered_images": 4, "new_filenames": ["top.png"],
+                                 "subject_qa_index_sha256": None}) as export:
+            report = self.stage(BASELINE + [("top.png", (2, 2, 2), 40)])
+        self.assertEqual(report["status"], STAGED_STATUS)
+        self.assertEqual(export.call_args.kwargs["source_report"]["predicted_match_cameras"],
+                         ["c.png", "top.png"])
 
     def test_a_moved_baseline_camera_blocks_the_export(self):
         moved = [("a.png", (5, 5, 5), 50)] + BASELINE[1:] + [("top.png", (2, 2, 2), 40)]
