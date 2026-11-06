@@ -1,8 +1,10 @@
 import json
+import sqlite3
+import struct
 import unittest
 
 from kumiki_blender.reconstruction.roma_camera_audit import (
-    audit_roma_candidate_camera, measure_target_observations,
+    audit_roma_candidate_camera, measure_target_observations, measure_unused_verified_matches,
 )
 from kumiki_blender.reconstruction.roma_predictions import generate_roma_predictions
 from kumiki_blender.reconstruction.roma_candidate_database import prepare_roma_candidate_database
@@ -72,6 +74,36 @@ class FakeModel:
 class CameraAuditTests(unittest.TestCase):
     setUp = PredictionGenerationTests.setUp
 
+    def test_unused_verified_match_is_reported_but_not_certified(self):
+        database = self.source / 'database.db'
+        with sqlite3.connect(database) as db:
+            db.execute('INSERT INTO two_view_geometries VALUES(?,?,?,?,?)',
+                       (1 * 2147483647 + 4, 1, 2, struct.pack('<II', 0, 0), 2))
+        baseline, registered = FakeModel(), FakeModel(target=True)
+        tracks = self.source / 'text-models/0/points3D.txt'
+        result = measure_unused_verified_matches(database, tracks, baseline, registered,
+                                                  'target.png', [])
+        self.assertEqual(result['status'], 'review-required')
+        self.assertEqual(result['matches'][0]['point3D_id'], 10)
+        self.assertAlmostEqual(result['matches'][0]['error_px'], 2 ** 0.5 * 2)
+        used = [{'point2D_idx': 0, 'point3D_id': 10}]
+        self.assertEqual(measure_unused_verified_matches(database, tracks, baseline, registered,
+                                                        'target.png', used)['matches'], [])
+
+    def test_ambiguous_unused_match_is_not_scored(self):
+        database = self.source / 'database.db'
+        with sqlite3.connect(database) as db:
+            db.executemany('INSERT INTO two_view_geometries VALUES(?,?,?,?,?)', [
+                (2147483647 + 4, 1, 2, struct.pack('<II', 0, 0), 2),
+                (2 * 2147483647 + 4, 1, 2, struct.pack('<II', 1, 0), 2)])
+        tracks = self.source / 'text-models/0/points3D.txt'
+        with tracks.open('a') as out:
+            out.write('11 1 2 3 255 255 255 0.1 2 1\n')
+        result = measure_unused_verified_matches(database, tracks, FakeModel(), FakeModel(target=True),
+                                                  'target.png', [])
+        self.assertEqual(result['ambiguous_feature_count'], 1)
+        self.assertEqual(result['matches'], [])
+
     def _candidate(self):
         generate_roma_predictions(self.source, self.root / 'predictions',
                                   targets=['target.png'], anchors=['a.png', 'b.png'],
@@ -102,7 +134,7 @@ class CameraAuditTests(unittest.TestCase):
         candidate = self._candidate()
         baseline, modified = FakeModel(), FakeModel(target=True)
         def loader(path):
-            return modified if path == candidate / 'registered' else baseline
+            return modified if path == (candidate / 'registered').resolve() else baseline
         report = audit_roma_candidate_camera(self.source, candidate, self.root / 'audit',
                                              remove_indices=[1, 2], model_loader=loader)
         self.assertEqual(report['synthetic_feature_observations'], 2)
@@ -128,7 +160,7 @@ class CameraAuditTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'shares a 3D point'):
             audit_roma_candidate_camera(self.source, candidate, self.root / 'unsafe',
                                         remove_indices=[1],
-                                        model_loader=lambda path: model if path == candidate / 'registered' else FakeModel())
+                                        model_loader=lambda path: model if path == (candidate / 'registered').resolve() else FakeModel())
         self.assertFalse((self.root / 'unsafe').exists())
 
     def test_refuses_pruning_two_view_track_that_would_disappear(self):
@@ -141,7 +173,7 @@ class CameraAuditTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'delete the entire 3D point'):
             audit_roma_candidate_camera(self.source, candidate, self.root / 'unsafe-track',
                                         remove_indices=[1],
-                                        model_loader=lambda path: model if path == candidate / 'registered' else FakeModel())
+                                        model_loader=lambda path: model if path == (candidate / 'registered').resolve() else FakeModel())
         self.assertFalse((self.root / 'unsafe-track').exists())
 
 

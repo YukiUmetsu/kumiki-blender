@@ -9,10 +9,79 @@ import hashlib
 import json
 import math
 import sqlite3
+import struct
+from collections import defaultdict
+from contextlib import closing
 from pathlib import Path
 
 from .registered_camera_recovery import validate_camera_recovery
 from .sfm_cohort_recovery import _source_paths
+from .sfm_track_support import MAX_IMAGE_ID, MAX_INLIERS, _tracks
+
+
+def measure_unused_verified_matches(database: Path, tracks_path: Path, baseline, registered,
+                                    target: str, observations: list[dict]) -> dict:
+    """Measure unused database matches; they remain candidates, not ground truth."""
+    import numpy as np
+
+    tracks = _tracks(tracks_path)
+    if tracks is None:
+        return {'status': 'unavailable-no-source-tracks', 'matches': []}
+    target_image = next(image for image in registered.images.values() if image.name == target)
+    camera = registered.cameras[target_image.camera_id]
+    pose = target_image.cam_from_world
+    if callable(pose):
+        pose = pose()
+    used_features = {row['point2D_idx'] for row in observations}
+    used_points = {row['point3D_id'] for row in observations}
+    baseline_ids = set(baseline.reg_image_ids())
+    candidates = defaultdict(lambda: defaultdict(set))
+    with closing(sqlite3.connect(database.resolve().as_uri() + '?mode=ro', uri=True)) as db:
+        image_row = db.execute('SELECT image_id FROM images WHERE name=?', (target,)).fetchone()
+        keypoints = db.execute('SELECT rows, cols, data FROM keypoints WHERE image_id=?',
+                               (image_row[0],)).fetchone() if image_row else None
+        if not keypoints or keypoints[1] < 2 or keypoints[2] is None or len(keypoints[2]) != keypoints[0] * keypoints[1] * 4:
+            raise ValueError('Target source keypoints are missing or malformed')
+        target_id = image_row[0]
+        for pair_id, count, columns, blob, config in db.execute(
+                'SELECT pair_id, rows, cols, data, config FROM two_view_geometries'):
+            first, second = divmod(pair_id, MAX_IMAGE_ID)
+            if target_id not in (first, second) or config in (0, 1) or not count:
+                continue
+            anchor = second if first == target_id else first
+            if anchor not in baseline_ids:
+                continue
+            if count < 0 or count > MAX_INLIERS or columns != 2 or blob is None or len(blob) != count * 8:
+                raise ValueError(f'Invalid verified 2D match blob: pair {pair_id}')
+            for left, right in struct.iter_unpack('<II', blob):
+                feature, anchor_feature = (left, right) if first == target_id else (right, left)
+                point = tracks.get((anchor, anchor_feature))
+                if point is not None and feature not in used_features and point not in used_points:
+                    candidates[feature][point].add(anchor)
+        unique = {feature: next(iter(points)) for feature, points in candidates.items() if len(points) == 1}
+        point_counts = defaultdict(int)
+        for point in unique.values():
+            point_counts[point] += 1
+        matches = []
+        for feature, point in sorted(unique.items()):
+            if point_counts[point] != 1:
+                continue
+            if feature >= keypoints[0]:
+                raise ValueError('Verified match refers to a missing target keypoint')
+            xy = np.asarray(struct.unpack_from('<ff', keypoints[2], feature * keypoints[1] * 4))
+            xyz = np.asarray(pose * baseline.points3D[point].xyz, dtype=float)
+            if not np.isfinite(xy).all() or not np.isfinite(xyz).all() or xyz[2] <= 0:
+                continue
+            projected = np.asarray(camera.img_from_cam(xyz), dtype=float)
+            if not np.isfinite(projected).all():
+                continue
+            matches.append({'point2D_idx': feature, 'point3D_id': point,
+                            'anchor_image_ids': sorted(candidates[feature][point]),
+                            'observed_xy': xy.tolist(), 'projected_xy': projected.tolist(),
+                            'error_px': float(np.linalg.norm(projected - xy))})
+    return {'status': 'review-required', 'matches': matches,
+            'ambiguous_feature_count': sum(len(points) > 1 for points in candidates.values()),
+            'warning': 'Unused verified matches can still be wrong and may not be independent of pose estimation.'}
 
 
 def measure_target_observations(model, name: str, original_keypoints: int | None) -> list[dict]:
@@ -100,6 +169,9 @@ def audit_roma_candidate_camera(revision: Path, candidate: Path, output: Path, *
     registered = model_loader(model_path)
     native = validate_camera_recovery(baseline, registered)
     observations = measure_target_observations(registered, target, original[0])
+    unused_matches = measure_unused_verified_matches(
+        source['database'], source['text'].parent / 'points3D.txt', baseline, registered,
+        target, observations)
     outliers = [row for row in observations if row['error_px'] > outlier_px]
     outlier_ids = {row['point2D_idx'] for row in outliers}
     if not set(removed) <= outlier_ids:
@@ -122,6 +194,7 @@ def audit_roma_candidate_camera(revision: Path, candidate: Path, output: Path, *
     report = {'status': 'experimental-camera-needs-independent-validation',
               'target': target, 'outlier_threshold_px': outlier_px,
               'native_camera_geometry_gate': native,
+              'unused_verified_matches': unused_matches,
               'measured_feature_observations': sum(row['source'] == 'existing-feature' for row in observations),
               'synthetic_feature_observations': sum(row['source'] == 'roma-predicted-keypoint' for row in observations),
               'high_error_observations': outliers, 'remove_requested': sorted(removed),

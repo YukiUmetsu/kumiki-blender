@@ -454,6 +454,13 @@ new view: small reprojection error on a *predicted* keypoint is circular
 evidence. Confirm the face/paws/top/rear-left alignment visually and evaluate
 independent, actually measured target-to-registered correspondences. Hold out
 anchors from matching when possible; do not count them as independent proof.
+The report also lists `unused_verified_matches`: original database matches to
+baseline 3D tracks that are absent from the candidate's current observations.
+Conflicting feature-to-track associations are excluded. Large errors identify
+items to inspect, not automatic pose failures: repetitive texture can produce
+incorrect matches even after pairwise verification. These observations may
+also have influenced an earlier fitting step, so "unused" does not mean
+independently held out. Missing source tracks are reported as unavailable.
 
 If exactly two bad observation indices have been inspected and found in
 `high_error_observations`, prune only those indices into a **new** model:
