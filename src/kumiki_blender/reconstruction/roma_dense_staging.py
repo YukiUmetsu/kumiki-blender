@@ -98,7 +98,7 @@ def stage_repaired_roma_dense_revision(
         if _sha256(original) != expected_hashes.get(filename):
             raise ReferenceError(
                 "The rectified source model differs from the one actually repaired; "
-                "do not mix r01/r02 camera coordinates")
+                "use the source_revision recorded in the dense experiment's dense-report.json")
     for model_dir in (source_sparse, repaired_sparse):
         if any(path.is_symlink() or not path.is_file()
                for path in model_dir.iterdir()):

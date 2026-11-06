@@ -508,14 +508,16 @@ two extra registrations. The orange top-view overlay projected the **old
 49-camera mesh**, not the new SAM2 foreground mask; missing projected paws or
 rear geometry in that overlay must not be mistaken for a mask-only defect.
 
-The repaired 50-camera sparse model was taken from `roma-dense-r01`, not the
-later, differently rectified `roma-dense-r02`. Prepare its complete dense input
-with the **matching r01 rectified camera revision**:
+The repaired 50-camera sparse model was taken from the private workspace of
+`roma-dense-r01`. Do **not** infer its camera-revision origin from `r01`/`r02`
+folder names: the authoritative source is `source_revision` in that dense
+run's receipt. Prepare the new input from **that exact rectified revision**:
 
 ```sh
 RUN=.review/great-sphinx/statue-hq-r005
+SOURCE=$(jq -r '.source_revision' "$RUN/roma-dense-r01/dense-report.json")
 kumiki-blender stage-roma-dense-candidate \
-  --source-reconstruction "$RUN/roma-cameras-r01" \
+  --source-reconstruction "$SOURCE" \
   --repair "$RUN/roma-top-only-r01" \
   --output "$RUN/roma-cameras-top-only-r01"
 ```
@@ -526,8 +528,9 @@ the repair receipt, rejects mismatched camera poses and intrinsics, and copies
 **only the 50 selected registered images** alongside the repaired sparse model.
 It regenerates a COLMAP text model and the pinned 50-image source index for
 `plan-dense-photos`. It neither writes to its source nor certifies the RoMa
-pose. **Do not** substitute `roma-cameras-r02` or 636×1043 masks for r01's
-605×900 top-view image: those are different rectified grids.
+pose. **Do not** substitute a differently rectified image or mask grid; the
+staging and dense preflight commands enforce exact calibration and pixel
+dimensions regardless of revision names.
 
 ```sh
 kumiki-blender plan-dense-photos \

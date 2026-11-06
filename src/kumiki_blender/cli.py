@@ -397,7 +397,7 @@ def main(argv: list[str] | None = None) -> int:
         "stage-roma-dense-candidate",
         help="Stage separately repaired RoMa cameras and matching rectified images for an exploratory dense A/B run")
     roma_dense.add_argument("--source-reconstruction", type=Path, required=True,
-                            help="Exact original rectified RoMa revision from which the 52-camera sparse model was repaired")
+                            help="Exact source_revision from the experiment's dense-report.json, not a guessed r01/r02 folder")
     roma_dense.add_argument("--repair", type=Path, required=True,
                             help="Isolated repair-roma-sparse-camera output with its approval receipt")
     roma_dense.add_argument("--output", type=Path, required=True,

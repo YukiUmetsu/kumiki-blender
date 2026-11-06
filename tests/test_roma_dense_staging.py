@@ -134,7 +134,7 @@ class DenseStagingTests(unittest.TestCase):
 
     def test_refuses_rectified_source_with_other_intrinsics_or_binary_model(self):
         (self.source / 'undistorted/sparse/images.bin').write_bytes(b'new-model')
-        with self.assertRaisesRegex(ReferenceError, 'differs from the one actually repaired'):
+        with self.assertRaisesRegex(ReferenceError, 'use the source_revision recorded'):
             self._run()
         self.assertFalse(self.out.exists())
 
