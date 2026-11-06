@@ -61,6 +61,126 @@ def _registered(model) -> dict[str, tuple[int, Any]]:
             for image_id in model.reg_image_ids()}
 
 
+class RevisionExportError(Exception):
+    """A dense-ready revision could not be written; the message is the report reason."""
+
+
+def run_colmap_stage(colmap: str, name: str, args: list[str], log: Path, timeout_seconds: int,
+                     runner: Callable[[list[str], Path, int], int] | None = None) -> int:
+    """Run one COLMAP command with its output in `log`, and return the exit code."""
+    argv = [colmap, name] + args
+    if runner is not None:
+        return runner(argv, log, timeout_seconds)
+    try:
+        with log.open("w", encoding="utf-8") as stream:
+            return subprocess.run(argv, stdout=stream, stderr=subprocess.STDOUT,
+                                  timeout=timeout_seconds, check=False).returncode
+    except (OSError, subprocess.TimeoutExpired) as error:
+        # Preserve native output written before a timeout; it is often
+        # the only useful diagnostic for an OpenCV/COLMAP failure.
+        with log.open("a", encoding="utf-8") as stream:
+            stream.write(f"\n{type(error).__name__}: {error}\n")
+        return 124 if isinstance(error, subprocess.TimeoutExpired) else 127
+
+
+def export_dense_ready_revision(
+        source: Path, target: Path, selected: Path, baseline_names: set[str], *,
+        staged: dict[str, Any], source_report: dict[str, Any], database: Path,
+        rectified_max_side: int, execute: Callable[[str, list[str]], bool],
+        model_loader: Callable[[Path], Any]) -> dict[str, Any]:
+    """Write the photos, the selected model, rectified photos and indexes of a new revision.
+
+    This is the exact camera and rectified-photo revision that SAM2 and OpenMVS
+    read. It does not judge the poses: validate `selected` before this call.
+    """
+    images = source / "images"
+    (target / "images").mkdir()
+    originals = {}
+    for entry in staged["images"]:
+        name, expected = entry.get("filename"), entry.get("sha256")
+        if (not isinstance(name, str) or Path(name).name != name
+                or not isinstance(expected, str) or len(expected) != 64):
+            raise RevisionExportError("unsafe-staged-image-index")
+        source_file = images / name
+        if source_file.is_symlink() or not source_file.is_file() or _sha(source_file) != expected:
+            raise RevisionExportError("source-photo-integrity-failed")
+        shutil.copyfile(source_file, target / "images" / name)
+        originals[name] = entry
+    shutil.copyfile(source / "staged-reference-index.json", target / "staged-reference-index.json")
+    if database.resolve() != (target / "database.db").resolve():
+        shutil.copyfile(database, target / "database.db")
+    subject_qa_index_sha256 = copy_subject_qa_provenance(source, target)
+
+    saved_model = target / "sparse" / "0"
+    saved_model.mkdir(parents=True)
+    for name in ("cameras.bin", "images.bin", "points3D.bin"):
+        item = selected / name
+        if item.is_symlink() or not item.is_file():
+            raise RevisionExportError(f"missing-registered-model-{name}")
+        shutil.copyfile(item, saved_model / name)
+    text = target / "text-models" / "0"
+    text.mkdir(parents=True)
+    if not execute("model_converter", ["--input_path", str(saved_model),
+                                       "--output_path", str(text), "--output_type", "TXT"]):
+        raise RevisionExportError("model-converter-failed")
+
+    rectified = target / "undistorted"
+    rectified.mkdir()
+    if not execute("image_undistorter", ["--image_path", str(target / "images"),
+                                        "--input_path", str(saved_model),
+                                        "--output_path", str(rectified),
+                                        "--output_type", "COLMAP",
+                                        "--max_image_size", str(rectified_max_side)]):
+        raise RevisionExportError("image-undistorter-failed")
+    undistorted_text = rectified / "text-model"
+    undistorted_text.mkdir()
+    if not execute("model_converter", ["--input_path", str(rectified / "sparse"),
+                                       "--output_path", str(undistorted_text),
+                                       "--output_type", "TXT"]):
+        raise RevisionExportError("undistorted-model-converter-failed")
+    from .cameras import _read_intrinsics, _read_poses
+    from PIL import Image
+
+    intrinsics = _read_intrinsics(undistorted_text / "cameras.txt")
+    poses = _read_poses(undistorted_text / "images.txt")
+    registered_names = set(_registered(model_loader(saved_model)))
+    rectified_index = []
+    for _, camera_id, name, _, _ in poses:
+        if name not in originals or name not in registered_names or camera_id not in intrinsics:
+            raise RevisionExportError("invalid-rectified-camera-provenance")
+        photo = rectified / "images" / name
+        if photo.is_symlink() or not photo.is_file():
+            raise RevisionExportError("rectified-photo-missing")
+        with Image.open(photo) as image:
+            size = list(image.size)
+            image.verify()
+        camera = intrinsics[camera_id]
+        if size != [camera["width"], camera["height"]]:
+            raise RevisionExportError("rectified-camera-dimensions-mismatch")
+        rectified_index.append({**originals[name], "dimensions": size,
+                                "sha256": _sha(photo), "mask_requires_rectification": True})
+    if len(rectified_index) != len(registered_names):
+        raise RevisionExportError("undistorted-camera-count-mismatch")
+    (target / "undistorted-reference-index.json").write_text(
+        json.dumps({"images": rectified_index}, indent=2) + "\n", encoding="utf-8")
+    recovered = sorted(registered_names - baseline_names)
+    revision_report = {**source_report,
+                       "source_sparse_model": "0", "registered_images": len(registered_names),
+                       "registered_filenames": sorted(registered_names),
+                       "unregistered_filenames": sorted(set(originals) - registered_names),
+                       "undistorted_images": len(rectified_index),
+                       "models": [{"model": "0", "registered_images": len(registered_names),
+                                   "registered_filenames": sorted(registered_names)}],
+                       "engine": "colmap", "status": "candidate / visual-review-required",
+                       "undistorted_model": "undistorted/text-model",
+                       "camera_recovery_source": str(source),
+                       "camera_recovery_added": recovered}
+    (target / "reconstruction-report.json").write_text(
+        json.dumps(revision_report, indent=2) + "\n", encoding="utf-8")
+    return {"new_filenames": recovered, "registered_images": len(registered_names),
+            "subject_qa_index_sha256": subject_qa_index_sha256}
+
+
 def prioritize_missing_camera_views(staged: list[dict], registered: set[str]) -> list[str]:
     """Rank existing unregistered elevated source photos before requesting bridges.
 
@@ -213,20 +333,7 @@ def recover_registered_cameras(
 
     def execute(name: str, args: list[str]) -> bool:
         log = target / "logs" / f"{len(report['steps']) + 1:02}-{name}.log"
-        argv = [colmap, name] + args
-        if runner is None:
-            try:
-                with log.open("w", encoding="utf-8") as stream:
-                    code = subprocess.run(argv, stdout=stream, stderr=subprocess.STDOUT,
-                                          timeout=timeout_seconds, check=False).returncode
-            except (OSError, subprocess.TimeoutExpired) as error:
-                # Preserve native output written before a timeout; it is often
-                # the only useful diagnostic for an OpenCV/COLMAP failure.
-                with log.open("a", encoding="utf-8") as stream:
-                    stream.write(f"\n{type(error).__name__}: {error}\n")
-                code = 124 if isinstance(error, subprocess.TimeoutExpired) else 127
-        else:
-            code = runner(argv, log, timeout_seconds)
+        code = run_colmap_stage(colmap, name, args, log, timeout_seconds, runner)
         report["steps"].append({"stage": name, "exit_code": code,
                                 "log": str(log.relative_to(target))})
         save()
@@ -464,89 +571,17 @@ def recover_registered_cameras(
 
     # Export exact registered camera/rectified photo revision consumed by SAM2
     # and OpenMVS. Never present an inferred pose as an accepted registration.
-    (target / "images").mkdir()
-    originals = {}
-    for entry in staged["images"]:
-        name, expected = entry.get("filename"), entry.get("sha256")
-        if (not isinstance(name, str) or Path(name).name != name
-                or not isinstance(expected, str) or len(expected) != 64):
-            return fail("unsafe-staged-image-index")
-        source_file = images / name
-        if source_file.is_symlink() or not source_file.is_file() or _sha(source_file) != expected:
-            return fail("source-photo-integrity-failed")
-        shutil.copyfile(source_file, target / "images" / name)
-        originals[name] = entry
-    shutil.copyfile(source / "staged-reference-index.json", target / "staged-reference-index.json")
-    shutil.copyfile(database, target / "database.db")
-    report["subject_qa_index_sha256"] = copy_subject_qa_provenance(source, target)
-
-    saved_model = target / "sparse" / "0"
-    saved_model.mkdir(parents=True)
-    for name in ("cameras.bin", "images.bin", "points3D.bin"):
-        item = selected / name
-        if item.is_symlink() or not item.is_file():
-            return fail(f"missing-registered-model-{name}")
-        shutil.copyfile(item, saved_model / name)
-    text = target / "text-models" / "0"
-    text.mkdir(parents=True)
-    if not execute("model_converter", ["--input_path", str(saved_model),
-                                       "--output_path", str(text), "--output_type", "TXT"]):
-        return fail("model-converter-failed")
-
-    rectified = target / "undistorted"
-    rectified.mkdir()
-    if not execute("image_undistorter", ["--image_path", str(target / "images"),
-                                        "--input_path", str(saved_model),
-                                        "--output_path", str(rectified),
-                                        "--output_type", "COLMAP",
-                                        "--max_image_size", str(rectified_max_side)]):
-        return fail("image-undistorter-failed")
-    undistorted_text = rectified / "text-model"
-    undistorted_text.mkdir()
-    if not execute("model_converter", ["--input_path", str(rectified / "sparse"),
-                                       "--output_path", str(undistorted_text),
-                                       "--output_type", "TXT"]):
-        return fail("undistorted-model-converter-failed")
-    from .cameras import _read_intrinsics, _read_poses
-    from PIL import Image
-
-    intrinsics = _read_intrinsics(undistorted_text / "cameras.txt")
-    poses = _read_poses(undistorted_text / "images.txt")
-    registered_names = set(_registered(model_loader(saved_model)))
-    rectified_index = []
-    for _, camera_id, name, _, _ in poses:
-        if name not in originals or name not in registered_names or camera_id not in intrinsics:
-            return fail("invalid-rectified-camera-provenance")
-        photo = rectified / "images" / name
-        if photo.is_symlink() or not photo.is_file():
-            return fail("rectified-photo-missing")
-        with Image.open(photo) as image:
-            size = list(image.size)
-            image.verify()
-        camera = intrinsics[camera_id]
-        if size != [camera["width"], camera["height"]]:
-            return fail("rectified-camera-dimensions-mismatch")
-        rectified_index.append({**originals[name], "dimensions": size,
-                                "sha256": _sha(photo), "mask_requires_rectification": True})
-    if len(rectified_index) != len(registered_names):
-        return fail("undistorted-camera-count-mismatch")
-    (target / "undistorted-reference-index.json").write_text(
-        json.dumps({"images": rectified_index}, indent=2) + "\n", encoding="utf-8")
-    recovered = sorted(registered_names - set(_registered(baseline)))
-    source_report.update({"source_sparse_model": "0", "registered_images": len(registered_names),
-                          "registered_filenames": sorted(registered_names),
-                          "unregistered_filenames": sorted(set(originals) - registered_names),
-                          "undistorted_images": len(rectified_index),
-                          "models": [{"model": "0", "registered_images": len(registered_names),
-                                      "registered_filenames": sorted(registered_names)}],
-                          "engine": "colmap", "status": "candidate / visual-review-required",
-                          "undistorted_model": "undistorted/text-model",
-                          "camera_recovery_source": str(source),
-                          "camera_recovery_added": recovered})
-    (target / "reconstruction-report.json").write_text(
-        json.dumps(source_report, indent=2) + "\n", encoding="utf-8")
+    try:
+        exported = export_dense_ready_revision(
+            source, target, selected, set(_registered(baseline)), staged=staged,
+            source_report=source_report, database=database,
+            rectified_max_side=rectified_max_side, execute=execute, model_loader=model_loader)
+    except RevisionExportError as error:
+        return fail(str(error))
     report.update(status="candidate / verified-real-photo-cameras",
-                  candidate_accepted=True, registered_images=len(registered_names),
-                  new_filenames=recovered, new_cameras=len(recovered),
+                  candidate_accepted=True, registered_images=exported["registered_images"],
+                  new_filenames=exported["new_filenames"],
+                  new_cameras=len(exported["new_filenames"]),
+                  subject_qa_index_sha256=exported["subject_qa_index_sha256"],
                   recovered_revision=str(target))
     return save()

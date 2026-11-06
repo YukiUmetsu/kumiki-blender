@@ -67,8 +67,12 @@ def _filter_ambiguous_pixels(candidates: list[dict], original: list[tuple[float,
     return [item for index, item in enumerate(candidates) if index not in rejected], len(rejected)
 
 
-def prepare_roma_candidate_database(revision, predictions_path, output, *, model=0):
+def prepare_roma_candidate_database(revision, predictions_path, output, *, model=0,
+                                    base_database=None):
     """Add multiview-consistent candidate matches to a *new* database copy.
+
+    `base_database` is an earlier candidate database of the same revision. Use
+    it to add the predictions of one more target photo.
 
     Predictions JSON is {target: staged filename, predictions: [{track_id,
     xyz, pixel, anchor, subject_candidate}, ...]}. Existing tracked anchor
@@ -77,6 +81,16 @@ def prepare_roma_candidate_database(revision, predictions_path, output, *, model
     Run COLMAP geometric verification and camera registration separately.
     """
     paths = _source_paths(Path(revision), model)
+    if base_database is not None:
+        base = Path(base_database)
+        if base.is_symlink() or not base.is_file():
+            raise ValueError('Base candidate database must be an existing regular file')
+        with closing(sqlite3.connect(paths['database'].resolve().as_uri() + '?mode=ro', uri=True)) as original, \
+                closing(sqlite3.connect(base.resolve().as_uri() + '?mode=ro', uri=True)) as extended:
+            query = 'SELECT image_id,name FROM images ORDER BY image_id'
+            if original.execute(query).fetchall() != extended.execute(query).fetchall():
+                raise ValueError('Base candidate database belongs to a different camera revision')
+        paths = {**paths, 'database': base.resolve()}
     source_root, target = paths['revision'].resolve(), Path(output).resolve()
     if (Path(output).is_symlink() or target.exists() or target.is_relative_to(source_root)
             or source_root.is_relative_to(target)):

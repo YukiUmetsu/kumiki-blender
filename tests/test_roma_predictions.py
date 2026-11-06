@@ -72,6 +72,33 @@ class PredictionGenerationTests(unittest.TestCase):
         self.assertEqual(hashlib.sha256((self.source / 'database.db').read_bytes()).hexdigest(), before)
         self.assertEqual(len(list((self.root / 'predictions').glob('*.roma.json'))), 2)
 
+    def test_base_database_adds_another_target_to_an_earlier_candidate(self):
+        generate_roma_predictions(self.source, self.root / 'predictions',
+                                  targets=['target.png', 'rear.png'],
+                                  anchors=['a.png', 'b.png', 'c.png'], predictor=StubPredictor())
+        first = self.root / 'candidate-target'
+        prepare_roma_candidate_database(self.source, self.root / 'predictions/target.png.roma.json', first)
+        second = self.root / 'candidate-both'
+        prepare_roma_candidate_database(self.source, self.root / 'predictions/rear.png.roma.json',
+                                        second, base_database=first / 'database.db')
+
+        def keypoints(database):
+            with sqlite3.connect(database) as db:
+                return dict(db.execute('SELECT i.name,k.rows FROM images i JOIN keypoints k '
+                                       'ON k.image_id=i.image_id'))
+
+        original, both = keypoints(self.source / 'database.db'), keypoints(second / 'database.db')
+        self.assertEqual({name for name in original if both[name] > original[name]},
+                         {'target.png', 'rear.png'})
+        other = self.root / 'other.db'
+        with sqlite3.connect(other) as db:
+            db.execute('CREATE TABLE images (image_id INTEGER PRIMARY KEY, name TEXT)')
+            db.execute("INSERT INTO images VALUES (1, 'unrelated.png')")
+        with self.assertRaisesRegex(ValueError, 'different camera revision'):
+            prepare_roma_candidate_database(
+                self.source, self.root / 'predictions/rear.png.roma.json',
+                self.root / 'candidate-other', base_database=other)
+
     def test_import_rejects_predictions_pinned_to_different_target_photo(self):
         generate_roma_predictions(self.source, self.root / 'predictions',
                                   targets=['target.png'], anchors=['a.png', 'b.png'],

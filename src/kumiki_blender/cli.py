@@ -362,6 +362,17 @@ def main(argv: list[str] | None = None) -> int:
     roma_import.add_argument("--predictions", type=Path, required=True)
     roma_import.add_argument("--output", type=Path, required=True)
     roma_import.add_argument("--model", type=int, default=0)
+    roma_import.add_argument("--base-database", type=Path,
+                             help="Earlier candidate database of this revision; adds one more target photo to it")
+    predicted_stage = subcommands.add_parser(
+        "stage-predicted-cameras",
+        help="Register predicted-match photos against the unchanged baseline and write a labelled dense-ready revision")
+    predicted_stage.add_argument("--revision", type=Path, required=True)
+    predicted_stage.add_argument("--candidate-database", type=Path, required=True,
+                                 help="database.db from prepare-roma-candidate-database")
+    predicted_stage.add_argument("--output", type=Path, required=True)
+    predicted_stage.add_argument("--colmap", default="colmap")
+    predicted_stage.add_argument("--timeout-seconds", type=int, default=1800)
     roma_predict = subcommands.add_parser("predict-roma-tracks", help="Generate isolated RoMa multiview predictions for missing views (not verified observations)")
     roma_predict.add_argument("--revision", type=Path, required=True)
     roma_predict.add_argument("--output", type=Path, required=True)
@@ -1455,8 +1466,20 @@ def main(argv: list[str] | None = None) -> int:
             from .reconstruction.roma_candidate_database import prepare_roma_candidate_database
             try:
                 report = prepare_roma_candidate_database(args.revision, args.predictions,
-                                                          args.output, model=args.model)
+                                                          args.output, model=args.model,
+                                                          base_database=args.base_database)
             except (ValueError, OSError) as error:
+                raise RecipeError(str(error)) from error
+            print(json.dumps(report, indent=2))
+            return 0
+        if args.command == "stage-predicted-cameras":
+            from .reconstruction.predicted_camera_staging import stage_predicted_cameras
+            from .reconstruction.references import ReferenceError
+            try:
+                report = stage_predicted_cameras(args.revision, args.candidate_database, args.output,
+                                                 colmap=args.colmap,
+                                                 timeout_seconds=args.timeout_seconds)
+            except (ReferenceError, ValueError, ImportError, OSError) as error:
                 raise RecipeError(str(error)) from error
             print(json.dumps(report, indent=2))
             return 0

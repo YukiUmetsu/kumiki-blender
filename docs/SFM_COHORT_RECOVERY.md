@@ -764,6 +764,34 @@ outline and its face surface are the same as the 49-camera mesh (median
 change 0.02% of the model size). The nine top and rear photos are still not
 registered.
 
+#### Stage several predicted-match cameras for dense reconstruction
+
+Choose the anchors of each target from the match evidence of that target
+(`audit-sfm-matches`), not one fixed list. On the Sphinx photos, one list of
+six anchors gave 0 or 1 agreed tracks for `photo-0002` and `photo-0057`.
+Eight anchors per target, ranked by verified and tentative matches, gave 104
+and 314. `photo-0043` gave 50.
+
+Add each target to one candidate database, then stage the result:
+
+```sh
+kumiki-blender prepare-roma-candidate-database --revision "$CAMERAS" \
+  --predictions "$PREDICTIONS_A" --output "$CANDIDATE_A"
+kumiki-blender prepare-roma-candidate-database --revision "$CAMERAS" \
+  --predictions "$PREDICTIONS_B" --base-database "$CANDIDATE_A/database.db" \
+  --output "$CANDIDATE_B"
+kumiki-blender stage-predicted-cameras --revision "$CAMERAS" \
+  --candidate-database "$CANDIDATE_B/database.db" --output "$STAGED"
+```
+
+`stage-predicted-cameras` verifies and registers in a private copy of the
+database. It stops if a baseline camera moves or a new camera has fewer than
+10 track points. `predicted-camera-staging-report.json` and
+`reconstruction-report.json` name each `predicted_match_cameras` entry. These
+cameras are hypotheses. Before a dense build, project the existing mesh into
+each one and compare it with the photo. Then generate masks, run
+`carry-dense-masks`, and build into a new dense revision.
+
 macOS Gatekeeper can block a downloaded OpenMVS binary. The stage then fails
 with exit code -9 and an empty log. Do not remove the quarantine flag. Put a
 local build first on `PATH`, for example `.review/tools/openmvs-build4/bin`.
