@@ -6,6 +6,7 @@ import json
 import struct
 import tempfile
 import unittest
+from importlib.util import find_spec
 from contextlib import redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
@@ -712,6 +713,7 @@ class TrackGuidanceTests(unittest.TestCase):
             refine_masks_from_tracks(self.sparse, self.mask_revision, target,
                                      sam2_checkpoint=self.weights, resume=True)
 
+    @unittest.skipUnless(find_spec("scipy") is not None, "Component recovery needs scipy")
     def test_review_only_proposal_never_replaces_a_mask_even_if_it_passes_the_gate(self):
         correct = np.zeros((80, 100), dtype=np.uint8)
         correct[10:75, 10:90] = 255
