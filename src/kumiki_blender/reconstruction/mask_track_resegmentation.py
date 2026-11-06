@@ -23,6 +23,10 @@ from .references import ReferenceError
 
 
 SCHEMA = "track-guided-mask-revision-v8"
+# Completed revisions that can still supply proposals. The evidence gate of
+# older revisions was weaker, so a new revision is needed to apply new gates.
+TRACK_REVISION_SCHEMAS = (SCHEMA, *(f"track-guided-mask-revision-v{version}"
+                                    for version in range(1, 8)))
 # Inference results depend on the actual guide and checkpoint, not the QA
 # algorithm version. Keep the original prompt-cache namespace so unchanged
 # guides reuse prior MPS work; new negative clicks alter the cache key.
@@ -540,6 +544,13 @@ def refine_masks_from_tracks(reconstruction: str | Path, mask_revision: str | Pa
         draw.text((x+5, y+height-23), item["filename"][:42], fill=(234, 236, 238))
     contact.save(target / "mask-contact-sheet.jpg", "JPEG", quality=85)
     result["contact_sheet"] = "mask-contact-sheet.jpg"
+    # Hidden good proposals are the main reason that people retry masks by hand,
+    # so every revision states which withheld proposals deserve review.
+    from .mask_proposal_review import QUEUE_REPORT, ReviewPolicy, write_review_queue
+    queue = write_review_queue(source, target, result, evidence, target / "review-queue",
+                               ReviewPolicy())
+    result["review_queue"] = {"report": "review-queue/" + QUEUE_REPORT,
+                              "summary": queue["summary"]}
     result["status"] = "candidate / automatic-track-guided-qa"
     checkpoint_report()
     return result

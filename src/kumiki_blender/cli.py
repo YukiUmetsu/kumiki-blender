@@ -657,10 +657,19 @@ def main(argv: list[str] | None = None) -> int:
                                    help="Completed automatic improve-dense-masks revision")
     choose_mask_parser.add_argument("--output", type=Path, required=True,
                                    help="Unused immutable output revision")
-    choose_mask_parser.add_argument("--use-proposal", nargs="+", default=[],
-                                   metavar="PHOTO", help="Select a withheld candidate for the specified images")
+    choose_mask_parser.add_argument("--use-proposal", nargs="+", default=[], metavar="PHOTO[:KIND]",
+                                   help="Promote a withheld candidate. KIND is track-guided (default) or component-guided")
     choose_mask_parser.add_argument("--edits", type=Path,
                                    help="Optional normalized include/exclude polygons for specific photos")
+    rank_mask_parser = subcommands.add_parser(
+        "rank-mask-proposals", help="Rank withheld mask proposals for review; never approves a mask")
+    rank_mask_parser.add_argument("--reconstruction", type=Path, required=True)
+    rank_mask_parser.add_argument("--mask-revision", type=Path, required=True,
+                                  help="Completed automatic improve-dense-masks revision")
+    rank_mask_parser.add_argument("--output", type=Path, required=True,
+                                  help="Unused folder outside the revision")
+    rank_mask_parser.add_argument("--policy", type=Path,
+                                  help="Optional JSON file that overrides ReviewPolicy evidence limits")
     refine_mask_parser = subcommands.add_parser(
         "refine-dense-masks", help="Remove tiny mask islands/holes or apply camera-specific polygon cleanup")
     refine_mask_parser.add_argument("--reconstruction", type=Path, required=True)
@@ -1027,6 +1036,17 @@ def main(argv: list[str] | None = None) -> int:
                     progress=lambda count, total, outcome: print(
                         f"Track-guided mask QA {count}/{total}: {outcome}",
                         file=sys.stderr, flush=True))
+            except (ReferenceError, OSError, ValueError) as error:
+                raise RecipeError(str(error)) from error
+            print(json.dumps(report, indent=2))
+            return 0
+        if args.command == "rank-mask-proposals":
+            from .reconstruction.mask_proposal_review import ReviewPolicy, rank_mask_proposals
+            from .reconstruction.references import ReferenceError
+            try:
+                policy = ReviewPolicy.from_json(args.policy) if args.policy else None
+                report = rank_mask_proposals(args.reconstruction, args.mask_revision,
+                                             args.output, policy=policy)
             except (ReferenceError, OSError, ValueError) as error:
                 raise RecipeError(str(error)) from error
             print(json.dumps(report, indent=2))

@@ -324,11 +324,55 @@ jq '{status, summary, discovered: [.images[] |
   "$IMPROVED/mask-report.json"
 ```
 
-#### Optional manual corrections (not needed for automatic mode)
+#### Review withheld proposals
+
+The automatic gates compare each proposal with the current mask, so they must
+refuse large changes. When the current mask is the broken one, this also
+withholds good proposals. Each `improve-dense-masks` revision therefore writes
+`review-queue/mask-review-queue.json` and side-by-side images in
+`review-queue/review/`. Each image shows the photo, the kept mask, the proposal
+and the difference (red removed, cyan added).
+
+The queue compares each proposal with the labels from the *other* cameras, and
+with held-out tracks that did not create it:
+
+| Decision | Meaning |
+| --- | --- |
+| `review-recommended` | Cross-view agreement improved, and no independent evidence contradicts it |
+| `improved-leakage-untested` | Same, but too few background tracks exist to test for leakage |
+| `insufficient-evidence` | Too few foreground holdouts or consensus tracks to judge |
+| `no-cross-view-improvement` | Other cameras do not support the change |
+| `vetoed-by-independent-evidence` | A background track, foreground holdout, negative prompt or sky check contradicts it |
+
+A decision sets the review order only. It never approves a mask, and it does
+not change the automatic gates. Peer cameras can share one mask error, so
+inspect each image. A proposal can gain the subject and also gain ground.
+
+To change the limits, or to rank an older revision, write a JSON policy that
+contains only the values to change, and rank into an unused folder:
+
+```bash
+echo '{"min_background_tracks": 2, "min_agreement_gain": 0.05}' > review-policy.json
+kumiki-blender rank-mask-proposals \
+  --reconstruction "$RUN/cameras" \
+  --mask-revision "$IMPROVED" \
+  --output '.review/great-sphinx/review-queue-r001' \
+  --policy review-policy.json
+```
+
+The policy names are `min_foreground_holdouts`, `min_background_tracks`,
+`min_consensus_tracks`, `min_peer_cameras`, `min_peer_agreement`,
+`min_agreement_gain`, `max_new_sky_pixels` and `max_review_images`. An unknown
+name stops the command. `photos_without_proposal` lists the other photos, with
+the lowest cross-view agreement first. These photos need new prompts.
+
+#### Promote reviewed proposals (not needed for automatic mode)
 
 If someone inspects a withheld proposal and prefers it to the automatically
 selected mask, `select-track-masks` can promote *only those explicitly named*
-photos into another immutable revision. It does not re-run SAM2:
+photos into another immutable revision. It does not re-run SAM2. Use the
+`promote_with` value from the queue. A photo without a suffix uses its
+track-guided proposal:
 
 ```bash
 CHOICES='.review/great-sphinx/track-masks-user-choice-r001' # must not exist
@@ -336,12 +380,12 @@ kumiki-blender select-track-masks \
   --reconstruction "$RUN/cameras" \
   --mask-revision "$IMPROVED" \
   --output "$CHOICES" \
-  --use-proposal photo-0021.png photo-0022.png photo-0027.png photo-0034.png photo-0053.png
+  --use-proposal photo-0021.png photo-0015.png:component-guided
 ```
 
 For an automatically repaired image with a little unwanted ground, use
 `--edits /path/to/edits.json` **without** `--use-proposal`. Use the latter
-only to promote a separate withheld track-guided candidate. The edits JSON
+only to promote a separate withheld candidate. The edits JSON
 contains image-specific normalized include/exclude polygons:
 
 ```json

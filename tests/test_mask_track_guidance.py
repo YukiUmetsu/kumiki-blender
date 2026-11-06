@@ -20,6 +20,7 @@ from kumiki_blender.reconstruction.mask_track_guidance import (
 from kumiki_blender.reconstruction.mask_ground_plane import evaluate_local_ground_spill
 from kumiki_blender.reconstruction.mask_ground_plane import fit_ground_plane
 from kumiki_blender.reconstruction.mask_track_resegmentation import refine_masks_from_tracks
+from kumiki_blender.reconstruction.mask_proposal_review import rank_mask_proposals
 from kumiki_blender.reconstruction.mask_track_selection import select_track_mask_candidates
 from kumiki_blender.reconstruction.references import ReferenceError
 
@@ -710,6 +711,64 @@ class TrackGuidanceTests(unittest.TestCase):
         with self.assertRaisesRegex(ReferenceError, "identical settings|unfinished"):
             refine_masks_from_tracks(self.sparse, self.mask_revision, target,
                                      sam2_checkpoint=self.weights, resume=True)
+
+    def test_review_queue_ranks_and_promotes_a_withheld_component_proposal(self):
+        refined_root = self.root / "automatic"
+        correct = np.zeros((80, 100), dtype=np.uint8)
+        correct[10:75, 10:90] = 255
+        with (patch("kumiki_blender.reconstruction.masking._load_sam2_predictor",
+                    return_value=(object(), "mps")),
+              patch("kumiki_blender.reconstruction.masking._sam2_mask",
+                    return_value=(correct, {"components": ["subject"]}))):
+            automatic = refine_masks_from_tracks(self.sparse, self.mask_revision, refined_root,
+                                                 sam2_checkpoint=self.weights)
+        self.assertEqual(automatic["review_queue"]["report"],
+                         "review-queue/mask-review-queue.json")
+        self.assertTrue((refined_root / automatic["review_queue"]["report"]).is_file())
+
+        proposal = np.zeros((80, 100), dtype=np.uint8)
+        proposal[20:60, 20:80] = 255
+        candidate = refined_root / "candidates/view-02.png.component-guided.png"
+        Image.fromarray(proposal, "L").save(candidate, format="PNG")
+        saved = json.loads((refined_root / "mask-report.json").read_text())
+        target = next(item for item in saved["images"] if item["filename"] == "view-02.png")
+        target["component_guidance"] = {
+            "accepted": False, "proposed_mask": "candidates/" + candidate.name,
+            "proposed_mask_sha256": digest(candidate)}
+        (refined_root / "mask-report.json").write_text(json.dumps(saved))
+
+        policy = self.root / "review-policy.json"
+        policy.write_text(json.dumps({"max_review_images": 1}))
+        queue_root = self.root / "review-queue"
+        with redirect_stdout(io.StringIO()):
+            self.assertEqual(main(["rank-mask-proposals", "--reconstruction", str(self.sparse),
+                                   "--mask-revision", str(refined_root),
+                                   "--output", str(queue_root),
+                                   "--policy", str(policy)]), 0)
+        queue = json.loads((queue_root / "mask-review-queue.json").read_text())
+        self.assertFalse(queue["approved_for_reconstruction"])
+        self.assertEqual(queue["policy"]["max_review_images"], 1)
+        item = next(row for row in queue["queue"] if row["proposal"] == "component-guided")
+        self.assertEqual(item["promote_with"], "view-02.png:component-guided")
+        self.assertEqual(sum("review_image" in row for row in queue["queue"]), 1)
+        self.assertTrue((queue_root / queue["queue"][0]["review_image"]).is_file())
+
+        with self.assertRaisesRegex(ReferenceError, "inside|outside"):
+            rank_mask_proposals(self.sparse, refined_root, refined_root / "nested-queue")
+        with self.assertRaisesRegex(ReferenceError, "one proposal"):
+            select_track_mask_candidates(self.sparse, refined_root, self.root / "both",
+                                         use_proposals=["view-02.png",
+                                                        "view-02.png:component-guided"])
+        chosen_root = self.root / "reviewed-component"
+        chosen = select_track_mask_candidates(self.sparse, refined_root, chosen_root,
+                                              use_proposals=[item["promote_with"]])
+        entry = next(row for row in chosen["images"] if row["filename"] == "view-02.png")
+        self.assertEqual(entry["selection"], "explicit-user-proposal")
+        self.assertEqual(entry["source_proposal_sha256"], digest(candidate))
+        self.assertEqual(entry["candidate_comparison"]["selected"], "component-guided-proposal")
+        self.assertNotIn("component_guidance", entry)
+        self.assertEqual(digest(chosen_root / entry["mask"]), digest(candidate))
+        self.assertFalse(chosen["approved_for_reconstruction"])
 
     def test_optional_selection_and_polygon_correction_preserves_automatic_revision(self):
         refined_root = self.root / "automatic"
