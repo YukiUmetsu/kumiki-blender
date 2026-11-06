@@ -792,6 +792,17 @@ cameras are hypotheses. Before a dense build, project the existing mesh into
 each one and compare it with the photo. Then generate masks, run
 `carry-dense-masks`, and build into a new dense revision.
 
+On the Sphinx photos, this staged a 54-camera revision: the 49 baseline
+cameras with zero drift, two measured face cameras, and the predicted-match
+cameras `photo-0002` (rear), `photo-0043` (left rear) and `photo-0057`
+(aerial). The 49-camera mesh, projected into each of the three, matches the
+statue outline in its photo. The 54-camera mesh is almost the same as the
+49-camera mesh: 0.07% of its vertices are more than 1% of the model size from
+the old surface, and the hole on the top of the back is still there. Dense
+stereo needs two or more views of a surface, and `photo-0057` is the only
+registered camera that sees the top. More registered aerial views, or new
+photos of the top, are necessary.
+
 macOS Gatekeeper can block a downloaded OpenMVS binary. The stage then fails
 with exit code -9 and an empty log. Do not remove the quarantine flag. Put a
 local build first on `PATH`, for example `.review/tools/openmvs-build4/bin`.
