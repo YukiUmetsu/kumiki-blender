@@ -803,6 +803,21 @@ stereo needs two or more views of a surface, and `photo-0057` is the only
 registered camera that sees the top. More registered aerial views, or new
 photos of the top, are necessary.
 
+`photo-0060` (front, elevated) was then staged as camera 55 with 48 track
+points. The 55-camera mesh is also almost the same as the 49-camera mesh.
+In the `photo-0060` view, the mesh covers 40% of the statue mask, and both
+front paws are absent. They are already absent from the dense point cloud,
+although `photo-0057` and `photo-0060` see them. The cause is in the dense
+stage and is not yet known. `photo-0001`, `0049`, `0056`, `0058` and `0059`
+got 0 to 4 agreed tracks and are not registered.
+
+Known defect: `photo-0013` passed `recover-registered-cameras` with a focal
+length of 5,451 times its image size and a camera center about 1,000 times
+farther away than the other cameras. This is a degenerate near-orthographic
+solution. `validate_camera_recovery` checks baseline drift and track counts
+only. It needs a focal-length and distance check that excludes one camera
+without rejecting the others. Do not rely on `photo-0013` until then.
+
 macOS Gatekeeper can block a downloaded OpenMVS binary. The stage then fails
 with exit code -9 and an empty log. Do not remove the quarantine flag. Put a
 local build first on `PATH`, for example `.review/tools/openmvs-build4/bin`.
