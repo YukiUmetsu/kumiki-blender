@@ -696,6 +696,12 @@ remain. A `photo-0026` scaffold retry violated a negative click and is
 excluded from `r07`; `mask-photo-candidate-r06` contains that failed mask and
 must not be used. These numbers include an experimental camera and are review
 hints, not independent ground truth.
+The later `sam2-top-paws-retry-r01` and `sam2-profile-retry-r01` revisions
+add review candidates for `photo-0060` and `photo-0030`. Their selected masks
+are recorded in `mask-photo-candidate-r08` and `r09`; the top photograph's
+camera is still unverified and the candidate set remains unapproved.
+The final comparison reports 3,643 mixed tracks; the profile candidate also
+increased possible background-leak votes by 10, so inspect those locations.
 Scaffolding, nearby masonry and the remaining images still need review. In
 particular, the long restored forepaws can resemble unrelated walls: the
 experimental `mask-photo-candidate-r02` erased possible paw surfaces and was
