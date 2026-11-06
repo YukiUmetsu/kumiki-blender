@@ -5,6 +5,7 @@ import sqlite3
 import struct
 import tempfile
 import unittest
+from importlib.util import find_spec
 from pathlib import Path
 
 from PIL import Image
@@ -218,6 +219,37 @@ class PredictionGenerationTests(unittest.TestCase):
             generate_roma_predictions(self.source, output, resume=True,
                                       predictor=StubPredictor(), **params)
         self.assertEqual(unrecorded.read_text(), '{}')
+
+
+@unittest.skipUnless(find_spec('torch') is not None, 'The real predictor needs torch')
+class RoMaWarpLayoutTests(unittest.TestCase):
+    def predictor(self, batched):
+        import torch
+        from kumiki_blender.reconstruction.roma_predictions import RoMaPredictor
+
+        class SymmetricModel:
+            symmetric = True
+
+            def match(self, _anchor, _target, device):
+                # A->B half: every anchor pixel maps to (0.25, -0.5) with 0.9 certainty.
+                warp = torch.zeros(8, 16, 4)
+                warp[:, :8, 2], warp[:, :8, 3] = 0.25, -0.5
+                certainty = torch.zeros(8, 16)
+                certainty[:, :8] = 0.9
+                return (warp[None], certainty[None]) if batched else (warp, certainty)
+
+        predictor = object.__new__(RoMaPredictor)
+        predictor.torch, predictor.device, predictor.model = torch, 'cpu', SymmetricModel()
+        return predictor
+
+    def test_reads_the_batched_layout_that_romatch_returns_for_image_paths(self):
+        for batched in (True, False):
+            results = self.predictor(batched).predict(
+                Path('a.png'), Path('b.png'), [[50.0, 40.0]], (100, 80))
+            (pixel, confidence), = results
+            self.assertAlmostEqual(pixel[0], 0.25, places=5)
+            self.assertAlmostEqual(pixel[1], -0.5, places=5)
+            self.assertAlmostEqual(confidence, 0.9, places=5)
 
 
 if __name__ == '__main__':

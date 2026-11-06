@@ -217,6 +217,9 @@ class RoMaPredictor:
         width, height = anchor_size
         with torch.inference_mode():
             warp, certainty = self.model.match(str(anchor), str(target), device=self.device)
+            # romatch returns one batch entry for a pair of image paths.
+            if warp.ndim == 4 and certainty.ndim == 3 and len(warp) == 1 and len(certainty) == 1:
+                warp, certainty = warp[0], certainty[0]
             # Symmetric RoMa concatenates A->B and B->A along width. The first
             # half is the only one whose source pixels refer to anchor A.
             out_h, out_w = warp.shape[:2]
