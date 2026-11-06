@@ -714,6 +714,8 @@ mixed tracks. Two `photo-0024` attempts failed different prompt checks and
 are excluded; the second removed ground but also missed subject clicks. A
 subsequent polygon trial also removed subject clicks and is rejected as
 `sam2-ground-polygon-r01`; do not use it for reconstruction.
+The close-up face and profile candidates in `sam2-face-retry-r01` are included
+in `mask-photo-candidate-r14`; its comparison reports 2,469 mixed tracks.
 
 For a separate pose sanity check, `roma-top-original-mesh-overlay-r01` projects
 the original 49-view dense mesh into the experimental `photo-0060` camera.
