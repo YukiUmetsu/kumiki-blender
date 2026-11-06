@@ -499,6 +499,55 @@ rectified reconstruction. Evaluate independent object-surface matches and
 calibrated view overlays before preparing a separate rectified/masked 50-view
 workspace. Do not rerun OpenMVS solely because this gate passes.
 
+### Stage the isolated 50-camera RoMa dense input
+
+The November 5 Sphinx experiment separately produced a 52-camera dense mesh
+(`roma-dense-r02`), including two **unverified** views. Its 519,436 vertices and
+1,038,245 faces are useful for a visual comparison but **do not** validate the
+two extra registrations. The orange top-view overlay projected the **old
+49-camera mesh**, not the new SAM2 foreground mask; missing projected paws or
+rear geometry in that overlay must not be mistaken for a mask-only defect.
+
+The repaired 50-camera sparse model was taken from `roma-dense-r01`, not the
+later, differently rectified `roma-dense-r02`. Prepare its complete dense input
+with the **matching r01 rectified camera revision**:
+
+```sh
+RUN=.review/great-sphinx/statue-hq-r005
+kumiki-blender stage-roma-dense-candidate \
+  --source-reconstruction "$RUN/roma-cameras-r01" \
+  --repair "$RUN/roma-top-only-r01" \
+  --output "$RUN/roma-cameras-top-only-r01"
+```
+
+The staging command checks all 52 input rectified-image hashes, compares the
+original candidate sparse binary hashes against the sparse model recorded by
+the repair receipt, rejects mismatched camera poses and intrinsics, and copies
+**only the 50 selected registered images** alongside the repaired sparse model.
+It regenerates a COLMAP text model and the pinned 50-image source index for
+`plan-dense-photos`. It neither writes to its source nor certifies the RoMa
+pose. **Do not** substitute `roma-cameras-r02` or 636×1043 masks for r01's
+605×900 top-view image: those are different rectified grids.
+
+```sh
+kumiki-blender plan-dense-photos \
+  --reconstruction "$RUN/roma-cameras-top-only-r01" \
+  --rectified-masks "$RUN/roma-dense-r01/workspace/images" \
+  --output "$RUN/roma-dense-top-only-r01" \
+  --backend openmvs --resolution-level 2 --max-resolution 1600 \
+  --number-views 3 --no-texture
+```
+
+The plan is **read-only**. Before running `build-dense-photos`, visually audit
+all 50 mask boundaries, especially the upper body, full forelegs and paws,
+rear, and tail. The r02 top-view mask included the paws but had missing black
+interior regions and some foreground ground; r01 masks may have similar
+defects. Produce a new mask correction revision rather than silently widening
+the entire Sphinx silhouette or accepting ground. Then build the 50-camera
+mesh into a **new** directory with precisely the same preflight settings and
+the corrected r01 masks. Compare photographed geometry and holes against both
+the 49- and 52-camera experiments before publishing a GLB.
+
 **Before attempting an A/B dense mesh:** independent object-feature support,
 stable original poses, calibrated overlays, and reviewed masks must pass. Use a
 new complete rectified sparse reconstruction revision and new masks, then the

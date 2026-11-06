@@ -393,6 +393,16 @@ def main(argv: list[str] | None = None) -> int:
     roma_repair.add_argument("--outlier-px", type=float, default=8.0)
     roma_repair.add_argument("--allow-duplicate-repair", action="store_true",
                              help="Permit explicitly reviewed duplicate repair while preserving surviving native tracks")
+    roma_dense = subcommands.add_parser(
+        "stage-roma-dense-candidate",
+        help="Stage separately repaired RoMa cameras and matching rectified images for an exploratory dense A/B run")
+    roma_dense.add_argument("--source-reconstruction", type=Path, required=True,
+                            help="Exact original rectified RoMa revision from which the 52-camera sparse model was repaired")
+    roma_dense.add_argument("--repair", type=Path, required=True,
+                            help="Isolated repair-roma-sparse-camera output with its approval receipt")
+    roma_dense.add_argument("--output", type=Path, required=True,
+                            help="New private dense-input revision; source images and models remain unchanged")
+    roma_dense.add_argument("--colmap", default="colmap")
     camera_compare_parser = subcommands.add_parser(
         "compare-camera-registrations",
         help="Read-only before/after registration coverage for two COLMAP revisions")
@@ -1412,6 +1422,16 @@ def main(argv: list[str] | None = None) -> int:
                                                    outlier_px=args.outlier_px,
                                                    allow_duplicate_repair=args.allow_duplicate_repair)
             except (ValueError, OSError, RuntimeError) as error:
+                raise RecipeError(str(error)) from error
+            print(json.dumps(report, indent=2))
+            return 0
+        if args.command == "stage-roma-dense-candidate":
+            from .reconstruction.roma_dense_staging import stage_repaired_roma_dense_revision
+            from .reconstruction.references import ReferenceError
+            try:
+                report = stage_repaired_roma_dense_revision(
+                    args.source_reconstruction, args.repair, args.output, colmap=args.colmap)
+            except (ReferenceError, ValueError, OSError, ImportError, RuntimeError) as error:
                 raise RecipeError(str(error)) from error
             print(json.dumps(report, indent=2))
             return 0
