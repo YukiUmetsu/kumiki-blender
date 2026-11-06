@@ -36,6 +36,11 @@ class DenseSettings:
     resolution_level: int = 0
     max_resolution: int = 3200
     number_views: int = 5
+    # OpenMVS skips a camera with no error message if no neighbor reaches this
+    # score. The score grows with shared sparse points, so the default of 2.0
+    # drops elevated and low-resolution photos: 12 of 55 Sphinx cameras gave
+    # no depth map. Keep every camera unless a user sets a limit.
+    view_min_score: float = 0.0
     refine_decimate: float = 1.0
     texture_decimate: float = 1.0
     # OpenMVS 2.4 has a known texture sampling/seam-leveling regression that
@@ -63,6 +68,9 @@ class DenseSettings:
             raise ReferenceError("resolution_level must be 0–4")
         if type(self.max_resolution) is not int or not 640 <= self.max_resolution <= 16384:
             raise ReferenceError("max_resolution must be 640–16384")
+        if (type(self.view_min_score) not in (float, int) or
+                not math.isfinite(self.view_min_score) or self.view_min_score < 0):
+            raise ReferenceError("view_min_score must be a finite number of at least 0")
         if type(self.number_views) is not int or not 2 <= self.number_views <= 32:
             raise ReferenceError("number_views must be 2–32")
         if (type(self.refine_decimate) not in (int, float)
@@ -260,6 +268,7 @@ def plan_dense_reconstruction(reconstruction: str | Path, output: str | Path,
         "resolution_level": settings.resolution_level if settings.backend == "openmvs" else None,
         "max_resolution": settings.max_resolution if settings.backend == "openmvs" else None,
         "number_views": settings.number_views if settings.backend == "openmvs" else None,
+        "view_min_score": settings.view_min_score if settings.backend == "openmvs" else None,
         "refine_decimate": settings.refine_decimate if settings.backend == "openmvs" else None,
         "texture_decimate": settings.texture_decimate if settings.backend == "openmvs" else None,
         "texture_global_seam_leveling": (
@@ -474,6 +483,8 @@ def build_dense_reconstruction(reconstruction: str | Path, output: str | Path,
                              if plan["rectified_masks"] else [])
         scene = workspace / "scene.mvs"
         dense = workspace / "scene_dense.mvs"
+        densify_config = workspace / "densify.ini"
+        densify_config.write_text(f"View Min Score = {settings.view_min_score}\n", encoding="utf-8")
         mesh = workspace / "scene_dense_mesh.mvs"
         refined = workspace / "scene_dense_mesh_refined.mvs"
         textured_obj = workspace / "scene_dense_mesh_refined_texture.obj"
@@ -485,6 +496,10 @@ def build_dense_reconstruction(reconstruction: str | Path, output: str | Path,
                                              "--resolution-level", str(settings.resolution_level),
                                              "--max-resolution", str(settings.max_resolution),
                                              "--number-views", str(settings.number_views),
+                                             "--dense-config-file", str(densify_config),
+                                             # Masks define the subject. An estimated region
+                                             # can crop its far ends.
+                                             "--estimate-roi", "0",
                                              "--tower-mode", "0", *dense_mask_args]),
             ("mesh", "ReconstructMesh", ["--input-file", str(dense),
                                         "--output-file", str(mesh)]),

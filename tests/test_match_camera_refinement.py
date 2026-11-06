@@ -9,8 +9,9 @@ import numpy as np
 from PIL import Image
 
 from kumiki_blender.reconstruction.match_camera_refinement import (
-    RefinementSettings, epipolar_distance, fundamental_from_cameras, holdout_error, lattice_cells,
-    merge_tracks, select_pairs, similarity_between, triangulate_rays)
+    RefinementSettings, epipolar_distance, find_unusable_focal_lengths,
+    fundamental_from_cameras, holdout_error, lattice_cells,
+    merge_tracks, select_pairs, triangulate_rays)
 from kumiki_blender.reconstruction.references import ReferenceError
 
 
@@ -90,22 +91,19 @@ class GeometryTests(unittest.TestCase):
         self.assertLess(result["median_px"], 1e-3)
         self.assertGreater(result["pair_mean_px"], 1.0)
 
-    def test_similarity_recovers_a_known_transform(self):
-        points = np.random.default_rng(1).normal(size=(20, 3))
-        angle = .7
-        rotation = np.array([[np.cos(angle), -np.sin(angle), 0],
-                             [np.sin(angle), np.cos(angle), 0], [0, 0, 1.]])
-        moved = 2.5 * (rotation @ points.T).T + np.array([1., -2., 3.])
-        scale, fitted, translation = similarity_between(points, moved)
-        self.assertAlmostEqual(scale, 2.5, places=9)
-        np.testing.assert_allclose(fitted, rotation, atol=1e-9)
-        np.testing.assert_allclose(translation, [1., -2., 3.], atol=1e-9)
-
     def test_held_out_cells_are_fixed_and_exclude_nothing_twice(self):
         rows, columns = np.meshgrid(np.arange(10), np.arange(10), indexing="ij")
         first = lattice_cells(rows.ravel(), columns.ravel(), 5)
         self.assertEqual(int(first.sum()), 20)
         np.testing.assert_array_equal(first, lattice_cells(rows.ravel(), columns.ravel(), 5))
+
+
+class FocalLimitTests(unittest.TestCase):
+    def test_names_negative_and_far_moved_focal_lengths(self):
+        before = {"good": 1000., "moved": 1000., "flipped": 394., "shrunk": 1000., "limit": 1000.}
+        after = {"good": 500., "moved": 3100., "flipped": -298., "shrunk": 300., "limit": 3000.}
+        self.assertEqual(find_unusable_focal_lengths(before, after, 3.0),
+                         ["flipped", "moved", "shrunk"])
 
 
 class SettingsTests(unittest.TestCase):
@@ -207,6 +205,8 @@ class EndToEndRefinementTests(unittest.TestCase):
         focal = next(refined.cameras[image.camera_id].params[0] for image in refined.images.values()
                      if image.name == "view-4.png")
         self.assertLess(abs(focal - 1000.0), 40.0)
+        self.assertTrue(all(camera.model.name == "SIMPLE_PINHOLE"
+                            for camera in refined.cameras.values()))
         self.assertEqual((output / "undistorted/images/view-0.png").read_bytes(),
                          (self.revision / "undistorted/images/view-0.png").read_bytes())
         self.assertTrue((output / "undistorted/text-model/cameras.txt").is_file())

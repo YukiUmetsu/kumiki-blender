@@ -818,6 +818,47 @@ solution. `validate_camera_recovery` checks baseline drift and track counts
 only. It needs a focal-length and distance check that excludes one camera
 without rejecting the others. Do not rely on `photo-0013` until then.
 
+#### Refine cameras when dense stereo misses a surface
+
+Added cameras did not change the Sphinx mesh. The cause was camera calibration.
+Sparse features cluster on textured stone, so a registered camera can fit those
+areas and be wrong elsewhere. For the same photo pairs, one fundamental matrix
+fit RoMa matches on the chest and paws to under 1 px, while the registered
+cameras missed the paw matches by 26 to 42 px. Patch-based stereo then fails on
+those surfaces, and fusion correctly rejects the result. If an audit shows a
+surface that photographs see but the dense cloud lacks, compare the two
+residuals before you add photos.
+
+```sh
+kumiki-blender refine-cameras-with-matches --revision "$CAMERAS" \
+  --rectified-masks "$MASKS" --output "$REFINED" \
+  --exclude-camera photo-with-a-degenerate-pose.png \
+  --device mps --cache-dir "$MATCH_CACHE"
+```
+
+Run this in the environment with `romatch`, and put its folder on `PYTHONPATH`.
+The command matches camera pairs on the subject, verifies each pair without the
+current cameras, and refines poses and one focal length per camera. Rectified
+photos do not change, so `carry-dense-masks` keeps every mask. A share of the
+matches is held out, and the revision is written only if they improve.
+A camera whose focal length becomes negative or changes more than 3 times is
+removed and listed in `dropped_cameras`. These checks show consistency with a
+learned matcher, not ground truth, so compare the new mesh with the photographs.
+
+On the 53 usable Sphinx cameras, held-out error fell from 1.21 to 0.67 px per
+pair. `photo-0041` to `photo-0060` fell from 34 to under 1 px. `photo-0048`
+started with a 120 degree focal length and was removed. Compared with the
+earlier calibration, mesh faces rose from 1.25 to 1.95 million and statue
+coverage on shared cameras rose from 87.0% to 88.9%. Precision fell from 81.3%
+to 80.5%. The second foreleg now exists, but its toes are missing, and a new gap
+appeared at the left rear in `photo-0026`.
+
+`build-dense-photos` now keeps every camera. OpenMVS skips a camera with no
+message if no neighbor reaches `View Min Score` (default 2.0), and that score
+grows with shared sparse points. This removed 12 of 55 Sphinx cameras, including
+all new elevated cameras, so added cameras could not help. The command sets the
+score to 0 (see `--view-min-score`) and turns off estimated-region cropping.
+
 macOS Gatekeeper can block a downloaded OpenMVS binary. The stage then fails
 with exit code -9 and an empty log. Do not remove the quarantine flag. Put a
 local build first on `PATH`, for example `.review/tools/openmvs-build4/bin`.

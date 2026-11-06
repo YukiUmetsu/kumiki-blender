@@ -374,6 +374,8 @@ def main(argv: list[str] | None = None) -> int:
     refine_cameras.add_argument("--exclude-camera", action="append", default=[],
                                 help="Registered camera to leave out; repeat")
     refine_cameras.add_argument("--pairs-per-camera", type=int, default=6)
+    refine_cameras.add_argument("--refine-principal-point", action="store_true",
+                                help="Also refine principal points; unsafe for long lenses")
     refine_cameras.add_argument("--device", choices=("auto", "mps", "cpu"), default="auto")
     refine_cameras.add_argument("--cache-dir", type=Path,
                                 help="Keep verified matches here, so a repeated run needs no model")
@@ -502,6 +504,8 @@ def main(argv: list[str] | None = None) -> int:
                                   help="OpenMVS maximum depth map image dimension")
         dense_parser.add_argument("--number-views", type=int, default=5,
                                   help="OpenMVS neighboring views per depth estimate")
+        dense_parser.add_argument("--view-min-score", type=float, default=0.0,
+                                  help="OpenMVS minimum neighbor score; a camera below it gives no depth map (0 keeps every camera)")
         dense_parser.add_argument("--refine-decimate", type=float, default=1.0,
                                   help="OpenMVS pre-refinement face retention; 1 preserves high-poly detail")
         dense_parser.add_argument("--texture-decimate", type=float, default=1.0,
@@ -1423,7 +1427,7 @@ def main(argv: list[str] | None = None) -> int:
                     timeout_seconds=args.timeout_seconds, min_mesh_faces=args.min_mesh_faces,
                     resolution_level=args.resolution_level,
                     max_resolution=args.max_resolution, number_views=args.number_views,
-                    refine_decimate=args.refine_decimate,
+                    view_min_score=args.view_min_score, refine_decimate=args.refine_decimate,
                     texture_decimate=args.texture_decimate,
                     texture_global_seam_leveling=args.global_seam_leveling,
                     texture_local_seam_leveling=args.local_seam_leveling,
@@ -1492,7 +1496,8 @@ def main(argv: list[str] | None = None) -> int:
             try:
                 report = refine_cameras_with_matches(
                     args.revision, args.rectified_masks, args.output,
-                    settings=RefinementSettings(pairs_per_camera=args.pairs_per_camera),
+                    settings=RefinementSettings(pairs_per_camera=args.pairs_per_camera,
+                                                refine_principal_point=args.refine_principal_point),
                     device=args.device, exclude_cameras=args.exclude_camera,
                     cache_dir=args.cache_dir,
                     log=lambda line: print(line, file=sys.stderr, flush=True))

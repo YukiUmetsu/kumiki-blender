@@ -18,7 +18,7 @@ from __future__ import annotations
 import hashlib
 import json
 import shutil
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from importlib.util import find_spec
 from pathlib import Path
 from typing import Any, Callable
@@ -29,6 +29,7 @@ from .references import ReferenceError
 SCHEMA = "match-refined-cameras-v1"
 REPORT = "match-refinement-report.json"
 STAGED_STATUS = "candidate / match-refined-cameras-need-visual-review"
+MAX_ALIGNMENT_ANCHORS = 64  # The limit of cameras.fit_similarity.
 
 
 @dataclass(frozen=True)
@@ -45,8 +46,11 @@ class RefinementSettings:
     holdout_every: int = 5
     track_cell_px: float = 4.0
     reprojection_schedule_px: tuple[float, ...] = (48.0, 24.0, 12.0, 6.0, 4.0)
-    refine_principal_point: bool = True
+    # Off by default. On a long lens a principal point shift looks like a small
+    # rotation, so it moved outside the image on 3 of 54 Sphinx cameras.
+    refine_principal_point: bool = False
     min_track_length: int = 2
+    max_focal_change: float = 3.0
 
     def __post_init__(self) -> None:
         for name in ("pairs_per_camera", "coarse_resolution", "refine_resolution", "lattice_step",
@@ -153,6 +157,18 @@ def triangulate_rays(centers: Any, directions: Any) -> Any:
     if np.linalg.cond(system) > 1e8:
         return None
     return np.linalg.solve(system, target)
+
+
+def use_square_pixels(model: Any) -> None:
+    """Give each camera one focal length, so refinement cannot make pixels non-square."""
+    import numpy as np
+    import pycolmap
+
+    for camera in model.cameras.values():
+        if camera.model.name == "PINHOLE":
+            fx, fy, cx, cy = camera.params
+            camera.model = pycolmap.CameraModelId.SIMPLE_PINHOLE
+            camera.params = np.array([(fx + fy) / 2, cx, cy])
 
 
 def _camera_table(model: Any) -> dict[str, dict[str, Any]]:
@@ -300,6 +316,23 @@ def add_match_tracks(model: Any, cameras: dict[str, dict[str, Any]],
     return added
 
 
+def find_unusable_focal_lengths(before: dict[str, float], after: dict[str, float],
+                                max_change: float) -> list[str]:
+    """Name cameras whose focal length became impossible during refinement.
+
+    A camera with a very wrong start can pass through zero to a negative focal
+    length. Its reprojection error can stay small, so held-out matches do not
+    show this, and OpenMVS later crashes on the negative scale.
+    """
+    return sorted(name for name, focal in after.items()
+                  if focal <= 0 or not 1 / max_change <= focal / before[name] <= max_change)
+
+
+def _focal_lengths(model: Any) -> dict[str, float]:
+    return {image.name: float(model.cameras[image.camera_id].params[0])
+            for image in model.images.values() if image.has_pose}
+
+
 def refine_model(model: Any, settings: RefinementSettings,
                  log: Callable[[str], None] | None = None) -> list[dict[str, Any]]:
     """Run bundle adjustment with a falling reprojection limit, so early errors can recover."""
@@ -326,31 +359,20 @@ def refine_model(model: Any, settings: RefinementSettings,
     return stages
 
 
-def similarity_between(source: Any, target: Any) -> tuple[float, Any, Any]:
-    """Fit scale, rotation and translation that map source points to target points."""
-    import numpy as np
-
-    source_mean, target_mean = source.mean(axis=0), target.mean(axis=0)
-    a, b = source - source_mean, target - target_mean
-    left, values, right = np.linalg.svd(b.T @ a)
-    sign = np.eye(3)
-    sign[2, 2] = np.sign(np.linalg.det(left @ right))
-    rotation = left @ sign @ right
-    scale = float(np.trace(np.diag(values) @ sign) / max((a * a).sum(), 1e-12))
-    return scale, rotation, target_mean - scale * rotation @ source_mean
-
-
 def _align_to_source(refined: Any, source_cameras: dict[str, dict[str, Any]]) -> None:
     """Return a refined model to the coordinates of its source, so meshes stay comparable."""
     import numpy as np
     import pycolmap
 
+    from .cameras import fit_similarity
+
     current = _camera_table(refined)
     names = sorted(current)
-    scale, rotation, translation = similarity_between(
-        np.array([current[name]["center"] for name in names]),
-        np.array([source_cameras[name]["center"] for name in names]))
-    refined.transform(pycolmap.Sim3d(scale, pycolmap.Rotation3d(rotation), translation))
+    anchors = [(tuple(current[name]["center"]), tuple(source_cameras[name]["center"]))
+               for name in names[::max(1, len(names) // MAX_ALIGNMENT_ANCHORS + 1)]]
+    scale, rotation, translation, _ = fit_similarity(anchors)
+    refined.transform(pycolmap.Sim3d(scale, pycolmap.Rotation3d(np.array(rotation)),
+                                     np.array(translation)))
 
 
 def _pair_cache_path(cache: Path, first: str, second: str, settings: RefinementSettings) -> Path:
@@ -442,21 +464,37 @@ def refine_cameras_with_matches(
             log(f"matched {index}/{len(pair_names)} {first} {second}: {len(pair['train_a'])} train, "
                 f"{len(pair['holdout_a'])} held out")
 
-    before = holdout_error(cameras, pairs)
     tracks = merge_tracks([(pair["first"], pair["second"], pair["train_a"], pair["train_b"])
                            for pair in pairs if len(pair["train_a"])], settings.track_cell_px)
     report.update(verified_pairs=sum(len(pair["train_a"]) > 0 for pair in pairs),
                   train_matches=sum(len(pair["train_a"]) for pair in pairs),
-                  match_tracks=len(tracks), holdout_before=before)
+                  match_tracks=len(tracks))
     save()
+    use_square_pixels(model)
+    start_focals = _focal_lengths(model)
     add_match_tracks(model, cameras, tracks)
     report["refinement_stages"] = refine_model(model, settings, log)
+    # Remove a failed camera, then settle the others without its observations.
+    dropped: list[str] = []
+    while unusable := find_unusable_focal_lengths(start_focals, _focal_lengths(model),
+                                                  settings.max_focal_change):
+        dropped += unusable
+        for name in unusable:
+            model.deregister_frame(model.find_image_with_name(name).frame_id)
+        report["refinement_stages"] += refine_model(
+            model, replace(settings, reprojection_schedule_px=settings.reprojection_schedule_px[-2:]),
+            log)
+    report["dropped_cameras"] = sorted(dropped)
     _align_to_source(model, cameras)
     refined_cameras = _camera_table(model)
+    # Compare both sets of cameras on the same matches.
+    pairs = [pair for pair in pairs if pair["first"] in refined_cameras
+             and pair["second"] in refined_cameras]
+    before = holdout_error(cameras, pairs)
     after = holdout_error(refined_cameras, pairs)
-    report["holdout_after"] = after
+    report.update(holdout_before=before, holdout_after=after)
     moved = np.array([np.linalg.norm(refined_cameras[name]["center"] - cameras[name]["center"])
-                      for name in cameras])
+                      for name in refined_cameras])
     spread = np.linalg.norm(np.array([c["center"] for c in cameras.values()]) -
                             np.median([c["center"] for c in cameras.values()], axis=0), axis=1)
     report["camera_center_moved_relative_to_spread"] = {

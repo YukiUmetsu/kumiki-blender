@@ -161,6 +161,10 @@ class DenseMvsTests(unittest.TestCase):
         self.assertEqual(densify[densify.index("--resolution-level") + 1], "0")
         self.assertEqual(densify[densify.index("--max-resolution") + 1], "3200")
         self.assertEqual(densify[densify.index("--tower-mode") + 1], "0")
+        # OpenMVS otherwise drops cameras with few sparse points, without an error.
+        config = Path(densify[densify.index("--dense-config-file") + 1])
+        self.assertEqual(config.read_text(), "View Min Score = 0.0\n")
+        self.assertEqual(densify[densify.index("--estimate-roi") + 1], "0")
         refinement = report["commands"][3]["argv"]
         self.assertEqual(refinement[refinement.index("--decimate") + 1], "1.0")
         texturing = report["commands"][4]["argv"]
