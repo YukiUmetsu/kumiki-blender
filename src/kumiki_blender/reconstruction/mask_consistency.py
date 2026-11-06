@@ -12,11 +12,13 @@ import json
 import math
 import struct
 from collections import defaultdict
+from heapq import heappush, heapreplace
 from pathlib import Path
 from typing import Any, BinaryIO
 
 from .dense import (DenseSettings, _check_regular, _json, _sha256,
                     plan_dense_reconstruction)
+from .mask_shape_qa import inspect_mask_shape
 from .references import ReferenceError
 
 
@@ -29,6 +31,41 @@ _COUNT = struct.Struct("<Q")
 _MARK_COLORS = {"possible_background_leak": (250, 58, 40),
                 "possible_missing_subject": (37, 218, 241),
                 "ambiguous_tie": (255, 212, 46)}
+_WEAK_COLORS = {"possible_background_leak": (250, 132, 94),
+                "possible_missing_subject": (102, 190, 216)}
+
+
+def _peer_evidence(kind: str, positives: int, negatives: int) -> tuple[int, float, str]:
+    """Grade *other cameras* only; the target observation is not its own proof."""
+    peers = positives + negatives - 1
+    if kind == "ambiguous_tie":
+        # The target foreground label isn't passed here, and a tie has no
+        # directional consensus in any case. Do not manufacture agreement.
+        return peers, 0.0, "review-only-weak-votes"
+    supporting = (negatives if kind == "possible_background_leak" else
+                  positives)
+    fraction = supporting / peers if peers else 0.0
+    strength = ("strong-cross-view-mask-votes" if kind != "ambiguous_tie"
+                and supporting >= 4 and fraction >= 0.8
+                else "review-only-weak-votes")
+    return peers, round(fraction, 5), strength
+
+
+def _mark_review_rank(mark: dict) -> tuple:
+    """Prefer well-supported marks, then ground-leak risk on equal evidence."""
+    return (int(mark["evidence_strength"] == "strong-cross-view-mask-votes"),
+            mark["peer_agreement_fraction"],
+            int(mark["kind"] == "possible_background_leak"),
+            mark["other_camera_votes"], -mark["point3d_id"])
+
+
+def _keep_bounded_mark(heap: list, mark: dict, limit: int) -> None:
+    """Retain the strongest evidence even if it appears late in a huge model."""
+    entry = (_mark_review_rank(mark), mark)
+    if len(heap) < limit:
+        heappush(heap, entry)
+    elif entry[0] > heap[0][0]:
+        heapreplace(heap, entry)
 
 
 def _exact(stream: BinaryIO, size: int) -> bytes:
@@ -155,6 +192,15 @@ def audit_multiview_masks(reconstruction: str | Path, masks: str | Path,
                       refine=False, texture=False),
         rectified_masks=masks, executables={})
     source = Path(plan["source_revision"])
+    experimental_target = None
+    staging_receipt = source / "roma-dense-staging-report.json"
+    if staging_receipt.exists() or staging_receipt.is_symlink():
+        stage = _json(staging_receipt)
+        if stage.get("status") != "isolated-experimental-dense-input / independent-qa-required":
+            raise ReferenceError("Unknown or invalid experimental camera provenance")
+        experimental_target = stage.get("target")
+        if not isinstance(experimental_target, str) or experimental_target not in plan["undistorted_images"]:
+            raise ReferenceError("Experimental camera receipt has an invalid target")
     model_root = source / "undistorted/sparse"
     model_bin = model_root / "images.bin"
     model_txt = model_root / "images.txt"
@@ -179,6 +225,8 @@ def audit_multiview_masks(reconstruction: str | Path, masks: str | Path,
                          "ambiguous_observations": 0, "foreground_observations": 0,
                          "background_observations": 0, "review_targets": [],
                          "warnings": []} for name in names}
+    if experimental_target:
+        image_meta[experimental_target]["camera_evidence"] = "roma-predicted / independent-pose-qa-pending"
     index = _json(source / "undistorted-reference-index.json")
     for item in index["images"]:
         image_meta[item["filename"]]["source_photo_sha256"] = item["sha256"]
@@ -186,6 +234,7 @@ def audit_multiview_masks(reconstruction: str | Path, masks: str | Path,
     observed_points: dict[int, list[tuple[str, float, float, bool]]] = defaultdict(list)
     for name in names:
         with Image.open(mask_root / (name + ".mask.png")) as mask:
+            image_meta[name]["shape_qa"] = inspect_mask_shape(mask)
             decoded = mask.convert("L")
             pixels = decoded.load()
             width, height = mask.size
@@ -221,10 +270,10 @@ def audit_multiview_masks(reconstruction: str | Path, masks: str | Path,
     # tracks saturate a camera's marker budget. Keep both directions separate:
     # a mask's extra foreground needs a different correction than missing
     # statue pixels. Neither direction is automatically trusted or painted.
-    outlier_marks: dict[str, dict[str, list[dict[str, Any]]]] = {
+    outlier_marks: dict[str, dict[str, list]] = {
         name: {"possible_background_leak": [], "possible_missing_subject": []}
         for name in names}
-    tie_marks: dict[str, list[dict[str, Any]]] = {name: [] for name in names}
+    tie_marks: dict[str, list] = {name: [] for name in names}
     compared_tracks, mixed_tracks, ambiguous_tracks = 0, 0, 0
     for point_id, observations in observed_points.items():
         if len(observations) < 2:
@@ -253,14 +302,19 @@ def audit_multiview_masks(reconstruction: str | Path, masks: str | Path,
                 points = outlier_marks[name][kind]
             else:
                 continue
-            if len(points) < max_overlay_points:
-                width, height = image_meta[name]["dimensions"]
-                points.append({"point3d_id": point_id,
-                               "x": round(x, 3), "y": round(y, 3),
-                               "normalized_xy": [round(min(1.0, x / max(1, width-1)), 6),
-                                                 round(min(1.0, y / max(1, height-1)), 6)],
-                               "kind": kind, "foreground_votes": positives,
-                               "background_votes": negatives})
+            width, height = image_meta[name]["dimensions"]
+            peers, peer_agreement, strength = _peer_evidence(kind, positives, negatives)
+            _keep_bounded_mark(points, {
+                "point3d_id": point_id,
+                "x": round(x, 3), "y": round(y, 3),
+                "normalized_xy": [round(min(1.0, x / max(1, width-1)), 6),
+                                  round(min(1.0, y / max(1, height-1)), 6)],
+                "kind": kind, "foreground_votes": positives,
+                "background_votes": negatives,
+                "other_camera_votes": peers,
+                "peer_agreement_fraction": peer_agreement,
+                "evidence_strength": strength,
+                "automatic_prompt_allowed": False}, max_overlay_points)
     if compared_tracks == 0:
         raise ReferenceError("No shared 3D feature tracks; cross-view mask QA cannot run")
     for name in names:
@@ -269,6 +323,15 @@ def audit_multiview_masks(reconstruction: str | Path, masks: str | Path,
             item["consensus_outliers"] / max(1, item["compared_observations"]), 5)
         item["review_priority"] = ("high" if item["consensus_outliers"] else
                                    "medium" if item["ambiguous_observations"] else "normal")
+        shape = item["shape_qa"]
+        item["review_score"] = round(
+            100 * item["consensus_outlier_fraction"] +
+            100 * shape["interior_background_fraction"] +
+            100 * shape["detached_foreground_fraction"], 3)
+        if shape["review_flags"]:
+            item["warnings"].append(
+                "Silhouette contains inspectable internal gaps, detached sections or lower-border contact; "
+                "not proof of incorrect pixels")
         if item["compared_observations"] < 25:
             item["warnings"].append("Few shared sparse points; cannot infer mask correctness")
         if item["consensus_outliers"]:
@@ -301,12 +364,17 @@ def audit_multiview_masks(reconstruction: str | Path, masks: str | Path,
             preview = Image.composite(Image.new("RGB", preview.size, (237, 92, 61)),
                                       preview, alpha)
             draw = ImageDraw.Draw(preview)
-            # Prefer possible background contamination over missing subject
-            # when markers are capped; both outrank ambiguous ties.
-            selected_outliers = outlier_marks[name]["possible_background_leak"][:max_overlay_points]
-            selected_outliers += outlier_marks[name]["possible_missing_subject"][
-                :max_overlay_points-len(selected_outliers)]
-            selected_ties = tie_marks[name][:max_overlay_points-len(selected_outliers)]
+            # Strong *other-camera* agreement outranks weak red/yellow marks:
+            # the real Sphinx top-view had 3:2 red votes ON the statue's
+            # chest. With equally strong evidence, prefer ground-leak review.
+            selected_outliers = sorted(
+                (entry[1] for entry in (
+                    outlier_marks[name]["possible_background_leak"] +
+                    outlier_marks[name]["possible_missing_subject"])),
+                key=_mark_review_rank, reverse=True)[:max_overlay_points]
+            selected_ties = [entry[1] for entry in sorted(
+                tie_marks[name], key=lambda item: item[0], reverse=True)
+                [:max_overlay_points-len(selected_outliers)]]
             image_meta[name]["review_targets"] = selected_outliers + selected_ties
             # These are prompts for a *person* to inspect, never input to an
             # automatic label replacement. Occlusions and monument/background
@@ -319,14 +387,23 @@ def audit_multiview_masks(reconstruction: str | Path, masks: str | Path,
                  "point3d_id": mark["point3d_id"],
                  "foreground_votes": mark["foreground_votes"],
                  "background_votes": mark["background_votes"],
+                 "evidence_strength": mark["evidence_strength"],
+                 "other_camera_votes": mark["other_camera_votes"],
+                 "peer_agreement_fraction": mark["peer_agreement_fraction"],
+                 "automatic_prompt_allowed": False,
                  "human_confirmation_required": True,
-                 "note": "Check the original photograph; matched tracks are not ground-truth statue labels"}
+                 "note": ("Weak cross-view majority: do not turn this marker into a SAM2 prompt without "
+                          "independent photographic inspection" if
+                          mark["evidence_strength"] != "strong-cross-view-mask-votes" else
+                          "Peer agreement is strong but masks are not ground truth; inspect the statue photograph")}
                 for mark in selected_outliers[:30]
             ]
             # Draw ties first so concrete disagreements remain visually prominent.
             for mark in selected_ties + selected_outliers:
                 x, y = mark["x"], mark["y"]
-                color = _MARK_COLORS[mark["kind"]]
+                color = (_WEAK_COLORS.get(mark["kind"], _MARK_COLORS[mark["kind"]])
+                         if mark["evidence_strength"] != "strong-cross-view-mask-votes"
+                         else _MARK_COLORS[mark["kind"]])
                 cx = min(preview.width-1, round(x * preview.width / original_width))
                 cy = min(preview.height-1, round(y * preview.height / original_height))
                 radius = 5
@@ -358,7 +435,9 @@ def audit_multiview_masks(reconstruction: str | Path, masks: str | Path,
                 detail_draw.ellipse((center_x-9, center_y-9, center_x+9, center_y+9),
                                     outline=(19, 22, 25), width=3)
                 detail_draw.ellipse((center_x-8, center_y-8, center_x+8, center_y+8),
-                                    outline=_MARK_COLORS[mark["kind"]], width=3)
+                                    outline=(_WEAK_COLORS.get(mark["kind"], _MARK_COLORS[mark["kind"]])
+                                             if mark["evidence_strength"] != "strong-cross-view-mask-votes"
+                                             else _MARK_COLORS[mark["kind"]]), width=3)
                 path = target / "review" / (name + f".detail-{detail_index:02}.jpg")
                 detail.save(path, "JPEG", quality=92)
                 image_meta[name]["detail_reviews"].append({
@@ -371,13 +450,14 @@ def audit_multiview_masks(reconstruction: str | Path, masks: str | Path,
     label_draw = ImageDraw.Draw(contact)
     ordered = sorted(names, key=lambda name: (0 if image_meta[name]["review_priority"] == "high"
                                                else 1 if image_meta[name]["review_priority"] == "medium"
-                                               else 2, name))
+                                               else 2, -image_meta[name]["review_score"], name))
     for index, name in enumerate(ordered):
         x, y = (index % columns)*cell_w, (index // columns)*cell_h
         with Image.open(target / image_meta[name]["review"]) as preview:
             preview.thumbnail((cell_w-8, cell_h-34))
             contact.paste(preview, (x+4, y+4))
-        label_draw.text((x+6, y+cell_h-26), f"{name[:22]}: {image_meta[name]['review_priority']}",
+        label_draw.text((x+6, y+cell_h-26),
+                        f"{name[:22]}: {image_meta[name]['review_priority']} {image_meta[name]['review_score']:.1f}",
                         fill=(235, 236, 238))
     contact.save(target / "mask-consistency-contact-sheet.jpg", "JPEG", quality=85)
     report = {
@@ -388,11 +468,18 @@ def audit_multiview_masks(reconstruction: str | Path, masks: str | Path,
         "max_overlay_points": max_overlay_points,
         "marker_legend": {"possible_background_leak": "red: mask foreground / other views mostly background",
                           "possible_missing_subject": "cyan: mask background / other views mostly foreground",
-                          "ambiguous_tie": "yellow: no multi-view majority"},
+                          "ambiguous_tie": "yellow: no multi-view majority",
+                          "muted_red_or_cyan": "weak cross-view votes: inspect original photo before considering any correction"},
         "compared_3d_tracks": compared_tracks,
         "mixed_label_tracks": mixed_tracks,
         "mixed_label_fraction": round(mixed_tracks / compared_tracks, 5),
         "ambiguous_label_tracks": ambiguous_tracks,
+        "experimental_unverified_camera": experimental_target,
+        "recommendation_policy": (
+            "Sparse mask majorities are review hints only. Strong peer support needs >=4 other "
+            "registered views and >=80% agreement; even then human photographic confirmation "
+            "is mandatory. Cross-view mask agreement is not independent statue evidence. "
+            "Never auto-paint red markers or fill silhouette holes."),
         "contact_sheet": "mask-consistency-contact-sheet.jpg",
         "images": [image_meta[name] for name in names],
         "approved_for_reconstruction": False, "distribution_allowed": False,

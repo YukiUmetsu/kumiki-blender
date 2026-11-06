@@ -551,6 +551,48 @@ mesh into a **new** directory with precisely the same preflight settings and
 the corrected r01 masks. Compare photographed geometry and holes against both
 the 49- and 52-camera experiments before publishing a GLB.
 
+### Do not convert weak mask votes into SAM2 negative points
+
+The November 6 photographic 50-view audit compared **12,551 shared 3D tracks**;
+**6,228 (49.62%)** had mixed foreground labels. This is a serious inconsistency
+signal, not a statistic about what fraction of the real Sphinx is missing:
+ground, wall, shadow, and predicted RoMa tracks can also contribute.
+
+On `photo-0060.png`, the old report found three red possible-background marks
+with only **3:2** negative majorities. Inspection of the actual photograph
+shows those red markers on the **stone chest**, not on sand. Turning them into
+background SAM2 points could **erase genuine statue geometry**. The strongest
+cyan mark near the headdress has **6:1** positive votes, but even this is
+cross-view mask agreement, not independent surface truth.
+
+The updated `audit-dense-masks` now separates strong cross-view agreement
+(at least four *other* camera votes and 80% agreement) from weak majority
+review marks, ranks stronger evidence first even under marker budgets, and
+explicitly forbids automatic prompt conversion. Original photos and masks
+remain untouched. The report also includes `shape_qa` per image: bounded,
+non-mutating measurements of **enclosed black regions**, detached foreground,
+and boundary contact. The supplied 636×1043 top-view mask contained roughly
+**50 significant enclosed black regions occupying 1.94% of its image area**
+when sampled at 384px. Some may be real shadow or gaps between limbs; the
+measurements **do not authorize hole filling**. Confirm each anatomical region
+and ground boundary on the full-resolution photograph before regenerating a
+candidate mask.
+
+To regenerate QA after pulling the new branch, use a fresh output path:
+
+```sh
+kumiki-blender audit-dense-masks \
+  --reconstruction "$RUN/roma-cameras-top-only-r01" \
+  --rectified-masks "$RUN/roma-dense-r01/workspace/images" \
+  --output "$RUN/roma-top-only-mask-audit-r02"
+```
+
+Inspect `images[].shape_qa`, `images[].review_score`, and the new
+`evidence_strength` and `automatic_prompt_allowed` fields on each suggestion.
+Neither a high consensus score nor a successful sparse camera repair means the
+mesh or mask is ready for production. Keep the 49-, 50- and 52-camera revisions
+separate until real-photo QA demonstrates a geometric improvement.
+
 **Before attempting an A/B dense mesh:** independent object-feature support,
 stable original poses, calibrated overlays, and reviewed masks must pass. Use a
 new complete rectified sparse reconstruction revision and new masks, then the
