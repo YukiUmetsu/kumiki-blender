@@ -49,6 +49,7 @@ def test_unverified_view_has_no_registered_scores(tmp_path):
     part = compare_sam_to_capture(manifest, capture, sam, tmp_path / "review")["parts"][0]
     assert "registered_iou" not in part["shape"]
     assert "centroid_offset_xy_px" not in part["shape"]
+    assert (tmp_path / "review/comparisons/front/head.png").is_file()
     assert any(row["channel"] == "registration" for row in part["correction_observations"])
 
 
