@@ -27,7 +27,7 @@ def main(argv: list[str] | None = None) -> int:
     segment.add_argument("--prompts", type=Path, required=True)
     segment.add_argument("--checkpoint", type=Path, required=True)
     segment.add_argument("--output", type=Path, required=True)
-    segment.add_argument("--model", choices=("tiny", "small"), default="small")
+    segment.add_argument("--model", choices=("tiny", "small", "base-plus"), default="small")
     segment.add_argument("--device", choices=("cpu", "mps", "cuda"), default="cpu")
     segment.add_argument("--no-alpha-clipping", action="store_true")
     hint = commands.add_parser("depth-hint", help="MoGe-2 estimated relative depth, local weights")

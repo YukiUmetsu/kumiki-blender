@@ -18,6 +18,7 @@ from PIL import Image, ImageDraw
 CONFIGS = {
     "tiny": "configs/sam2.1/sam2.1_hiera_t.yaml",
     "small": "configs/sam2.1/sam2.1_hiera_s.yaml",
+    "base-plus": "configs/sam2.1/sam2.1_hiera_b+.yaml",
 }
 PART_ID = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")
 CATEGORIES = {"anatomy", "costume", "accessory", "prop"}

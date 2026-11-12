@@ -19,6 +19,9 @@ CHECKPOINTS = {
     "sam2.1-small": (
         "https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_small.pt",
         "sam2.1_hiera_small.pt"),
+    "sam2.1-base-plus": (
+        "https://dl.fbaipublicfiles.com/segment_anything_2/092824/sam2.1_hiera_base_plus.pt",
+        "sam2.1_hiera_base_plus.pt"),
 }
 MAX_BYTES = 1024 * 1024 * 1024
 

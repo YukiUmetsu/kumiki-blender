@@ -42,7 +42,7 @@ def _infer(rgb: np.ndarray, checkpoint: Path, device: str):
     model = MoGeModel.from_pretrained(str(checkpoint)).to(device).eval()
     tensor = torch.as_tensor(rgb.copy(), device=device, dtype=torch.float32).permute(2, 0, 1) / 255.0
     with torch.inference_mode():
-        return model.infer(tensor)
+        return model.infer(tensor, resolution_level=5, use_fp16=(device == "cuda"))
 
 
 def estimate_depth_hint(image_path, checkpoint_path, output, *, device="cpu", infer=None) -> dict:
@@ -61,7 +61,12 @@ def estimate_depth_hint(image_path, checkpoint_path, output, *, device="cpu", in
     with Image.open(image_path) as source:
         if source.width * source.height > 16_777_216:
             raise ValueError("Source exceeds sixteen megapixels")
-        rgb = np.asarray(source.convert("RGB"))
+        if "A" in source.getbands():
+            canvas = Image.new("RGBA", source.size, (255, 255, 255, 255))
+            canvas.alpha_composite(source.convert("RGBA"))
+            rgb = np.asarray(canvas.convert("RGB"))
+        else:
+            rgb = np.asarray(source.convert("RGB"))
     result = (infer or _infer)(rgb, checkpoint.resolve(), device)
 
     def array(value):
@@ -74,12 +79,25 @@ def estimate_depth_hint(image_path, checkpoint_path, output, *, device="cpu", in
     predicted = array(result["depth"])
     if predicted.shape != rgb.shape[:2]:
         raise ValueError("Model returned depth with incorrect dimensions")
-    valid = array(result["mask"]) if "mask" in result else None
+    valid = array(result["mask"]) > 0.5 if "mask" in result else None
     normalized = relative_depth(predicted, valid)
+    normals = None
+    if "normal" in result:
+        normals = array(result["normal"]).astype(np.float32)
+        if normals.shape != (*normalized.shape, 3):
+            raise ValueError("MoGe normal map must be H×W×3")
+        length = np.linalg.norm(normals, axis=-1)
+        good = np.isfinite(normals).all(axis=-1) & (length > 1e-6) & np.isfinite(normalized)
+        normals[good] /= length[good, None]
+        normals[~good] = np.nan
     out.mkdir(parents=True, exist_ok=False)
     np.savez_compressed(out / "depth_hint.npz", depth_relative=normalized)
     Image.fromarray(np.uint8(np.round(np.where(np.isfinite(normalized), normalized, 1) * 255))).save(
         out / "depth_hint.png")
+    if normals is not None:
+        np.savez_compressed(out / "normal_hint.npz", normal_camera=normals)
+        preview = np.nan_to_num((normals + 1.0) * 127.5, nan=0)
+        Image.fromarray(np.uint8(np.clip(np.round(preview), 0, 255))).save(out / "normal_hint.png")
     digest = hashlib.sha256()
     with checkpoint.open("rb") as handle:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
@@ -89,6 +107,7 @@ def estimate_depth_hint(image_path, checkpoint_path, output, *, device="cpu", in
         "status": "estimated-only / review-required", "device": device,
         "source_sha256": hashlib.sha256(image_path.read_bytes()).hexdigest(),
         "checkpoint_sha256": digest.hexdigest(), "shape": list(normalized.shape),
+        "normal_output": "normal_hint.npz" if normals is not None else None,
         "manifest_reference_depth_hint": {"path": "depth_hint.npz",
                                           "provenance": "estimated", "near_is_small": True},
         "limitations": ["Single artwork does not establish true metric depth.",

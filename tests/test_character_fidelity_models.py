@@ -100,3 +100,49 @@ def test_moge_missing_checkpoint_refuses_network(tmp_path):
     image, _, _ = fixtures(tmp_path)
     with pytest.raises(ValueError, match="locally downloaded"):
         estimate_depth_hint(image, tmp_path / "missing.pt", tmp_path / "depth")
+
+
+
+def test_sam2_base_plus_checkpoint_variant_is_supported():
+    from kumiki_blender.character_fidelity.sam2_masks import CONFIGS
+    from kumiki_blender.character_fidelity.public_models import CHECKPOINTS
+    assert CONFIGS["base-plus"] == "configs/sam2.1/sam2.1_hiera_b+.yaml"
+    assert CHECKPOINTS["sam2.1-base-plus"][1] == "sam2.1_hiera_base_plus.pt"
+
+
+def test_moge_optional_surface_normals_are_normalized(tmp_path):
+    image, _, checkpoint = fixtures(tmp_path)
+    def fake(rgb, *_):
+        h, w = rgb.shape[:2]
+        normals = np.zeros((h, w, 3), dtype=np.float32)
+        normals[..., 2] = 2
+        normals[0, 0] = 0
+        return {"depth": np.tile(np.linspace(1, 4, w), (h, 1)), "normal": normals}
+    report = estimate_depth_hint(image, checkpoint, tmp_path / "normals", infer=fake)
+    assert report["normal_output"] == "normal_hint.npz"
+    with np.load(tmp_path / "normals/normal_hint.npz") as result:
+        normal = result["normal_camera"]
+    assert np.isnan(normal[0, 0]).all()
+    assert normal[10, 10, 2] == pytest.approx(1.0)
+    assert (tmp_path / "normals/normal_hint.png").is_file()
+
+
+def test_moge_rejects_mismatched_normal_shape(tmp_path):
+    image, _, checkpoint = fixtures(tmp_path)
+    def fake(rgb, *_):
+        h, w = rgb.shape[:2]
+        return {"depth": np.tile(np.linspace(1, 4, w), (h, 1)),
+                "normal": np.zeros((h, w, 2))}
+    with pytest.raises(ValueError, match="normal map"):
+        estimate_depth_hint(image, checkpoint, tmp_path / "invalid", infer=fake)
+    assert not (tmp_path / "invalid").exists()
+
+
+
+def test_offline_checkpoint_inspection_refuses_unknown_architecture(tmp_path):
+    import torch
+    from kumiki_blender.character_fidelity.checkpoints import inspect_checkpoint
+    path = tmp_path / "unknown.pt"
+    torch.save({"model": {"foo": torch.zeros(3)}}, path)
+    with pytest.raises(ValueError, match="not recognized"):
+        inspect_checkpoint(path)

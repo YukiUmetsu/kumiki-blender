@@ -143,3 +143,31 @@ The output includes depth_hint.npz with a 2D depth_relative float array, depth_h
 ## Validation boundary
 
 The model integration regression suite in tests/test_character_fidelity_models.py uses mock predictors; it verifies mask shape, prompt validation, missing-local-checkpoint handling, and depth-hint NPZ compatibility without downloading weights. Live inference with public weights and Quill's full sheet remains unverified until the actual checkpoint files can be loaded locally. Do not commit model weights or the supplied character artwork.
+
+
+## User-supplied ungated SAM Base+ and MoGe-2 checkpoints
+
+SAM 2.1 Base+ is now supported as `--model base-plus` with the official
+`configs/sam2.1/sam2.1_hiera_b+.yaml`. Reuse the local
+`sam2.1_hiera_base_plus.pt` checkpoint. The official Meta public downloader
+also accepts `sam2.1-base-plus` when no local file is available.
+
+The MoGe-2 depth adapter now exports an additional optional
+`normal_hint.npz` file, containing `normal_camera` in camera coordinates
+(H×W×3; invalid regions are NaN), plus `normal_hint.png`. It converts alpha
+artwork onto white before inference and uses full precision on CPU/Apple MPS.
+**Both normal and depth maps are uncertain AI estimates for painted artwork.**
+They cannot certify the sculpt's 3D surface geometry.
+
+To inspect the supplied weights without loading either neural runtime:
+
+```bash
+python -m kumiki_blender.character_fidelity.checkpoints \
+  /path/to/sam2.1_hiera_base_plus.pt /path/to/moge-2-model.pt
+```
+
+Then with separately installed official `sam2` and `moge` runtime packages,
+run `character_fidelity segment --model base-plus` or
+`character_fidelity depth-hint` with the local checkpoints. These commands
+never request Hugging Face access. Keep model weights and character artwork out
+of Git and do not approve generated masks without inspecting them.
