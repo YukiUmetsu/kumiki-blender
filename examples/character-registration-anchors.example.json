@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "view": "front",
+  "landmarks": [
+    {"id": "left-eye-center", "source_xy": [155, 190], "render_xy": [81, 99]},
+    {"id": "right-eye-center", "source_xy": [380, 190], "render_xy": [198, 99]},
+    {"id": "beak-tip", "source_xy": [268, 260], "render_xy": [140, 136]},
+    {"id": "left-foot-tip", "source_xy": [200, 658], "render_xy": [104, 343]},
+    {"id": "right-foot-tip", "source_xy": [353, 658], "render_xy": [184, 343]}
+  ]
+}

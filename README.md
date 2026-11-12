@@ -1,5 +1,17 @@
 # Kumiki Blender
 
+## Character-sheet fidelity QA (Blender vs original artwork)
+
+**[Start here: Character Fidelity Review](docs/CHARACTER_FIDELITY_REVIEW.md)** — reusable anatomy, costume and accessory comparison. Inspect shape and position independently, compare unlit colors and actual mesh depth/normals, propose masks with optional local SAM 2.1 and relative depth with optional local MoGe 2. New `review-masks` and `propose-registration` commands expose uncertain part ownership and camera alignment instead of silently approving them. No Hugging Face approval or mandatory model download.
+
+```bash
+python -m pip install -e '.[character-qa]'
+kumiki-character-qa --help
+```
+
+[Detailed QA architecture](docs/CHARACTER_FIDELITY_QA.md) · [Part mapping example](examples/character-fidelity.example.json) · [Mask review rules](examples/character-mask-review.example.json) · [Landmark anchors](examples/character-registration-anchors.example.json)
+
+
 **New: historical or cinematic 3D completion:**
 [`suggest-completion`, `generate-completion-image`, `generate-completion-part`,
 `plan-completion`, and `build-completion`](docs/EVIDENCE_GUIDED_COMPLETION.md)

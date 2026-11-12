@@ -1,0 +1,134 @@
+{
+  "schema_version": 1,
+  "notes": "Examples for Dr. Quill's 614x722 front turnaround; REVIEW the boxes and clicks before use. Coordinates measured from the original artwork, not ground truth. Never commit licensed source art or model weights.",
+  "parts": [
+    {
+      "id": "head",
+      "category": "anatomy",
+      "box": [
+        95,
+        6,
+        541,
+        260
+      ],
+      "positive_points": [
+        [
+          309,
+          70
+        ],
+        [
+          300,
+          191
+        ]
+      ],
+      "negative_points": [
+        [
+          306,
+          350
+        ]
+      ]
+    },
+    {
+      "id": "wing-left",
+      "category": "anatomy",
+      "box": [
+        7,
+        348,
+        179,
+        641
+      ],
+      "positive_points": [
+        [
+          90,
+          462
+        ]
+      ],
+      "negative_points": [
+        [
+          174,
+          340
+        ]
+      ]
+    },
+    {
+      "id": "wing-right",
+      "category": "anatomy",
+      "box": [
+        441,
+        346,
+        607,
+        642
+      ],
+      "positive_points": [
+        [
+          526,
+          460
+        ]
+      ],
+      "negative_points": [
+        [
+          424,
+          350
+        ]
+      ]
+    },
+    {
+      "id": "coat",
+      "category": "costume",
+      "box": [
+        48,
+        236,
+        569,
+        631
+      ],
+      "positive_points": [
+        [
+          188,
+          491
+        ],
+        [
+          458,
+          508
+        ]
+      ],
+      "negative_points": [
+        [
+          302,
+          363
+        ]
+      ]
+    },
+    {
+      "id": "waistcoat",
+      "category": "costume",
+      "box": [
+        245,
+        261,
+        411,
+        508
+      ],
+      "positive_points": [
+        [
+          327,
+          385
+        ]
+      ]
+    },
+    {
+      "id": "bow-tie",
+      "category": "costume",
+      "box": [
+        260,
+        227,
+        366,
+        292
+      ],
+      "positive_points": [
+        [
+          291,
+          257
+        ]
+      ]
+    }
+  ]
+}
