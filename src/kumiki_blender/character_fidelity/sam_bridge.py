@@ -44,6 +44,51 @@ def _observations(item: dict[str, Any], conflict: bool) -> list[dict[str, str]]:
     return observations
 
 
+def _unregistered_previews(report, stage, capture, view_id, source_size, output):
+    """Write a clearly labeled, unregistered intrinsic-shape overlay per part."""
+    import cv2
+    import numpy as np
+    from PIL import Image, ImageDraw
+    from .evaluate import _mask, _visible_labels
+
+    metadata = json.loads(asset(capture, "capture.json").read_text(encoding="utf-8"))
+    labels = np.asarray(Image.open(asset(capture, metadata["views"][view_id]["labels"])).convert("RGBA"))
+    part_masks = _visible_labels(labels, metadata["palette"])
+
+    def normalize(mask):
+        y, x = np.nonzero(mask)
+        canvas = np.zeros((256, 256), dtype=bool)
+        if not len(x):
+            return canvas
+        crop = mask[y.min():y.max() + 1, x.min():x.max() + 1].astype(np.uint8)
+        scale = 240 / max(crop.shape)
+        h, w = max(1, round(crop.shape[0] * scale)), max(1, round(crop.shape[1] * scale))
+        canvas[(256-h)//2:(256-h)//2+h, (256-w)//2:(256-w)//2+w] = cv2.resize(
+            crop, (w, h), interpolation=cv2.INTER_NEAREST).astype(bool)
+        return canvas
+
+    for item in report["parts"]:
+        if item.get("comparison") or item.get("shape", {}).get("registration_verified"):
+            continue
+        part = item["part"]
+        original = normalize(_mask(asset(stage, f"mask-{part}.png"), source_size))
+        sculpt = normalize(part_masks[part])
+        pixels = np.full((256, 256, 3), 247, dtype=np.uint8)
+        pixels[original & ~sculpt] = (225, 65, 65)
+        pixels[sculpt & ~original] = (60, 95, 222)
+        pixels[original & sculpt] = (90, 165, 104)
+        image = Image.new("RGB", (256, 302), "#e9edf2")
+        text = ImageDraw.Draw(image)
+        text.text((7, 5), "SHAPE ONLY / NOT REGISTERED", fill="#162334")
+        text.text((7, 23), "RED source / BLUE sculpt / GREEN both", fill="#162334")
+        image.paste(Image.fromarray(pixels), (0, 46))
+        relative = f"comparisons/{view_id}/{part}.png"
+        destination = Path(output) / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        image.save(destination)
+        item["comparison"] = relative
+
+
 def compare_sam_to_capture(manifest: str | Path, capture: str | Path,
                            segmentation: str | Path, output: str | Path, *,
                            view_id: str = "front", depth_hints: str | Path | None = None,
@@ -123,6 +168,10 @@ def compare_sam_to_capture(manifest: str | Path, capture: str | Path,
         (temp / "manifest.json").write_text(json.dumps(staged), encoding="utf-8")
         from .evaluate import evaluate_character
         result = evaluate_character(temp / "manifest.json", capture, output)
+        from PIL import Image
+        with Image.open(source) as original_image:
+            source_size = original_image.size
+        _unregistered_previews(result, temp, capture, view_id, source_size, output)
     for item in result["parts"]:
         p = item["part"]
         item["source_mask_provenance"] = provenance[p]
