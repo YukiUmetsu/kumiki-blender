@@ -57,3 +57,41 @@ Semantic ID render uses a **single visibility-aware render**, not one isolated r
 ## Tests
 
 `pytest -q tests/test_character_fidelity.py` covers shape-vs-translation, aspect-ratio shape mismatch, color, calibrated/unverified depth, missing components, duplicate part IDs, source path traversal, pose mismatch, and report output. A small Blender 5.3 smoke fixture was also rendered locally to validate visibility/color/metric depth export; Blender itself is not required for normal unit tests.
+
+## Ungated advanced analysis (optional)
+
+Install without downloading any model or contacting Hugging Face:
+
+```bash
+python -m pip install -e '.[character-qa-advanced]'
+```
+
+`contour_geometry` adds normalized symmetric contour distances, 95th-percentile error, Hausdorff distance and curvature-distribution mismatch. `perceptual_color` adds CIEDE2000 median-palette difference; pixelwise CIEDE2000 is reported **only for verified matching camera/pose/registration**. They cannot override a failed silhouette or anatomical placement gate. The baseline CIE76 score is retained for backwards compatibility.
+
+An optional per-view `reference_depth_hint` can point to a local NPZ with a 2D float array named `depth_relative` in source pixel coordinates:
+
+```json
+"reference_depth_hint": {
+  "path": "depth/front_depth_hint.npz",
+  "provenance": "estimated",
+  "near_is_small": true
+}
+```
+
+Set `near_is_small=false` for disparity-style predictions where higher means closer. A source hint only generates a **relative Spearman rank correlation**, not metric-depth MAE; it is ignored if registration/pose is unverified. AI-estimated depth of paintings is an uncertain hypothesis, not anatomical ground truth. Blender itself supplies the metric sculpt depth. The model predictions must be produced separately, reviewed, and referenced as local NPZ files.
+
+### Optional SAM 2.1 segmentation (public weights)
+
+For unsegmented sheets, the official SAM 2 repository provides standalone public checkpoints without Hugging Face. Use the explicit downloader (model inference requires the separately installed SAM2 implementation):
+
+```bash
+mkdir -p ~/.cache/kumiki-blender/checkpoints
+python -m kumiki_blender.character_fidelity.public_models sam2.1-small \
+  --directory ~/.cache/kumiki-blender/checkpoints
+# Install SAM 2 separately if desired, without HF login:
+# python -m pip install 'git+https://github.com/facebookresearch/sam2.git'
+```
+
+Download is manual, never triggered during evaluation. Only two verified Meta-hosted URLs (`sam2.1-tiny` and `sam2.1-small`) are accepted. Weights are not bundled, and download success is not guaranteed on networks blocking Meta. **No Hugging Face account, token, access request, or gated model is required by this character-fidelity workflow.** The downloader prepares a checkpoint; it does not automatically segment images. Source-layer masks still take precedence over predicted masks.
+
+The optional Open3D and Trimesh libraries can be used independently for mesh inspection. Neither requires model weights. This feature does not install Depth Anything 3 or MoGe by default: their model runtime/dependencies and license-per-checkpoint suitability must be evaluated separately before enabling them as automated depth providers.
