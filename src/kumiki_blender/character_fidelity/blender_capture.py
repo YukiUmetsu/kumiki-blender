@@ -73,6 +73,8 @@ def build_visible_bvh(groups, extra_objects=()):
     vertices, faces = [], []
     for objs in [*groups.values(), extra_objects]:
         for obj in objs:
+            if obj.hide_render:
+                continue
             evaluated = obj.evaluated_get(depsgraph)
             try:
                 mesh = evaluated.to_mesh()
