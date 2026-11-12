@@ -83,3 +83,17 @@ def test_output_is_immutable(tmp_path):
     compare_sam_to_capture(manifest, capture, sam, tmp_path / "review")
     with pytest.raises(ValueError, match="new directory"):
         compare_sam_to_capture(manifest, capture, sam, tmp_path / "review")
+
+
+def test_sam_bridge_preserves_existing_measured_depth_reference(tmp_path):
+    import numpy as np
+
+    manifest, capture, sam = _fixture(tmp_path)
+    np.savez_compressed(manifest.parent / "truth.npz", depth_m=np.full((64, 64), 4.75))
+    data = json.loads(manifest.read_text())
+    data["views"][0]["reference_depth"] = {"path": "truth.npz",
+        "provenance": "measured", "units": "meters"}
+    manifest.write_text(json.dumps(data))
+    report = compare_sam_to_capture(manifest, capture, sam, tmp_path / "review")
+    assert report["parts"][0]["depth"]["status"] == "measured-calibrated-depth"
+    assert report["parts"][0]["depth"]["depth_mae_m"] == pytest.approx(.25)
