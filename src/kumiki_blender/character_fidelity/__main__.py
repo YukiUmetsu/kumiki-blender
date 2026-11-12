@@ -22,8 +22,33 @@ def main(argv: list[str] | None = None) -> int:
     compare.add_argument("--manifest", type=Path, required=True)
     compare.add_argument("--capture", type=Path, required=True)
     compare.add_argument("--output", type=Path, required=True)
+    segment = commands.add_parser("segment", help="Propose masks with a local SAM2.1 checkpoint")
+    segment.add_argument("--image", type=Path, required=True)
+    segment.add_argument("--prompts", type=Path, required=True)
+    segment.add_argument("--checkpoint", type=Path, required=True)
+    segment.add_argument("--output", type=Path, required=True)
+    segment.add_argument("--model", choices=("tiny", "small"), default="small")
+    segment.add_argument("--device", choices=("cpu", "mps", "cuda"), default="cpu")
+    segment.add_argument("--no-alpha-clipping", action="store_true")
+    hint = commands.add_parser("depth-hint", help="MoGe-2 estimated relative depth, local weights")
+    hint.add_argument("--image", type=Path, required=True)
+    hint.add_argument("--checkpoint", type=Path, required=True)
+    hint.add_argument("--output", type=Path, required=True)
+    hint.add_argument("--device", choices=("cpu", "mps", "cuda"), default="cpu")
     args = parser.parse_args(argv)
     try:
+        if args.command == "segment":
+            from .sam2_masks import segment_sheet
+            result = segment_sheet(args.image, args.prompts, args.checkpoint, args.output,
+                                   model=args.model, device=args.device,
+                                   clip_to_alpha=not args.no_alpha_clipping)
+            print(f"{args.output}/report.json: {result['status']}")
+            return 0
+        if args.command == "depth-hint":
+            from .moge_depth import estimate_depth_hint
+            result = estimate_depth_hint(args.image, args.checkpoint, args.output, device=args.device)
+            print(f"{args.output}/report.json: {result['status']}")
+            return 0
         if args.command == "capture":
             load_manifest(args.manifest)
             if not args.blend.is_file() or args.blend.is_symlink():
