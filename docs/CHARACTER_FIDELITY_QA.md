@@ -171,3 +171,10 @@ run `character_fidelity segment --model base-plus` or
 `character_fidelity depth-hint` with the local checkpoints. These commands
 never request Hugging Face access. Keep model weights and character artwork out
 of Git and do not approve generated masks without inspecting them.
+
+
+## Real Quill checkpoint smoke test (2026-11-12)
+
+The supplied SAM 2.1 Base+ and MoGe 2 Small-with-normals checkpoints completed actual PyTorch CPU inference on the original 614x722 Quill front illustration. No Hugging Face login, approval or download was used. The restricted runtime required temporary local compatibility helpers for Hydra/IOPath and utils3d; these helpers are not distributed or a substitute for proper upstream dependencies.
+
+SAM produced six unapproved semantic part proposals. The independently predicted coat region overlapped approximately 38% of the left wing and 31% of the right wing; the new diagnostic reports these conflicts without clipping source masks. MoGe produced estimated depth and camera-space normal maps, which are not metric ground truth for stylized artwork.

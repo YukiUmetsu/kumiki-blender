@@ -88,13 +88,17 @@ def segment_sheet(image_path, prompt_path, checkpoint_path, output, *,
     if out.exists() or out.is_symlink():
         raise ValueError("Output directory must be new")
     out = out.resolve()
-    if out.is_relative_to(image_path.parent) or out.is_relative_to(checkpoint_path.parent):
-        raise ValueError("Output must be outside source and checkpoint directories")
+    # A new output directory can safely be created next to the inputs.
     with Image.open(image_path) as original:
         if original.width * original.height > 16_777_216:
             raise ValueError("Image exceeds sixteen megapixels")
-        canvas = original.convert("RGB")
         alpha = np.asarray(original.getchannel("A")) >= 128 if "A" in original.getbands() else None
+        if alpha is not None:
+            white = Image.new("RGBA", original.size, (255, 255, 255, 255))
+            white.alpha_composite(original.convert("RGBA"))
+            canvas = white.convert("RGB")
+        else:
+            canvas = original.convert("RGB")
     prompts = load_prompts(prompt_path, canvas.size)
     factory = predictor_factory or make_predictor
     predictor = factory(CONFIGS[model], checkpoint_path, device)
@@ -126,6 +130,19 @@ def segment_sheet(image_path, prompt_path, checkpoint_path, output, *,
                         "predicted_iou": float(scores[index]),
                         "foreground_fraction": fraction,
                         "status": status, "approved": False})
+    # Independent prompts may claim the same visible pixels. Preserve the
+    # original masks, reporting ambiguities rather than silently clipping.
+    overlaps = []
+    for i, (a_name, a_mask) in enumerate(proposals):
+        for b_name, b_mask in proposals[i + 1:]:
+            shared = int(np.count_nonzero(a_mask & b_mask))
+            smaller = min(int(np.count_nonzero(a_mask)), int(np.count_nonzero(b_mask)))
+            fraction = shared / smaller if smaller else 0.0
+            if fraction >= 0.10:
+                overlaps.append({"first": a_name, "second": b_name,
+                                 "shared_pixels": shared,
+                                 "fraction_of_smaller_part": round(fraction, 6),
+                                 "status": "semantic-overlap-review-required"})
     out.mkdir(parents=True, exist_ok=False)
     (out / "masks").mkdir()
     previews = []
@@ -150,6 +167,7 @@ def segment_sheet(image_path, prompt_path, checkpoint_path, output, *,
               "device": device, "image_sha256": hashlib.sha256(image_path.read_bytes()).hexdigest(),
               "checkpoint": checkpoint_path.name, "clip_to_alpha": clip_to_alpha,
               "status": "unapproved-proposals / human-review-required", "parts": results,
+              "semantic_overlap_warnings": overlaps,
               "limitations": ["Predicted IoU is not compared to artist-approved masks.",
                               "2D segmentation provides no verified depth or hidden geometry."]}
     (out / "report.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")

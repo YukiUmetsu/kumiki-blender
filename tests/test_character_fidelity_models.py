@@ -146,3 +146,45 @@ def test_offline_checkpoint_inspection_refuses_unknown_architecture(tmp_path):
     torch.save({"model": {"foo": torch.zeros(3)}}, path)
     with pytest.raises(ValueError, match="not recognized"):
         inspect_checkpoint(path)
+
+
+def test_sam2_flags_overlap_without_changing_predicted_masks(tmp_path):
+    import json, numpy as np
+    from PIL import Image
+    from kumiki_blender.character_fidelity.sam2_masks import segment_sheet
+    im = tmp_path / "image.png"
+    Image.new("RGB", (80, 80), "white").save(im)
+    ckpt = tmp_path / "model.pt"
+    ckpt.write_bytes(b"fixture")
+    prompts = tmp_path / "prompts.json"
+    prompts.write_text(json.dumps({"schema_version": 1, "parts": [
+        {"id":"wing","category":"anatomy","box":[10,10,50,60]},
+        {"id":"coat","category":"costume","box":[25,10,65,60]}]}))
+    class Predictor:
+        def set_image(self, img): self.img = img
+        def predict(self, *, point_coords, point_labels, box, multimask_output):
+            m = np.zeros(self.img.shape[:2], dtype=bool)
+            x1,y1,x2,y2 = map(int, box)
+            m[y1:y2,x1:x2] = True
+            return np.stack([m]), np.array([0.96]), None
+    report = segment_sheet(im, prompts, ckpt, tmp_path / "out",
+                           predictor_factory=lambda *_: Predictor())
+    assert len(report["semantic_overlap_warnings"]) == 1
+    assert report["semantic_overlap_warnings"][0]["fraction_of_smaller_part"] > 0.5
+    assert not any(p["approved"] for p in report["parts"])
+    assert np.count_nonzero(np.array(Image.open(tmp_path / "out/masks/wing.png"))) == 2000
+
+def test_depth_output_beside_checkpoint_is_permitted(tmp_path):
+    import numpy as np
+    from PIL import Image
+    from kumiki_blender.character_fidelity.moge_depth import estimate_depth_hint
+    im = tmp_path / "image.png"
+    Image.new("RGB",(30,24),"white").save(im)
+    ckpt = tmp_path / "checkpoint.pt"
+    ckpt.write_bytes(b"fixture")
+    def fake(rgb, *_):
+        h,w = rgb.shape[:2]
+        return {"depth":np.tile(np.linspace(1,4,w,dtype=np.float32),(h,1))}
+    report=estimate_depth_hint(im, ckpt, tmp_path / "depth-output", infer=fake)
+    assert report["status"].startswith("estimated-only")
+    assert (tmp_path / "depth-output/depth_hint.npz").is_file()

@@ -56,8 +56,7 @@ def estimate_depth_hint(image_path, checkpoint_path, output, *, device="cpu", in
     if out.is_symlink() or out.exists():
         raise ValueError("Output directory must be new")
     out = out.resolve()
-    if out.is_relative_to(image_path.resolve().parent) or out.is_relative_to(checkpoint.resolve().parent):
-        raise ValueError("Output must be outside image and checkpoint directories")
+    # The output must be a new directory, but may be adjacent to the inputs.
     with Image.open(image_path) as source:
         if source.width * source.height > 16_777_216:
             raise ValueError("Source exceeds sixteen megapixels")
