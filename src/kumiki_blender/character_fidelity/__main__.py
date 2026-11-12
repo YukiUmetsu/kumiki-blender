@@ -7,7 +7,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-from .evaluate import evaluate_character
 from .schema import load_manifest
 
 
@@ -35,6 +34,7 @@ def main(argv: list[str] | None = None) -> int:
                        str(Path(__file__).with_name("blender_capture.py")), "--",
                        "--manifest", str(args.manifest.resolve()), "--output", str(args.output.resolve())]
             return subprocess.run(command, check=False).returncode
+        from .evaluate import evaluate_character  # expensive QA dependencies only for compare
         result = evaluate_character(args.manifest, args.capture, args.output)
         print(f"{args.output}/report.json: {result['status']}")
         return 0

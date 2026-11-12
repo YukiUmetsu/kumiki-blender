@@ -1,6 +1,6 @@
 """Blender background capture: visible semantic IDs, unlit color and metric Z depth.
 
-Usage: blender -b scene.blend --python scripts/blender_character_fidelity_capture.py --
+Usage: blender -b scene.blend --python /path/to/character_fidelity/blender_capture.py --
        --manifest path/config.json --output path/new-capture
 
 Does not save or overwrite the source .blend. Scene changes are in-memory only.

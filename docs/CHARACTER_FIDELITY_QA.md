@@ -37,8 +37,8 @@ Copy and edit [`examples/character-fidelity.example.json`](../examples/character
 |---|---|---|
 | Intrinsic **shape** | Isolated silhouette IoU after uniform scale and translation, *aspect preserved*; source vs sculpt width/height ratio | Fine hidden topology and volumetric continuity |
 | Registered **shape + placement** | World-scale-projected IoU, bbox ratios, area ratio, centroid XY offset, symmetric contour mean/P95, boundary F1 at 2/5/10 px | Likeness if camera/pose is wrong |
-| **Color** | Median source vs unlit Blender material/texture Base Color in RGB and CIE76 ΔE in Lab | Painterly highlights, lighting and translucency; ΔE is not ΔE2000 |
-| **Detail proxy** | Mask-interior Laplacian magnitude/edge fraction (source art vs material-color render) | Material roughness, full PBR textures, sculpt surface quality |
+| **Color** | Median source vs unlit Blender material/texture Base Color in RGB and CIE76 ΔE in Lab; 16-bin Lab marginal histogram total-variation distance for color patterns | Painterly highlights, lighting and translucency; ΔE is not ΔE2000 |
+| **Detail proxy** | Mask-interior Laplacian magnitude/edge fraction, gradient intensity and 8-bin edge orientation histogram (source art vs material-color render) | Material roughness, full PBR textures, sculpt surface quality |
 | **Depth** | Camera-visible intersection depth P10/P50/P90, and camera-space 3D bound range for each group | Ground-truth depth from a single uncalibrated illustration |
 | Measured source **depth** (optional) | Same-camera metric-depth MAE/P95 on valid visible correspondence | Completeness of hidden geometry |
 

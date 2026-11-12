@@ -63,6 +63,14 @@ def test_color_and_detail_are_independent():
     assert same["delta_e76"] == pytest.approx(0)
     assert different["delta_e76"] > 60
     assert surface_detail(red, m)["mean_abs_laplacian"] == 0
+    # A flat object and a patterned one can have similar median RGB, but
+    # the Lab distribution check must still see the missing pattern.
+    patterned = np.full_like(red, 128)
+    patterned[:, :16, :] = 64
+    patterned[:, 16:, :] = 192
+    flat = np.full_like(red, 128)
+    assert color(patterned, flat, m, m)["lab_histogram_tvd_mean"] > .3
+    assert len(surface_detail(patterned, m)["edge_orientation_histogram_8"]) == 8
 
 
 def test_depth_requires_calibrated_ground_truth():

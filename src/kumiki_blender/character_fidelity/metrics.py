@@ -103,11 +103,21 @@ def color(reference_rgb: np.ndarray, sculpt_rgb: np.ndarray,
         median_lab = np.median(lab, axis=0)
         median_lab = np.array([median_lab[0] * 100 / 255, median_lab[1] - 128,
                                median_lab[2] - 128])
-        samples.append((median_rgb, median_lab))
+        samples.append((median_rgb, median_lab, lab))
+    histogram_tvd = []
+    for channel, limits in enumerate(((0, 100), (-128, 127), (-128, 127))):
+        def normalized_hist(lab_values):
+            values = lab_values[:, channel]
+            values = values * 100 / 255 if channel == 0 else values - 128
+            counts, _ = np.histogram(values, bins=16, range=limits)
+            return counts.astype(float) / len(values)
+        histogram_tvd.append(float(np.abs(normalized_hist(samples[0][2]) -
+                                           normalized_hist(samples[1][2])).sum() / 2))
     return {"status": "diagnostic", "metric": "CIE76-median-Lab",
             "source_median_rgb": np.round(samples[0][0], 1).tolist(),
             "sculpt_median_rgb": np.round(samples[1][0], 1).tolist(),
             "delta_e76": round(float(np.linalg.norm(samples[0][1]-samples[1][1])), 3),
+            "lab_histogram_tvd_mean": round(float(np.mean(histogram_tvd)), 5),
             "limitations": "Painted lighting, gradients and shadowing may shift the source palette"}
 
 
@@ -118,8 +128,20 @@ def surface_detail(rgb: np.ndarray, mask: np.ndarray) -> dict[str, Any]:
         return {"status": "insufficient-interior"}
     gray = cv2.cvtColor(rgb[:, :, :3].astype("uint8"), cv2.COLOR_RGB2GRAY)
     laplacian = np.abs(cv2.Laplacian(gray.astype(np.float32), cv2.CV_32F, ksize=3))
+    gx = cv2.Sobel(gray.astype(np.float32), cv2.CV_32F, 1, 0, ksize=3)
+    gy = cv2.Sobel(gray.astype(np.float32), cv2.CV_32F, 0, 1, ksize=3)
+    gradient = np.hypot(gx, gy)
+    active = inner & (gradient > 12)
+    if active.any():
+        angle = (np.arctan2(gy[active], gx[active]) % np.pi)
+        counts, _ = np.histogram(angle, bins=8, range=(0, np.pi))
+        orientation = np.round(counts / counts.sum(), 4).tolist()
+    else:
+        orientation = [0.0] * 8
     return {"status": "diagnostic", "mean_abs_laplacian": round(float(laplacian[inner].mean()), 3),
-            "edge_fraction_threshold_12": round(float((laplacian[inner] > 12).mean()), 5)}
+            "edge_fraction_threshold_12": round(float((laplacian[inner] > 12).mean()), 5),
+            "gradient_magnitude_mean": round(float(gradient[inner].mean()), 3),
+            "edge_orientation_histogram_8": orientation}
 
 
 def depth(sculpt_depth: np.ndarray, sculpt_mask: np.ndarray, *,
