@@ -32,7 +32,7 @@ def regular_file(path: Path, label: str) -> Path:
 def load_prompts(path: Path, size: tuple[int, int]) -> dict:
     data = json.loads(regular_file(path, "Prompts").read_text(encoding="utf-8"))
     parts = data.get("parts") if isinstance(data, dict) else None
-    if data.get("schema_version") != 1 or not isinstance(parts, list) or not 1 <= len(parts) <= 32:
+    if not isinstance(data, dict) or data.get("schema_version") != 1 or not isinstance(parts, list) or not 1 <= len(parts) <= 32:
         raise ValueError("Expected schema_version=1 and 1 to 32 parts")
     width, height = size
     used = set()
@@ -135,10 +135,15 @@ def segment_sheet(image_path, prompt_path, checkpoint_path, output, *,
         pane.paste(tint, Image.fromarray(binary.astype(np.uint8) * 95))
         ImageDraw.Draw(pane).text((8, 8), name, fill="white", stroke_width=2, stroke_fill="black")
         previews.append(pane)
-    preview = Image.new("RGB", (canvas.width * len(previews), canvas.height), "white")
+    # Keep review mosaics bounded even for 32 parts and 4K input artwork.
+    cell_w, cell_h = (max(1, min(canvas.width, 720)),
+                      max(1, min(canvas.height, 720)))
+    columns = min(4, len(previews))
+    rows = (len(previews) + columns - 1) // columns
+    preview = Image.new("RGB", (columns * cell_w, rows * cell_h), "#f5f5f5")
     for i, pane in enumerate(previews):
-        preview.paste(pane, (i * canvas.width, 0))
-    preview.thumbnail((4096, 4096), Image.Resampling.LANCZOS)
+        pane.thumbnail((cell_w, cell_h), Image.Resampling.LANCZOS)
+        preview.paste(pane, ((i % columns) * cell_w, (i // columns) * cell_h))
     preview.save(out / "review.jpg", quality=90)
     report = {"schema_version": 1, "provider": "sam2.1-local", "model": model,
               "device": device, "image_sha256": hashlib.sha256(image_path.read_bytes()).hexdigest(),
