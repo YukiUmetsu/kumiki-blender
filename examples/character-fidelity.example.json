@@ -1,0 +1,66 @@
+{
+  "schema_version": 1,
+  "views": [
+    {
+      "id": "front",
+      "camera": "Reference Front Camera",
+      "width": 1024,
+      "height": 1024,
+      "reference_image": "references/view_front.png",
+      "alignment": {
+        "verified": false,
+        "source_to_render": [[1, 0, 0], [0, 1, 0]]
+      }
+    },
+    {
+      "id": "side",
+      "camera": "Reference Side Camera",
+      "width": 1024,
+      "height": 1024,
+      "reference_image": "references/view_side.png",
+      "alignment": {
+        "verified": false,
+        "source_to_render": [[1, 0, 0], [0, 1, 0]]
+      }
+    }
+  ],
+  "parts": [
+    {
+      "id": "head",
+      "category": "anatomy",
+      "objects": ["Skull*", "FaceBase*", "CrownFeather*"],
+      "reference_masks": {"front": "masks/front/head.png", "side": "masks/side/head.png"}
+    },
+    {
+      "id": "wings",
+      "category": "anatomy",
+      "objects": ["Wing_*", "FlightFeather_*", "Covert_*"],
+      "reference_masks": {"front": "masks/front/wings.png", "side": "masks/side/wings.png"},
+      "unmatched_pose_views": ["side"]
+    },
+    {
+      "id": "feet",
+      "category": "anatomy",
+      "objects": ["Feet_*", "Talon_*"],
+      "reference_masks": {"front": "masks/front/feet.png", "side": "masks/side/feet.png"}
+    },
+    {
+      "id": "coat",
+      "category": "costume",
+      "objects": ["Coat_*", "Lapel_*", "Sleeve_*"],
+      "reference_masks": {"front": "masks/front/coat.png", "side": "masks/side/coat.png"}
+    },
+    {
+      "id": "waistcoat",
+      "category": "costume",
+      "objects": ["Waistcoat_*", "Vest_*"],
+      "reference_masks": {"front": "masks/front/waistcoat.png"}
+    },
+    {
+      "id": "spectacles",
+      "category": "accessory",
+      "objects": ["Spectacles_*", "Glasses_*"],
+      "reference_masks": {"front": "masks/front/spectacles.png", "side": "masks/side/spectacles.png"}
+    }
+  ]
+}
