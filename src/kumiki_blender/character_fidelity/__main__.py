@@ -35,8 +35,24 @@ def main(argv: list[str] | None = None) -> int:
     hint.add_argument("--checkpoint", type=Path, required=True)
     hint.add_argument("--output", type=Path, required=True)
     hint.add_argument("--device", choices=("cpu", "mps", "cuda"), default="cpu")
+    reconcile = commands.add_parser("reconcile", help="Compare SAM masks with Blender capture")
+    reconcile.add_argument("--manifest", type=Path, required=True)
+    reconcile.add_argument("--capture", type=Path, required=True)
+    reconcile.add_argument("--sam", type=Path, required=True)
+    reconcile.add_argument("--output", type=Path, required=True)
+    reconcile.add_argument("--depth-hints", type=Path)
+    reconcile.add_argument("--view", default="front")
+    reconcile.add_argument("--mapping", type=Path, help="JSON mapping of manifest part IDs to SAM IDs")
     args = parser.parse_args(argv)
     try:
+        if args.command == "reconcile":
+            import json
+            from .sam_bridge import compare_sam_to_capture
+            mapping = json.loads(args.mapping.read_text(encoding="utf-8")) if args.mapping else None
+            report = compare_sam_to_capture(args.manifest, args.capture, args.sam, args.output,
+                        view_id=args.view, depth_hints=args.depth_hints, mapping=mapping)
+            print(f"{args.output}/report.json: {report['status']}")
+            return 0
         if args.command == "segment":
             from .sam2_masks import segment_sheet
             result = segment_sheet(args.image, args.prompts, args.checkpoint, args.output,

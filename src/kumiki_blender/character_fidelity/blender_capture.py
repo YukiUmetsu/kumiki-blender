@@ -66,12 +66,12 @@ def camera_depth_extent(objects, camera):
     return [round(min(depths), 5), round(max(depths), 5)] if depths else None
 
 
-def build_visible_bvh(groups):
+def build_visible_bvh(groups, extra_objects=()):
     """Single world-space BVH of evaluated, assigned geometry; includes modifiers."""
     from mathutils.bvhtree import BVHTree
     depsgraph = bpy.context.evaluated_depsgraph_get()
     vertices, faces = [], []
-    for objs in groups.values():
+    for objs in [*groups.values(), extra_objects]:
         for obj in objs:
             evaluated = obj.evaluated_get(depsgraph)
             try:
@@ -91,7 +91,7 @@ def build_visible_bvh(groups):
     return BVHTree.FromPolygons(vertices, faces, all_triangles=False)
 
 
-def render_depth(camera, scene, bvh, width, height):
+def render_surface(camera, scene, bvh, width, height):
     """Metric optical-axis Z at camera pixel centers; nan for ray misses."""
     frame = camera.data.view_frame(scene=scene)
     left, right = min(v.x for v in frame), max(v.x for v in frame)
@@ -102,6 +102,7 @@ def render_depth(camera, scene, bvh, width, height):
     back_transform = matrix.inverted()
     orthographic = camera.data.type == "ORTHO"
     out = np.full((height, width), np.nan, dtype=np.float32)
+    normals = np.full((height, width, 3), np.nan, dtype=np.float32)
     if camera.data.type not in ("ORTHO", "PERSP"):
         raise ValueError("Only orthographic and perspective reference cameras are supported")
     forward = rotation @ Vector((0, 0, -1))
@@ -115,12 +116,21 @@ def render_depth(camera, scene, bvh, width, height):
             else:
                 ray_origin = matrix.translation
                 ray_direction = (rotation @ Vector((cx, cy, negative_z))).normalized()
-            hit, _, _, _ = bvh.ray_cast(ray_origin, ray_direction)
+            hit, surface_normal, _, _ = bvh.ray_cast(ray_origin, ray_direction)
             if hit is not None:
                 depth_m = -(back_transform @ hit).z
                 if depth_m > 0:
                     out[row, col] = depth_m
-    return out
+                    normal_camera = rotation.inverted() @ surface_normal
+                    if normal_camera.length > 1e-8:
+                        normal_camera.normalize()
+                        normals[row, col] = tuple(normal_camera)
+    return out, normals
+
+
+def render_depth(camera, scene, bvh, width, height):
+    """Backwards-compatible, depth-only variant."""
+    return render_surface(camera, scene, bvh, width, height)[0]
 
 
 def capture(manifest_path: Path, output: Path) -> None:
@@ -148,17 +158,23 @@ def capture(manifest_path: Path, output: Path) -> None:
         if camera is None or camera.type != "CAMERA":
             raise ValueError(f"Missing Blender camera: {view['camera']}")
         camera_by_view[view["id"]] = camera
+    occlude_unassigned = config.get("unassigned_behavior", "hide") == "occlude"
+    extra_occluders = [obj for obj in objects if obj.name not in assignments and not obj.hide_render] if occlude_unassigned else []
     original_hide = {obj.name: obj.hide_render for obj in objects}
     original_color = {obj.name: tuple(obj.color) for obj in objects}
     original_materials = {obj.name: [slot.material for slot in obj.material_slots] for obj in objects}
     output.mkdir(parents=True, exist_ok=False)
     record = {"schema_version": 1, "assignments": assignments, "palette": palette, "views": {},
-              "source_scene_saved": False, "occlusion": "all assigned parts rendered together"}
+              "source_scene_saved": False, "occlusion": "assigned and unassigned visible objects" if occlude_unassigned else "assigned parts only",
+              "unassigned_occluders": [obj.name for obj in extra_occluders]}
     try:
         for obj in objects:
-            obj.hide_render = obj.name not in assignments
+            visible = obj.name in assignments or (occlude_unassigned and obj in extra_occluders)
+            obj.hide_render = original_hide[obj.name] or not visible
             if obj.name in assignments:
                 obj.color = (*palette[assignments[obj.name]], 1.0)
+            elif occlude_unassigned:
+                obj.color = (0.0, 0.0, 0.0, 1.0)
         scene.render.resolution_percentage = 100
         scene.render.image_settings.file_format = "PNG"
         scene.render.image_settings.color_mode = "RGBA"
@@ -180,7 +196,7 @@ def capture(manifest_path: Path, output: Path) -> None:
             scene.render.filepath = str(view_dir / "labels.png")
             bpy.ops.render.render(write_still=True)
             record["views"][vid] = {"labels": f"{vid}/labels.png", "albedo": f"{vid}/albedo.png",
-                "depth_npz": f"{vid}/depth_m.npz", "part_depth_extent_m": {
+                "depth_npz": f"{vid}/depth_m.npz", "normal_npz": f"{vid}/normal_camera.npz", "part_depth_extent_m": {
                     pid: camera_depth_extent(items, scene.camera) for pid, items in groups.items()}}
         # Replace material shaders *in memory* with unlit Base Color; preserve texture connections.
         material_cache = {}
@@ -192,15 +208,16 @@ def capture(manifest_path: Path, output: Path) -> None:
         scene.render.engine = "CYCLES"
         scene.cycles.samples = 1
         scene.render.image_settings.color_mode = "RGBA"
-        bvh = build_visible_bvh(groups)
+        bvh = build_visible_bvh(groups, extra_occluders)
         for view in config["views"]:
             vid, folder = view["id"], output / view["id"]
             scene.camera = camera_by_view[vid]
             scene.render.resolution_x, scene.render.resolution_y = view["width"], view["height"]
             scene.render.filepath = str(folder / "albedo.png")
             bpy.ops.render.render(write_still=True)
-            depth_map = render_depth(scene.camera, scene, bvh, view["width"], view["height"])
+            depth_map, normal_map = render_surface(scene.camera, scene, bvh, view["width"], view["height"])
             np.savez_compressed(folder / "depth_m.npz", depth_m=depth_map)
+            np.savez_compressed(folder / "normal_camera.npz", normal_camera=normal_map)
         (output / "capture.json").write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
     finally:
         for obj in objects:

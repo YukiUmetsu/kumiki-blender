@@ -33,6 +33,8 @@ def load_manifest(path: str | Path) -> dict[str, Any]:
     data = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(data, dict) or data.get("schema_version") != 1:
         raise ValueError("Expected character fidelity schema_version=1")
+    if data.get("unassigned_behavior", "hide") not in ("hide", "occlude"):
+        raise ValueError("unassigned_behavior must be hide or occlude")
     views, parts = data.get("views"), data.get("parts")
     if not isinstance(views, list) or not views or not isinstance(parts, list) or not parts:
         raise ValueError("Manifest must declare at least one view and one part")

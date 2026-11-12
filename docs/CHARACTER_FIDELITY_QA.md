@@ -178,3 +178,45 @@ of Git and do not approve generated masks without inspecting them.
 The supplied SAM 2.1 Base+ and MoGe 2 Small-with-normals checkpoints completed actual PyTorch CPU inference on the original 614x722 Quill front illustration. No Hugging Face login, approval or download was used. The restricted runtime required temporary local compatibility helpers for Hydra/IOPath and utils3d; these helpers are not distributed or a substitute for proper upstream dependencies.
 
 SAM produced six unapproved semantic part proposals. The independently predicted coat region overlapped approximately 38% of the left wing and 31% of the right wing; the new diagnostic reports these conflicts without clipping source masks. MoGe produced estimated depth and camera-space normal maps, which are not metric ground truth for stylized artwork.
+
+
+## Compare model captures against SAM source-part proposals
+
+\`character_fidelity reconcile\` uses the already-implemented source-to-Blender
+metrics with SAM 2.1 masks and optional MoGe 2 depth hints, without changing any
+artwork, checkpoints, or .blend file:
+
+\`\`\`bash
+python -m kumiki_blender.character_fidelity reconcile \
+  --manifest character_fidelity.json --capture /tmp/part-capture-001 \
+  --sam /tmp/sam-proposals-001 --depth-hints /tmp/moge-hints-001 \
+  --view front --output /tmp/fidelity-reconcile-001
+\`\`\`
+
+Optional \`--mapping mapping.json\` is a JSON dictionary of manifest IDs to
+SAM proposal IDs. The source-image SHA-256 must match the segmentation report.
+SAM proposals remain **unapproved**, even at high predicted IoU. Reported
+semantic-mask overlaps are preserved as warnings rather than auto-clipped.
+The output contains \`report.json\`, per-part registered (if verified) shape
+overlays and \`review.md\` with separate shape, color, placement and mask review
+observations. If camera alignment is unverified, no registered placement,
+pixelwise color or source metric-depth accuracy is asserted.
+
+### Preserve unassigned occluders
+
+The manifest may set \`"unassigned_behavior": "occlude"\` to retain unlabeled,
+artist-visible meshes as neutral occluders during ID capture and as ray-hit
+geometry for depth; the previous default is \`"hide"\`. Existing hidden objects
+remain hidden. Capture records the list of unassigned occluders.
+
+A new \`<view>/normal_camera.npz\` contains visible mesh normals in Blender
+camera coordinates, in addition to the existing metric \`depth_m.npz\`.
+These measured normals must **not** be compared numerically with painted-image
+MoGe normal estimates until both camera conventions and image registration
+are established.
+
+On Quill revision 04 the first front-view real capture succeeded, with
+six SAM proposals (head, two wings, coat, waistcoat and bow tie) and MoGe depth
+hints. Wing-coat source-mask overlap and unverified alignment mean those
+shape diagnostics are provisional. Model weights, character artwork and
+captured render assets are not included in the Git repository.
