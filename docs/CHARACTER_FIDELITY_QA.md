@@ -95,3 +95,51 @@ python -m kumiki_blender.character_fidelity.public_models sam2.1-small \
 Download is manual, never triggered during evaluation. Only two verified Meta-hosted URLs (`sam2.1-tiny` and `sam2.1-small`) are accepted. Weights are not bundled, and download success is not guaranteed on networks blocking Meta. **No Hugging Face account, token, access request, or gated model is required by this character-fidelity workflow.** The downloader prepares a checkpoint; it does not automatically segment images. Source-layer masks still take precedence over predicted masks.
 
 The optional Open3D and Trimesh libraries can be used independently for mesh inspection. Neither requires model weights. This feature does not install Depth Anything 3 or MoGe by default: their model runtime/dependencies and license-per-checkpoint suitability must be evaluated separately before enabling them as automated depth providers.
+
+
+## SAM 2.1 prompted character-part segmentation
+
+This runs upstream Meta SAM2 inference with a **local** official checkpoint. The Python adapter makes no Hugging Face API calls, downloads no weights, and saves proposed, unapproved masks only.
+
+Install dependencies and upstream SAM2 code:
+
+~~~bash
+python -m pip install -e '.[character-qa-models]'
+python -m pip install 'git+https://github.com/facebookresearch/sam2.git'
+mkdir -p "$HOME/.cache/kumiki-blender/checkpoints"
+python -m kumiki_blender.character_fidelity.public_models sam2.1-small \
+  --directory "$HOME/.cache/kumiki-blender/checkpoints"
+~~~
+
+The downloader uses an allowlisted direct Meta URL rather than Hugging Face. With no network, supply an already downloaded official checkpoint file.
+
+Review and edit examples/character-segmentation-prompts.example.json. It supplies initial pixel clicks and boxes for Quill's 614x722 original front artwork, not verified masks. This is prompt-guided segmentation, NOT automatic text-to-object detection.
+
+~~~bash
+python -m kumiki_blender.character_fidelity segment \
+  --image /path/to/turnarounds/view_front.png \
+  --prompts examples/character-segmentation-prompts.example.json \
+  --checkpoint "$HOME/.cache/kumiki-blender/checkpoints/sam2.1_hiera_small.pt" \
+  --model small --device mps --output /tmp/quill-sam-001
+~~~
+
+Use --device cpu on Linux without supported acceleration, cuda when available. Read review.jpg and report.json; manually approve each output mask before providing it as a source annotation. Output masks use the original full canvas dimensions. Transparent background clipping is enabled by default; turn it off only if the artwork requires it. SAM2 predicted IoU is not a verified comparison with the intended source feature. Original isolated PNG alpha layers, where available, remain preferable to generated masks.
+
+## Optional MoGe-2 relative-depth hints using local weights
+
+Install Microsoft's open-source MoGe package separately from https://github.com/microsoft/MoGe. Obtain an explicitly public MoGe-2 checkpoint through a supported public download process. The command below accepts a **trusted local file path**; it does not contact Hugging Face, download a model, or use a registry model identifier.
+
+~~~bash
+python -m kumiki_blender.character_fidelity depth-hint \
+  --image /path/to/turnarounds/view_front.png \
+  --checkpoint /path/to/local-moge-2-vits-normal.pt \
+  --device mps --output /tmp/quill-depth-001
+~~~
+
+The output includes depth_hint.npz with a 2D depth_relative float array, depth_hint.png and report.json. Copy the NPZ to a manifest-relative file and add a reference_depth_hint object with path, provenance=estimated, near_is_small=true. Use the existing relative rank comparison only after matching camera and pose have been independently verified.
+
+**Single-illustration inferred depth is not measured depth.** Never put it into the reference_depth ground-truth field or compare absolute meters against Blender as if validated. The depth map may be unreliable for stylized feathers and costume layering.
+
+## Validation boundary
+
+The model integration regression suite in tests/test_character_fidelity_models.py uses mock predictors; it verifies mask shape, prompt validation, missing-local-checkpoint handling, and depth-hint NPZ compatibility without downloading weights. Live inference with public weights and Quill's full sheet remains unverified until the actual checkpoint files can be loaded locally. Do not commit model weights or the supplied character artwork.
