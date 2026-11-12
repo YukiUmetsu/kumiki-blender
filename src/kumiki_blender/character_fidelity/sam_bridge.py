@@ -138,13 +138,18 @@ def compare_sam_to_capture(manifest: str | Path, capture: str | Path,
         current_view = staged["views"][0]
         shutil.copyfile(source, temp / "source.png")
         current_view["reference_image"] = "source.png"
+        for field, filename in (("reference_depth_hint", "saved_source_hint.npz"),
+                                ("reference_depth", "saved_metric_source_depth.npz")):
+            if field in current_view:
+                declared = current_view[field]
+                shutil.copyfile(asset(manifest.resolve().parent, declared["path"]), temp / filename)
+                declared["path"] = filename
         if depth_hints is not None:
             hint = asset(Path(depth_hints), "depth_hint.npz")
             shutil.copyfile(hint, temp / "depth_hint.npz")
             current_view["reference_depth_hint"] = {
                 "path": "depth_hint.npz", "provenance": "estimated", "near_is_small": True}
-        # Estimated depth is NOT the measured reference_depth contract.
-        current_view.pop("reference_depth", None)
+        # Estimated depth hints never replace a separate calibrated source depth.
         for part in staged["parts"]:
             part["unmatched_pose_views"] = [v for v in part.get("unmatched_pose_views", []) if v == view_id]
             pid, sid = part["id"], mapping.get(part["id"], part["id"])
