@@ -11,6 +11,7 @@ import numpy as np
 from PIL import Image, ImageDraw
 
 from .metrics import color, depth, shape, surface_detail
+from .advanced_metrics import contour_geometry, perceptual_color, relative_depth_hint
 from .schema import asset, load_manifest
 
 
@@ -115,6 +116,15 @@ def evaluate_character(manifest: str | Path, capture: str | Path, output: str | 
         aligned_rgb = _warp(source_rgb, transform, size, nearest=False) if verified else None
         depth_data = np.load(asset(capture, view_meta["depth_npz"]), allow_pickle=False)
         candidate_depth = depth_data["depth_m"]
+        ref_hint = None
+        if view.get("reference_depth_hint") and verified:
+            hint_npz = np.load(asset(manifest_path.parent, view["reference_depth_hint"]["path"]), allow_pickle=False)
+            if "depth_relative" not in hint_npz:
+                raise ValueError("Relative depth hint NPZ must contain depth_relative")
+            raw_hint = hint_npz["depth_relative"]
+            if raw_hint.shape != source_rgb.shape[:2]:
+                raise ValueError("Relative depth hint must match source illustration dimensions")
+            ref_hint = _warp(raw_hint.astype(np.float32), transform, size, nearest=False)
         ref_depth = None
         if view.get("reference_depth") and verified:
             source_depth = np.load(asset(manifest_path.parent, view["reference_depth"]["path"]),
@@ -137,12 +147,19 @@ def evaluate_character(manifest: str | Path, capture: str | Path, output: str | 
             ref_mask = _warp(source_mask.astype(np.uint8), transform, size, nearest=True).astype(bool) if score else source_mask
             result: dict[str, Any] = {"view": vid, "part": pid, "category": part["category"],
                 "pose_matched": pose, "shape": shape(ref_mask, mod_mask, registered=score)}
+            result["contour_geometry"] = contour_geometry(ref_mask, mod_mask)
+            # Palette ΔE00 is intrinsic; per-pixel ΔE00 requires trusted registration.
+            result["perceptual_color"] = perceptual_color(
+                aligned_rgb if score else source_rgb, flat, ref_mask, mod_mask, registered=score)
             # Color distributions require no pixel correspondence; shape does.
             result["color"] = color(source_rgb, flat, source_mask, mod_mask)
             result["detail_proxy"] = {"source": surface_detail(source_rgb, source_mask),
                                        "sculpt": surface_detail(flat, mod_mask)}
             result["depth"] = depth(candidate_depth, mod_mask, reference_depth=ref_depth if score else None,
                                      reference_mask=ref_mask if score else None, calibrated=score and ref_depth is not None)
+            if ref_hint is not None and score:
+                result["depth_hint"] = relative_depth_hint(ref_hint, candidate_depth, ref_mask, mod_mask,
+                    verified_alignment=True, near_is_small=view["reference_depth_hint"]["near_is_small"])
             result["camera_depth_extent_m"] = view_meta.get("part_depth_extent_m", {}).get(pid)
             if score:
                 result["comparison"] = f"comparisons/{vid}/{pid}.png"
@@ -161,6 +178,7 @@ def evaluate_character(manifest: str | Path, capture: str | Path, output: str | 
         "limitations": ["No global likeness score or automatic artistic approval.",
             "Shape and placement use explicit verified view alignment; mismatched poses are intrinsic-only.",
             "Unlit color and 2D detail are diagnostics, not texture/material fidelity certification.",
-            "Single artwork cannot establish actual depth; numeric depth error requires measured same-camera metric ground truth."]}
+            "Single artwork cannot establish actual depth; numeric depth error requires measured same-camera metric ground truth.",
+            "AI relative-depth hints report rank ordering only and are not validated source depth."]}
     (target / "report.json").write_text(json.dumps(report, indent=2) + "\n", encoding="utf-8")
     return report
