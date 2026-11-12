@@ -152,3 +152,15 @@ def test_pose_mismatch_reports_no_false_registered_score(tmp_path):
     report = evaluate_character(manifest, capture, tmp_path / "output")
     assert report["parts"][0]["pose_matched"] is False
     assert "registered_iou" not in report["parts"][0]["shape"]
+
+
+def test_optional_unassigned_occluder_policy_is_validated(tmp_path):
+    manifest, _ = _make_fixture(tmp_path)
+    cfg = json.loads(manifest.read_text())
+    cfg["unassigned_behavior"] = "occlude"
+    manifest.write_text(json.dumps(cfg))
+    assert load_manifest(manifest)["unassigned_behavior"] == "occlude"
+    cfg["unassigned_behavior"] = "unhide-all"
+    manifest.write_text(json.dumps(cfg))
+    with pytest.raises(ValueError, match="unassigned_behavior"):
+        load_manifest(manifest)
