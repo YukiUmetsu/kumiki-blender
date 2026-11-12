@@ -1,0 +1,157 @@
+"""Compare unapproved SAM2 masks with visibility-aware Blender component capture.
+
+The supplied SAM image hash must match the reference image. We stage masks in
+a temporary manifest and reuse shape, placement, color, texture and relative
+depth QA. All source assets, .blend files and checkpoint files stay unchanged.
+"""
+from __future__ import annotations
+
+import copy
+import hashlib
+import json
+import shutil
+import tempfile
+from pathlib import Path
+from typing import Any
+
+from .schema import asset, load_manifest
+
+
+def _observations(item: dict[str, Any], conflict: bool) -> list[dict[str, str]]:
+    observations: list[dict[str, str]] = []
+    shape = item.get("shape", {})
+    if shape.get("status") == "missing-part":
+        observations.append({"channel": "mapping", "severity": "critical",
+            "message": "Part missing from either source mask or visible sculpt. Check object selection and occlusion first."})
+    elif shape.get("intrinsic_shape_iou") is not None and shape["intrinsic_shape_iou"] < .70:
+        observations.append({"channel": "shape", "severity": "high",
+            "message": "Contour differs even after uniform size normalization; inspect outline, taper and tips before changing position."})
+    if shape.get("registration_verified"):
+        delta = shape.get("centroid_offset_xy_px")
+        if delta is not None and max(abs(value) for value in delta) >= 10:
+            observations.append({"channel": "position", "severity": "medium",
+                "message": f"Part centroid is offset {delta} registered pixels; verify camera landmarks and attachment."})
+    else:
+        observations.append({"channel": "registration", "severity": "review",
+            "message": "Camera or pose not verified. Position, pixelwise color and metric depth agreement cannot be claimed."})
+    de = item.get("perceptual_color", {}).get("median_palette_delta_e2000")
+    if de is not None and de > 12:
+        observations.append({"channel": "color", "severity": "medium",
+            "message": "Unlit sculpt base-color palette differs from painted reference; lighting style may contribute."})
+    if conflict:
+        observations.append({"channel": "segmentation", "severity": "high",
+            "message": "SAM part overlaps another source mask; review original source layers or re-prompt segmentation."})
+    return observations
+
+
+def compare_sam_to_capture(manifest: str | Path, capture: str | Path,
+                           segmentation: str | Path, output: str | Path, *,
+                           view_id: str = "front", depth_hints: str | Path | None = None,
+                           mapping: dict[str, str] | None = None) -> dict[str, Any]:
+    """Reconcile unapproved SAM proposals with an existing Blender capture.
+
+    Optional mapping maps manifest part IDs to SAM proposal IDs. When SAM
+    has no matching part, retain the existing manifest mask with explicit
+    provenance; never infer a missing mask from a different camera view.
+    """
+    manifest, capture, segmentation, output = map(Path, (manifest, capture, segmentation, output))
+    config = load_manifest(manifest)
+    view = next((v for v in config["views"] if v["id"] == view_id), None)
+    if view is None:
+        raise ValueError(f"Unknown reference view: {view_id}")
+    if output.is_symlink() or output.exists():
+        raise ValueError("QA output must be a new directory")
+    if any(output.resolve().is_relative_to(path.resolve()) for path in
+           (manifest.parent, capture, segmentation)):
+        raise ValueError("QA output must be outside reference, segmentation and capture directories")
+    source = asset(manifest.resolve().parent, view["reference_image"])
+    report = json.loads(asset(segmentation, "report.json").read_text(encoding="utf-8"))
+    if report.get("provider") != "sam2.1-local" or report.get("schema_version") != 1:
+        raise ValueError("Expected SAM 2.1 proposal report")
+    digest = hashlib.sha256(source.read_bytes()).hexdigest()
+    if report.get("image_sha256") != digest:
+        raise ValueError("SAM proposal image SHA-256 does not match reference artwork")
+    entries = report.get("parts")
+    if (not isinstance(entries, list) or
+            any(not isinstance(item, dict) or not isinstance(item.get("part"), str) for item in entries)):
+        raise ValueError("Malformed SAM part proposal report")
+    sam = {item["part"]: item for item in entries}
+    if len(sam) != len(entries):
+        raise ValueError("Duplicate SAM part identifiers")
+    known_ids = {part["id"] for part in config["parts"]}
+    if mapping is not None and (not isinstance(mapping, dict) or any(
+            part_id not in known_ids or sam_id not in sam for part_id, sam_id in mapping.items())):
+        raise ValueError("Mapping contains unknown Blender or SAM parts")
+    mapping = mapping or {}
+    conflicts = {frozenset((item.get("first"), item.get("second")))
+                 for item in report.get("semantic_overlap_warnings", []) if isinstance(item, dict)}
+    provenance = {}
+    with tempfile.TemporaryDirectory(prefix="kumiki-sam-evidence-") as folder:
+        temp = Path(folder)
+        staged = copy.deepcopy(config)
+        staged["views"] = [next(v for v in staged["views"] if v["id"] == view_id)]
+        current_view = staged["views"][0]
+        shutil.copyfile(source, temp / "source.png")
+        current_view["reference_image"] = "source.png"
+        if depth_hints is not None:
+            hint = asset(Path(depth_hints), "depth_hint.npz")
+            shutil.copyfile(hint, temp / "depth_hint.npz")
+            current_view["reference_depth_hint"] = {
+                "path": "depth_hint.npz", "provenance": "estimated", "near_is_small": True}
+        # Estimated depth is NOT the measured reference_depth contract.
+        current_view.pop("reference_depth", None)
+        for part in staged["parts"]:
+            part["unmatched_pose_views"] = [v for v in part.get("unmatched_pose_views", []) if v == view_id]
+            pid, sid = part["id"], mapping.get(part["id"], part["id"])
+            if sid in sam:
+                proposal = sam[sid]
+                if proposal.get("category") is not None and proposal["category"] != part["category"]:
+                    raise ValueError(f"SAM part category conflicts with {pid}")
+                mask = asset(segmentation, proposal.get("proposed_mask"))
+                provenance[pid] = {"source": "sam-proposal-unapproved", "sam_part": sid,
+                    "predicted_iou_not_ground_truth": proposal.get("predicted_iou"),
+                    "mask_conflict": any(sid in overlap for overlap in conflicts)}
+            elif view_id in part["reference_masks"]:
+                mask = asset(manifest.resolve().parent, part["reference_masks"][view_id])
+                provenance[pid] = {"source": "existing-manifest-mask / review-required",
+                                   "mask_conflict": False}
+            else:
+                raise ValueError(f"No SAM or existing mask for {pid} in {view_id}")
+            destination = temp / f"mask-{pid}.png"
+            shutil.copyfile(mask, destination)
+            part["reference_masks"] = {view_id: destination.name}
+        (temp / "manifest.json").write_text(json.dumps(staged), encoding="utf-8")
+        from .evaluate import evaluate_character
+        result = evaluate_character(temp / "manifest.json", capture, output)
+    for item in result["parts"]:
+        p = item["part"]
+        item["source_mask_provenance"] = provenance[p]
+        item["correction_observations"] = _observations(item, provenance[p]["mask_conflict"])
+    result["status"] = "segmentation-review-required / no-automatic-approval"
+    result["semantic_mask_conflicts"] = report.get("semantic_overlap_warnings", [])
+    result["source_image_sha256"] = digest
+    result["limitations"] += [
+        "SAM predicted IoU is not artist-verified mask overlap.",
+        "Unapproved SAM masks can conflict and should not be sculpt targets without review.",
+        "Model depth is measured; MoGe depth hints are not metric source ground truth.",
+        "No combined likeness score or automatic geometry correction."]
+    (output / "report.json").write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
+    md = ["# Character fidelity review", "",
+          "Unapproved SAM source masks versus a read-only Blender component capture.", "",
+          "| Part | Category | Intrinsic shape overlap | Median color DeltaE00 | Mask |",
+          "|---|---|---:|---:|---|"]
+    for row in result["parts"]:
+        pid = row["part"]
+        iou = row.get("shape", {}).get("intrinsic_shape_iou")
+        delta = row.get("perceptual_color", {}).get("median_palette_delta_e2000")
+        md.append("| " + " | ".join((
+            pid, row["category"], f"{iou:.3f}" if iou is not None else "n/a",
+            f"{delta:.1f}" if delta is not None else "n/a",
+            "conflict" if provenance[pid]["mask_conflict"] else "unapproved")) + " |")
+    for row in result["parts"]:
+        md.extend(("", "## " + row["category"] + " / " + row["part"]))
+        for finding in row["correction_observations"]:
+            md.append("- **" + finding["channel"] + "**: " + finding["message"])
+    md.extend(("", "No geometry was modified; confirm source masks and view registration first.", ""))
+    (output / "review.md").write_text("\n".join(md), encoding="utf-8")
+    return result
