@@ -160,7 +160,8 @@ def compare_sam_to_capture(manifest: str | Path, capture: str | Path,
                 mask = asset(segmentation, proposal.get("proposed_mask"))
                 provenance[pid] = {"source": "sam-proposal-unapproved", "sam_part": sid,
                     "predicted_iou_not_ground_truth": proposal.get("predicted_iou"),
-                    "mask_conflict": any(sid in overlap for overlap in conflicts)}
+                    "mask_conflict": any(sid in overlap for overlap in conflicts),
+                    "mask_review": proposal.get("mask_review", {})}
             elif view_id in part["reference_masks"]:
                 mask = asset(manifest.resolve().parent, part["reference_masks"][view_id])
                 provenance[pid] = {"source": "existing-manifest-mask / review-required",
@@ -180,9 +181,20 @@ def compare_sam_to_capture(manifest: str | Path, capture: str | Path,
     for item in result["parts"]:
         p = item["part"]
         item["source_mask_provenance"] = provenance[p]
-        item["correction_observations"] = _observations(item, provenance[p]["mask_conflict"])
+        incomplete = bool(provenance[p].get("mask_review", {}).get("incomplete_shape_evidence"))
+        item["source_mask_incomplete"] = incomplete
+        item["shape"]["source_evidence_status"] = "partial / review-required" if incomplete else "unapproved / review-required"
+        observations = _observations(item, provenance[p]["mask_conflict"])
+        if incomplete:
+            # Keep numeric diagnostics but never prescribe geometry edits on
+            # source boundaries missing pixels due unresolved part ownership.
+            observations = [note for note in observations if note["channel"] not in ("shape", "position", "color")]
+            observations.insert(0, {"channel": "mask-evidence", "severity": "critical",
+                "message": "Source mask excludes unresolved ambiguous pixels. Shape and appearance numbers are partial evidence; resolve mask ownership before sculpt edits."})
+        item["correction_observations"] = observations
     result["status"] = "segmentation-review-required / no-automatic-approval"
     result["semantic_mask_conflicts"] = report.get("semantic_overlap_warnings", [])
+    result["source_mask_review"] = report.get("mask_review")
     result["source_image_sha256"] = digest
     result["limitations"] += [
         "SAM predicted IoU is not artist-verified mask overlap.",
@@ -201,7 +213,7 @@ def compare_sam_to_capture(manifest: str | Path, capture: str | Path,
         md.append("| " + " | ".join((
             pid, row["category"], f"{iou:.3f}" if iou is not None else "n/a",
             f"{delta:.1f}" if delta is not None else "n/a",
-            "conflict" if provenance[pid]["mask_conflict"] else "unapproved")) + " |")
+            "incomplete" if row["source_mask_incomplete"] else "conflict" if provenance[pid]["mask_conflict"] else "unapproved")) + " |")
     for row in result["parts"]:
         md.extend(("", "## " + row["category"] + " / " + row["part"]))
         for finding in row["correction_observations"]:

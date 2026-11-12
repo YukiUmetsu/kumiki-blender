@@ -1,0 +1,10 @@
+{
+  "schema_version": 1,
+  "source_masks": {
+    "head": "masks/verified-full-canvas-head.png"
+  },
+  "ownership_masks": {
+    "wing-left": "ownership/wing-left-pixels.png",
+    "coat": "ownership/coat-pixels.png"
+  }
+}

@@ -43,8 +43,31 @@ def main(argv: list[str] | None = None) -> int:
     reconcile.add_argument("--depth-hints", type=Path)
     reconcile.add_argument("--view", default="front")
     reconcile.add_argument("--mapping", type=Path, help="JSON mapping of manifest part IDs to SAM IDs")
+    mask_review = commands.add_parser("review-masks", help="Review SAM overlap and preserve raw character-part evidence")
+    mask_review.add_argument("--image", type=Path, required=True)
+    mask_review.add_argument("--sam", type=Path, required=True)
+    mask_review.add_argument("--rules", type=Path)
+    mask_review.add_argument("--output", type=Path, required=True)
+    registration = commands.add_parser("propose-registration", help="Fit camera landmarks and write an unverified visual proposal")
+    registration.add_argument("--manifest", type=Path, required=True)
+    registration.add_argument("--capture", type=Path, required=True)
+    registration.add_argument("--anchors", type=Path, required=True)
+    registration.add_argument("--view", default="front")
+    registration.add_argument("--output", type=Path, required=True)
+    registration.add_argument("--inlier-tolerance-px", type=float, default=3.0)
     args = parser.parse_args(argv)
     try:
+        if args.command == "review-masks":
+            from .mask_review import refine_masks
+            result = refine_masks(args.image, args.sam, args.output, rules=args.rules)
+            print(f"{args.output}/report.json: {result['status']}")
+            return 0
+        if args.command == "propose-registration":
+            from .registration_review import propose_registration
+            result = propose_registration(args.manifest, args.capture, args.anchors,
+                args.output, view_id=args.view, inlier_tolerance_px=args.inlier_tolerance_px)
+            print(f"{args.output}/registration.json: {result['status']}")
+            return 0
         if args.command == "reconcile":
             import json
             from .sam_bridge import compare_sam_to_capture

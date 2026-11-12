@@ -1,5 +1,8 @@
 # Character sheet → Blender part fidelity QA
 
+**New to this feature?** Start with [the short character fidelity workflow](CHARACTER_FIDELITY_REVIEW.md), including `review-masks` and `propose-registration` commands and their uncertainty gates.
+
+
 The `kumiki_blender.character_fidelity` package compares **explicitly segmented source artwork** with **visible, named Blender geometry**. It is reusable for owls, people, clothing, accessories, and props; Quill is not a hard-coded class. The previous `face_analysis` and photogrammetry QA workflows remain unchanged.
 
 ## Install and run
