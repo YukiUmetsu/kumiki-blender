@@ -61,6 +61,11 @@ def load_manifest(path: str | Path) -> dict[str, Any]:
                     not math.isfinite(number) for row in affine for number in row) or
                 abs(affine[0][0] * affine[1][1] - affine[0][1] * affine[1][0]) < 1e-8):
             raise ValueError(f"View {vid} needs invertible 2x3 source_to_render affine")
+        hint = view.get("reference_depth_hint")
+        if hint is not None:
+            if not isinstance(hint, dict) or hint.get("provenance") not in ("estimated", "artist-annotated") or type(hint.get("near_is_small")) is not bool:
+                raise ValueError("Reference depth hint must declare estimated/artist-annotated provenance and near_is_small")
+            asset(path.parent, hint.get("path"))
         depth = view.get("reference_depth")
         if depth is not None:
             if not isinstance(depth, dict) or depth.get("provenance") not in ("measured", "validated-multiview") or depth.get("units") != "meters":
