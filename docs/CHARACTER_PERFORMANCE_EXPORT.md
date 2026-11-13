@@ -9,9 +9,30 @@ This is a **Blender-native export bridge** for a character that gestures, walks 
 - Both Actions use the same start/end timeline. Source file contains no CTRL_ authoring bones; bake them using the existing plan-animation-bake/bake-character-animation commands first.
 - At least one real skinned body mesh; this pipeline rejects an empty skeleton or animation without actual facial morph motion.
 
-The first iteration deliberately does not import Actions from multiple .blend files, merge NLA stacks, automatically retime actions, or create mouth shapes. Combine the authored body and face Actions in one .blend first, then export them with the following commands.
+The manual-authoring mode does not import Actions from different .blend files or create mouth shapes. The automated mode above can generate the facial Action from offline cues directly inside a copy of the baked skeletal scene. Combine the authored body and face Actions in one .blend first, then export them with the following commands.
 
-## Commands
+## Automated body motion + offline mouth cues (recommended)
+
+Use a source .blend with a **baked deform-skeleton Action** plus *unanimated* artist-authored mouth shape keys. No manual facial animation Action is needed. Provide local Rhubarb-style JSON cues:
+
+~~~bash
+kumiki-character-build plan-talking-performance \
+  --blend /path/to/baked-rig-with-mouth.blend \
+  --cues /path/to/mouth-cues.json \
+  --clip talk_wave --start 1 --end 72 --fps 24 \
+  --output .review/character/talking-plan-r01
+
+kumiki-character-build export-talking-performance \
+  --plan .review/character/talking-plan-r01/talking-plan.json \
+  --output .review/character/talking-r01 \
+  --blender /Applications/Blender.app/Contents/MacOS/Blender
+~~~
+
+The planner hashes the saved Blender file and cue JSON, validates that cue timing fits the skeletal Action and that both share a frame rate and source. The Blender worker applies keyframes only to existing relative mouth shapes, pins silence at the animation boundary, and exports the same synchronized GLB clip as the manual-body/face mode below.
+
+An immutable combined.blend is written for further editing. The original baked rig and mouth geometry are preserved. The worker refuses to overwrite existing facial Actions or missing/unchanged mouth shapes.
+
+## Existing body + facial Actions (manual authoring alternative)
 
 ~~~bash
 kumiki-character-build plan-performance \

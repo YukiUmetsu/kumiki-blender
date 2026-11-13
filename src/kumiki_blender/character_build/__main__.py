@@ -86,6 +86,24 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--baseline", type=Path, help="prior report.json to reject registered-view regressions")
     p.add_argument("--max-regression", type=float, default=0.01, help="maximum per-view drop in IoU")
 
+    p = sub.add_parser("plan-talking-performance", help="plan a baked body Action plus offline mouth cues")
+    p.add_argument("--blend", type=Path, required=True, help="baked deform Action .blend with unkeyed authored mouth shapes")
+    p.add_argument("--cues", type=Path, required=True, help="offline Rhubarb-style mouthCues JSON")
+    p.add_argument("--clip", required=True, help="single output animation clip name")
+    p.add_argument("--start", type=int, required=True, help="inclusive skeletal Action start frame")
+    p.add_argument("--end", type=int, required=True, help="inclusive skeletal Action end frame")
+    p.add_argument("--fps", type=int, default=24)
+    p.add_argument("--armature", default="CharacterRig")
+    p.add_argument("--mouth-object", default="Mouth")
+    p.add_argument("--ramp-frames", type=float, default=1.5)
+    p.add_argument("--time-alignment-tolerance-s", type=float, default=.05)
+    p.add_argument("--output", type=Path, required=True, help="new immutable automated performance plan")
+
+    p = sub.add_parser("export-talking-performance", help="auto-key existing mouth shapes and export synchronized body+face GLB")
+    p.add_argument("--plan", type=Path, required=True, help="talking-plan.json")
+    p.add_argument("--output", type=Path, required=True, help="new combined.blend and performance.glb revision")
+    p.add_argument("--blender")
+
     p = sub.add_parser("plan-performance", help="lock one simultaneous skeletal and facial Action timeline")
     p.add_argument("--blend", type=Path, required=True, help="source .blend with both active Actions")
     p.add_argument("--clip", required=True, help="single output glTF animation name")
@@ -399,6 +417,26 @@ def _run(args) -> int:
             "plan": plan, "output": str(args.output.resolve()),
             "source_blend": str(args.blend.resolve())},
             blender=args.blender, blend_file=args.blend.resolve())
+        print(json.dumps(report, indent=2))
+        return 0
+    if args.command == "plan-talking-performance":
+        from .talking_plan import save_talking_plan
+        report = save_talking_plan(args.blend, args.cues, args.clip, args.start,
+                   args.end, args.output, fps=args.fps, armature=args.armature,
+                   mouth_object=args.mouth_object, ramp_frames=args.ramp_frames,
+                   time_alignment_tolerance_s=args.time_alignment_tolerance_s)
+        print(json.dumps(report, indent=2))
+        return 0
+    if args.command == "export-talking-performance":
+        from .talking_plan import load_talking_plan
+        from .blender import run_worker
+        if args.output.exists():
+            raise FileExistsError(f"Output revision already exists: {args.output}")
+        plan = load_talking_plan(args.plan)
+        report = run_worker("performance", {
+            "plan": plan["performance"], "viseme_plan": plan["visemes"],
+            "output": str(args.output.resolve()),
+        }, blender=args.blender, blend_file=Path(plan["performance"]["source_blend"]))
         print(json.dumps(report, indent=2))
         return 0
     if args.command == "plan-performance":
