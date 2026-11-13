@@ -33,6 +33,12 @@ Commands plan-anatomy / build-anatomy create **separate, fully editable real 3D 
 
 Use resolve-anatomy-landmarks to fill explicitly named eyeball, eyelid, beak and muzzle control-point placeholders from triangulate-landmarks 3D results. The resolver validates source-image provenance, rejects unsolved landmarks and leaves the existing Blender source unchanged. Run independent reference alignment and deformation QA on each modeled part.
 
+### Registered landmark fitting of existing detailed meshes
+
+[Surface-geodesic fitting guide](docs/CHARACTER_GEODESIC_LANDMARK_FIT.md)
+
+Commands plan-landmark-fit and fit-landmark-surface move explicitly mapped, pre-rig mesh vertices toward triangulated original-art landmarks using surface-connected (geodesic) influence rather than a spatial brush. Protected vertices, UVs, materials, neighboring components and original Blender sources are guarded. This is a controlled geometric revision, not inferred anatomy or artistic approval.
+
 ## Character Production v2: isolated parts and Blender-native rig audits
 
 [Implementation guide](docs/CHARACTER_PRODUCTION_V2.md) · [example CharacterSpec](examples/character-v2.example.json) · [region sculpt plan](examples/character-region-sculpt.example.json) · [rig pose QA plan](examples/character-rig-pose-qa.example.json)
