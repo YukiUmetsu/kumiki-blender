@@ -184,6 +184,20 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--output", type=Path, required=True, help="new editable controlled.blend")
     p.add_argument("--blender")
 
+    p = sub.add_parser("plan-joint-refine", help="source-lock local quad-loop density changes around reviewed hinge joints")
+    p.add_argument("--blend", type=Path, required=True, help="pre-rig quad cage .blend")
+    p.add_argument("--topology", type=Path, required=True, help="existing topology-plan.json")
+    p.add_argument("--joint", action="append", required=True, help="reviewed joint name, repeat for multiple hinges")
+    p.add_argument("--cuts", type=int, default=2, help="additional axial cuts per crossing quad edge, 1–4")
+    p.add_argument("--max-added-vertices", type=int, default=25000)
+    p.add_argument("--axial-alignment-min", type=float, default=.6)
+    p.add_argument("--output", type=Path, required=True)
+
+    p = sub.add_parser("refine-joint-topology", help="add bounded Blender BMesh hinge loops on an unskinned quad cage")
+    p.add_argument("--plan", type=Path, required=True, help="joint-refine-plan.json")
+    p.add_argument("--output", type=Path, required=True, help="new hinge-retopo.blend and OBJ revision")
+    p.add_argument("--blender")
+
     p = sub.add_parser("plan-topology", help="generate joint-specific topology cross-section review zones")
     p.add_argument("--joints", type=Path, required=True)
     p.add_argument("--mesh-name", default="Low", help="exact Blender mesh object name")
@@ -595,6 +609,27 @@ def _run(args) -> int:
             "plan": plan, "source_blend": str(args.blend.resolve()),
             "output": str(args.output.resolve()),
         }, blender=args.blender, blend_file=args.blend.resolve())
+        print(json.dumps(report, indent=2))
+        return 0
+    if args.command == "plan-joint-refine":
+        from .joint_refine_plan import save_joint_refine_plan
+        report = save_joint_refine_plan(args.blend, args.topology, args.joint,
+                                        args.output, cuts=args.cuts,
+                                        max_added_vertices=args.max_added_vertices,
+                                        axial_alignment_min=args.axial_alignment_min)
+        print(json.dumps(report, indent=2))
+        return 0
+    if args.command == "refine-joint-topology":
+        from .joint_refine_plan import load_joint_refine_plan
+        from .topology_zones import load_topology_plan
+        from .blender import run_worker
+        if args.output.exists():
+            raise FileExistsError(f"Output revision exists: {args.output}")
+        plan = load_joint_refine_plan(args.plan)
+        topology = load_topology_plan(plan["topology_plan"])
+        report = run_worker("joint-refine", {
+            "plan": plan, "topology": topology, "output": str(args.output.resolve()),
+        }, blender=args.blender, blend_file=Path(plan["source_blend"]))
         print(json.dumps(report, indent=2))
         return 0
     if args.command == "plan-topology":
