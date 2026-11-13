@@ -50,3 +50,17 @@ def test_legacy_grouping_still_available():
     assert regions.group is None
     assert regions.feature.shape[1] == 6
     assert len(regions.texels) == 1
+
+
+
+def test_one_node_region_supports_scoring_and_interpolation():
+    points = np.zeros((1, 3))
+    normals = np.array([[0.0, 0.0, 1.0]])
+    region = build_regions(points, normals, sigma=0.02, spacing=0.01,
+                           group_labels=np.array([5]))
+    region.add_sources(np.ones((1, 1)), np.full((1, 1, 3), 125, dtype=np.uint8))
+    chosen = choose_sources(region, np.array([False]), contest_delta_e=0,
+                            min_region_nodes=1)
+    painted, _ = per_texel(region, points, chosen["score"], None)
+    assert painted.tolist() == [0]
+    assert region.near.shape == (1, 1)
