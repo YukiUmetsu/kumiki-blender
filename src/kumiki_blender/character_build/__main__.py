@@ -438,9 +438,10 @@ def _run(args) -> int:
             raise ValueError("--blend must be an existing .blend source")
         if args.output.exists():
             raise FileExistsError(f"Revision exists: {args.output}")
+        validated = load_collision_plan(args.plan)
         report = run_worker("penetration-repair", {
-            "plan": {"schema_version": 1,
-                     "pairs": [asdict(p) for p in load_collision_plan(args.plan)["pairs"]]},
+            "plan": {"schema_version": 1, "pairs": [asdict(p) for p in validated["pairs"]],
+                     "guard_pairs": validated["guard_pairs"]},
             "source_blend": str(args.blend.resolve()),
             "output": str(args.output.resolve()),
         }, blender=args.blender, blend_file=args.blend.resolve())
