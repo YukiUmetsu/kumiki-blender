@@ -77,6 +77,38 @@ Quill, multi-view route with the right side mirrored from the left (`texture
 --assume-symmetric`): silhouette IoU 0.90 to 0.95. Median delta E: 1.1 (back), 2.1
 (front), 2.9 (left), 9.2 (front 3/4). 15-bone wing rig, all vertices heat-weighted.
 
+## Repaint the angles between the drawings
+
+More drawn angles do not help. Each new AI drawing is one more independent guess. On
+Pip the two 3/4 drawings disagreed with the front and side drawings. With them, the
+side view error rose from 4.1 to 7.0 delta E. A texture from the front, back and side
+drawings only is accurate in those views. But it shows the eyes twice at 45 degrees,
+because the drawings place them slightly differently on the shape.
+
+`repaint` takes the in-between angles from the model instead:
+
+1. `texture HANDOFF low.obj --views front,back,left,right --output axis.png`
+2. `repaint HANDOFF low.obj axis.png --subject "the cartoon squirrel" --output rp/`
+   renders the model from the four 3/4 directions and from 35 degrees above the four
+   sides (free cameras are named `az<deg>_el<deg>`). A local FLUX.2 [klein] in ComfyUI
+   repaints each render in the style of the nearest drawing. A repaint whose silhouette
+   differs from the render (IoU below 0.9) is rejected.
+3. `texture HANDOFF low.obj --views front,back,left,right --extra rp/manifest.json --power 4 --output final.png`
+
+Each drawing keeps the surface that it faces. The repaints take the angles between
+the drawings and the tops of the head and tail, which no drawing shows. On Pip the
+doubled eye disappeared, and the front view error rose only from 3.1 to 4.1 delta E.
+
+Notes:
+
+- Start ComfyUI with `--disable-smart-memory` on a 24 GB Mac. The diffusion model and
+  the text encoder together take 15 GB. One 768 px view takes about 15 minutes.
+- If the batch stops, run the same `repaint` command again with `--resume`. It keeps
+  each finished repaint whose render and settings did not change, and repaints the
+  other views.
+- Prompt wording matters. With "illustration" the editor drew a flat outlined
+  cartoon. Starting from the render at partial denoise (0.7) kept the doubled eye.
+
 ## Image-to-3D route
 
 A shape from silhouettes knows only the outlines. Ears, a snout and a tail

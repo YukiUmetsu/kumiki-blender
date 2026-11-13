@@ -350,6 +350,92 @@ class TextureTests(SharedSet):
         np.testing.assert_allclose(mesh.vertices[2], [1, 0, 1])  # OBJ Y up -> Blender Z up
 
 
+class RepaintTests(SharedSet):
+    def test_free_cameras(self):
+        from kumiki_blender.character_build.views import camera
+        level = camera("az-45_el0")
+        np.testing.assert_allclose(level.toward, views.camera("front_right").toward, atol=1e-12)
+        above = camera("az0_el35")
+        points = np.array([[0, 0, HEIGHT_M / 2], [0, -0.1, HEIGHT_M / 2]])
+        _, row, _ = above.project(points, HEIGHT_M / 1000)
+        self.assertAlmostEqual(row[0], views.BASELINE - views.FIGURE_PX / 2, places=6)  # the pivot stays put
+        self.assertGreater(row[1], row[0], "seen from above, a point nearer the camera sits lower")
+        with self.assertRaises(views.ViewError):
+            camera("az0_el95")
+
+    def test_render_round_trip_through_bake(self):
+        """A render baked back as an extra view puts each colour where it came from."""
+        from kumiki_blender.character_build.repaint import describe, nearest_drawing, render_condition
+        mesh = read_mesh(self.handoff / "blockout.obj")
+        low, high = mesh.bounds()
+        uv = (mesh.vertices[:, [0, 2]] - low[[0, 2]]) / (high[[0, 2]] - low[[0, 2]])
+        corner_uv = uv[mesh.faces] * 0.98 + 0.01
+        texture = np.zeros((256, 256, 3), np.uint8)
+        texture[:, :128] = (200, 40, 40)   # one half red, one half blue in UV (left/right of the figure)
+        texture[:, 128:] = (40, 40, 200)
+        picture, mask, mapping = render_condition(mesh, corner_uv, texture, "az-45_el30", HEIGHT_M / 1000, size=256)
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "paint.png"
+            Image.fromarray(np.dstack([np.asarray(picture), np.where(mask, 255, 0).astype(np.uint8)])).save(path)
+            baked, report = bake_texture(self.handoff, mesh, corner_uv, size=256, views=[],
+                                         extra=[{"name": "az-45_el30", "image": str(path), "map": mapping,
+                                                 "weight": 1.0}])
+        self.assertGreater(report["per_view"]["az-45_el30"], 0.2)
+        seen = baked.reshape(-1, 3)
+        reds = (seen[:, 0] > 150) & (seen[:, 2] < 90)
+        self.assertGreater(reds.mean(), 0.2)
+        np.testing.assert_array_less(np.abs(baked[60:200, 40:100].astype(int) - [200, 40, 40]).max(axis=2).mean(), 25)
+        self.assertIn("front-right", describe("az-45_el0"))
+        self.assertIn("above", describe("az0_el35"))
+        self.assertEqual(nearest_drawing("az170_el20", ["front", "back", "left"]), "back")
+
+    def test_workflow_starts_from_the_render(self):
+        from kumiki_blender.character_build.repaint import klein_workflow
+        workflow = klein_workflow("r.png", "s.png", "p", size=768, steps=20, seed=1, denoise=0.6)
+        sampler = workflow["20"]["inputs"]
+        self.assertEqual(sampler["latent_image"], ["6", 0])  # the render's latent
+        self.assertEqual(sampler["sigmas"], ["19", 1])       # the low-noise part of the schedule
+        self.assertEqual(workflow["19"]["inputs"]["denoise"], 0.6)
+
+
+    def test_batch_resumes_without_repainting_finished_views(self):
+        from kumiki_blender.character_build import repaint
+        mesh = read_mesh(self.handoff / "blockout.obj")
+        low, high = mesh.bounds()
+        uv = (mesh.vertices[:, [0, 2]] - low[[0, 2]]) / (high[[0, 2]] - low[[0, 2]])
+        corner_uv = uv[mesh.faces] * 0.98 + 0.01
+        texture = np.full((64, 64, 3), 150, np.uint8)
+
+        class Client:
+            uploads = []
+
+            def upload_image(self, path):
+                self.uploads.append(Path(path).name)
+                return Path(path).name
+
+        def fake_comfy(client, workflow):
+            render = workflow["4"]["inputs"]["image"]   # echo the render back: a perfect repaint
+            return (out / render).read_bytes()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp)
+            original = repaint.run_comfy
+            repaint.run_comfy = fake_comfy
+            try:
+                run = lambda views, image: repaint.repaint_views(self.handoff, mesh, corner_uv, image, views, out,
+                                                                 Client(), size=128)
+                run(["az45_el0"], texture)
+                Client.uploads.clear()
+                manifest = run(["az45_el0", "az-45_el0"], texture)
+                self.assertEqual([r["reused"] for r in manifest["views"]], [True, False])
+                self.assertEqual(Client.uploads, ["az-45_el0_render.png", "az-45_el0_style.png"])
+                self.assertTrue(all(r["accepted"] for r in manifest["views"]))
+                changed = run(["az45_el0"], np.full_like(texture, 90))   # a new texture: the old repaint is stale
+                self.assertEqual([r["reused"] for r in changed["views"]], [False])
+            finally:
+                repaint.run_comfy = original
+
+
 class FurMaskTests(unittest.TestCase):
     def test_clothing_and_empty_texels_get_no_fur(self):
         texture = np.zeros((40, 40, 3), np.uint8)
