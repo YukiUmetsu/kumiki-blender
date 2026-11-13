@@ -1,6 +1,6 @@
 # Source-guarded, feature-preserving surface refinement
 
-\`kumiki-character-build refine-surface\` is a **non-destructive pre-rig stage** for
+`kumiki-character-build refine-surface` is a **non-destructive pre-rig stage** for
 surface lumps left by retopology, local sculpting, and rough source-image
 reconstruction. It runs locally on Blender 4.5+ with NumPy; it does not
 require a cloud AI model, SciPy inside Blender, or a new paid dependency.
@@ -21,13 +21,13 @@ kumiki-character-build refine-surface \
   --blender /Applications/Blender.app/Contents/MacOS/Blender
 ~~~
 
-The output contains \`report.json\`, \`model/report.json\`, and, if numerical
+The output contains `report.json`, `model/report.json`, and, if numerical
 surface improvement passed the safety guards:
 
-- \`model/surface-candidate.blend\`: new independent, editable Blender scene
-- \`model/baseline-source.obj\`: original part, **world-space Z-up** for camera QA
-- \`model/surface-candidate-source.obj\`: revised part, **world-space Z-up**
-- \`model/surface-candidate.obj\`: traditional Blender-export Y-up interchange
+- `model/surface-candidate.blend`: new independent, editable Blender scene
+- `model/baseline-source.obj`: original part, **world-space Z-up** for camera QA
+- `model/surface-candidate-source.obj`: revised part, **world-space Z-up**
+- `model/surface-candidate.obj`: traditional Blender-export Y-up interchange
 
 The source .blend is never overwritten. The original object's vertex IDs,
 triangles/quads, UV layers, materials and unrelated objects are retained.
@@ -51,16 +51,23 @@ and pass all hard guards:
 - no flipped or degenerate faces
 - protected named vertex groups untouched
 
-\`curvature_stop\` controls suppression of smoothing near distinctive shapes;
-\`feature_angle_deg\` locks sharp edge vertices. Both are *geometry*
+`curvature_stop` controls suppression of smoothing near distinctive shapes;
+`feature_angle_deg` locks sharp edge vertices. Both are *geometry*
 parameters, not artificial ways to adjust acceptance thresholds.
 
-\`editable_vertex_group\` optionally limits smoothing to artist-painted
+`editable_vertex_group` optionally limits smoothing to artist-painted
 vertices. Blend weights between 0 and 1 supply continuous falloff. Every
 name must exist and a group needs at least one weight of 0.5 or greater.
-\`protected_vertex_groups\` always override editable weights.
+`protected_vertex_groups` always override editable weights.
 
-For a 0.35 m character, begin with \`max_displacement_m\` between 0.001 and
+Optionally add `guard_pairs` such as `[["Body", "Scarf"], ["Body", "Eye.L"]]`
+to prevent smoothing one object from increasing Blender BVH triangle-overlap
+counts against nearby separately modeled parts. Each pair must include the
+edited `mesh` and another existing, unmodified mesh. The worker rejects the
+candidate if any guard worsens. These counts are conservative collision
+candidates, not penetration volumes or guarantees of proper contact.
+
+For a 0.35 m character, begin with `max_displacement_m` between 0.001 and
 0.004. Don't apply aggressive smoothing to the muzzle or eye regions before
 protecting those high-value features.
 
@@ -82,18 +89,18 @@ add the following to the policy (replace the path and region):
 
 The command exports the **same Blender object**, before and after, as
 registered Z-up OBJs and invokes the existing
-\`gate_region_revision\` machinery. It compares *independently verified*
+`gate_region_revision` machinery. It compares *independently verified*
 reference views, preserves source-camera registration, and generates
 per-view overlays and a baseline/candidate report.
 
 If **any view** regresses beyond the configured tolerance, the top-level
-status is \`reference-regression-rejected\` and a
-\`SOURCE_REGRESSION_REJECTED.txt\` marker is written. The output remains
-inspectable, but do **not** promote its \`.blend\` to production. The CLI exits
+status is `reference-regression-rejected` and a
+`SOURCE_REGRESSION_REJECTED.txt` marker is written. The output remains
+inspectable, but do **not** promote its `.blend` to production. The CLI exits
 with a nonzero status on registered-source regression.
 
 If no CharacterSpec gate is supplied, the top-level status is
-\`surface-candidate-art-review-required\`: geometric roughness alone
+`surface-candidate-art-review-required`: geometric roughness alone
 does not establish likeness.
 
 **Critical:** A CharacterSpec region is a *part-only reference mask*. The
@@ -105,8 +112,8 @@ If you have no verified part masks, omit the gate; do not fabricate them.
 
 Run **after** coarse silhouette fitting, volume modeling, retopology and
 local anatomy placement, but **before** facial shape keys and skinning.
-Then perform \`audit-region-revision\`, \`audit-topology\`,
-\`refine-joint-topology\` if necessary, and \`validate-rig\` after skinning.
+Then perform `audit-region-revision`, `audit-topology`,
+`refine-joint-topology` if necessary, and `validate-rig` after skinning.
 
 The tool rejects modifiers, linked or shape-key meshes and any surface that
 is open, non-manifold, degenerate or not outward oriented. It will not
