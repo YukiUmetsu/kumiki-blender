@@ -180,7 +180,12 @@ def _read_obj(path: Path) -> Mesh:
                     index = int(token.split("/")[0])
                     ids.append(index - 1 if index > 0 else len(vertices) + index)
                 faces.extend([ids[0], ids[i], ids[i + 1]] for i in range(1, len(ids) - 1))
-    points = _y_up_to_z_up(np.array(vertices, dtype=np.float64).reshape(-1, 3))
+    points = np.array(vertices, dtype=np.float64).reshape(-1, 3)
+    # Native Blender source-registered exports explicitly preserve Z-up
+    # world coordinates. Do not silently rotate these like interchange OBJ;
+    # the registered source-camera comparison would become meaningless.
+    if not (path.name.endswith("-source.obj") or path.name.endswith(".source.obj")):
+        points = _y_up_to_z_up(points)
     rgb = None
     if colours and len(colours) == len(vertices):
         values = np.array(colours)
