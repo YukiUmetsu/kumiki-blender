@@ -86,6 +86,23 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--baseline", type=Path, help="prior report.json to reject registered-view regressions")
     p.add_argument("--max-regression", type=float, default=0.01, help="maximum per-view drop in IoU")
 
+    p = sub.add_parser("plan-animation-bake", help="lock an animated Blender control rig and one clip range")
+    p.add_argument("--blend", type=Path, required=True, help="animated source control-rig .blend")
+    p.add_argument("--clip", required=True, help="filename-safe clip name")
+    p.add_argument("--start", type=int, required=True, help="inclusive start frame")
+    p.add_argument("--end", type=int, required=True, help="inclusive end frame")
+    p.add_argument("--step", type=int, default=1, help="bake every Nth frame")
+    p.add_argument("--fps", type=int, default=24)
+    p.add_argument("--armature", default="CharacterRig")
+    p.add_argument("--max-position-error-m", type=float, default=.002)
+    p.add_argument("--max-rotation-error-deg", type=float, default=2.)
+    p.add_argument("--output", type=Path, required=True, help="new immutable bake plan directory")
+
+    p = sub.add_parser("bake-character-animation", help="visually bake Blender controls into deform-only GLB animation")
+    p.add_argument("--plan", type=Path, required=True, help="bake-plan.json")
+    p.add_argument("--output", type=Path, required=True, help="new baked.blend / animated.glb revision")
+    p.add_argument("--blender")
+
     p = sub.add_parser("plan-rig-controls", help="generate native FK/IK animator control rig from reviewed joints")
     p.add_argument("--joints", type=Path, required=True, help="validated joints.json from existing character rig")
     p.add_argument("--profile", required=True, choices=("generic-biped", "stylized-biped-tail", "avian-biped-wings"))
@@ -351,6 +368,25 @@ def _run(args) -> int:
             "plan": plan, "output": str(args.output.resolve()),
             "source_blend": str(args.blend.resolve())},
             blender=args.blender, blend_file=args.blend.resolve())
+        print(json.dumps(report, indent=2))
+        return 0
+    if args.command == "plan-animation-bake":
+        from .animation_bake_plan import save_bake_plan
+        report = save_bake_plan(args.blend, args.clip, args.start, args.end, args.output,
+                                armature=args.armature, step=args.step, fps=args.fps,
+                                max_position_error_m=args.max_position_error_m,
+                                max_rotation_error_deg=args.max_rotation_error_deg)
+        print(json.dumps(report, indent=2))
+        return 0
+    if args.command == "bake-character-animation":
+        from .animation_bake_plan import load_bake_plan
+        from .blender import run_worker
+        if args.output.exists():
+            raise FileExistsError(f"Output revision already exists: {args.output}")
+        plan = load_bake_plan(args.plan)
+        report = run_worker("animation-bake", {
+            "plan": plan, "output": str(args.output.resolve()),
+        }, blender=args.blender, blend_file=Path(plan["source_blend"]))
         print(json.dumps(report, indent=2))
         return 0
     if args.command == "plan-rig-controls":

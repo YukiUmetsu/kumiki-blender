@@ -145,14 +145,14 @@ feature; it does **not** magically produce good source anatomy or a finished
 GLB animation.
 
 Built-in profiles:
-- \`generic-biped\`: leg IK targets/poles plus FK controls for upper/fore arms.
-- \`stylized-biped-tail\`: the same with independently keyed FK tail chain.
-- \`avian-biped-wings\`: leg IK plus FK controls for primary and secondary wing bones.
+- `generic-biped`: leg IK targets/poles plus FK controls for upper/fore arms.
+- `stylized-biped-tail`: the same with independently keyed FK tail chain.
+- `avian-biped-wings`: leg IK plus FK controls for primary and secondary wing bones.
 
-The profile **must match** the bones actually present in reviewed \`joints.json\`;
+The profile **must match** the bones actually present in reviewed `joints.json`;
 a missing or disconnected chain is an error rather than an invented rig.
 
-\`\`\`bash
+```bash
 kumiki-character-build plan-rig-controls \
   --joints /path/to/rig/joints.json \
   --profile avian-biped-wings \
@@ -163,16 +163,16 @@ kumiki-character-build apply-rig-controls \
   --plan .review/character/controls-plan-r01/controls.json \
   --output .review/character/controls-r01 \
   --blender /Applications/Blender.app/Contents/MacOS/Blender
-\`\`\`
+```
 
-This writes a new \`controlled.blend\` and \`report.json\`. Existing deform
+This writes a new `controlled.blend` and `report.json`. Existing deform
 bone positions, vertex groups, and mesh geometry are checked and retained.
-Controls are named \`CTRL_...\`, set non-deforming, and parented to the
+Controls are named `CTRL_...`, set non-deforming, and parented to the
 corresponding upstream controls or safe root/chest. Ordinary leg IK uses
 explicit knee poles; wing/tail bend uses Blender-native local FK.
 
 **Required QA:** inspect foot IK bend direction/pole angle, neutral mesh
-shifts, wing folding, and tail deformation under the \`validate-rig\` pose
+shifts, wing folding, and tail deformation under the `validate-rig` pose
 battery. These controls are **not exported to GLB as animation curves**.
 Bake animation onto the deform skeleton first (future milestone). The worker
 refuses existing deform-bone constraints rather than destructively overriding
@@ -188,7 +188,7 @@ three surface cross sections around each reviewed joint and reports:
 - Nearby quad/triangle/n-gon fraction and unusual vertex valence.
 - Regions needing additional modeling or manual loop correction.
 
-\`\`\`bash
+```bash
 kumiki-character-build plan-topology \
   --joints /path/to/rig/joints.json \
   --mesh-name Low \
@@ -200,17 +200,17 @@ kumiki-character-build audit-topology \
   --output .review/character/topology-review-r01 \
   --annotate \
   --blender /Applications/Blender.app/Contents/MacOS/Blender
-\`\`\`
+```
 
 The default audits elbows, shoulders, knees, neck, hips and tail joints when
-the corresponding reviewed joints exist. Use \`--joint elbow.L --joint knee.L\`
-to narrow a run. \`--strict\` on **plan-topology** makes specified numeric
+the corresponding reviewed joints exist. Use `--joint elbow.L --joint knee.L`
+to narrow a run. `--strict` on **plan-topology** makes specified numeric
 cross-section thresholds blocking; by default all results require visual
 review and do not fail the pipeline merely for a low contour count.
 
-When \`--annotate\` is used, \`topology-reviewed.blend\` includes editable,
+When `--annotate` is used, `topology-reviewed.blend` includes editable,
 non-rendering cross-section rings to help spot under-modeled bends. The
-original sculpt and original retopo \`.blend\` remain unchanged.
+original sculpt and original retopo `.blend` remain unchanged.
 
 **Important limitation:** closed cross sections and good quad ratios are
 neither an automatic retopology algorithm nor proof of deformation-friendly
@@ -231,14 +231,14 @@ PYTHONPATH=src:tests python -m unittest \
 
 Also run the original character test suite; no existing command should change behavior. The new Python schema and mask-comparison stages require the existing `character-build` dependencies, but the versioned schema, DAG and rig/sculpt plan validators themselves use only Python's standard library.
 
-Real Blender tests are **not** performed by these Python unit tests; use a local Blender executable with real mesh and rig fixtures. The feature is intentionally incomplete until real assets and Blender/Kumiki export checks have been exercised.
+The focused Python suite is accompanied by a synthetic **Blender 4.5 LTS native smoke test** covering local sculpting, animator IK/FK controls, joint topology review and pose QA. See [animation bake and portable GLB clip export](CHARACTER_ANIMATION_BAKE.md) for the subsequently added skeletal-action bridge. These synthetic checks do not establish real Pip/Quill artistic fidelity or browser render parity.
 
 ## 8. Remaining roadmap (not implemented in this slice)
 
 1. Fully semantic Blender geometry authoring and optional Open3D ARAP deformation.
 2. Non-destructive seam bridging and retopology guided by eyes, mouth, wing, hip, knee and tail bends.
-3. Rigify/species profile adaptors, IK/FK controls, weight-region exclusion masks and corrective shape keys.
+3. Expand the existing native biped, avian and tail FK/IK controls to Rigify-compatible and additional species profiles; add skin-weight exclusion masks and corrective shape keys.
 4. Facial expression and viseme shape-key generation with optional MIT Rhubarb Lip Sync.
-5. Groomed bird feathers/fur, secondary deformation, animation actions, and validated skinned GLB playback.
+5. Groomed bird feathers/fur, secondary deformation, multiple NLA clip/morph integration and independently rendered Kumiki-UI GLB playback.
 
 Prioritize a synthetic owl/squirrel fixture and then independently reviewed Pip and Quill model runs before declaring these modeling or rigging workflows production-ready. Continue using immutable private character assets rather than committing copyrighted reference artwork or unlicensed third-party meshes.

@@ -22,6 +22,7 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "src"))
 from tests.test_character_rig_controls import rig_fixture  # noqa: E402
 from kumiki_blender.character_build.rig_control_plan import save_control_plan  # noqa: E402
+from kumiki_blender.character_build.animation_bake_plan import save_bake_plan  # noqa: E402
 from kumiki_blender.character_build.topology_zones import save_topology_plan  # noqa: E402
 
 WORKER_DIR = ROOT / "src/kumiki_blender/character_build"
@@ -101,6 +102,35 @@ def main():
         assert "CTRL_upper_wing.L" in controls["controls"]
         assert "Wing.L" in controls["rest_pose_change"]
 
+        # Drive one native FK control with a real two-key pose action. This
+        # proves the exporter can bake evaluated IK/FK motion, not just export
+        # a static skinned model containing a misleading animation name.
+        bpy.ops.wm.open_mainfile(filepath=str(output_controls / "controlled.blend"))
+        rig = bpy.data.objects["CharacterRig"]
+        wing = rig.pose.bones["CTRL_upper_wing.L"]
+        wing.rotation_mode = "XYZ"
+        bpy.context.scene.frame_set(1)
+        wing.rotation_euler = (0, 0, 0)
+        wing.keyframe_insert(data_path="rotation_euler", frame=1)
+        bpy.context.scene.frame_set(12)
+        wing.rotation_euler = (0, 0, .45)
+        wing.keyframe_insert(data_path="rotation_euler", frame=12)
+        animated = folder / "animated-controls.blend"
+        bpy.ops.wm.save_as_mainfile(filepath=str(animated))
+        bake_plan = save_bake_plan(animated, "wing_fold", 1, 12, folder / "bake-plan")
+        bake_out = folder / "bake-output"
+        baked = run_worker(animated, "blender_animation_bake.py", {
+            "plan": bake_plan, "output": str(bake_out),
+        }, bake_out)
+        assert (bake_out / "baked.blend").is_file()
+        assert (bake_out / "animated.glb").is_file()
+        assert baked["glb"]["skins"] >= 1 and baked["glb"]["channels"] >= 1
+        assert baked["pose_parity"]["max_position_error_m"] <= .002
+        assert baked["pose_parity_after_controller_removal"]["max_position_error_m"] <= .002
+        assert baked["glb"]["deform_joint_channels"] > 0
+        assert baked["glb"]["animations"] == 1
+        assert baked["glb"]["clip_names"] == ["wing_fold"]
+
         topology_spec = save_topology_plan(joints_file, folder / "topology-plan",
                                            mesh="Skin", joints=["neck", "shoulder.L", "elbow.L"])
         topology_out = folder / "topology-output"
@@ -150,6 +180,9 @@ def main():
             "topology_zones": len(topology["zones"]),
             "sculpt_vertices": sculpt["edited_vertices"],
             "pose_qa_status": poses["status"],
+            "exported_animation_channels": baked["glb"]["channels"],
+            "deform_joint_channels": baked["glb"]["deform_joint_channels"],
+            "animation_names": baked["glb"]["clip_names"],
         }, indent=2))
 
 
