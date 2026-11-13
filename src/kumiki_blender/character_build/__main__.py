@@ -97,6 +97,12 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--limbs", choices=("arms", "wings"), default="arms")
     p.add_argument("--tail", action="store_true")
 
+    p = sub.add_parser("fur-mask", help="UV-space fur mask from a base-colour texture (clothing excluded)")
+    p.add_argument("basecolor", type=Path)
+    p.add_argument("--exclude", action="append", default=[], help="r,g,b of a no-fur colour; repeat")
+    p.add_argument("--max-delta-e", type=float, default=18.0)
+    p.add_argument("--output", type=Path, required=True)
+
     p = sub.add_parser("place", help="repair, orient and score image-to-3D candidates against the references")
     p.add_argument("handoff", type=Path)
     p.add_argument("meshes", type=Path, nargs="+")
@@ -111,11 +117,29 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("swap", help="replace a region of one mesh with the same region of another")
     p.add_argument("base", type=Path)
     p.add_argument("donor", type=Path)
-    p.add_argument("--region", action="append", required=True, help="condition such as y>0.02; repeat to combine")
+    p.add_argument("--region", action="append", help="condition such as y>0.02; repeat to combine")
+    p.add_argument("--ellipsoid", help="cx,cy,cz,rx,ry,rz in metres: a round region (a head) instead of --region")
     p.add_argument("--voxel-m", type=float, default=0.0015, help="voxel size that fuses the pieces")
     p.add_argument("--no-align", action="store_true", help="the donor already matches the base exactly")
+    p.add_argument("--align-region", action="append",
+                   help="align only on these shared parts (default: everything outside --region); repeat")
     p.add_argument("--output", type=Path, required=True, help="new folder")
     p.add_argument("--blender")
+
+    p = sub.add_parser("fur", help="strand fur with Blender's hair assets on a textured low-poly mesh")
+    p.add_argument("mesh", type=Path, help="low.obj from retopo (with UVs)")
+    p.add_argument("--basecolor", type=Path, required=True)
+    p.add_argument("--systems", type=Path, required=True, help="JSON list of fur systems (see blender_fur.py)")
+    p.add_argument("--output", type=Path, required=True)
+    p.add_argument("--weights", type=Path, help="PLY from fur-weights (red = fur); systems use it with use_fur_attribute")
+    p.add_argument("--render", action="store_true")
+    p.add_argument("--blender")
+
+    p = sub.add_parser("fur-weights", help="per-vertex fur weights from colours projected from the drawings")
+    p.add_argument("coloured", type=Path, help="mesh from `project` (vertex colours)")
+    p.add_argument("--clothing-top-m", type=float, required=True, help="height above which no clothing exists")
+    p.add_argument("--eye-band-m", required=True, help="low,high height of the eyes")
+    p.add_argument("--output", type=Path, required=True, help=".ply (red channel = weight)")
 
     for name, help_text in (("blender-setup", "reference cameras and images in Blender; optional renders"),
                             ("assemble", "place parts with anchor pairs and join them"),
@@ -136,6 +160,8 @@ def main(argv: list[str] | None = None) -> int:
             p.add_argument("--target-faces", type=int, default=8000)
             p.add_argument("--bake-size", type=int, default=2048)
             p.add_argument("--cage-m", type=float, default=0.005)
+            p.add_argument("--colour-from", type=Path,
+                           help="placement JSON from `place`: bake that source file's own texture as base colour")
         if name == "rig":
             p.add_argument("--rom-deg", type=float, default=45.0)
             p.add_argument("--render-rom", action="store_true")
@@ -226,6 +252,32 @@ def _run(args) -> int:
         print(json.dumps(report if args.command != "fit" else {k: report[k] for k in ("normalise", "start", "best", "folds")},
                          indent=2))
         return 0
+    if args.command == "fur-weights":
+        import numpy as np
+
+        from .mesh import Mesh, read_mesh, write_ply
+        from .scatter import fur_weights
+
+        _new_file(args.output)
+        mesh = read_mesh(args.coloured)
+        band = tuple(float(v) for v in args.eye_band_m.split(","))
+        weights = fur_weights(mesh, clothing_top_m=args.clothing_top_m, eye_band_m=band)
+        grey = np.repeat((weights * 255).astype(np.uint8)[:, None], 3, axis=1)
+        write_ply(Mesh(mesh.vertices, mesh.faces, grey), args.output)
+        print(json.dumps({"fur_fraction": round(float(weights.mean()), 4)}))
+        return 0
+    if args.command == "fur-mask":
+        import numpy as np
+        from PIL import Image
+
+        from .scatter import fur_mask
+
+        _new_file(args.output)
+        texture = np.asarray(Image.open(args.basecolor).convert("RGB"))
+        mask = fur_mask(texture, [tuple(int(v) for v in c.split(",")) for c in args.exclude], args.max_delta_e)
+        Image.fromarray(mask).save(args.output)
+        print(json.dumps({"fur_fraction": round(float((mask > 0).mean()), 4)}))
+        return 0
     if args.command == "place":
         from .fit import normalise
         from .handoff import compare, reference_masks
@@ -243,6 +295,7 @@ def _run(args) -> int:
             solid = solidify(placed, args.voxel_mm / 1000)
             target = out / f"{path.stem}.ply"
             write_ply(solid, target)
+            _write_json(out / f"{path.stem}.placement.json", {"source": str(path.resolve()), **info})
             report = compare(args.handoff, target, output=out / f"{path.stem}-compare")
             ranking.append({"mesh": str(path), "placed": str(target), "mean_iou": report["mean_iou"],
                             "views": {v["view"]: v["iou"] for v in report["views"]},
@@ -283,6 +336,21 @@ def _run(args) -> int:
 
     from .blender import run_worker
 
+    if args.command == "fur":
+        for path in (args.mesh, args.basecolor, args.systems):
+            if not path.is_file():
+                raise FileNotFoundError(f"{path} does not exist")
+        systems = json.loads(args.systems.read_text(encoding="utf-8"))
+        for system in systems:
+            if system.get("mask"):
+                system["mask"] = str((args.systems.parent / system["mask"]).resolve())
+        out = _new_dir(args.output)
+        report = run_worker("fur", {"mesh": str(args.mesh.resolve()), "basecolor": str(args.basecolor.resolve()),
+                                    "weights": str(args.weights.resolve()) if args.weights else None,
+                                    "systems": systems, "render": args.render, "output": str(out.resolve())},
+                            blender=args.blender)
+        print(json.dumps({k: report[k] for k in ("strands", "renders")}, indent=2))
+        return 0
     if args.command == "swap":
         from .mesh import read_mesh, weld, write_ply
         from .swap import align, parse_region, region_box
@@ -290,17 +358,27 @@ def _run(args) -> int:
         for path in (args.base, args.donor):
             if not path.is_file():
                 raise FileNotFoundError(f"{path} does not exist")
-        region = parse_region(args.region)
+        ellipsoid = [float(v) for v in args.ellipsoid.split(",")] if args.ellipsoid else None
+        if ellipsoid is not None:
+            if len(ellipsoid) != 6 or min(ellipsoid[3:]) <= 0:
+                raise ValueError("--ellipsoid needs cx,cy,cz,rx,ry,rz with positive radii")
+            c, r = ellipsoid[:3], ellipsoid[3:]
+            region = [(i, ">", c[i] - r[i]) for i in range(3)] + [(i, "<", c[i] + r[i]) for i in range(3)]
+        elif args.region:
+            region = parse_region(args.region)
+        else:
+            raise ValueError("Give --region or --ellipsoid")
         low, high = region_box(region)
         out = _new_dir(args.output)
         out.mkdir(parents=True, exist_ok=True)
         donor_path, alignment = args.donor.resolve(), None
         if not args.no_align:
-            donor, alignment = align(weld(read_mesh(args.donor)), weld(read_mesh(args.base)), region)
+            match = parse_region(args.align_region) if args.align_region else None
+            donor, alignment = align(weld(read_mesh(args.donor)), weld(read_mesh(args.base)), region, match=match)
             donor_path = (out / "donor_aligned.ply").resolve()
             write_ply(donor, donor_path)
         report = run_worker("swap", {"base": str(args.base.resolve()), "donor": str(donor_path),
-                                     "box_min": low, "box_max": high, "voxel_m": args.voxel_m,
+                                     "box_min": low, "box_max": high, "ellipsoid": ellipsoid, "voxel_m": args.voxel_m,
                                      "output": str(out.resolve())}, blender=args.blender)
         report["alignment"] = alignment
         _write_json(out / "report.json", report)
@@ -319,9 +397,10 @@ def _run(args) -> int:
         report = run_worker("assemble", {"plan": load_assembly(args.input), "output": str(out.resolve())},
                             blender=args.blender)
     elif args.command == "retopo":
+        colour = json.loads(args.colour_from.read_text(encoding="utf-8")) if args.colour_from else None
         report = run_worker("retopo", {"mesh": str(args.input.resolve()), "output": str(out.resolve()),
                                        "target_faces": args.target_faces, "bake_size": args.bake_size,
-                                       "cage_m": args.cage_m}, blender=args.blender)
+                                       "cage_m": args.cage_m, "colour_from": colour}, blender=args.blender)
     else:
         from .rig import validate_joints
 

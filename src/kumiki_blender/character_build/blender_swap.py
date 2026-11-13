@@ -1,6 +1,7 @@
 """Blender worker: replace a box region of the base mesh with the same region of the donor mesh.
 
-Arguments (JSON): base, donor, box_min, box_max (metres), voxel_m, output.
+Arguments (JSON): base, donor, box_min, box_max (metres), ellipsoid (optional
+[cx, cy, cz, rx, ry, rz], used instead of the box), voxel_m, output.
 Each mesh is first rebuilt as a closed solid by a voxel remesh (generator meshes
 have non-manifold edges, which exact booleans reject). The base loses the box
 (boolean difference), the donor keeps only the box (boolean intersect), and the
@@ -46,9 +47,15 @@ def main() -> None:
     for obj in (base, donor):
         voxel_solid(obj, size)
     low, high = args["box_min"], args["box_max"]
-    bpy.ops.mesh.primitive_cube_add(size=1, location=[(a + b) / 2 for a, b in zip(low, high)])
-    box = bpy.context.view_layer.objects.active
-    box.scale = [b - a for a, b in zip(low, high)]
+    if args.get("ellipsoid"):  # centre and radii: a round cut follows a head; a box cuts flat walls
+        cx, cy, cz, rx, ry, rz = args["ellipsoid"]
+        bpy.ops.mesh.primitive_uv_sphere_add(segments=64, ring_count=32, radius=1, location=(cx, cy, cz))
+        box = bpy.context.view_layer.objects.active
+        box.scale = (rx, ry, rz)
+    else:
+        bpy.ops.mesh.primitive_cube_add(size=1, location=[(a + b) / 2 for a, b in zip(low, high)])
+        box = bpy.context.view_layer.objects.active
+        box.scale = [b - a for a, b in zip(low, high)]
     bpy.ops.object.transform_apply(scale=True)
     boolean(base, box, "DIFFERENCE")
     boolean(donor, box, "INTERSECT")

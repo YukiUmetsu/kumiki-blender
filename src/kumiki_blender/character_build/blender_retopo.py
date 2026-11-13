@@ -8,12 +8,14 @@ onto the low mesh (Cycles, CPU), so a light mesh keeps the sculpted look.
 
 from __future__ import annotations
 
+import math
 import sys
 import time
 from pathlib import Path
 
 import bpy
 import numpy as np
+from mathutils import Matrix
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from kumiki_blender.character_build.blender_common import (activate, arguments, clear_startup_scene,  # noqa: E402
@@ -133,16 +135,19 @@ def main() -> None:
             steps.append(f"grid quads: voxel remesh {size * 1000:.2f} mm (QuadriFlow refused every size)")
             warnings.append("QuadriFlow refused the mesh at every size. low.obj has grid-aligned quads "
                             "without edge loops; retopologize joints by hand for animation.")
-    # QuadriFlow follows the voxel stair-steps of a remeshed input. Relax the quads, then snap
-    # them back onto the high mesh, so the low mesh lies on the real surface.
+    # QuadriFlow follows the voxel stair-steps of a remeshed input. Relax the quads and snap
+    # them back onto the high mesh, then smooth again: a sculpted high mesh (fur clumps) is
+    # bumpy at the scale of a quad. The bumps belong in the normal map, not the low mesh.
     relax = low.modifiers.new("Relax", "SMOOTH")
     relax.factor, relax.iterations = 0.5, 6
     snap = low.modifiers.new("OntoHigh", "SHRINKWRAP")
     snap.target, snap.wrap_method = high, "NEAREST_SURFACEPOINT"
+    even = low.modifiers.new("Even", "LAPLACIANSMOOTH")
+    even.iterations, even.lambda_factor, even.use_volume_preserve = 4, 0.5, True
     activate(low)
-    for modifier in (relax.name, snap.name):
+    for modifier in (relax.name, snap.name, even.name):
         bpy.ops.object.modifier_apply(modifier=modifier)
-    steps.append("relaxed and shrink-wrapped onto the high mesh")
+    steps.append("relaxed, shrink-wrapped onto the high mesh and smoothed")
     bpy.ops.object.mode_set(mode="EDIT")
     bpy.ops.mesh.select_all(action="SELECT")
     bpy.ops.uv.smart_project(angle_limit=1.15, island_margin=0.01)
@@ -177,6 +182,35 @@ def main() -> None:
     image.filepath_raw = str(output / "low_normal.png")
     image.file_format = "PNG"
     image.save()
+    files = ["retopo.blend", "low.obj", "low.glb", "low_normal.png"]
+    colour = args.get("colour_from")
+    if colour:
+        # Bake the generator's own texture (detailed fur painting) onto the low mesh. The source
+        # file goes into the reference frame with the transform that `place` measured.
+        source = import_mesh(colour["source"], "ColourSource")
+        rotation = Matrix.Rotation(math.radians(colour["yaw_deg"]), 4, "Z")
+        source.matrix_world = Matrix.Translation(colour["offset_m"]) @ Matrix.Scale(colour["scale"], 4) @ rotation
+        base = bpy.data.images.new("LowBaseColor", size, size, float_buffer=False)
+        base_node = nodes.new("ShaderNodeTexImage")
+        base_node.image = base
+        nodes.active = base_node
+        bpy.ops.object.select_all(action="DESELECT")
+        source.select_set(True)
+        low.select_set(True)
+        bpy.context.view_layer.objects.active = low
+        started = time.time()
+        # The fit moved the surface a few millimetres from the source: search 1 cm each way.
+        bpy.ops.object.bake(type="DIFFUSE", pass_filter={"COLOR"}, use_selected_to_active=True,
+                            cage_extrusion=max(float(args.get("cage_m", 0.005)), 0.01), max_ray_distance=0.02,
+                            margin=8)
+        steps.append(f"base colour bake from {Path(colour['source']).name} {time.time() - started:.1f} s")
+        links.new(base_node.outputs["Color"], nodes["Principled BSDF"].inputs["Base Color"])
+        base.filepath_raw = str(output / "low_basecolor.png")
+        base.file_format = "PNG"
+        base.save()
+        files.append("low_basecolor.png")
+        source.hide_render = True
+        source.hide_set(True)
     high.hide_render = True
     high.hide_set(True)
     bpy.ops.wm.save_as_mainfile(filepath=str(output / "retopo.blend"))
@@ -185,7 +219,7 @@ def main() -> None:
     # glTF stores triangles only. The OBJ keeps the quads (and UVs) for rigging and sculpting.
     bpy.ops.wm.obj_export(filepath=str(output / "low.obj"), export_selected_objects=True, export_materials=False)
     write_report(output, {"high": high_stats, "low": mesh_stats(low), "uv_coverage": round(uv_coverage(low), 4),
-                          "steps": steps, "warnings": warnings, "files": ["retopo.blend", "low.obj", "low.glb", "low_normal.png"]})
+                          "steps": steps, "warnings": warnings, "files": files})
 
 
 main()

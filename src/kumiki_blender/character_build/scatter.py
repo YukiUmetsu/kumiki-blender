@@ -102,3 +102,53 @@ def scatter_cards(mesh: Mesh, spec: ScatterSpec) -> tuple[Mesh, dict]:
     cards = Mesh(world.reshape(-1, 3), faces, colours)
     return cards, {"cards": count, "region_area_m2": round(region_area, 6),
                    "density_per_m2": spec.density_per_m2, "faces": len(faces)}
+
+
+def fur_mask(basecolor: np.ndarray, exclude: list[tuple[int, int, int]], max_delta_e: float = 18.0,
+             grow_px: int = 3) -> np.ndarray:
+    """A UV-space mask (uint8, 255 = fur) from a base-colour texture.
+
+    Texels near any ``exclude`` colour (clothing, eyes, nose) get no fur. The excluded
+    areas grow by ``grow_px`` so strands do not root on a seam of the vest or scarf.
+    Unpainted texels (pure black between UV islands) get no fur either.
+    """
+    from scipy import ndimage
+
+    h, w = basecolor.shape[:2]
+    rgb = basecolor[..., :3].reshape(-1, 3)
+    colours = lab(rgb)
+    blocked = np.zeros(len(rgb), dtype=bool)
+    for colour in exclude:
+        blocked |= np.linalg.norm(colours - lab(np.array([colour], np.uint8)), axis=1) <= max_delta_e
+    blocked = blocked.reshape(h, w) | (basecolor[..., :3].max(axis=2) < 8)
+    if grow_px:
+        blocked = ndimage.binary_dilation(blocked, iterations=grow_px)
+    return np.where(blocked, 0, 255).astype(np.uint8)
+
+
+def fur_weights(mesh: Mesh, *, clothing_top_m: float, eye_band_m: tuple[float, float], grow_rounds: int = 2
+                ) -> np.ndarray:
+    """Per-vertex fur weight (0 or 1) from colours projected from the reference drawings.
+
+    A generator's own texture paints clothing in fur colours, but the drawings separate
+    them. No fur grows on: green (a vest), saturated dark red (a scarf), saturated
+    orange-brown leather and near-black, below ``clothing_top_m``; and near-black in the
+    ``eye_band_m`` height band on the front (pupils). The bare areas grow by
+    ``grow_rounds`` rings so strands do not root on a seam.
+    """
+    if mesh.colours is None:
+        raise ValueError("fur_weights needs a mesh with colours projected from the drawings (run project)")
+    colours = lab(mesh.colours)
+    lightness, chroma = colours[:, 0], np.hypot(colours[:, 1], colours[:, 2])
+    hue = np.degrees(np.arctan2(colours[:, 2], colours[:, 1])) % 360
+    z, y = mesh.vertices[:, 2], mesh.vertices[:, 1]
+    low = z < clothing_top_m
+    green = (hue > 90) & (hue < 150) & (chroma > 12)
+    red = ((hue < 40) | (hue > 340)) & (chroma > 30) & (lightness < 55) & low
+    leather = (hue >= 40) & (hue < 70) & (chroma > 35) & (lightness < 55) & low
+    dark = (lightness < 25) & (low | ((z > eye_band_m[0]) & (z < eye_band_m[1]) & (y < 0)))
+    bare = green | red | leather | dark
+    adjacency = mesh.adjacency()
+    for _ in range(grow_rounds):
+        bare = bare | ((adjacency @ bare.astype(float)) > 0)
+    return np.where(bare, 0.0, 1.0)

@@ -65,6 +65,11 @@ def import_mesh(path: str, name: str):
         bpy.ops.mesh.select_all(action="SELECT")
         bpy.ops.mesh.remove_doubles(threshold=1e-6)
         bpy.ops.object.mode_set(mode="OBJECT")
+    # OBJ and glTF files can carry per-face normals, which override smooth shading and show
+    # every quad. Character surfaces are smooth: drop them and shade smooth.
+    if obj.data.has_custom_normals:
+        bpy.ops.mesh.customdata_custom_splitnormals_clear()
+    bpy.ops.object.shade_smooth()
     obj.name = obj.data.name = name
     return obj
 

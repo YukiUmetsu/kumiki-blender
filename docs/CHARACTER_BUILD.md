@@ -37,7 +37,10 @@ or newer. The other commands need only NumPy, SciPy, scikit-image and Pillow.
 | Parts | `assemble plan.json --output asm/` | Parts placed with anchor pairs, seams measured |
 | Generators | `place HANDOFF a.glb b.glb --output ranked/` | Repaired, solid, oriented candidates ranked by IoU |
 | Generators | `solidify mesh.glb --output solid.ply` | A hollow or badly wound mesh rebuilt as one solid |
-| Generators | `swap BASE DONOR --region "y>0.05" --output sw/` | One region taken from another generation |
+| Generators | `swap BASE DONOR --region "y>0.05" --output sw/` | One region taken from another generation (`--ellipsoid`, `--align-region`) |
+| Texture | `retopo fitted.ply --colour-from ranked/x.placement.json` | The generator's own texture baked as `low_basecolor.png` |
+| Fur | `fur-weights coloured.ply --clothing-top-m 0.2 --eye-band-m 0.21,0.27` | Per-vertex fur weight from the drawings' colours (no fur on clothing or eyes) |
+| Fur | `fur retopo/low.obj --basecolor low_basecolor.png --weights w.ply --systems s.json` | Strand fur with Blender's procedural hair assets |
 | Blender | `blender-setup HANDOFF --output refs/ --save` | Reference cameras, image empties and blockout in a `.blend` |
 
 Each command writes a new file or folder. It does not overwrite an output.
@@ -65,6 +68,15 @@ corrects, colours and rigs the generated mesh.
    aligns the donor to the base with a two-way similarity ICP outside the
    region, then cuts and fuses closed solids. It works when a box separates the
    part. It does not work when the part wraps around the body.
+
+6. **Texture.** `retopo --colour-from ranked/<name>.placement.json` bakes the
+   generator's own texture onto the low mesh. It is sharper than colours
+   projected from the drawings. The bake searches 2 cm from the surface, so it
+   fails where the fit moved the surface further.
+7. **Fur.** `fur-weights` marks clothing and eyes from the colours projected
+   from the drawings. A generator texture often paints clothing in fur colours.
+   `fur` then grows strands with Blender's hair node assets. Strands thinner
+   than a pixel need a Cycles render and grooming to read as fur.
 
 TRELLIS.2 exports a hollow, inconsistently wound shell, so `place` and
 `solidify` rebuild it as one solid. On a 24 GB Mac the 512 pipeline peaked at

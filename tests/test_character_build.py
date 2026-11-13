@@ -23,7 +23,7 @@ from kumiki_blender.character_build.mesh import Mesh, orient_faces, rasterize, r
 from kumiki_blender.character_build.swap import align, parse_region, region_box
 from kumiki_blender.character_build.project import mirror_missing, project_images, relief, subdivide
 from kumiki_blender.character_build.rig import estimate_joints, validate_joints
-from kumiki_blender.character_build.scatter import ScatterSpec, scatter_cards
+from kumiki_blender.character_build.scatter import ScatterSpec, fur_mask, scatter_cards
 from kumiki_blender.character_fidelity.schema import load_manifest
 
 
@@ -281,6 +281,37 @@ class AlignmentTests(SharedSet):
         self.assertAlmostEqual(info["scale"], 1 / 1.1, delta=0.005)
         self.assertAlmostEqual(info["rotation_deg"], 10, delta=0.5)
         self.assertLess(float(np.median(np.linalg.norm(aligned.vertices - base.vertices, axis=1))), 0.002)
+        # Matching only a shared part. Both meshes come from `place`, so they differ only a
+        # little. The part must hold distinctive shapes (feet, a face): a round lower body alone
+        # leaves the rotation loose (it settles at 3.2 of 5 degrees).
+        b = np.radians(5)
+        small = np.array([[np.cos(b), -np.sin(b), 0], [np.sin(b), np.cos(b), 0], [0, 0, 1]])
+        donor = Mesh(1.02 * base.vertices @ small.T + [0.005, 0, 0], base.faces)
+        aligned, info = align(donor, base, parse_region(["y>0.1"]), match=parse_region(["z<0.8"]))
+        self.assertAlmostEqual(info["rotation_deg"], 5, delta=0.5)
+
+    def test_placement_transform_reproduces_the_placed_mesh(self):
+        """place writes yaw, scale and offset so the source file (and its texture) can be put in place."""
+        blockout = read_mesh(self.handoff / "blockout.obj")
+        a = np.radians(-30)
+        turn = np.array([[np.cos(a), -np.sin(a), 0], [np.sin(a), np.cos(a), 0], [0, 0, 1]])
+        source = Mesh(blockout.vertices @ turn.T * 2.0 + [0.3, -0.1, 0.2], blockout.faces)
+        placed, info = normalise(source, reference_masks(self.handoff, 0.25), HEIGHT_M, HEIGHT_M / 1000, 0.25)
+        b = np.radians(info["yaw_deg"])
+        rz = np.array([[np.cos(b), -np.sin(b), 0], [np.sin(b), np.cos(b), 0], [0, 0, 1]])
+        rebuilt = info["scale"] * source.vertices @ rz.T + info["offset_m"]
+        np.testing.assert_allclose(rebuilt, placed.vertices, atol=1e-9)
+
+
+class FurMaskTests(unittest.TestCase):
+    def test_clothing_and_empty_texels_get_no_fur(self):
+        texture = np.zeros((40, 40, 3), np.uint8)
+        texture[:, :20] = (160, 115, 85)    # fur
+        texture[:, 20:30] = (70, 95, 50)    # vest green
+        mask = fur_mask(texture, [(70, 95, 50)], grow_px=0)
+        self.assertTrue((mask[:, :20] == 255).all())
+        self.assertTrue((mask[:, 20:30] == 0).all())
+        self.assertTrue((mask[:, 30:] == 0).all(), "unpainted texels between UV islands")
 
 
 class JointsAndAssemblyTests(SharedSet):

@@ -65,20 +65,29 @@ def _similarity(source: np.ndarray, target: np.ndarray) -> tuple[float, np.ndarr
 
 
 def align(donor: Mesh, base: Mesh, region: list[tuple[int, str, float]], *, iterations: int = 150,
-          sample: int = 20000, keep: float = 0.8, seed: int = 0) -> tuple[Mesh, dict]:
+          sample: int = 20000, keep: float = 0.8, seed: int = 0,
+          match: list[tuple[int, str, float]] | None = None) -> tuple[Mesh, dict]:
     """Move the donor onto the base with a similarity ICP on the parts outside the swap region.
 
     Two generations of one character share the body, head and legs but not the
     part that differs. Matching only the shared parts puts the donor's part where
     it belongs. The worst ``1 - keep`` of the matches are ignored each round.
 
+    ``match`` (conditions) replaces "outside the region" when the parts outside the
+    region also differ between the generations, such as two different tails. It must
+    hold distinctive shapes (feet, a face): a round body alone leaves the rotation loose.
+
     Matches go both ways (donor to base and base to donor). With a free scale,
     one-way nearest neighbours shrink the donor, because a smaller shape lies
     closer to every point of the larger one.
     """
     rng = np.random.default_rng(seed)
-    fixed = base.vertices[~in_region(base.vertices, region)]
-    moving = donor.vertices[~in_region(donor.vertices, region)]
+    if match:  # match only parts that both generations share (e.g. legs and belly, not two different tails)
+        fixed = base.vertices[in_region(base.vertices, match)]
+        moving = donor.vertices[in_region(donor.vertices, match)]
+    else:
+        fixed = base.vertices[~in_region(base.vertices, region)]
+        moving = donor.vertices[~in_region(donor.vertices, region)]
     fixed = fixed[rng.choice(len(fixed), min(sample, len(fixed)), replace=False)]
     moving = moving[rng.choice(len(moving), min(sample, len(moving)), replace=False)]
     tree = cKDTree(fixed)
@@ -98,7 +107,9 @@ def align(donor: Mesh, base: Mesh, region: list[tuple[int, str, float]], *, iter
     end = float(np.median(tree.query(moving)[0]))
     moved = total_scale * donor.vertices @ total_rotation.T + total_shift
     angle = float(np.degrees(np.arccos(np.clip((np.trace(total_rotation) - 1) / 2, -1, 1))))
-    return Mesh(moved, donor.faces, donor.colours), {
+    matrix = np.eye(4)
+    matrix[:3, :3], matrix[:3, 3] = total_scale * total_rotation, total_shift
+    return Mesh(moved, donor.faces, donor.colours), {"matrix": matrix.round(8).tolist(),
         "median_gap_before_m": round(start, 5), "median_gap_after_m": round(end, 5),
         "scale": round(total_scale, 4), "rotation_deg": round(angle, 2),
         "shift_m": [round(float(v), 4) for v in total_shift]}

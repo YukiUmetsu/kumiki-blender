@@ -145,8 +145,10 @@ def normalise(mesh: Mesh, masks: dict[str, np.ndarray], height_m: float, px: flo
         best = fine[yaw]
     else:
         yaw, best = 0.0, score(0.0)
-    placed, factor, _rotation, _offset = _place(mesh.vertices, yaw, height_m)
+    placed, factor, _rotation, offset = _place(mesh.vertices, yaw, height_m)
+    # p_placed = scale * Rz(yaw) @ p + offset: enough to put the source file (and its texture) in place.
     return Mesh(placed, mesh.faces, mesh.colours), {"yaw_deg": float(yaw), "scale": float(factor),
+                                                    "offset_m": [float(v) for v in offset],
                                                     "silhouette_iou": round(best, 4)}
 
 
