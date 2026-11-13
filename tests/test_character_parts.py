@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import tempfile
 import unittest
 from pathlib import Path
@@ -271,6 +272,47 @@ class BakeByPartTests(unittest.TestCase):
         red = np.abs(image[rows, cols].astype(int) - BAG).sum(axis=1) < 90
         self.assertGreater(red[label == self.report["parts"].index(self.bag())].mean(), 0.9)
         self.assertLess(red[label == 0].mean(), 0.01)
+
+    def test_source_fingerprint_rejects_stale_raw_reference(self):
+        self.assertEqual(len(self.report["source_signature_sha256"]), 64)
+        with tempfile.TemporaryDirectory() as tmp:
+            copy = Path(tmp) / "handoff"
+            shutil.copytree(self.handoff, copy)
+            picture = copy / "raw" / "right.png"
+            with Image.open(picture) as image:
+                changed = image.convert("RGBA").copy()
+            changed.putpixel((0, 0), (255, 0, 255, 255))
+            changed.save(picture)
+            with self.assertRaisesRegex(ValueError, "stale.*source drawing"):
+                parts.bake_parts(copy, self.mesh, self.corner_uv, self.out,
+                                 size=256)
+
+    def test_source_fingerprint_rejects_stale_mesh_and_uv(self):
+        changed_uv = self.corner_uv.copy()
+        changed_uv[0, 0, 0] += .001
+        with self.assertRaisesRegex(ValueError, "stale"):
+            parts.bake_parts(self.handoff, self.mesh, changed_uv, self.out,
+                             size=256)
+        changed_vertices = self.mesh.vertices.copy()
+        changed_vertices[0, 0] += .001
+        changed_mesh = Mesh(changed_vertices, self.mesh.faces)
+        with self.assertRaisesRegex(ValueError, "stale"):
+            parts.bake_parts(self.handoff, changed_mesh, self.corner_uv,
+                             self.out, size=256)
+
+    def test_existing_parts_output_does_not_overwrite_reviewed_masks(self):
+        note = self.out / "reviewed.txt"
+        note.write_text("manual review approved")
+        try:
+            with self.assertRaises(FileExistsError):
+                parts.find_parts(self.handoff, self.mesh, self.corner_uv,
+                                 self.out, size=256)
+            self.assertEqual(note.read_text(), "manual review approved")
+            self.assertEqual(
+                json.loads((self.out/"parts.json").read_text())["source_signature_sha256"],
+                self.report["source_signature_sha256"])
+        finally:
+            note.unlink(missing_ok=True)
 
     def test_the_parts_must_come_from_the_same_sources_as_the_bake(self):
         with self.assertRaises(ValueError):

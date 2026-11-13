@@ -160,6 +160,17 @@ kumiki-character-build texture-parts HANDOFF retopo/low.obj parts/ --output base
 Give both commands the same sources: `--views`, `--assume-symmetric` and `--extra`.
 A side without a source has no colours, and `parts` cannot recognise it.
 
+**Source-locked part masks:** `parts.json` records a SHA-256 signature of the
+source handoff configuration, every selected original/reference image, any
+supplementary repaint, source-mesh vertices/faces and UV corner coordinates.
+`texture-parts` validates the same signature **before** it bakes: a new
+character mesh, changed raw drawing, modified repaint, altered UV layout or
+different camera selection requires a **new `parts` revision**. It refuses
+stale masks rather than silently painting a scarf onto the tail or moving an
+eye to the wrong surface. The texture resolution can still change between
+part identification and the final bake. A pre-existing folder containing
+part labels is never overwritten; use a new output folder for each revision.
+
 How `parts` works:
 
 1. **Shapes, from geometry.** The tail, the wings and the ears meet the body in

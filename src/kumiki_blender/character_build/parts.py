@@ -27,6 +27,7 @@ before you rely on them. ``semantic.json`` gives the same masks in the format of
 
 from __future__ import annotations
 
+import hashlib
 import json
 import tempfile
 from pathlib import Path
@@ -46,6 +47,63 @@ PART_COLOURS = np.array([(66, 135, 245), (240, 90, 60), (70, 190, 110), (245, 20
                          (40, 200, 210), (250, 140, 40), (140, 140, 140), (130, 80, 40), (250, 140, 200),
                          (120, 160, 40), (90, 60, 160)], dtype=np.uint8)
 DOMINANT_SHARE = 0.15   # a colour class with this share of a part is one of its main colours
+
+
+def _source_signature(handoff: Path, mesh: Mesh, corner_uv: np.ndarray, *,
+                      views: list[str] | None, extra: list[dict] | None,
+                      mirror_missing: bool) -> str:
+    """SHA-256 of geometry/UVs and every source image driving part ownership.
+
+    Without this lock an old UV mask could be reused after the eye, clothing,
+    or tail geometry changes, silently painting the wrong anatomy.
+    The signature excludes bake output resolution: a reviewed 256px part map
+    may be intentionally re-used at 2048px on unchanged source geometry.
+    """
+    spec_file = handoff / "spec.json"
+    spec_bytes = spec_file.read_bytes()
+    spec = json.loads(spec_bytes)
+    names = [
+        name for name in spec["raw"]
+        if (views is None or name in views)
+        and (handoff / "raw" / f"{name}.png").is_file()
+    ]
+    digest = hashlib.sha256(b"kumiki-parts-source-v1\n")
+    digest.update(spec_bytes)
+    digest.update(json.dumps({
+        "view_names": names,
+        "mirror_missing": bool(mirror_missing),
+        "extras": [
+            {key: value for key, value in entry.items() if key != "image"}
+            for entry in (extra or [])
+        ],
+    }, sort_keys=True, default=str).encode("utf-8"))
+    for name in names:
+        path = handoff / "raw" / f"{name}.png"
+        digest.update(name.encode("utf-8"))
+        with path.open("rb") as stream:
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                digest.update(chunk)
+    for index, entry in enumerate(extra or []):
+        digest.update(f"extra-image:{index}".encode("ascii"))
+        with Path(entry["image"]).open("rb") as stream:
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                digest.update(chunk)
+    for name, array, dtype in (
+        ("vertices", mesh.vertices, np.float64),
+        ("faces", mesh.faces, np.int64),
+        ("corner_uv", corner_uv, np.float64),
+    ):
+        value = np.ascontiguousarray(array, dtype=dtype)
+        digest.update(name.encode("ascii"))
+        digest.update(str(value.shape).encode("ascii"))
+        digest.update(memoryview(value).cast("B"))
+    if mesh.colours is not None:
+        colours = np.ascontiguousarray(mesh.colours, dtype=np.uint8)
+        digest.update(b"vertex_colours")
+        digest.update(str(colours.shape).encode("ascii"))
+        digest.update(memoryview(colours).cast("B"))
+    return digest.hexdigest()
+
 
 
 def weighted_lab(rgb: np.ndarray) -> np.ndarray:
@@ -514,6 +572,13 @@ def find_parts(handoff: Path, mesh: Mesh, corner_uv: np.ndarray, out: Path, *, s
     """
     spec = json.loads((handoff / "spec.json").read_text(encoding="utf-8"))
     px = spec["metres_per_aligned_px"]
+    # The CLI accepts a pre-existing *empty* directory but no produced mask
+    # revision may silently overwrite human-reviewed UV or view labels.
+    if out.exists() and (not out.is_dir() or any(out.iterdir())):
+        raise FileExistsError(f"Part-revision output already contains files: {out}")
+    source_signature = _source_signature(
+        handoff, mesh, corner_uv, views=views, extra=extra,
+        mirror_missing=mirror_missing)
     out.mkdir(parents=True, exist_ok=True)
     bake = {k: v for k, v in bake.items() if k != "diagnostics"}
     with tempfile.TemporaryDirectory() as scratch:
@@ -558,7 +623,11 @@ def find_parts(handoff: Path, mesh: Mesh, corner_uv: np.ndarray, out: Path, *, s
     colours = np.vstack([[(40, 40, 40)], PART_COLOURS[np.arange(len(parts)) % len(PART_COLOURS)]]).astype(np.uint8)
     turnaround(mesh, corner_uv, [first, colours[labels_uv], colours[np.clip(shapes_uv, 0, len(colours) - 1)]], px
                ).save(out / "turnaround.png")
+    if _source_signature(handoff, mesh, corner_uv, views=views, extra=extra,
+                         mirror_missing=mirror_missing) != source_signature:
+        raise ValueError("Part recognition sources changed while processing; regenerate the revision")
     report = {"schema_version": 1, "source_confidence": "estimated", "review": "required", "size": size,
+              "source_signature_sha256": source_signature,
               "views": names, "slack_px": slack_px, "mirror_missing": mirror_missing,
               "extra": [item["name"] for item in extra or []],
               "parts": [{**part, "colour_in_pictures": [int(c) for c in PART_COLOURS[i % len(PART_COLOURS)]],
@@ -618,6 +687,14 @@ def bake_parts(handoff: Path, mesh: Mesh, corner_uv: np.ndarray, parts_dir: Path
     spec = json.loads((handoff / "spec.json").read_text(encoding="utf-8"))
     px = spec["metres_per_aligned_px"]
     found = json.loads((parts_dir / "parts.json").read_text(encoding="utf-8"))
+    original = found.get("source_signature_sha256")
+    if not isinstance(original, str) or len(original) != 64:
+        raise ValueError("Part labels lack source provenance; regenerate the parts revision")
+    current = _source_signature(
+        handoff, mesh, corner_uv, views=views, extra=extra,
+        mirror_missing=bool(bake.get("mirror_missing")))
+    if current != original:
+        raise ValueError("Part labels are stale: source drawing, mesh, UV or camera inputs changed; regenerate parts")
     parts = found["parts"]
     if bool(bake.get("mirror_missing")) != bool(found.get("mirror_missing")):
         raise ValueError("The parts were recognised with a different --assume-symmetric setting than this bake. "
