@@ -67,7 +67,7 @@ def _faces_and_poles(obj, coords, center, axis, radius, half_width):
     quads = polygons = triangles = ngons = 0
     for face in obj.data.polygons:
         points = [coords[i] for i in face.vertices]
-        centroid = sum(points, Vector()) / len(points)
+        centroid = sum(points[1:], points[0].copy()) / len(points)
         radial = centroid - center
         along = radial.dot(axis)
         normal = (radial - axis * along).length
@@ -81,7 +81,6 @@ def _faces_and_poles(obj, coords, center, axis, radius, half_width):
         return {"faces": 0, "quad_fraction": None, "triangles": 0,
                 "ngons": 0, "interior_poles": 0, "sampled_vertices": 0}
     valence = [0] * len(obj.data.vertices)
-    edge_faces = [0] * len(obj.data.vertices)
     for edge in obj.data.edges:
         a, b = edge.vertices
         if a in local:
