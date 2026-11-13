@@ -16,9 +16,11 @@ from character_build_fixtures import (HEIGHT_M, MARGINS, ellipsoid_mesh, figure_
 from kumiki_blender.character_build import checks, hull, views
 from kumiki_blender.character_build.__main__ import main as cli
 from kumiki_blender.character_build.assembly import load_assembly
-from kumiki_blender.character_build.fit import fit_silhouettes, fold_faces
+from kumiki_blender.character_build.fit import fit_silhouettes, fold_faces, normalise
 from kumiki_blender.character_build.handoff import build_handoff, compare, reference_masks
-from kumiki_blender.character_build.mesh import Mesh, rasterize, read_mesh, write_mesh
+from kumiki_blender.character_build.hull import solidify
+from kumiki_blender.character_build.mesh import Mesh, orient_faces, rasterize, read_mesh, write_mesh
+from kumiki_blender.character_build.swap import align, parse_region, region_box
 from kumiki_blender.character_build.project import mirror_missing, project_images, relief, subdivide
 from kumiki_blender.character_build.rig import estimate_joints, validate_joints
 from kumiki_blender.character_build.scatter import ScatterSpec, scatter_cards
@@ -184,6 +186,19 @@ class FitProjectScatterTests(SharedSet):
         self.assertEqual(result.folds, 0, "the flip guard and untangle leave no folded triangles")
         self.assertEqual(len(fold_faces(result.mesh, 0.0)), 0, "no crease sharper than 90 degrees")
 
+    def test_orientation_search_finds_a_turned_generator_mesh(self):
+        """A generator mesh comes turned (45 degrees from a 3/4 view), scaled and moved. Front and
+        back silhouettes are mirror images, so the side views must settle a half turn."""
+        blockout = read_mesh(self.handoff / "blockout.obj")
+        masks = reference_masks(self.handoff, 0.25)
+        for yaw in (47, 180):
+            a = np.radians(-yaw)
+            turn = np.array([[np.cos(a), -np.sin(a), 0], [np.sin(a), np.cos(a), 0], [0, 0, 1]])
+            moved = Mesh(blockout.vertices @ turn.T * 3.0 + [1, 2, 3], blockout.faces)
+            placed, info = normalise(moved, masks, HEIGHT_M, HEIGHT_M / 1000, 0.25)
+            self.assertLess(abs((info["yaw_deg"] - yaw + 180) % 360 - 180), 4, info)
+            self.assertAlmostEqual(placed.vertices[:, 2].max(), HEIGHT_M, places=6)
+
     def test_visibility_and_relief(self):
         image = np.full((views.CANVAS_H, views.CANVAS_W, 3), 100.0)
         sphere = ellipsoid_mesh((0, 0, .5), (.3, .3, .3), 3)
@@ -222,6 +237,50 @@ class FitProjectScatterTests(SharedSet):
         behind, report = scatter_cards(sphere, ScatterSpec(density_per_m2=2000, y_min_m=0.1, seed=3))
         bases = behind.vertices.reshape(report["cards"], -1, 3)[:, 0]
         self.assertTrue(np.all(bases[:, 1] > 0.07), "a y band selects the back of the figure only")
+
+
+class GeneratorMeshTests(unittest.TestCase):
+    """Repairs for image-to-3D output: winding, hollow shells, and region swaps between generations."""
+
+    def test_orient_faces_repairs_random_winding(self):
+        sphere = ellipsoid_mesh((0, 0, .5), (.3, .3, .3), 3)
+        faces = sphere.faces.copy()
+        flip = np.random.default_rng(0).random(len(faces)) < 0.5
+        faces[flip] = faces[flip][:, ::-1]
+        fixed, flipped = orient_faces(Mesh(sphere.vertices, faces))
+        self.assertAlmostEqual(signed_volume(fixed), signed_volume(sphere), places=9)
+        self.assertGreater(flipped, 0)
+
+    def test_solidify_fills_a_hollow_shell(self):
+        """TRELLIS.2 exports a closed outer wall with an inner wall just behind it."""
+        outer = ellipsoid_mesh((0, 0, .1), (.08, .08, .08), 4)
+        inner = ellipsoid_mesh((0, 0, .1), (.078, .078, .078), 4)
+        shell = Mesh(np.vstack([outer.vertices, inner.vertices]),
+                     np.vstack([outer.faces, inner.faces[:, ::-1] + len(outer.vertices)]))
+        self.assertLess(signed_volume(shell), 0.1 * signed_volume(outer))
+        solid = solidify(shell, 0.002)
+        self.assertAlmostEqual(signed_volume(solid) / signed_volume(outer), 1.0, delta=0.08)
+
+    def test_region_parsing(self):
+        self.assertEqual(region_box(parse_region(["y>0.02", "z<0.3"]))[0][1], 0.02)
+        with self.assertRaises(ValueError):
+            parse_region(["tail>1"])
+        with self.assertRaises(ValueError):
+            region_box(parse_region(["y>0.2", "y<0.1"]))
+
+
+class AlignmentTests(SharedSet):
+    def test_similarity_icp_recovers_a_known_transform(self):
+        """Two generations share the body; matching it outside the swap region lines them up.
+        (A smooth ellipsoid is a poor test: ICP slides along it. The figure has ears and feet.)"""
+        base = read_mesh(self.handoff / "blockout.obj")
+        a = np.radians(10)
+        turn = np.array([[np.cos(a), -np.sin(a), 0], [np.sin(a), np.cos(a), 0], [0, 0, 1]])
+        donor = Mesh(1.1 * base.vertices @ turn.T + [0.01, -0.02, 0.005], base.faces)
+        aligned, info = align(donor, base, parse_region(["y>0.1"]))
+        self.assertAlmostEqual(info["scale"], 1 / 1.1, delta=0.005)
+        self.assertAlmostEqual(info["rotation_deg"], 10, delta=0.5)
+        self.assertLess(float(np.median(np.linalg.norm(aligned.vertices - base.vertices, axis=1))), 0.002)
 
 
 class JointsAndAssemblyTests(SharedSet):

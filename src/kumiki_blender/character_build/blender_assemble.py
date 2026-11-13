@@ -68,8 +68,11 @@ def main() -> None:
     output.mkdir(parents=True, exist_ok=True)
     bpy.ops.wm.save_as_mainfile(filepath=str(output / "assembled.blend"))
     bpy.ops.export_scene.gltf(filepath=str(output / "assembled.glb"), export_format="GLB")
+    activate(body)
+    bpy.ops.wm.obj_export(filepath=str(output / "assembled_body.obj"), export_selected_objects=True,
+                          export_materials=False)
     write_report(output, {"body": mesh_stats(body), "parts": parts, "union_parts": union_names,
-                          "files": ["assembled.blend", "assembled.glb"]})
+                          "files": ["assembled.blend", "assembled.glb", "assembled_body.obj"]})
 
 
 main()

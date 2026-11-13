@@ -67,6 +67,75 @@ class Mesh:
         return self.vertices.min(axis=0), self.vertices.max(axis=0)
 
 
+def weld(mesh: Mesh, tolerance: float = 1e-7) -> Mesh:
+    """Merge vertices at the same position (within ``tolerance``) and drop faces that collapse.
+
+    glTF and OBJ split vertices along UV seams and hard edges. Smoothing and fitting
+    need the true neighbours, or the seams crack open.
+    """
+    keys = np.round(mesh.vertices / tolerance).astype(np.int64)
+    _, first, inverse = np.unique(keys, axis=0, return_index=True, return_inverse=True)
+    faces = inverse.reshape(-1)[mesh.faces]
+    keep = (faces[:, 0] != faces[:, 1]) & (faces[:, 1] != faces[:, 2]) & (faces[:, 2] != faces[:, 0])
+    colours = mesh.colours[first] if mesh.colours is not None else None
+    return Mesh(mesh.vertices[first], faces[keep], colours)
+
+
+def orient_faces(mesh: Mesh) -> tuple[Mesh, int]:
+    """Make the face winding consistent and outward. Return the mesh and the count of flipped faces.
+
+    Generator meshes can have nearly random winding (TRELLIS.2: about half the faces
+    point in). Signed volume, voxel remeshing and visibility tests all need outward
+    faces. Two faces that share a manifold edge must traverse it in opposite
+    directions; a breadth-first walk flips faces to agree, then each connected piece
+    is turned so its signed volume is positive. Edges with more than two faces do
+    not propagate.
+    """
+    from collections import deque
+
+    faces = mesh.faces.copy()
+    count = len(faces)
+    directed = np.concatenate([faces[:, [0, 1]], faces[:, [1, 2]], faces[:, [2, 0]]])
+    owner = np.tile(np.arange(count), 3)
+    undirected = np.sort(directed, axis=1)
+    order = np.lexsort((undirected[:, 1], undirected[:, 0]))
+    undirected, directed, owner = undirected[order], directed[order], owner[order]
+    starts = np.r_[True, (undirected[1:] != undirected[:-1]).any(axis=1)]
+    group = np.cumsum(starts) - 1
+    sizes = np.bincount(group)
+    pair = sizes[group] == 2
+    first = np.nonzero(pair & starts)[0]
+    a, b = owner[first], owner[first + 1]
+    same = (directed[first] == directed[first + 1]).all(axis=1)  # same direction: one of them must flip
+    neighbours = [[] for _ in range(count)]
+    for f1, f2, parity in zip(a.tolist(), b.tolist(), same.tolist()):
+        neighbours[f1].append((f2, parity))
+        neighbours[f2].append((f1, parity))
+    flip = np.full(count, -1, dtype=np.int8)
+    component = np.full(count, -1)
+    for seed in range(count):
+        if flip[seed] >= 0:
+            continue
+        flip[seed], component[seed] = 0, seed
+        queue = deque([seed])
+        while queue:
+            f = queue.popleft()
+            for g, parity in neighbours[f]:
+                if flip[g] < 0:
+                    flip[g] = flip[f] ^ parity
+                    component[g] = seed
+                    queue.append(g)
+    faces[flip == 1] = faces[flip == 1][:, ::-1]
+    a_, b_, c_ = (mesh.vertices[faces[:, i]] for i in range(3))
+    volume = np.einsum("ij,ij->i", a_, np.cross(b_, c_))
+    labels, inverse = np.unique(component, return_inverse=True)
+    inward = np.bincount(inverse, weights=volume) < 0
+    turn = inward[inverse]
+    faces[turn] = faces[turn][:, ::-1]
+    flipped = int(((flip == 1) ^ turn).sum())
+    return Mesh(mesh.vertices, faces, mesh.colours), flipped
+
+
 # ---------------------------------------------------------------- reading
 
 def read_mesh(path: Path, *, max_faces: int = 3_000_000) -> Mesh:

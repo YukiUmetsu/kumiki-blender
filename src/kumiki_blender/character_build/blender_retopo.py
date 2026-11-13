@@ -52,6 +52,18 @@ def main() -> None:
         removed = remove_debris(low)  # voxel remesh leaves small floating pieces; QuadriFlow rejects them
         steps.append(f"voxel remesh {size:.5f} m ({reason}), {removed} debris pieces removed")
 
+    def reduce_for_quadriflow(limit: int = 150_000) -> None:
+        """QuadriFlow accepted every mesh near 250k faces and refused larger generator meshes.
+        A 15k-face target needs no fine input, so decimate a large mesh first."""
+        faces = len(low.data.polygons)
+        if faces <= limit:
+            return
+        decimate = low.modifiers.new("ForQuadriFlow", "DECIMATE")
+        decimate.ratio = limit / faces
+        activate(low)
+        bpy.ops.object.modifier_apply(modifier=decimate.name)
+        steps.append(f"decimated {faces} -> {len(low.data.polygons)} faces for QuadriFlow")
+
     def quadriflow() -> bool:
         """QuadriFlow, tried at several sizes.
 
@@ -60,6 +72,7 @@ def main() -> None:
         in one direction. So try the largest dimension at 1.5, 3, 6, 0.8 and 12 m, then
         scale back.
         """
+        reduce_for_quadriflow()
         activate(low)
         for size in (1.5, 3.0, 6.0, 0.8, 12.0):
             started = time.time()
@@ -120,6 +133,16 @@ def main() -> None:
             steps.append(f"grid quads: voxel remesh {size * 1000:.2f} mm (QuadriFlow refused every size)")
             warnings.append("QuadriFlow refused the mesh at every size. low.obj has grid-aligned quads "
                             "without edge loops; retopologize joints by hand for animation.")
+    # QuadriFlow follows the voxel stair-steps of a remeshed input. Relax the quads, then snap
+    # them back onto the high mesh, so the low mesh lies on the real surface.
+    relax = low.modifiers.new("Relax", "SMOOTH")
+    relax.factor, relax.iterations = 0.5, 6
+    snap = low.modifiers.new("OntoHigh", "SHRINKWRAP")
+    snap.target, snap.wrap_method = high, "NEAREST_SURFACEPOINT"
+    activate(low)
+    for modifier in (relax.name, snap.name):
+        bpy.ops.object.modifier_apply(modifier=modifier)
+    steps.append("relaxed and shrink-wrapped onto the high mesh")
     bpy.ops.object.mode_set(mode="EDIT")
     bpy.ops.mesh.select_all(action="SELECT")
     bpy.ops.uv.smart_project(angle_limit=1.15, island_margin=0.01)

@@ -62,6 +62,9 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--iterations", type=int, default=40)
     p.add_argument("--views", nargs="*", help="limit to these views")
     p.add_argument("--no-normalise", action="store_true", help="the mesh already stands in the handoff frame")
+    p.add_argument("--smooth-radius-px", type=float, default=4.0,
+                   help="displacement smoothing radius in fit-grid pixels (about 1.3 mm each for a 0.32 m figure); "
+                        "use about 40 for a detailed generator mesh, so only proportions change")
 
     p = sub.add_parser("project", help="vertex colours from the views; optional clay relief")
     p.add_argument("handoff", type=Path)
@@ -93,6 +96,26 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--output", type=Path, required=True)
     p.add_argument("--limbs", choices=("arms", "wings"), default="arms")
     p.add_argument("--tail", action="store_true")
+
+    p = sub.add_parser("place", help="repair, orient and score image-to-3D candidates against the references")
+    p.add_argument("handoff", type=Path)
+    p.add_argument("meshes", type=Path, nargs="+")
+    p.add_argument("--output", type=Path, required=True, help="new folder: placed meshes, reports, ranking.json")
+    p.add_argument("--voxel-mm", type=float, default=1.0, help="solidify voxel")
+
+    p = sub.add_parser("solidify", help="rebuild a hollow or badly wound generator mesh as one solid")
+    p.add_argument("mesh", type=Path)
+    p.add_argument("--output", type=Path, required=True, help=".ply or .obj")
+    p.add_argument("--voxel-mm", type=float, default=1.0)
+
+    p = sub.add_parser("swap", help="replace a region of one mesh with the same region of another")
+    p.add_argument("base", type=Path)
+    p.add_argument("donor", type=Path)
+    p.add_argument("--region", action="append", required=True, help="condition such as y>0.02; repeat to combine")
+    p.add_argument("--voxel-m", type=float, default=0.0015, help="voxel size that fuses the pieces")
+    p.add_argument("--no-align", action="store_true", help="the donor already matches the base exactly")
+    p.add_argument("--output", type=Path, required=True, help="new folder")
+    p.add_argument("--blender")
 
     for name, help_text in (("blender-setup", "reference cameras and images in Blender; optional renders"),
                             ("assemble", "place parts with anchor pairs and join them"),
@@ -153,7 +176,10 @@ def _run(args) -> int:
     if args.command in ("fit", "project", "joints"):
         from .mesh import read_mesh, write_mesh
 
-        spec, mesh = _spec(args.handoff), read_mesh(args.mesh)
+        from .mesh import orient_faces, weld
+
+        # Generator files split UV seams and can have inconsistent winding.
+        spec, (mesh, _flipped) = _spec(args.handoff), orient_faces(weld(read_mesh(args.mesh)))
         _new_file(args.output)
         if args.command == "fit":
             from .fit import fit_silhouettes
@@ -164,7 +190,7 @@ def _run(args) -> int:
             if args.views:
                 masks = {n: m for n, m in masks.items() if n in args.views}
             result = fit_silhouettes(mesh, masks, spec["height_m"], scale=scale, iterations=args.iterations,
-                                     normalise_first=not args.no_normalise)
+                                     normalise_first=not args.no_normalise, smooth_radius_px=args.smooth_radius_px)
             write_mesh(result.mesh, args.output)
             report = {"input": str(args.mesh), "normalise": result.transform, "best_iteration": result.best_iteration,
                       "folds": result.folds,
@@ -200,6 +226,43 @@ def _run(args) -> int:
         print(json.dumps(report if args.command != "fit" else {k: report[k] for k in ("normalise", "start", "best", "folds")},
                          indent=2))
         return 0
+    if args.command == "place":
+        from .fit import normalise
+        from .handoff import compare, reference_masks
+        from .hull import solidify
+        from .mesh import orient_faces, read_mesh, weld, write_ply
+
+        spec, out = _spec(args.handoff), _new_dir(args.output)
+        out.mkdir(parents=True, exist_ok=True)
+        masks = reference_masks(args.handoff, 0.25)
+        ranking = []
+        for path in args.meshes:
+            mesh, flipped = orient_faces(weld(read_mesh(path)))
+            # Scale to the reference height first, so the solidify voxel is in metres.
+            placed, info = normalise(mesh, masks, spec["height_m"], spec["metres_per_aligned_px"], 0.25)
+            solid = solidify(placed, args.voxel_mm / 1000)
+            target = out / f"{path.stem}.ply"
+            write_ply(solid, target)
+            report = compare(args.handoff, target, output=out / f"{path.stem}-compare")
+            ranking.append({"mesh": str(path), "placed": str(target), "mean_iou": report["mean_iou"],
+                            "views": {v["view"]: v["iou"] for v in report["views"]},
+                            "orientation": info, "faces_flipped": flipped})
+            print(f"{path.name}: mean IoU {report['mean_iou']}", file=sys.stderr)
+        ranking.sort(key=lambda r: -r["mean_iou"])
+        _write_json(out / "ranking.json", {"ranking": ranking})
+        print(json.dumps([{k: r[k] for k in ("mesh", "mean_iou", "views")} for r in ranking], indent=2))
+        return 0
+    if args.command == "solidify":
+        from .hull import solidify
+        from .mesh import read_mesh, weld, write_mesh
+
+        _new_file(args.output)
+        source = weld(read_mesh(args.mesh))
+        solid = solidify(source, args.voxel_mm / 1000)
+        write_mesh(solid, args.output)
+        print(json.dumps({"input_faces": len(source.faces), "faces": len(solid.faces),
+                          "voxel_mm": args.voxel_mm}, indent=2))
+        return 0
     if args.command == "scatter":
         from .mesh import read_mesh, write_mesh
         from .scatter import ScatterSpec, scatter_cards
@@ -220,6 +283,29 @@ def _run(args) -> int:
 
     from .blender import run_worker
 
+    if args.command == "swap":
+        from .mesh import read_mesh, weld, write_ply
+        from .swap import align, parse_region, region_box
+
+        for path in (args.base, args.donor):
+            if not path.is_file():
+                raise FileNotFoundError(f"{path} does not exist")
+        region = parse_region(args.region)
+        low, high = region_box(region)
+        out = _new_dir(args.output)
+        out.mkdir(parents=True, exist_ok=True)
+        donor_path, alignment = args.donor.resolve(), None
+        if not args.no_align:
+            donor, alignment = align(weld(read_mesh(args.donor)), weld(read_mesh(args.base)), region)
+            donor_path = (out / "donor_aligned.ply").resolve()
+            write_ply(donor, donor_path)
+        report = run_worker("swap", {"base": str(args.base.resolve()), "donor": str(donor_path),
+                                     "box_min": low, "box_max": high, "voxel_m": args.voxel_m,
+                                     "output": str(out.resolve())}, blender=args.blender)
+        report["alignment"] = alignment
+        _write_json(out / "report.json", report)
+        print(json.dumps({k: report[k] for k in ("alignment", "pieces", "result")}, indent=2))
+        return 0
     if not args.input.exists():
         raise FileNotFoundError(f"{args.input} does not exist")
     out = _new_dir(args.output)

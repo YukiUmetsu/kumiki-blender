@@ -91,43 +91,71 @@ def _sample(field: np.ndarray, col: np.ndarray, row: np.ndarray) -> np.ndarray:
     return ndimage.map_coordinates(field, [row - 0.5, col - 0.5], order=1, mode="nearest")
 
 
-def _ious(mesh: Mesh, masks: dict[str, np.ndarray], px: float, scale: float) -> dict[str, float]:
-    samples = surface_samples(mesh, 0.5 * px / scale)
-    out = {}
-    for name, target in masks.items():
-        model = rasterize(mesh, camera(name), px, scale, samples)[0]
-        out[name] = float((model & target).sum() / max(1, (model | target).sum()))
-    return out
+def _place(points: np.ndarray, yaw_deg: float, height_m: float
+           ) -> tuple[np.ndarray, float, np.ndarray, np.ndarray]:
+    """Rotate about Z, scale to the height, stand on Z = 0, centre on the bounding box.
+
+    Returns the placed points, the scale, the rotation and the offset, so other
+    point sets (surface samples) can get the same transform.
+    """
+    a = np.radians(yaw_deg)
+    rotation = np.array([[np.cos(a), -np.sin(a), 0], [np.sin(a), np.cos(a), 0], [0, 0, 1]])
+    turned = points @ rotation.T
+    low, high = turned.min(axis=0), turned.max(axis=0)
+    factor = height_m / (high[2] - low[2])
+    offset = -np.array([(low[0] + high[0]) / 2, (low[1] + high[1]) / 2, low[2]]) * factor
+    return turned * factor + offset, factor, rotation, offset
 
 
 def normalise(mesh: Mesh, masks: dict[str, np.ndarray], height_m: float, px: float, scale: float,
-              try_yaw: bool = True) -> tuple[Mesh, dict]:
+              try_yaw: bool = True, coarse_deg: float = 15.0, fine_deg: float = 3.0) -> tuple[Mesh, dict]:
     """Scale to the reference height, stand on Z = 0, centre like the references, choose the facing.
 
-    Generators export with any facing. With ``try_yaw`` the four quarter turns
-    are tried and the best mean IoU over the axis views wins.
+    Generators export with any facing, and a mesh made from a 3/4 view comes out
+    turned about 45 degrees. The search tries every ``coarse_deg`` step, then
+    refines around the best in ``fine_deg`` steps. It scores the mean IoU over
+    all views: the side views tell the front from the back (the face and the
+    feet point one way, a tail the other), which the front and back cannot.
     """
-    best = None
-    for yaw in ((0, 90, 180, 270) if try_yaw else (0,)):
-        a = np.radians(yaw)
-        rotation = np.array([[np.cos(a), -np.sin(a), 0], [np.sin(a), np.cos(a), 0], [0, 0, 1]])
-        points = mesh.vertices @ rotation.T
-        low, high = points.min(axis=0), points.max(axis=0)
-        factor = height_m / (high[2] - low[2])
-        points = (points - [0, 0, low[2]]) * factor
-        # Centre each axis on its silhouette bounding box, as the aligned views do.
-        points[:, 0] -= (points[:, 0].min() + points[:, 0].max()) / 2
-        points[:, 1] -= (points[:, 1].min() + points[:, 1].max()) / 2
-        candidate = Mesh(points, mesh.faces, mesh.colours)
-        axis = {n: m for n, m in masks.items() if n in AXIS_VIEWS} or masks
-        score = float(np.mean(list(_ious(candidate, axis, px, scale).values())))
-        if best is None or score > best[0]:
-            best = (score, candidate, {"yaw_deg": yaw, "scale": float(factor), "axis_iou": round(score, 4)})
-    return best[1], best[2]
+    samples = surface_samples(mesh, 0.5 * px / scale)[0]
+    samples = samples[::max(1, len(samples) // 300_000)]  # ranking angles needs no dense cover
+
+    def score(yaw: float) -> float:
+        _placed, factor, rotation, offset = _place(mesh.vertices, yaw, height_m)
+        points = (samples @ rotation.T) * factor + offset
+        values = []
+        for name, target in masks.items():
+            cam = camera(name)
+            col, row, _ = cam.project(points, px, scale)
+            model = np.zeros_like(target)
+            c, r = np.floor(col).astype(int), np.floor(row).astype(int)
+            keep = (c >= 0) & (c < target.shape[1]) & (r >= 0) & (r < target.shape[0])
+            model[r[keep], c[keep]] = True
+            if name not in AXIS_VIEWS:  # a 3/4 view has no shared horizontal centre
+                values.append(max(_iou(np.roll(model, sh, axis=1), target) for sh in range(-20, 21, 4)))
+            else:
+                values.append(_iou(model, target))
+        return float(np.mean(values))
+
+    if try_yaw:
+        coarse = {yaw: score(yaw) for yaw in np.arange(0, 360, coarse_deg)}
+        start = max(coarse, key=coarse.get)
+        fine = {yaw % 360: score(yaw) for yaw in np.arange(start - coarse_deg, start + coarse_deg + 1e-6, fine_deg)}
+        yaw = max(fine, key=fine.get)
+        best = fine[yaw]
+    else:
+        yaw, best = 0.0, score(0.0)
+    placed, factor, _rotation, _offset = _place(mesh.vertices, yaw, height_m)
+    return Mesh(placed, mesh.faces, mesh.colours), {"yaw_deg": float(yaw), "scale": float(factor),
+                                                    "silhouette_iou": round(best, 4)}
+
+
+def _iou(a: np.ndarray, b: np.ndarray) -> float:
+    return float((a & b).sum() / max(1, (a | b).sum()))
 
 
 def fit_silhouettes(mesh: Mesh, masks: dict[str, np.ndarray], height_m: float, *, scale: float = 0.25,
-                    iterations: int = 40, step: float = 0.6, rim_cos: float = 0.35, smooth_rounds: int = 4,
+                    iterations: int = 40, step: float = 0.6, rim_cos: float = 0.35, smooth_radius_px: float = 4.0,
                     outline_blur_px: float = 12.0,
                     max_move_px: float = 3.0, anchor_weight: float = 2.0, normalise_first: bool = True
                     ) -> FitResult:
@@ -138,6 +166,10 @@ def fit_silhouettes(mesh: Mesh, masks: dict[str, np.ndarray], height_m: float, *
         mesh, transform = normalise(mesh, masks, height_m, px, scale)
     vertices = mesh.vertices.copy()
     adjacency = Mesh(vertices, mesh.faces).adjacency()
+    edges = np.concatenate([mesh.faces[:, [0, 1]], mesh.faces[:, [1, 2]]])
+    median_edge = float(np.median(np.linalg.norm(vertices[edges[:, 0]] - vertices[edges[:, 1]], axis=1)))
+    # Averaging over neighbours spreads a move about one edge per sqrt(round).
+    smooth_rounds = int(np.clip((smooth_radius_px * height_m / FIGURE_PX / scale / max(median_edge, 1e-9)) ** 2, 4, 4000))
     # Target the low-passed outline, as the blockout does. The raw outline of a fur or feather
     # fringe changes on every row, and chasing it grooves the surface row by row.
     sigma = outline_blur_px * scale
@@ -184,6 +216,7 @@ def fit_silhouettes(mesh: Mesh, masks: dict[str, np.ndarray], height_m: float, *
         moved = votes > 0
         field[moved] = move_sum[moved] / votes[moved, None]
         # Smooth the displacement, not the shape: neighbours follow a move, unmoved detail stays.
+        # The radius is physical (grid pixels), so a dense generator mesh does not crumple.
         for _ in range(smooth_rounds):
             field = 0.5 * field + 0.5 * (adjacency @ field)
         # Flip guard: a move that turns a triangle over folds the surface (QuadriFlow then refuses

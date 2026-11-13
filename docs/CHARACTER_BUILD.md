@@ -35,9 +35,50 @@ or newer. The other commands need only NumPy, SciPy, scikit-image and Pillow.
 | 9. Rig | `rig retopo/low.obj joints.json --output rig/ --render-rom` | `rigged.glb`, range-of-motion report and renders |
 | Any time | `compare HANDOFF model.glb` | IoU, missing, extra and height error for each view, with overlays |
 | Parts | `assemble plan.json --output asm/` | Parts placed with anchor pairs, seams measured |
+| Generators | `place HANDOFF a.glb b.glb --output ranked/` | Repaired, solid, oriented candidates ranked by IoU |
+| Generators | `solidify mesh.glb --output solid.ply` | A hollow or badly wound mesh rebuilt as one solid |
+| Generators | `swap BASE DONOR --region "y>0.05" --output sw/` | One region taken from another generation |
 | Blender | `blender-setup HANDOFF --output refs/ --save` | Reference cameras, image empties and blockout in a `.blend` |
 
 Each command writes a new file or folder. It does not overwrite an output.
+
+## Image-to-3D route (recommended for detail)
+
+A shape from silhouettes knows only the outlines. Ears, a snout and a tail
+volume need an image-to-3D generator. The pipeline then places, scores,
+corrects, colours and rigs the generated mesh.
+
+1. **Generate.** [TRELLIS.2](https://github.com/microsoft/TRELLIS.2) runs on
+   Apple Silicon through [trellis-silicon](https://github.com/sanchez-kim/trellis-silicon)
+   (MPS and Metal). Give it the aligned views with a transparent background
+   (`handoff/aligned/<view>.png`), one view per run. A 3/4 view works best:
+   on Pip, front-left scored 0.85, right side 0.80 and front 0.69.
+2. **Rank.** `place HANDOFF a.glb b.glb ... --output ranked/` repairs each
+   candidate (UV seams, face winding, hollow shell) and finds its facing in
+   3 degree steps. The side views tell the front from the back. Then it scores
+   each candidate against every view. Run several seeds and keep the best.
+3. **Correct.** `fit HANDOFF ranked/best.ply --no-normalise --smooth-radius-px 40`.
+   A large smoothing radius changes proportions only and keeps the generated
+   detail. The default radius (4) crumples a detailed mesh.
+4. **Finish.** `project`, `joints`, `retopo` and `rig` as for a blockout.
+5. **Optional part swap.** `swap BASE DONOR --region "y>0.05" --region "z>0.04"`
+   aligns the donor to the base with a two-way similarity ICP outside the
+   region, then cuts and fuses closed solids. It works when a box separates the
+   part. It does not work when the part wraps around the body.
+
+TRELLIS.2 exports a hollow, inconsistently wound shell, so `place` and
+`solidify` rebuild it as one solid. On a 24 GB Mac the 512 pipeline peaked at
+26 GB (memory compression) and took about 5 minutes per mesh.
+
+Setup notes for trellis-silicon:
+
+- Install Eigen (`brew install eigen`) and build `o_voxel` with
+  `CPLUS_INCLUDE_PATH=/opt/homebrew/include/eigen3`, or it falls back to a
+  slower texture baker.
+- TRELLIS.2 loads the RMBG-2.0 background remover at start, which is gated and
+  licensed for non-commercial use. Inputs with a transparent background never
+  use it. In `TRELLIS.2/trellis2/pipelines/trellis2_image_to_3d.py`, wrap the
+  `rembg_model` load in `try/except OSError` and set it to `None`.
 
 ## Views and frame
 
@@ -92,8 +133,10 @@ Each command writes a new file or folder. It does not overwrite an output.
   `*_clay` views. This is stylized relief from shading, not measured geometry.
   Flat clay gives no relief.
 - **Retopology.** QuadriFlow refuses a mesh with folded triangles, sliver
-  triangles or floating debris. It gives one misleading "not manifold" message
-  for all of them, and its result also depends on the mesh's absolute size. The worker removes
+  triangles, floating debris or more than about 250k faces. It gives one
+  misleading "not manifold" message for all of them, and its result also
+  depends on the mesh's absolute size. Large meshes are decimated to 150k faces
+  first. The quads are then relaxed and shrink-wrapped onto the high mesh. The worker removes
   debris, merges vertices closer than a tenth of the median edge, tries
   QuadriFlow at several sizes, then at a voxel-remeshed copy. If every try
   fails, a voxel remesh sized to the target face count makes grid-aligned
@@ -121,6 +164,16 @@ Each command writes a new file or folder. It does not overwrite an output.
 | Low-poly IoU | 0.952 | | 0.957 |
 | Rig | 15 bones, all heat-weighted | | 18 bones with a 3-bone tail, all heat-weighted |
 | Worst range-of-motion volume change | 14% (wing into the body) | | 43% (tail bent 45 degrees into the back) |
+
+Remade Pip through TRELLIS.2 used the front-left view, seed 42, the best of
+four seeds. Results:
+
+- placed IoU 0.848, fitted IoU 0.880, height error -0.4%;
+- 87% of the surface coloured from the views;
+- QuadriFlow retopology with 13k quads, low-poly IoU 0.877;
+- an 18-bone rig with every vertex heat-weighted.
+
+All four seeds read the fanned tail as two lobes. The fit narrows the gap.
 
 The first Pip set drew a fanned tail in the front view and a narrow tail in
 the back and side views. The remade set used the skill's volume lock and

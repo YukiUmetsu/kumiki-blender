@@ -192,3 +192,46 @@ def sdf_blockout(views: dict[str, View], hull: Hull, metres_per_px: float, *, to
     if np.einsum("ij,ij->i", a, np.cross(b, c)).sum() < 0:                  # make the normals point out
         mesh = Mesh(mesh.vertices, mesh.faces[:, ::-1].copy())
     return drop_fragments(mesh)
+
+
+def solidify(mesh: Mesh, voxel_m: float = 0.001, smooth_sigma: float = 0.7, tunnel_voxels: int = 2) -> Mesh:
+    """Rebuild any closed surface, hollow or badly wound, as one solid with an outward surface.
+
+    TRELLIS.2 exports a hollow shell: an outer and an inner wall a voxel apart, so its
+    signed volume is the shell's, not the body's. The surface is drawn into a voxel
+    grid, voxels enclosed by it become solid (see the ray vote below), and marching
+    cubes extracts the outer surface.
+    """
+    from skimage.measure import marching_cubes
+
+    from .mesh import surface_samples
+
+    low, high = mesh.bounds()
+    pad = 3
+    origin = low - pad * voxel_m
+    shape = np.ceil((high - low) / voxel_m).astype(int) + 2 * pad + 1
+    grid = np.zeros(shape, dtype=bool)
+    points = surface_samples(mesh, 0.5 * voxel_m)[0]
+    index = np.floor((points - origin) / voxel_m).astype(int)
+    grid[index[:, 0], index[:, 1], index[:, 2]] = True
+    grid = ndimage.binary_dilation(grid)                    # seal pinholes between samples
+    # A voxel is inside when a straight line from it hits the surface in all 6 axis
+    # directions. (A flood fill leaks through any gap in the shell; a 5-of-6 vote also
+    # fills real concavities, such as the space between two tail lobes.) A gap in the
+    # shell leaves thin empty tunnels along the axes through it; a closing removes them.
+    blocked = np.ones(shape, dtype=bool)
+    for axis in range(3):
+        blocked &= np.maximum.accumulate(grid, axis=axis)
+        blocked &= np.flip(np.maximum.accumulate(np.flip(grid, axis), axis=axis), axis)
+    solid = grid | blocked
+    if tunnel_voxels:
+        solid = ndimage.binary_closing(solid, iterations=tunnel_voxels, border_value=0)
+    solid = ndimage.binary_fill_holes(solid)
+    solid = ndimage.binary_erosion(solid) | (solid & ~grid)  # undo the dilation on the outside
+    field = ndimage.gaussian_filter(solid.astype(np.float32), smooth_sigma) if smooth_sigma else solid
+    verts, faces, _n, _v = marching_cubes(field, level=0.5, allow_degenerate=False)
+    result = Mesh(origin + verts * voxel_m, faces)
+    a, b, c = (result.vertices[result.faces[:, i]] for i in range(3))
+    if np.einsum("ij,ij->i", a, np.cross(b, c)).sum() < 0:
+        result = Mesh(result.vertices, result.faces[:, ::-1].copy())
+    return drop_fragments(result)
