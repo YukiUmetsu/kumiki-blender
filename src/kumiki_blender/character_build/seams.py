@@ -376,7 +376,9 @@ def per_texel(regions: Regions, points: np.ndarray, score: np.ndarray, offset: n
         chosen = np.full(stop - start, -1)
         for v in np.unique(node_label[node_label >= 0]):
             field = (weight * score[v][idx]).sum(axis=1)
-            field[~(node_label == v).any(axis=1)] = -np.inf
+            # A neighbor from a different semantic part has zero weight and
+            # must not make its source eligible for this texel.
+            field[~((node_label == v) & (weight > 0)).any(axis=1)] = -np.inf
             better = field > best
             best[better], chosen[better] = field[better], v
         label[start:stop] = chosen
