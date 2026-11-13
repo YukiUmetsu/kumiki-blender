@@ -118,7 +118,8 @@ def bake_texture(handoff: Path, mesh: Mesh, corner_uv: np.ndarray, *, size: int 
                  level: bool = True, level_reach_px: float = 150.0,
                  agree_delta_e: float = 15.0, slack_px: float = 60.0, contest_delta_e: float = 20.0,
                  mirror_missing: bool = False, mirror_weight: float = 0.3,
-                 extra: list[dict] | None = None, diagnostics: Path | None = None) -> tuple[np.ndarray, dict]:
+                 extra: list[dict] | None = None, diagnostics: Path | None = None,
+                 semantic: dict | None = None, semantic_root: Path | None = None) -> tuple[np.ndarray, dict]:
     """RGB texture (size x size, uint8) and a report with the coverage of each view.
 
     Each texel takes its colour from one view, not a blend: AI views of one character
@@ -167,6 +168,12 @@ def bake_texture(handoff: Path, mesh: Mesh, corner_uv: np.ndarray, *, size: int 
     spec = json.loads((handoff / "spec.json").read_text(encoding="utf-8"))
     px = spec["metres_per_aligned_px"]
     rows, cols, points, normals = texel_samples(mesh, corner_uv, size)
+    semantic_projection = None
+    if semantic is not None:
+        if semantic_root is None:
+            raise ValueError('semantic_root is required with semantic rules')
+        from .semantic_projection import load_semantic_projection
+        semantic_projection = load_semantic_projection(semantic, Path(semantic_root), handoff, size, rows, cols)
     samples = surface_samples(mesh, 0.5 * px / depth_scale)
     # One source per painting camera: (camera name, image path, camera-frame -> image map,
     # mirrored about the frame centre, score factor).
@@ -187,7 +194,10 @@ def bake_texture(handoff: Path, mesh: Mesh, corner_uv: np.ndarray, *, size: int 
     if len(set(names)) != len(names):
         raise ValueError(f"Two sources paint from the same camera: {sorted(names)}")
     count = len(points)
-    regions = build_regions(points, normals, sigma=region_px * px, spacing=region_px * px / 3)
+    regions = build_regions(
+        points, normals, sigma=region_px * px, spacing=region_px * px / 3,
+        group_labels=semantic_projection.labels if semantic_projection is not None else None,
+    )
     # The facing of the surface without its bumps: on modelled fur the true normal swings by
     # tens of degrees from texel to texel, and a view that faces the tail squarely would score low.
     facing = regions.normal[regions.cell]
@@ -224,6 +234,8 @@ def bake_texture(handoff: Path, mesh: Mesh, corner_uv: np.ndarray, *, size: int 
         rx, ry = np.floor(raw_x).astype(int), np.floor(raw_y).astype(int)
         use = visible & (rx >= 0) & (rx < w) & (ry >= 0) & (ry < h) & (cosine > min_cosine) & (true_cosine > 0.1)
         use[use] = core[ry[use], rx[use]]
+        if semantic_projection is not None:
+            use = semantic_projection.allowed(name, use, rx, ry)
         clear = np.ones(int(use.sum()))
         if occlusion_px > 0:
             apart = _occlusion_distance(depth, occlusion_jump_px * px)[r[use], c[use]] / depth_scale
@@ -270,6 +282,10 @@ def bake_texture(handoff: Path, mesh: Mesh, corner_uv: np.ndarray, *, size: int 
     seen = (label >= 0) & (quality[held, every] > 0) & inner_enough[held, every]
     if not seen.any():
         raise ValueError("No view sees the mesh: check that the mesh stands in the handoff frame")
+    if semantic_projection is not None:
+        for index, part_name in enumerate(semantic_projection.part_names):
+            if not np.any(seen & (semantic_projection.labels == index)):
+                raise ValueError(f'No trustworthy source paints semantic part {part_name}; fix its masks/views')
     colour = np.zeros((count, 3))
     colour[seen] = np.clip(colours[label[seen], every[seen]] + shift[seen], 0, 255)
     if (~seen).any():
@@ -278,8 +294,21 @@ def bake_texture(handoff: Path, mesh: Mesh, corner_uv: np.ndarray, *, size: int 
         # Nearest painted texel on the same side of the surface: position and facing together,
         # so the back of the neck is not filled from the tail that hangs 2 cm behind it.
         where = np.hstack([points / regions.sigma, facing * NORMAL_WEIGHT])
-        _, nearest = cKDTree(where[seen]).query(where[~seen], workers=-1)
-        colour[~seen] = colour[seen][nearest]
+        if semantic_projection is None:
+            _, nearest = cKDTree(where[seen]).query(where[~seen], workers=-1)
+            colour[~seen] = colour[seen][nearest]
+        else:
+            # Fill missing texels ONLY from the same semantic surface; never
+            # transfer scarf pixels onto tail geometry or vice versa.
+            labels = semantic_projection.labels
+            for label in np.unique(labels[~seen]):
+                missing = (~seen) & (labels == label)
+                available = seen & (labels == label)
+                if not available.any():
+                    name = 'unlabelled' if label < 0 else semantic_projection.part_names[int(label)]
+                    raise ValueError(f'No painted surface to fill semantic part {name}')
+                _, nearest = cKDTree(where[available]).query(where[missing], workers=-1)
+                colour[missing] = colour[available][nearest]
     image = np.zeros((size, size, 3))
     image[rows, cols] = colour
     covered = np.zeros((size, size), dtype=bool)
@@ -322,7 +351,9 @@ def bake_texture(handoff: Path, mesh: Mesh, corner_uv: np.ndarray, *, size: int 
               "mirrored_views": sorted(source[0] for source in sources if source[3]),
               "owner_colours": {n: [int(c) for c in OWNER_COLOURS[i % len(OWNER_COLOURS)]] for i, n in enumerate(names)},
               **{k: chosen[k] for k in ("regions", "rejected_claims", "contested_nodes")}, **seams,
-              "conflicts": conflicts}
+              "conflicts": conflicts,
+               "semantic": {"enabled": semantic_projection is not None,
+                            "parts": list(semantic_projection.part_names) if semantic_projection else []}}
     return np.clip(np.round(image), 0, 255).astype(np.uint8), report
 
 

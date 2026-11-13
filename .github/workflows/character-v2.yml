@@ -16,6 +16,10 @@ on:
       - "tests/test_character_glb_performance.py"
       - "tests/test_character_talking_plan.py"
       - "tests/test_character_landmark_triangulation.py"
+      - "tests/test_character_conflict_repair.py"
+      - "tests/test_character_penetration_repair.py"
+      - "tests/test_character_semantic_regions.py"
+      - "scripts/smoke_character_penetration_repair_blender.py"
       - "tests/test_character_anatomy.py"
       - "tests/test_character_anatomy_landmark_resolver.py"
       - ".github/workflows/character-v2.yml"
@@ -37,7 +41,7 @@ jobs:
           python-version: "3.11"
           cache: pip
       - name: Install character build dependencies
-        run: python -m pip install -e '.[character-build]'
+        run: python -m pip install -e '.[character-build]' 'pytest>=8,<10'
       - name: Test CharacterSpec v2, region comparison and safe sculpt/pose contracts
         run: |
           PYTHONPATH=src:tests python -m unittest -q \
@@ -56,6 +60,11 @@ jobs:
             tests.test_character_anatomy \
             tests.test_character_anatomy_landmark_resolver
 
+
+      - name: Test opt-in semantic conflict repair and regression safety
+        env:
+          PYTHONPATH: src
+        run: python -m pytest -q tests/test_character_conflict_repair.py tests/test_character_penetration_repair.py tests/test_character_semantic_regions.py
 
   character-blender-smoke:
     name: Native Blender character worker smoke
@@ -107,3 +116,6 @@ jobs:
           blender --background --factory-startup --threads 2 \
             --python-exit-code 1 \
             --python scripts/smoke_character_anatomy_blender.py
+          blender --background --factory-startup --threads 2 \
+            --python-exit-code 1 \
+            --python scripts/smoke_character_penetration_repair_blender.py

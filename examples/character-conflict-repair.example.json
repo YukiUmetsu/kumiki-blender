@@ -1,0 +1,58 @@
+{
+  "schema_version": 1,
+  "evaluation_size": 512,
+  "final_size": 1024,
+  "appearance_scale": 0.2,
+  "settings": {
+    "power": 4,
+    "diagonal_weight": 1,
+    "min_cosine": 0.35,
+    "region_px": 24,
+    "min_region_px": 40,
+    "occlusion_px": 30,
+    "level_reach_px": 150
+  },
+  "search": {
+    "rounds": 2,
+    "max_evaluations": 12,
+    "min_improvement": 0.0001,
+    "steps": [
+      {
+        "parameter": "region_px",
+        "values": [
+          16,
+          32,
+          48
+        ]
+      },
+      {
+        "parameter": "occlusion_px",
+        "values": [
+          15,
+          45,
+          60
+        ]
+      },
+      {
+        "parameter": "power",
+        "values": [
+          2,
+          6
+        ]
+      }
+    ]
+  },
+  "guards": {
+    "max_view_mean_delta_e_increase": 1,
+    "max_unseen_fraction_increase": 0.005,
+    "max_view_silhouette_iou_drop": 0.005
+  },
+  "weights": {
+    "misplaced_part": 4,
+    "contested_feature": 3,
+    "unseen": 5,
+    "tone_seam": 0.3,
+    "appearance": 0.75,
+    "silhouette": 1
+  }
+}

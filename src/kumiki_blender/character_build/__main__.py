@@ -206,6 +206,12 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--output", type=Path, required=True, help="new immutable report directory")
     p.add_argument("--blender", help="local Blender executable path")
 
+    p = sub.add_parser("repair-penetrations", help="bounded BVH collision repair for named Blender object pairs")
+    p.add_argument("--blend", type=Path, required=True, help="original editable .blend file")
+    p.add_argument("--plan", type=Path, required=True, help="directed collision-pair JSON with protected anchors")
+    p.add_argument("--output", type=Path, required=True, help="new revision directory")
+    p.add_argument("--blender", help="local Blender binary")
+
     p = sub.add_parser("refine-region", help="bounded local sculpt edit; preserve all other .blend objects")
     p.add_argument("--blend", type=Path, required=True, help="editable source Blender file")
     p.add_argument("--plan", type=Path, required=True, help="region sculpt correction JSON")
@@ -303,6 +309,12 @@ def main(argv: list[str] | None = None) -> int:
     _bake_arguments(p)
     p.add_argument("--output", type=Path, required=True, help="new folder: report.json, turnaround.png, ...")
     p.add_argument("--size", type=int, default=1024)
+
+    p = sub.add_parser("resolve-conflicts", help="bounded, rollback-safe semantic texture conflict repair")
+    p.add_argument("handoff", type=Path, help="existing character handoff folder")
+    p.add_argument("mesh", type=Path, help="source OBJ with UVs")
+    p.add_argument("--config", type=Path, required=True, help="character-independent repair policy JSON")
+    p.add_argument("--output", type=Path, required=True, help="new directory for best texture and QA report")
 
     p = sub.add_parser("repaint", help="repaint views of the model with a local FLUX.2 [klein] in ComfyUI")
     p.add_argument("handoff", type=Path)
@@ -457,6 +469,24 @@ def _run(args) -> int:
                                 max_regression=args.max_regression)
         print(json.dumps(report, indent=2))
         return 1 if report["failed_views"] else 0
+    if args.command == "repair-penetrations":
+        from dataclasses import asdict
+        from .penetration_repair import load_collision_plan
+        from .blender import run_worker
+        if not args.blend.is_file() or args.blend.suffix.lower() != ".blend":
+            raise ValueError("--blend must be an existing .blend source")
+        if args.output.exists():
+            raise FileExistsError(f"Revision exists: {args.output}")
+        validated = load_collision_plan(args.plan)
+        report = run_worker("penetration-repair", {
+            "plan": {"schema_version": 1, "pairs": [asdict(p) for p in validated["pairs"]],
+                     "guard_pairs": validated["guard_pairs"]},
+            "source_blend": str(args.blend.resolve()),
+            "output": str(args.output.resolve()),
+        }, blender=args.blender, blend_file=args.blend.resolve())
+        print(json.dumps(report, indent=2))
+        # A no-op collision check is a valid, non-destructive result.
+        return 0
     if args.command == "refine-region":
         from .region_sculpt_plan import load_region_sculpt_plan
         from .blender import run_worker
@@ -744,6 +774,14 @@ def _run(args) -> int:
                    **{k: v for k, v in report.items() if k.startswith("seam_")}}
         _write_json(out / "report.json", summary)
         print(json.dumps(summary, indent=2))
+        return 0
+    if args.command == "resolve-conflicts":
+        from .conflict_repair import run_conflict_repair
+
+        report = run_conflict_repair(args.handoff, args.mesh, args.config, args.output)
+        print(json.dumps({"status": report["status"], "selected_settings": report["selected_settings"],
+                          "selected_score": report["selected_score"], "attempts": len(report["attempts"]),
+                          "output": str(args.output)}, indent=2))
         return 0
     if args.command == "repaint":
         import numpy as np
