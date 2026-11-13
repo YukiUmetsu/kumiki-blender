@@ -12,6 +12,7 @@ import numpy as np
 from PIL import Image
 
 from .character_spec_v2 import _hash, open_plan
+from .region_contours import silhouette_boundary_metrics
 from .mesh import rasterize, read_mesh
 from .views import FIGURE_PX, camera
 
@@ -52,6 +53,7 @@ def _metrics(reference: np.ndarray, candidate: np.ndarray) -> dict:
         "bbox_reference": _bbox(reference),
         "bbox_candidate": _bbox(candidate),
         "pixel_scale_of_source": SCALE,
+        **silhouette_boundary_metrics(reference, candidate),
     }
 
 

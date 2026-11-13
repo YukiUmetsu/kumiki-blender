@@ -82,6 +82,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--region", help="semantic region to audit, e.g. eye.L; requires --character")
     p.add_argument("--qa-before", type=Path, help="optional baseline canonical mesh when region has no source_mesh")
     p.add_argument("--max-regression", type=float, default=.01, help="max permitted source IoU decline in any view")
+    p.add_argument("--max-contour-regression", type=float, default=.03, help="maximum permitted source boundary F1 decline in any view")
     p.add_argument("--min-iou", type=float, help="optional per-camera absolute source silhouette floor")
 
     p = sub.add_parser("triangulate-landmarks", help="recover registered 3D anatomical points from verified 2D views")
@@ -118,6 +119,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--before", type=Path, help="canonical baseline mesh; defaults to source_mesh in CharacterSpec")
     p.add_argument("--after", type=Path, required=True, help="new canonical source-frame OBJ, PLY or GLB")
     p.add_argument("--max-regression", type=float, default=.01, help="maximum allowed per-camera IoU decline")
+    p.add_argument("--max-contour-regression", type=float, default=.03, help="maximum allowed per-camera 2-pixel contour F1 decline")
     p.add_argument("--min-iou", type=float, help="optional absolute per-camera source silhouette floor")
     p.add_argument("--output", type=Path, required=True, help="new immutable before/after report and overlays")
 
@@ -489,6 +491,9 @@ def _run(args) -> int:
             if (not math.isfinite(args.max_regression)
                     or not 0 <= args.max_regression <= 1):
                 raise ValueError("--max-regression must be a finite fraction from 0 to 1")
+            if (not math.isfinite(args.max_contour_regression)
+                    or not 0 <= args.max_contour_regression <= 1):
+                raise ValueError("--max-contour-regression must be a finite fraction from 0 to 1")
             if args.min_iou is not None and (
                     not math.isfinite(args.min_iou) or not 0 <= args.min_iou <= 1):
                 raise ValueError("--min-iou must be a finite fraction from 0 to 1")
@@ -517,7 +522,8 @@ def _run(args) -> int:
         source_qa = gate_region_revision(
             args.character, args.region, args.output / "landmark-fitted-source.obj",
             args.output / "source-fidelity", before=source_gate_before,
-            max_regression=args.max_regression, min_iou=args.min_iou)
+            max_regression=args.max_regression, min_iou=args.min_iou,
+            max_contour_regression=args.max_contour_regression)
         receipt = {
             "schema_version": 1,
             "status": ("source-regression-rejected" if not source_qa["numeric_gate_pass"]
@@ -532,6 +538,7 @@ def _run(args) -> int:
             "source_sha256": source_qa["source_spec_sha256"],
             "failed_views": source_qa["failed_views"],
             "numeric_gate_pass": source_qa["numeric_gate_pass"],
+            "max_boundary_f1_2px_regression_per_view": source_qa["max_boundary_f1_2px_regression_per_view"],
             "artistic_review_required": True,
         }
         (args.output / "source-fidelity-receipt.json").write_text(
@@ -578,7 +585,8 @@ def _run(args) -> int:
         from .region_revision_gate import gate_region_revision
         report = gate_region_revision(
             args.character, args.region, args.after, args.output, before=args.before,
-            max_regression=args.max_regression, min_iou=args.min_iou)
+            max_regression=args.max_regression, min_iou=args.min_iou,
+            max_contour_regression=args.max_contour_regression)
         print(json.dumps(report, indent=2))
         return 0 if report["numeric_gate_pass"] else 1
     if args.command == "compare-region":

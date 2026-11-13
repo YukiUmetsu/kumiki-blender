@@ -48,6 +48,15 @@ height are rejected before Blender starts. Numeric camera regressions return
 a failing exit code but keep the editable Blender candidate and detailed
 review evidence.
 
+### Boundary-sensitive source fidelity for thin eye, feather and beak details
+
+Source-camera QA now measures both mask IoU and boundary F1, with independent
+per-view rejection thresholds. It also decodes the distinct source-frame
+OBJ filename convention without incorrectly rotating Blender Z-up geometry.
+The reader and auditor share the same explicit coordinate contract; synthetic
+regression tests cover matching native/legacy imports, thin-detail deletions,
+and contour-only failures that area IoU misses.
+
 ### Reject source-fidelity regressions before accepting 3D edits
 
 [Per-region source-fidelity release gate](docs/CHARACTER_REGION_REVISION_GATE.md)

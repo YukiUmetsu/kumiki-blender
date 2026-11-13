@@ -54,6 +54,7 @@ class AutomaticFitSourceQA(unittest.TestCase):
         }
         self.qa = {
             "numeric_gate_pass": True, "source_spec_sha256": "source-sha",
+            "max_boundary_f1_2px_regression_per_view": .03,
             "failed_views": [], "status": "no-registered-regression-artistic-review-required",
         }
         self.mock_plan = self.enterContext(patch(
@@ -113,6 +114,7 @@ class AutomaticFitSourceQA(unittest.TestCase):
         self.assertEqual(args[1], "eye.L")
         self.assertEqual(args[2], self.root/"revision"/"landmark-fitted-source.obj")
         self.assertEqual(kwargs["before"], self.baseline.resolve())
+        self.assertEqual(kwargs["max_contour_regression"], .03)
         self.assertEqual(json.loads(text)["status"], "source-numeric-gate-artistic-review-required")
 
     def test_regression_returns_one_but_keeps_editable_mesh(self):
@@ -140,6 +142,8 @@ class AutomaticFitSourceQA(unittest.TestCase):
             ["--region", "eye.L"],
             ["--qa-before", str(self.baseline)],
             [*self.gating_args(), "--max-regression", "nan"],
+            [*self.gating_args(), "--max-contour-regression", "nan"],
+            [*self.gating_args(), "--max-contour-regression", "-0.1"],
             [*self.gating_args(), "--min-iou", "1.5"],
         ):
             with self.subTest(args=args):

@@ -10,14 +10,24 @@ kumiki-character-build audit-region-revision \
   --region eye.L \
   --after .review/characters/pip/landmark-fit-r01/landmark-fitted-source.obj \
   --max-regression 0.01 \
+  --max-contour-regression 0.03 \
   --output .review/characters/pip/eye-L-fidelity-r01
 ~~~
 
 The baseline comes from the region's **source_mesh** in CharacterSpec v2. Alternatively, supply **--before /path/to/previous-source.obj** (or PLY/GLB) when the region has no declared original mesh.
 
-**Coordinate contract:** Pass the canonical Z-up **source-frame** OBJ with a filename ending in *-source.obj or *.source.obj, created by the Blender dual-format exporter. Legacy region.obj, low.obj and other Y-up handoff files are rejected so that their rotated coordinates cannot silently inflate or destroy the registered-view score. PLY and GLB must likewise already use the original Blender world frame.
+**Coordinate contract:** Pass the canonical Z-up **source-frame** OBJ with a filename ending in *-source.obj or *.source.obj, created by the Blender dual-format exporter. Legacy region.obj, low.obj and other Y-up handoff files are rejected so that their rotated coordinates cannot silently inflate or destroy the registered-view score. The mesh reader **does not** rotate explicitly named *-source.obj or *.source.obj; those are already Blender Z-up. Legacy OBJ remains Y-up and is converted only for established rig/assembly handoffs. PLY and GLB must likewise already use the original Blender world frame.
 
 The optional **--min-iou 0.85** establishes a separate absolute IoU floor in every verified camera. **--max-regression 0.01** rejects a drop greater than one IoU percentage point in *any* verified view, not just the average.
+
+**--max-contour-regression 0.03** (default) also rejects a drop greater than
+three percentage points in **2-pixel boundary F1** for any verified view.
+IoU measures area agreement; boundary F1 measures location and preservation of
+thin contours, such as eyelid lips, feathers and beak tips. Both must pass.
+The report additionally records 1-pixel F1, mean symmetric contour distance
+and worst-direction 95th-percentile distance in the registered 400×300 QA grid.
+At this resolution one QA pixel is four original-art pixels: finer details need
+a higher-resolution visual review. This is not a photometric/material comparison.
 
 A source-unchanged mesh is reported as **no-change-review-required** rather than improvement. Exit code 1 indicates a registered-view failure; 0 means numerical guards passed but does not certify visual quality.
 
