@@ -15,6 +15,12 @@ kumiki-character-build check refs/ && kumiki-character-build handoff refs/ --hei
 
 Use `resolve-conflicts` to improve multiview texture ownership and projection seams with per-view regression gates. Use `repair-penetrations` to generate bounded, non-destructive Blender geometry candidates for explicitly declared object pairs. Semantic UV masks, named attachment vertex groups, guarded object contacts, and automatic rollback are configurable per character. The geometry worker does not certify silhouette fidelity, rig deformation, or artistic likeness; review candidates before use.
 
+## Feature-preserving 3D character surface refinement
+
+[Native smoothing and verified-view QA guide](docs/CHARACTER_SURFACE_REFINEMENT.md) · [reusable configuration](examples/character-surface-fairing.example.json)
+
+The additive `refine-surface` command creates a separate pre-rig Blender candidate using protected-feature, displacement-limited Taubin-style fairing. Optional CharacterSpec v2 verified-view masks automatically reject silhouette regressions in individual source views. It preserves original UVs, mesh topology and scene input files; a smoother mesh is never treated as automatic artistic approval.
+
 ## Orthographic source landmark recovery
 
 [Registered multiview landmark guide](docs/CHARACTER_LANDMARK_TRIANGULATION.md)
