@@ -258,6 +258,20 @@ class BakeByPartTests(unittest.TestCase):
         self.assertGreater(red[label == index].mean(), 0.9, "the bag part is red all over")
         self.assertLess(red[label == 0].mean(), 0.01, "no red on the body")
 
+    def test_the_masks_work_as_a_semantic_policy_for_the_plain_bake(self):
+        """`semantic.json` is the policy format of `bake_texture(semantic=...)` and `resolve-conflicts`."""
+        from kumiki_blender.character_build.texture import bake_texture
+        policy = json.loads((self.out / "semantic.json").read_text())
+        image, report = bake_texture(self.handoff, self.mesh, self.corner_uv, size=256, semantic=policy,
+                                     semantic_root=self.out)
+        self.assertTrue(report["semantic"]["enabled"])
+        self.assertEqual(report["semantic"]["parts"], [entry["id"] for entry in policy["parts"]])
+        rows, cols, _, _ = texel_samples(self.mesh, self.corner_uv, 256)
+        label = np.asarray(Image.open(self.out / "uv_labels.png"))[rows, cols].astype(int) - 1
+        red = np.abs(image[rows, cols].astype(int) - BAG).sum(axis=1) < 90
+        self.assertGreater(red[label == self.report["parts"].index(self.bag())].mean(), 0.9)
+        self.assertLess(red[label == 0].mean(), 0.01)
+
     def test_the_parts_must_come_from_the_same_sources_as_the_bake(self):
         with self.assertRaises(ValueError):
             parts.bake_parts(self.handoff, self.mesh, self.corner_uv, self.out, size=128, mirror_missing=True)

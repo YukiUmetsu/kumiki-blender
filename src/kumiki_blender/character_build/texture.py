@@ -302,12 +302,13 @@ def bake_texture(handoff: Path, mesh: Mesh, corner_uv: np.ndarray, *, size: int 
         else:
             # Fill missing texels ONLY from the same semantic surface; never
             # transfer scarf pixels onto tail geometry or vice versa.
+            # (`owned`, not `label`: `label` is the source of each texel and is used again below.)
             labels = semantic_projection.labels
-            for label in np.unique(labels[~seen]):
-                missing = (~seen) & (labels == label)
-                available = seen & (labels == label)
+            for owned in np.unique(labels[~seen]):
+                missing = (~seen) & (labels == owned)
+                available = seen & (labels == owned)
                 if not available.any():
-                    name = 'unlabelled' if label < 0 else semantic_projection.part_names[int(label)]
+                    name = 'unlabelled' if owned < 0 else semantic_projection.part_names[int(owned)]
                     raise ValueError(f'No painted surface to fill semantic part {name}')
                 _, nearest = cKDTree(where[available]).query(where[missing], workers=-1)
                 colour[missing] = colour[available][nearest]
