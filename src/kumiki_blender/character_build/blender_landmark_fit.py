@@ -124,8 +124,11 @@ def main():
     bpy.ops.object.select_all(action="DESELECT")
     obj.select_set(True)
     bpy.context.view_layer.objects.active = obj
+    # Source-view QA uses Blender metres, +Z up and -Y forward. The OBJ
+    # operator otherwise defaults to Y-up and silently breaks registration.
     bpy.ops.wm.obj_export(filepath=str(folder / "landmark-fitted.obj"),
-                          export_selected_objects=True, export_materials=False)
+                          export_selected_objects=True, export_materials=False,
+                          forward_axis="NEGATIVE_Y", up_axis="Z")
     write_report(folder, {
         "schema_version": 1,
         "status": "geodesic-landmark-candidate-visual-qa-required",

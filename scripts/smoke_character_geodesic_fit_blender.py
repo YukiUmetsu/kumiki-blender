@@ -81,6 +81,16 @@ def main():
         assert report["unrelated_meshes_unchanged"] is True
         assert report["original_materials_and_uvs_unchanged"] is True
         assert (output / "landmark-fitted.obj").is_file()
+        # Explicitly audit OBJ world axes against the immutable registered
+        # Blender frame. Default Blender export Y-up would fail this check.
+        obj_vertices = []
+        with (output / "landmark-fitted.obj").open("r", encoding="utf-8") as stream:
+            for line in stream:
+                if line.startswith("v "):
+                    obj_vertices.append(Vector(tuple(float(x) for x in line.split()[1:4])))
+        assert len(obj_vertices) == source_count
+        assert min((candidate - target).length for candidate in obj_vertices) < 1e-6, (
+            "OBJ export changed Blender Z-up registered source coordinates")
         assert hashlib.sha256(source.read_bytes()).hexdigest() == source_sha
         bpy.ops.wm.open_mainfile(filepath=str(output / "landmark-fitted.blend"))
         obj = bpy.data.objects["FacePatch"]
