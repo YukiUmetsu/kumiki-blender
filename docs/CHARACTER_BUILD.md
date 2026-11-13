@@ -191,8 +191,13 @@ Median error against the drawings: front 4.6, back 5.0, left 5.9, right 6.7 delt
 
 Two rules keep the drawings in charge:
 
-- Each repaint gets the colour statistics of its render before the bake. The editor
-  adds its own shading, and Pip's repaints were 5 to 10 L* darker than their renders.
+- Each repaint gets the tone of its render before the bake. The editor adds its own
+  shading, and Pip's repaints were 5 to 10 L* darker than their renders. The
+  correction is smooth and local. It applies only near pixels that a drawing painted
+  in the render. On a side that no drawing shows, the render is a fill colour.
+  For such a side, give `repaint` the owner map of the base texture:
+  `texture ... --diagnostics d/` and then `repaint ... --owners d/owners.png`.
+  Without it, a fill colour made the repainted side of Pip's face pale.
 - Only drawings are witnesses in the objections and in the agreement score. The
   repaints all come from one render, so three of them would outvote one drawing.
 

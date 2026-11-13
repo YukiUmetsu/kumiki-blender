@@ -301,6 +301,9 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--min-usable", type=float, default=0.5,
                    help="reject a repaint if less than this share of the figure keeps its outline")
     p.add_argument("--weight", type=float, default=0.8, help="quality of a repaint relative to a drawing")
+    p.add_argument("--owners", type=Path,
+                   help="owners.png from `texture --diagnostics` of the same texture: take the tone only from "
+                        "pixels that a drawing painted")
     p.add_argument("--resume", action="store_true",
                    help="reuse finished repaints in --output whose render and settings match; repaint the rest")
 
@@ -709,9 +712,10 @@ def _run(args) -> int:
         mesh, corner_uv = read_obj_uv(args.mesh)
         texture = np.asarray(Image.open(args.texture).convert("RGB"))
         views = args.views.split(",") if args.views else default_views()
+        owners = np.asarray(Image.open(args.owners).convert("RGB")) if args.owners else None
         manifest = repaint_views(args.handoff, mesh, corner_uv, texture, views, out, _LocalComfyClient(args.server),
                                  subject=args.subject, size=args.size, steps=args.steps, denoise=args.denoise,
-                                 min_iou=args.min_iou, min_usable=args.min_usable, weight=args.weight)
+                                 min_iou=args.min_iou, min_usable=args.min_usable, weight=args.weight, owners=owners)
         print(json.dumps(manifest["views"], indent=2))
         return 0
     if args.command == "appearance":
