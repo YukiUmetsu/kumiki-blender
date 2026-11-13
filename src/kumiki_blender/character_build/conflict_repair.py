@@ -33,7 +33,7 @@ DEFAULT_WEIGHTS = {'misplaced_part': 4.0, 'contested_feature': 3.0,
 _LIMITS = {'power': (0.5, 12.0), 'diagonal_weight': (0.05, 3.0),
            'min_cosine': (0.0, 0.95), 'region_px': (4.0, 120.0),
            'min_region_px': (4.0, 180.0), 'occlusion_px': (0.0, 200.0),
-           'level_reach_px': (0.0, 400.0)}
+           'level_reach_px': (1.0, 400.0)}
 _ALLOWED = frozenset({'schema_version', 'settings', 'search', 'guards', 'weights',
                       'semantic', 'candidate_meshes', 'final_size', 'evaluation_size',
                       'appearance_scale', 'views'})
