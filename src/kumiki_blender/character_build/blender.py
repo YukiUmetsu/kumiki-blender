@@ -15,7 +15,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 WORKERS = {"setup": "blender_setup.py", "assemble": "blender_assemble.py", "retopo": "blender_retopo.py",
-           "rig": "blender_rig.py", "pose-qa": "blender_pose_qa.py", "region-sculpt": "blender_region_sculpt.py", "rig-controls": "blender_rig_controls.py", "topology-qa": "blender_topology_qa.py", "animation-bake": "blender_animation_bake.py", "swap": "blender_swap.py", "fur": "blender_fur.py"}
+           "rig": "blender_rig.py", "pose-qa": "blender_pose_qa.py", "region-sculpt": "blender_region_sculpt.py", "rig-controls": "blender_rig_controls.py", "topology-qa": "blender_topology_qa.py", "animation-bake": "blender_animation_bake.py", "visemes": "blender_visemes.py", "swap": "blender_swap.py", "fur": "blender_fur.py"}
 
 
 def find_blender(explicit: str | None = None) -> str:
