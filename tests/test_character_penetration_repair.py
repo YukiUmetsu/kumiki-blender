@@ -147,3 +147,12 @@ def test_invalid_vertex_groups_rejected(tmp_path, groups):
         "moving": "Tail", "fixed": "Body", "protected_vertex_groups": groups}]}))
     with pytest.raises(ValueError, match="protected_vertex_groups"):
         load_collision_plan(path)
+
+
+def test_legacy_plan_works_without_optional_guards(tmp_path):
+    path = tmp_path / "legacy.json"
+    path.write_text(json.dumps({"schema_version": 1, "pairs": [
+        {"moving": "Tail", "fixed": "Body", "protected_vertices": [0]}]}))
+    parsed = load_collision_plan(path)
+    assert parsed["guard_pairs"] == []
+    assert parsed["pairs"][0].protected_vertex_groups == ()
