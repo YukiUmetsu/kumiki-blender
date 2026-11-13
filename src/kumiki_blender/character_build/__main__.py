@@ -51,6 +51,13 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--baseline", type=Path, help="prior report.json to reject registered-view regressions")
     p.add_argument("--max-regression", type=float, default=0.01, help="maximum per-view drop in IoU")
 
+    p = sub.add_parser("validate-rig", help="native Blender pose tests for a skinned .blend")
+    p.add_argument("--blend", type=Path, required=True, help="existing rigged source .blend")
+    p.add_argument("--plan", type=Path, required=True, help="bounded pose battery JSON")
+    p.add_argument("--output", type=Path, required=True, help="new immutable report directory")
+    p.add_argument("--blender", help="local Blender executable path")
+
+
     p = sub.add_parser("ingest", help="copy generator output into canonical view names")
     p.add_argument("source", type=Path)
     p.add_argument("mapping", type=Path, help='JSON {"file.png": "front", ...}')
@@ -250,6 +257,18 @@ def _run(args) -> int:
                                 max_regression=args.max_regression)
         print(json.dumps(report, indent=2))
         return 1 if report["failed_views"] else 0
+    if args.command == "validate-rig":
+        from .pose_spec import load_pose_plan
+        from .blender import run_worker
+        if not args.blend.is_file() or args.blend.suffix.lower() != ".blend":
+            raise ValueError("--blend must be an existing Blender .blend file")
+        if args.output.exists():
+            raise FileExistsError(f"Output revision already exists: {args.output}")
+        plan = load_pose_plan(args.plan)
+        report = run_worker("pose-qa", {"plan": plan, "output": str(args.output.resolve())},
+                            blender=args.blender, blend_file=args.blend.resolve())
+        print(json.dumps(report, indent=2))
+        return 1 if report["status"] == "structural-fail" else 0
     if args.command == "ingest":
         used = ingest(args.source, args.mapping, args.destination)
         print(json.dumps(used, indent=2))
