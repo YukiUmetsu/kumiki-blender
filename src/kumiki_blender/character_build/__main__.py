@@ -108,7 +108,11 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--smooth-radius-px", type=float, default=4.0,
                    help="displacement smoothing radius in fit-grid pixels (about 1.3 mm each for a 0.32 m figure); "
                         "use about 40 for a detailed generator mesh, so only proportions change")
-    p.add_argument("--lattice", help="nx,ny,nz cells: deform only through a coarse lattice (best for generator meshes)")
+    p.add_argument("--lattice", help="nx,ny,nz cells: deform only through a coarse lattice (best for generator "
+                                     "meshes), or `auto`: 4,4,8 then 8,8,16, each kept only if it does no harm")
+    p.add_argument("--max-distortion", type=float, default=0.03,
+                   help="with --lattice auto: largest share of edges stretched or squeezed by more than 1.5")
+    p.add_argument("--max-new-folds", type=int, default=0, help="with --lattice auto: folds that a stage may add")
 
     p = sub.add_parser("project", help="vertex colours from the views; optional clay relief")
     p.add_argument("handoff", type=Path)
@@ -315,13 +319,24 @@ def _run(args) -> int:
             masks = reference_masks(args.handoff, scale)
             if args.views:
                 masks = {n: m for n, m in masks.items() if n in args.views}
-            result = fit_silhouettes(mesh, masks, spec["height_m"], scale=scale, iterations=args.iterations,
-                                     normalise_first=not args.no_normalise, smooth_radius_px=args.smooth_radius_px,
-                                     lattice_cells=tuple(int(v) for v in args.lattice.split(",")) if args.lattice else None)
+            common = dict(scale=scale, iterations=args.iterations, normalise_first=not args.no_normalise,
+                          smooth_radius_px=args.smooth_radius_px)
+            stages = None
+            if args.lattice == "auto":
+                from .fit import fit_ladder
+
+                result, stages = fit_ladder(mesh, masks, spec["height_m"], max_distortion=args.max_distortion,
+                                            max_new_folds=args.max_new_folds, **common)
+            else:
+                cells = tuple(int(v) for v in args.lattice.split(",")) if args.lattice else None
+                result = fit_silhouettes(mesh, masks, spec["height_m"], lattice_cells=cells, **common)
             write_mesh(result.mesh, args.output)
             report = {"input": str(args.mesh), "normalise": result.transform, "best_iteration": result.best_iteration,
                       "folds": result.folds,
                       "start": result.history[0], "best": result.history[result.best_iteration]}
+            if stages is not None:
+                report["stages"] = stages
+                report["start"] = {"iteration": 0, **{k: stages[0][k] for k in ("weighted_iou", "views")}}
             _write_json(args.output.with_suffix(".json"), {**report, "history": result.history})
         elif args.command == "project":
             import numpy as np
