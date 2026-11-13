@@ -103,6 +103,8 @@ def build_regions(points: np.ndarray, normals: np.ndarray, *, sigma: float, spac
     # the same half-space: the other side of a thin flap must not cancel it.
     smooth = total / np.maximum(np.linalg.norm(total, axis=1), 1e-12)[:, None]
     distance, around = cKDTree(centre / sigma).query(centre / sigma, k=min(neighbours, count), workers=-1)
+    if count == 1:
+        distance, around = distance[:, None], around[:, None]
     weight = np.exp(-0.5 * distance ** 2)
     if group is not None:
         weight *= group[around] == group[:, None]
@@ -115,6 +117,8 @@ def build_regions(points: np.ndarray, normals: np.ndarray, *, sigma: float, spac
         feature = np.column_stack([feature, group * 20.0])
     tree = cKDTree(feature)
     distance, near = tree.query(feature, k=min(neighbours, count), workers=-1)
+    if count == 1:
+        distance, near = distance[:, None], near[:, None]
     gauss = np.exp(-0.5 * distance ** 2)
     if group is not None:
         gauss *= group[near] == group[:, None]
