@@ -121,7 +121,9 @@ bounded region sculpting and a collision detector.
 - Semantic labels are supplied, not inferred by the loop.
 - A high surface-conflict count may be caused by wrong geometry or inconsistent
   art. Stop texture optimization when reference geometry needs correction.
-- Geometry candidates must pass a separate per-view silhouette guard; texture\nerrors alone cannot justify shrinking the character to hide missing regions.\n\nThe library entrypoint is run_conflict_repair(..., evaluator=optional_callback);
+- Geometry candidates must pass a separate per-view silhouette guard; texture
+  errors alone cannot justify shrinking the character to hide missing regions.
+- The library entrypoint is run_conflict_repair(..., evaluator=optional_callback);
   an alternative character pipeline can supply its own candidate evaluator.
   Callback output must keep conflict definitions and view comparisons stable.
 
