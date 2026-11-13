@@ -9,6 +9,12 @@ python -m pip install -e '.[character-build]'
 kumiki-character-build check refs/ && kumiki-character-build handoff refs/ --height-m 0.35
 ```
 
+## Reusable character conflict repair
+
+[Repair guide](docs/CHARACTER_CONFLICT_REPAIR.md) · [texture repair policy](examples/character-conflict-repair.example.json) · [geometry repair policy](examples/character-penetration-repair.example.json)
+
+Use `resolve-conflicts` to improve multiview texture ownership and projection seams with per-view regression gates. Use `repair-penetrations` to generate bounded, non-destructive Blender geometry candidates for explicitly declared object pairs. Semantic UV masks, named attachment vertex groups, guarded object contacts, and automatic rollback are configurable per character. The geometry worker does not certify silhouette fidelity, rig deformation, or artistic likeness; review candidates before use.
+
 ## Orthographic source landmark recovery
 
 [Registered multiview landmark guide](docs/CHARACTER_LANDMARK_TRIANGULATION.md)
