@@ -9,7 +9,7 @@
 - ``gen/``: square images of the full-body views with one shared scale, for
   image-to-3D generators. ``gen/white/`` has white backgrounds.
 - ``parts/``: square images of each close-up and part image.
-- ``blockout.obj``: smooth visual hull in metres.
+- ``blockout.obj``: smooth blockout in metres (signed-distance intersection of the views).
 - ``spec.json``: height, bands, landmarks, cameras and hull agreement.
 - ``fidelity_manifest.json``: a ``character_fidelity`` manifest for the cameras.
 """
@@ -23,7 +23,7 @@ import numpy as np
 from PIL import Image
 
 from .checks import colour_map, iou
-from .hull import carve, hull_mesh
+from .hull import carve, sdf_blockout
 from .mesh import rasterize, read_mesh, surface_samples, write_obj
 from .views import (AXIS_VIEWS, AZIMUTH, BASELINE, CANVAS_H, CANVAS_W, CX, FIGURE_PX, PART_PREFIXES, camera,
                     figure_mask, load_folder)
@@ -63,7 +63,7 @@ def camera_spec(name: str, metres_per_px: float, height_m: float) -> dict:
 
 
 def build_handoff(folder: Path, height_m: float, *, factor: int = 5, tolerance_px: float = 10.0,
-                  rounding: float | None = 2.5) -> dict:
+                  round_px: float = 6.0, outline_blur_px: float = 12.0) -> dict:
     if not (0.01 <= height_m <= 100):
         raise ValueError("height_m must be between 0.01 and 100 metres")
     views, errors = load_folder(folder)
@@ -76,7 +76,7 @@ def build_handoff(folder: Path, height_m: float, *, factor: int = 5, tolerance_p
     for sub in ("aligned", "masks", "gen"):
         (out / sub).mkdir(parents=True)
     px = height_m / FIGURE_PX
-    hull = carve(full, factor, tolerance_px, rounding)
+    hull = carve(full, factor, tolerance_px)
     shifts_px = {n: s * factor for n, s in hull.shifts.items()}
     for name, view in full.items():
         image, mask = view.aligned, Image.fromarray(view.mask.astype(np.uint8) * 255)
@@ -87,7 +87,8 @@ def build_handoff(folder: Path, height_m: float, *, factor: int = 5, tolerance_p
         clay = views.get(f"{name}_clay")
         if clay is not None:  # same frame as its colour view
             _shifted(clay.aligned, -shifts_px.get(name, 0)).save(out / "aligned" / f"{name}_clay.png")
-    blockout = hull_mesh(hull, px)
+    blockout = sdf_blockout(full, hull, px, tolerance_px=tolerance_px, round_px=round_px,
+                            outline_blur_px=outline_blur_px)
     write_obj(blockout, out / "blockout.obj", "Visual hull of the character reference views (metres, Y up)")
 
     front = full["front"].mask
@@ -105,7 +106,7 @@ def build_handoff(folder: Path, height_m: float, *, factor: int = 5, tolerance_p
         "views": sorted(full), "load_errors": errors,
         "blockout": {"file": "blockout.obj", "voxel_m": round(factor * px, 6), "vertices": len(blockout.vertices),
                      "faces": len(blockout.faces), "carve_tolerance_px": tolerance_px,
-                     "section_rounding_exponent": rounding,
+                     "round_px": round_px, "outline_blur_px": outline_blur_px,
                      "unexplained_silhouette": {n: round(v, 4) for n, v in hull.missing.items()},
                      "diagonal_shift_px": shifts_px},
         "bounding_box_m": {"width": round(float(front.any(0).sum()) * px, 5),

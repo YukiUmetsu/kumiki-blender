@@ -16,7 +16,7 @@ from character_build_fixtures import (HEIGHT_M, MARGINS, ellipsoid_mesh, figure_
 from kumiki_blender.character_build import checks, hull, views
 from kumiki_blender.character_build.__main__ import main as cli
 from kumiki_blender.character_build.assembly import load_assembly
-from kumiki_blender.character_build.fit import fit_silhouettes
+from kumiki_blender.character_build.fit import fit_silhouettes, fold_faces
 from kumiki_blender.character_build.handoff import build_handoff, compare, reference_masks
 from kumiki_blender.character_build.mesh import Mesh, rasterize, read_mesh, write_mesh
 from kumiki_blender.character_build.project import mirror_missing, project_images, relief, subdivide
@@ -127,15 +127,17 @@ class HullAndHandoffTests(SharedSet):
         self.assertGreater(signed_volume(mesh), 0)
         report = compare(self.handoff, self.handoff / "blockout.obj")
         self.assertGreater(report["mean_iou"], 0.95)
-        for row in report["views"]:
-            self.assertLess(abs(row["height_error"]), 0.01, row)
+        for row in report["views"]:  # the outline blur shortens thin tips (ears) by about 2%
+            self.assertLess(abs(row["height_error"]), 0.025, row)
 
-    def test_rounding_keeps_axis_silhouettes(self):
-        full = {n: v for n, v in views.load_folder(self.good)[0].items() if n in ("front", "right")}
-        box, rounded = hull.carve(full), hull.carve(full, rounding=2.5)
-        self.assertLess(rounded.occupied.sum(), 0.95 * box.occupied.sum())
-        for name in ("front", "right"):
-            self.assertLess(rounded.missing[name], 0.02)
+    def test_blockout_surface_is_smooth(self):
+        """No voxel terraces: a vertex normal stays close to the mean normal of its neighbours."""
+        mesh = read_mesh(self.handoff / "blockout.obj")
+        normals = mesh.vertex_normals()
+        mean = mesh.adjacency() @ normals
+        mean /= np.maximum(np.linalg.norm(mean, axis=1), 1e-12)[:, None]
+        rough = float((np.einsum("ij,ij->i", normals, mean) < np.cos(np.radians(20))).mean())
+        self.assertLess(rough, 0.01)
 
     def test_spec_and_fidelity_manifest(self):
         self.assertEqual(sorted(self.spec["views"]), sorted(views.AZIMUTH))
@@ -179,6 +181,8 @@ class FitProjectScatterTests(SharedSet):
         start, best = result.history[0]["weighted_iou"], result.history[result.best_iteration]["weighted_iou"]
         self.assertGreater(best - start, 0.2)
         self.assertGreater(best, 0.9)
+        self.assertEqual(result.folds, 0, "the flip guard and untangle leave no folded triangles")
+        self.assertEqual(len(fold_faces(result.mesh, 0.0)), 0, "no crease sharper than 90 degrees")
 
     def test_visibility_and_relief(self):
         image = np.full((views.CANVAS_H, views.CANVAS_W, 3), 100.0)
@@ -215,6 +219,9 @@ class FitProjectScatterTests(SharedSet):
         self.assertTrue(np.allclose(np.linalg.norm(bases - [0, 0, .5], axis=1), 0.2, atol=0.01))
         again, _ = scatter_cards(sphere, spec)
         np.testing.assert_array_equal(cards.vertices, again.vertices)
+        behind, report = scatter_cards(sphere, ScatterSpec(density_per_m2=2000, y_min_m=0.1, seed=3))
+        bases = behind.vertices.reshape(report["cards"], -1, 3)[:, 0]
+        self.assertTrue(np.all(bases[:, 1] > 0.07), "a y band selects the back of the figure only")
 
 
 class JointsAndAssemblyTests(SharedSet):

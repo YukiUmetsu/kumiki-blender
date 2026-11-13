@@ -67,28 +67,41 @@ Each command writes a new file or folder. It does not overwrite an output.
 
 ## Stages in detail
 
-- **Blockout.** The visual hull with rounded cross-sections (a superellipse,
-  exponent 2.5, inscribed in each front x side rectangle). The rounding keeps
-  the front and side silhouettes. Use `--rounding 0` for the box hull when wide
-  parts (wings held away from the body) need the box corners.
+- **Blockout.** The tool blurs each view's 2D signed distance field by 12 px.
+  The blur removes the wobble of fur and feather fringes. It extrudes each field
+  along its camera and intersects them with a smooth maximum. The smooth maximum
+  (6 px) rounds the edges where views meet. Floating pieces with less than 5% of the body's area are dropped. The
+  blur shortens thin tips (ears, tufts) by about 2% of the height. The fit
+  restores most of it. Options: `--outline-blur-px`, `--round-px`.
 - **Fit.** Vertices outside a reference silhouette move in. Outline vertices
-  inside it move out. The front and primary side have double weight. Only the
-  displacement is smoothed, so regions that need no move keep their detail.
-  For a generator mesh, the tool chooses the facing (four quarter turns) and
-  scales the mesh to the reference height first.
+  inside it move out. The targets use the same blurred outline as the
+  blockout, so the fit does not groove the surface row by row. The front and
+  primary side have double weight. Only the displacement is smoothed. A flip
+  guard cancels each move that turns a triangle more than 90 degrees from its
+  start. A final local smoothing removes each crease sharper than 90 degrees. The
+  report gives the remaining folds (0 on both test characters). For a
+  generator mesh, the tool chooses the facing (four quarter turns) and scales
+  the mesh to the reference height first.
 - **Colours.** A vertex takes colour only from views where it is visible. The
   test uses a depth buffer with a slope-aware tolerance. Each view is weighted
-  by how directly it sees the vertex. `--assume-symmetric` fills a missing side view with the
+  by (n . d)^4, and 3/4 views count 0.1, so they fill only what the front, side
+  and back views see poorly. Otherwise an AI 3/4 view paints its own face
+  beside the front view's face (ghost eyes). `--assume-symmetric` fills a missing side view with the
   mirrored opposite side. Do not use it for a one-sided accessory.
 - **Relief.** `--relief-mm` moves vertices by the high-pass of the projected
   `*_clay` views. This is stylized relief from shading, not measured geometry.
   Flat clay gives no relief.
-- **Retopology.** QuadriFlow, with a voxel remesh fallback. The worker scales
-  the mesh to 1.5 m for QuadriFlow: QuadriFlow refuses small meshes (a 0.35 m
-  figure) with a misleading "not manifold" message.
+- **Retopology.** QuadriFlow refuses a mesh with folded triangles, sliver
+  triangles or floating debris. It gives one misleading "not manifold" message
+  for all of them, and its result also depends on the mesh's absolute size. The worker removes
+  debris, merges vertices closer than a tenth of the median edge, tries
+  QuadriFlow at several sizes, then at a voxel-remeshed copy. If every try
+  fails, a voxel remesh sized to the target face count makes grid-aligned
+  quads. The report then warns that they have no edge loops.
 - **Joints and rig.** The spine follows the body midline, which can differ
   from x = 0 when an accessory hangs on one side. Legs are found above the
-  feet, and arms or wings are the lateral mass. Landmark heights come from
+  feet. Arms or wings are the lateral mass. Tail joints sit at centroids of
+  distance bands from the tail root, so they follow a fanned or curled tail. Landmark heights come from
   `landmarks.json` (`crown`, `face_bottom`, `shoulder`, `hip`, `knee`, in % of
   height from the top). The rig uses heat weights. Vertices without a weight
   get their nearest bone, and the report gives that fraction. Influences are
@@ -96,23 +109,29 @@ Each command writes a new file or folder. It does not overwrite an output.
 
 ## Results on the two reference sets (2026-11-12)
 
-| | Quill | Pip |
-|---|---|---|
-| Views | front, back, left, front_left, head and foot close-ups | front, back, left, right, front_left, back_left, head close-ups |
-| Mirror checks | back 0.963 PASS | back 0.81 FAIL, left 0.82 FAIL |
-| 3D agreement | every view <= 0.03 unexplained | front 0.13, left 0.10, right 0.09 unexplained: FAIL |
-| Cause | consistent views | the tail fans out behind the head in the front view, but the back and side views draw a narrow tail |
-| Blockout IoU | 0.95 mean (3/4 view 0.89) | not built: regenerate the views first |
-| Fit | 3/4 view 0.89 -> 0.93, front and side -0.01 | |
-| Retopology | 10k quads, normal bake | |
-| Rig | 15 bones, all vertices heat-weighted; worst range-of-motion volume change 14% (wing turned into the body) | |
+| | Quill | Pip, first set | Pip, remade with the updated skill |
+|---|---|---|---|
+| Views | front, back, left, front_left | front, back, left, right, front_left, back_left | the same six views |
+| Back mirror | 0.963 | 0.81 FAIL | 0.935 |
+| Left / right mirror | | 0.82 FAIL | 0.905 |
+| 3D agreement (worst view unexplained) | 3% | 13% FAIL | 5.7% WARN (left drawn slightly larger) |
+| Blockout IoU | 0.944 | not built | 0.940 |
+| Fitted IoU, folds | 0.955, 0 | | 0.959, 0 |
+| Retopology | 11k quads, QuadriFlow | | 11k quads, QuadriFlow |
+| Low-poly IoU | 0.952 | | 0.957 |
+| Rig | 15 bones, all heat-weighted | | 18 bones with a 3-bone tail, all heat-weighted |
+| Worst range-of-motion volume change | 14% (wing into the body) | | 43% (tail bent 45 degrees into the back) |
+
+The first Pip set drew a fanned tail in the front view and a narrow tail in
+the back and side views. The remade set used the skill's volume lock and
+turnaround strip, and the views agree.
 
 ## Limits
 
-- A silhouette hull cannot place outline detail in 3D. Jagged outlines (feather
-  tips) make horizontal ridges, and a part seen only from the front (a wing)
-  becomes a plate. For organic detail, generate a mesh from `handoff/gen/`
-  with an image-to-3D tool and `fit` it.
+- A shape from silhouettes cannot place outline detail in 3D, and a part seen
+  only from the front (a wing) becomes a plate. Heads come out boxy with few
+  views. For organic detail, generate a mesh from `handoff/gen/` with an
+  image-to-3D tool and `fit` it.
 - With few views the hull is boxy in diagonal directions. Each extra
   orthographic view (`front_right`, `back_right`, ...) removes a corner.
 - The fit cannot satisfy views that disagree. It trades between them. Anchor

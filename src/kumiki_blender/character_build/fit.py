@@ -9,7 +9,8 @@ Each iteration, per view:
 - a rim vertex (normal perpendicular to the view, on the model outline) that
   sits inside the reference silhouette moves outward to the reference outline.
 
-The move follows the gradient of the reference signed distance field. Moves
+The move follows the gradient of the reference signed distance field, blurred
+by ``outline_blur_px`` so fur and feather fringes do not groove the surface. Moves
 from all views are averaged per vertex, with the front and primary side
 weighted ``anchor_weight`` times (they fix the frame; the other AI views agree
 with them only roughly). Only the displacement field is smoothed, so regions
@@ -33,6 +34,52 @@ class FitResult:
     history: list[dict]
     best_iteration: int
     transform: dict
+    folds: int = 0  # edges whose two triangles face nearly opposite ways (> 154 degrees)
+
+
+def fold_faces(mesh: Mesh, cosine: float = -0.9) -> np.ndarray:
+    """Indices of faces on an edge whose two triangles meet at a crease sharper than acos(cosine).
+
+    -0.9 (154 degrees) finds folds. 0.0 (90 degrees) also finds the crumples that outline
+    pushes leave near the rim.
+    """
+    normals, _ = mesh.face_normals()
+    f = mesh.faces
+    edges = np.sort(np.concatenate([f[:, [0, 1]], f[:, [1, 2]], f[:, [2, 0]]]), axis=1)
+    owner = np.tile(np.arange(len(f)), 3)
+    order = np.lexsort((edges[:, 1], edges[:, 0]))
+    edges, owner = edges[order], owner[order]
+    pair = (edges[1:] == edges[:-1]).all(axis=1)
+    a, b = owner[:-1][pair], owner[1:][pair]
+    bad = np.einsum("ij,ij->i", normals[a], normals[b]) < cosine
+    return np.unique(np.concatenate([a[bad], b[bad]]))
+
+
+def untangle(mesh: Mesh, rounds: int = 20, rings: int = 2, cosine: float = 0.0) -> Mesh:
+    """Smooth only the vertices around folds and crumples until none remain. The rest stays."""
+    adjacency = mesh.adjacency()
+    vertices = mesh.vertices.copy()
+    for _ in range(rounds):
+        bad = fold_faces(Mesh(vertices, mesh.faces), cosine)
+        if not len(bad):
+            break
+        region = np.zeros(len(vertices), dtype=bool)
+        region[np.unique(mesh.faces[bad])] = True
+        for _ in range(rings):
+            region |= (adjacency @ region.astype(float)) > 0
+        vertices[region] = (adjacency @ vertices)[region]
+    return Mesh(vertices, mesh.faces, mesh.colours)
+
+
+def count_folds(mesh: Mesh) -> int:
+    normals, _ = mesh.face_normals()
+    f = mesh.faces
+    edges = np.sort(np.concatenate([f[:, [0, 1]], f[:, [1, 2]], f[:, [2, 0]]]), axis=1)
+    owner = np.tile(np.arange(len(f)), 3)
+    order = np.lexsort((edges[:, 1], edges[:, 0]))
+    edges, owner = edges[order], owner[order]
+    pair = (edges[1:] == edges[:-1]).all(axis=1)
+    return int((np.einsum("ij,ij->i", normals[owner[:-1][pair]], normals[owner[1:][pair]]) < -0.9).sum())
 
 
 def _signed_distance(mask: np.ndarray) -> np.ndarray:
@@ -81,6 +128,7 @@ def normalise(mesh: Mesh, masks: dict[str, np.ndarray], height_m: float, px: flo
 
 def fit_silhouettes(mesh: Mesh, masks: dict[str, np.ndarray], height_m: float, *, scale: float = 0.25,
                     iterations: int = 40, step: float = 0.6, rim_cos: float = 0.35, smooth_rounds: int = 4,
+                    outline_blur_px: float = 12.0,
                     max_move_px: float = 3.0, anchor_weight: float = 2.0, normalise_first: bool = True
                     ) -> FitResult:
     """Fit ``mesh`` to reference ``masks`` (camera frame at ``scale`` of the aligned frame)."""
@@ -90,12 +138,18 @@ def fit_silhouettes(mesh: Mesh, masks: dict[str, np.ndarray], height_m: float, *
         mesh, transform = normalise(mesh, masks, height_m, px, scale)
     vertices = mesh.vertices.copy()
     adjacency = Mesh(vertices, mesh.faces).adjacency()
-    fields = {n: _signed_distance(m) for n, m in masks.items()}
+    # Target the low-passed outline, as the blockout does. The raw outline of a fur or feather
+    # fringe changes on every row, and chasing it grooves the surface row by row.
+    sigma = outline_blur_px * scale
+    fields = {n: ndimage.gaussian_filter(_signed_distance(m), sigma) if sigma > 0 else _signed_distance(m)
+              for n, m in masks.items()}
     gradients = {n: np.gradient(f) for n, f in fields.items()}  # (d/drow, d/dcol)
     grid_px = px / scale  # metres per grid pixel
     anchors = {"front", "right" if "right" in masks else "left"}
     weights = {n: anchor_weight if n in anchors else 1.0 for n in masks}
     history, best = [], None
+    faces = mesh.faces
+    start_normals = np.cross(vertices[faces[:, 1]] - vertices[faces[:, 0]], vertices[faces[:, 2]] - vertices[faces[:, 0]])
     for iteration in range(iterations + 1):
         current = Mesh(vertices, mesh.faces)
         samples = surface_samples(current, 0.5 * grid_px)
@@ -132,7 +186,24 @@ def fit_silhouettes(mesh: Mesh, masks: dict[str, np.ndarray], height_m: float, *
         # Smooth the displacement, not the shape: neighbours follow a move, unmoved detail stays.
         for _ in range(smooth_rounds):
             field = 0.5 * field + 0.5 * (adjacency @ field)
+        # Flip guard: a move that turns a triangle over folds the surface (QuadriFlow then refuses
+        # the mesh). Compare with the starting orientation, not the last iteration: a triangle can
+        # also turn over a little at a time. Cancel the moves at the corners of each triangle that
+        # would face more than 90 degrees away from its start, a few times. A stricter limit
+        # (60 degrees) leaves fewer folds but blocks real moves: -0.01 IoU on two real characters.
+        for _ in range(4):
+            moved_points = vertices + field
+            after = np.cross(moved_points[faces[:, 1]] - moved_points[faces[:, 0]],
+                             moved_points[faces[:, 2]] - moved_points[faces[:, 0]])
+            cosine = np.einsum("ij,ij->i", start_normals, after) / np.maximum(
+                np.linalg.norm(start_normals, axis=1) * np.linalg.norm(after, axis=1), 1e-30)
+            flipped = cosine <= 0.0
+            if not flipped.any():
+                break
+            field[np.unique(faces[flipped])] = 0.0
         # No height rescale here: the silhouettes fix the top and the soles. A rescale to the
         # mesh's own extremes stretches the whole body when a thin tip (a tuft) is short.
         vertices += field
-    return FitResult(Mesh(best[1], mesh.faces), history, best[2], transform)
+    # Folds and rim crumples that the flip guard let through shade as specks and spoil the bake.
+    result = untangle(Mesh(best[1], mesh.faces))
+    return FitResult(result, history, best[2], transform, count_folds(result))

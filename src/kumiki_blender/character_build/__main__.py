@@ -46,8 +46,9 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--height-m", type=float, required=True, help="soles to highest point, metres")
     p.add_argument("--voxel-px", type=int, default=5, help="blockout voxel in aligned pixels (1000 px = height)")
     p.add_argument("--tolerance-px", type=float, default=10.0)
-    p.add_argument("--rounding", type=float, default=2.5,
-                   help="superellipse exponent of the cross-sections (2 ellipse; 0 keeps the box hull)")
+    p.add_argument("--round-px", type=float, default=6.0, help="edge rounding where views meet (aligned px)")
+    p.add_argument("--outline-blur-px", type=float, default=12.0,
+                   help="low-pass the outlines so fur or feather fringes do not groove the surface (0 keeps them)")
 
     p = sub.add_parser("compare", help="model silhouettes against the references")
     p.add_argument("handoff", type=Path)
@@ -78,6 +79,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--max-delta-e", type=float, default=18.0)
     p.add_argument("--z-min-m", type=float, default=float("-inf"))
     p.add_argument("--z-max-m", type=float, default=float("inf"))
+    p.add_argument("--y-min-m", type=float, default=float("-inf"), help="the back of the figure is +Y")
+    p.add_argument("--y-max-m", type=float, default=float("inf"))
     p.add_argument("--density", type=float, default=20000.0, help="cards per square metre")
     p.add_argument("--length-mm", type=float, default=12.0)
     p.add_argument("--width-mm", type=float, default=6.0)
@@ -138,7 +141,7 @@ def _run(args) -> int:
         from .handoff import build_handoff
 
         spec = build_handoff(args.folder, args.height_m, factor=args.voxel_px, tolerance_px=args.tolerance_px,
-                             rounding=args.rounding or None)
+                             round_px=args.round_px, outline_blur_px=args.outline_blur_px)
         print(json.dumps({"views": spec["views"], "blockout": spec["blockout"]}, indent=2))
         return 0
     if args.command == "compare":
@@ -164,6 +167,7 @@ def _run(args) -> int:
                                      normalise_first=not args.no_normalise)
             write_mesh(result.mesh, args.output)
             report = {"input": str(args.mesh), "normalise": result.transform, "best_iteration": result.best_iteration,
+                      "folds": result.folds,
                       "start": result.history[0], "best": result.history[result.best_iteration]}
             _write_json(args.output.with_suffix(".json"), {**report, "history": result.history})
         elif args.command == "project":
@@ -193,7 +197,7 @@ def _run(args) -> int:
             report = estimate_joints(mesh, spec["height_m"], spec.get("landmarks_z_m"), limbs=args.limbs,
                                      tail=args.tail)
             _write_json(args.output, report)
-        print(json.dumps(report if args.command != "fit" else {k: report[k] for k in ("normalise", "start", "best")},
+        print(json.dumps(report if args.command != "fit" else {k: report[k] for k in ("normalise", "start", "best", "folds")},
                          indent=2))
         return 0
     if args.command == "scatter":
@@ -203,6 +207,7 @@ def _run(args) -> int:
         _new_file(args.output)
         colour = tuple(int(v) for v in args.colour.split(",")) if args.colour else None
         spec = ScatterSpec(colour=colour, max_delta_e=args.max_delta_e, z_min_m=args.z_min_m, z_max_m=args.z_max_m,
+                           y_min_m=args.y_min_m, y_max_m=args.y_max_m,
                            density_per_m2=args.density, length_m=args.length_mm / 1000, width_m=args.width_mm / 1000,
                            lift_deg=args.lift_deg, seed=args.seed)
         cards, report = scatter_cards(read_mesh(args.mesh), spec)

@@ -3,8 +3,10 @@
 ``project_colours`` gives each vertex a colour from the views that see it. A
 vertex is visible in a view when no other surface is nearer the camera at its
 pixel (depth buffer from the NumPy rasterizer). Each visible view is weighted
-by (n . d)^2, so a view that sees the surface straight on wins over a grazing
-view.
+by (n . d)^4, so the view that sees the surface most directly wins. 3/4 views
+count 0.1: they fill only what the front, side and back views see poorly. An
+AI 3/4 view paints its face onto the approximate head shape beside the front
+view's face, which makes ghost eyes when it competes.
 
 ``relief`` adds stylized surface detail from the clay views: the high-pass of
 the projected clay brightness moves vertices along their normals. This is a
@@ -22,7 +24,7 @@ from PIL import Image
 from scipy import ndimage
 
 from .mesh import Mesh, rasterize, surface_samples
-from .views import CANVAS_H, CANVAS_W, camera
+from .views import CANVAS_H, CANVAS_W, DIAGONAL_VIEWS, camera
 
 
 @dataclass
@@ -50,7 +52,7 @@ def subdivide(mesh: Mesh) -> Mesh:
 
 
 def project_images(mesh: Mesh, images: dict[str, np.ndarray], metres_per_px: float, *, scale: float = 0.5,
-                   depth_tolerance_px: float = 1.0, power: float = 2.0) -> Projection:
+                   depth_tolerance_px: float = 1.0, power: float = 4.0, diagonal_weight: float = 0.1) -> Projection:
     """Project per-pixel values (H, W, C) in the camera frame onto the vertices.
 
     ``images`` hold float values with NaN where the image has no figure.
@@ -76,7 +78,7 @@ def project_images(mesh: Mesh, images: dict[str, np.ndarray], metres_per_px: flo
         slope = np.minimum(np.sqrt(1 - cosine ** 2) / cosine, 10.0)
         grid_px = metres_per_px / scale
         visible = inside & (vertex_depth >= nearest - (depth_tolerance_px + 1.5 * slope) * grid_px)
-        facing = np.clip(normals @ cam.toward, 0, 1) ** power
+        facing = np.clip(normals @ cam.toward, 0, 1) ** power * (diagonal_weight if name in DIAGONAL_VIEWS else 1.0)
         values = np.full((len(c), channels), np.nan)
         full_c = np.clip((col / scale).astype(int), 0, image.shape[1] - 1)
         full_r = np.clip((row / scale).astype(int), 0, image.shape[0] - 1)

@@ -56,14 +56,58 @@ def import_mesh(path: str, name: str):
         bpy.ops.object.join()
     obj = bpy.context.view_layer.objects.active
     bpy.ops.object.transform_apply(location=True, rotation=True, scale=True)
-    # glTF and OBJ split vertices at UV seams and hard edges. Merge them back, or the mesh is a
-    # set of disconnected patches (heat weighting and QuadriFlow both fail). UVs are per corner.
-    bpy.ops.object.mode_set(mode="EDIT")
-    bpy.ops.mesh.select_all(action="SELECT")
-    bpy.ops.mesh.remove_doubles(threshold=1e-6)
-    bpy.ops.object.mode_set(mode="OBJECT")
+    # glTF and OBJ split vertices at UV seams and hard edges, which leaves open boundary edges.
+    # Merge them back, or the mesh is a set of patches (heat weighting and QuadriFlow fail).
+    # Only merge a mesh with open edges: on a closed mesh a merge welds separate vertices at
+    # pinch points and makes it non-manifold. UVs are per corner, so a merge keeps them.
+    if open_edges(obj):
+        bpy.ops.object.mode_set(mode="EDIT")
+        bpy.ops.mesh.select_all(action="SELECT")
+        bpy.ops.mesh.remove_doubles(threshold=1e-6)
+        bpy.ops.object.mode_set(mode="OBJECT")
     obj.name = obj.data.name = name
     return obj
+
+
+def open_edges(obj) -> int:
+    import bmesh
+
+    bm = bmesh.new()
+    bm.from_mesh(obj.data)
+    count = sum(1 for e in bm.edges if e.is_boundary)
+    bm.free()
+    return count
+
+
+def remove_debris(obj, keep_fraction: float = 0.01) -> int:
+    """Delete connected pieces smaller than ``keep_fraction`` of the faces. Return the count removed."""
+    import bmesh
+
+    bm = bmesh.new()
+    bm.from_mesh(obj.data)
+    bm.faces.ensure_lookup_table()
+    seen, pieces = set(), []
+    for face in bm.faces:
+        if face.index in seen:
+            continue
+        stack, piece = [face], []
+        seen.add(face.index)
+        while stack:
+            current = stack.pop()
+            piece.append(current)
+            for edge in current.edges:
+                for other in edge.link_faces:
+                    if other.index not in seen:
+                        seen.add(other.index)
+                        stack.append(other)
+        pieces.append(piece)
+    small = [p for p in pieces if len(p) < keep_fraction * len(bm.faces)]
+    doomed = [f for p in small for f in p]
+    if doomed:
+        bmesh.ops.delete(bm, geom=doomed, context="FACES")
+        bm.to_mesh(obj.data)
+    bm.free()
+    return len(small)
 
 
 def activate(obj) -> None:

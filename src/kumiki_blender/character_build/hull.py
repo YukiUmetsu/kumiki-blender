@@ -63,48 +63,12 @@ def silhouette(occupied: np.ndarray, cam_name: str, x: np.ndarray, y: np.ndarray
     return out
 
 
-def _runs(flags: np.ndarray) -> list[tuple[int, int]]:
-    """Start and end (exclusive) of each run of True values."""
-    edges = np.diff(np.concatenate([[0], flags.astype(np.int8), [0]]))
-    return list(zip(np.nonzero(edges == 1)[0], np.nonzero(edges == -1)[0]))
-
-
-def round_sections(occupied: np.ndarray, exponent: float, vertical_sigma: float = 1.5) -> None:
-    """Replace each box cross-section with an inscribed superellipse, in place.
-
-    After the axis views, a row of the hull is a set of rectangles (front runs x side
-    runs). A superellipse |dx/a|^p + |dy/b|^p <= 1 touches all four sides of its
-    rectangle, so the front and side silhouettes do not change, but the body is
-    round instead of boxy. p = 2 is an ellipse; a larger p is closer to the box.
-
-    Jagged outlines (feather tips) change a section's size from one row to the next,
-    which makes lathe-like rings. The rounded shape is blurred over ``vertical_sigma``
-    rows before it cuts, so neighbouring rows agree. The silhouettes still cut exactly.
-    """
-    keep = np.zeros_like(occupied)
-    for row in range(occupied.shape[0]):
-        section = occupied[row]
-        if not section.any():
-            continue
-        keep_row = keep[row]
-        for y0, y1 in _runs(section.any(axis=1)):
-            for x0, x1 in _runs(section.any(axis=0)):
-                cy, cx, b, a = (y0 + y1 - 1) / 2, (x0 + x1 - 1) / 2, (y1 - y0) / 2, (x1 - x0) / 2
-                yy, xx = np.mgrid[y0:y1, x0:x1]
-                keep_row[y0:y1, x0:x1] |= (np.abs((xx - cx) / a) ** exponent
-                                           + np.abs((yy - cy) / b) ** exponent) <= 1
-    if vertical_sigma > 0:
-        keep = ndimage.gaussian_filter(keep.astype(np.float32), (vertical_sigma, 0, 0)) >= 0.5
-    occupied &= keep
-
-
-def carve(views: dict[str, View], factor: int = 5, tolerance_px: float = 10.0, rounding: float | None = None) -> Hull:
+def carve(views: dict[str, View], factor: int = 5, tolerance_px: float = 10.0) -> Hull:
     """Carve a voxel hull from every available orthographic full-body view.
 
     ``tolerance_px`` (aligned pixels) dilates each secondary mask before carving.
-    ``rounding`` (a superellipse exponent, e.g. 2.5) rounds the cross-sections
-    before the diagonal views carve; ``None`` keeps the assumption-free box hull,
-    which the consistency checks use. Needs ``front`` and ``right`` or ``left``.
+    This is the assumption-free box hull. The checks use it, and it measures
+    the shifts of diagonal views. Needs ``front`` and ``right`` or ``left``.
     """
     if "front" not in views or not ({"right", "left"} & set(views)):
         raise ValueError("The hull needs front and right or left")
@@ -141,8 +105,6 @@ def carve(views: dict[str, View], factor: int = 5, tolerance_px: float = 10.0, r
     used = [n for n in AXIS_VIEWS if n in masks]
     for name in used:
         apply(name)
-    if rounding is not None:
-        round_sections(occupied, rounding)
     shifts = {}
     for name in DIAGONAL_VIEWS:
         if name not in masks:
@@ -164,32 +126,69 @@ def carve(views: dict[str, View], factor: int = 5, tolerance_px: float = 10.0, r
     return Hull(occupied, factor, x_start, y_start, shifts, missing, used)
 
 
-def taubin(mesh: Mesh, rounds: int, lam: float = 0.5, mu: float = -0.53) -> Mesh:
-    """Taubin smoothing: removes voxel terraces without the shrinkage of plain Laplacian smoothing."""
-    adjacency, points = mesh.adjacency(), mesh.vertices.copy()
-    for _ in range(rounds):
-        for weight in (lam, mu):
-            points += weight * (adjacency @ points - points)
-    return Mesh(points, mesh.faces, mesh.colours)
+def drop_fragments(mesh: Mesh, keep_area_fraction: float = 0.05) -> Mesh:
+    """Keep the main body and pieces with 5% or more of its area; drop carving debris.
+
+    Thin outline features that the carve cuts off leave small floating pieces.
+    QuadriFlow rejects a mesh with them, and they are not sculpt geometry.
+    """
+    from ..reconstruction.mesh_fragments import FragmentLimits, choose_faces
+
+    keep, _removed = choose_faces(mesh.vertices, mesh.faces, FragmentLimits(1e-9, keep_area_fraction))
+    faces = mesh.faces[keep]
+    used, remap = np.unique(faces, return_inverse=True)
+    colours = mesh.colours[used] if mesh.colours is not None else None
+    return Mesh(mesh.vertices[used], remap.reshape(-1, 3), colours)
 
 
-def hull_mesh(hull: Hull, metres_per_px: float, smooth_sigma: float = 0.5, terrace_rounds: int = 15) -> Mesh:
-    """Smooth triangle mesh of the hull: marching cubes on a lightly blurred field, then Taubin smoothing.
+def sdf_blockout(views: dict[str, View], hull: Hull, metres_per_px: float, *, tolerance_px: float = 10.0,
+                 round_px: float = 6.0, outline_blur_px: float = 12.0) -> Mesh:
+    """Smooth blockout from the silhouettes' signed distance fields.
 
-    A stronger voxel blur would also remove the terraces, but it shortens thin tips (tufts, ears).
+    Each view's 2D signed distance field (aligned pixels, positive outside) is
+    computed at full resolution and extruded along its camera direction. The
+    extrusions are intersected with a smooth maximum: k * log(sum exp(d / k)),
+    k = ``round_px``. The smooth maximum rounds the edges where two views meet,
+    and the fields are continuous from row to row, so the surface has no voxel
+    terraces. In an extrusion intersection, the front surface is the side outline
+    extruded across the body, so each wobble of a fur or feather fringe becomes a
+    groove. A Gaussian blur of each 2D field (``outline_blur_px``) low-passes the
+    contour and removes them. ``hull`` gives the grid and the diagonal shifts.
+    The front and the primary side are exact; other views get ``tolerance_px``.
     """
     from skimage.measure import marching_cubes
 
-    field = np.pad(hull.occupied.astype(np.float32), 2)
-    if smooth_sigma > 0:
-        field = ndimage.gaussian_filter(field, smooth_sigma)
-    verts, faces, _normals, _values = marching_cubes(field, level=0.5)
-    voxel = hull.factor * metres_per_px
-    gcx = CX / hull.factor
-    row, yi, xi = verts[:, 0] - 2, verts[:, 1] - 2, verts[:, 2] - 2
-    points = np.column_stack([(xi + hull.x_start + 0.5 - gcx) * voxel,
-                              (yi + hull.y_start + 0.5 - gcx) * voxel,
-                              (BASELINE / hull.factor - row - 0.5) * voxel])
-    # skimage winds these faces inward for an occupancy field. Reverse them so normals point out.
-    mesh = Mesh(points, faces[:, ::-1].copy())
-    return taubin(mesh, terrace_rounds) if terrace_rounds else mesh
+    factor, gcx = hull.factor, CX / hull.factor
+    anchors = {"front", "right" if "right" in hull.used else "left"}
+    rows, ys, xs = hull.occupied.shape
+    margin = 4
+    x = (np.arange(-margin, xs + margin) + hull.x_start + 0.5 - gcx)        # voxel units from the centre
+    y = (np.arange(-margin, ys + margin) + hull.y_start + 0.5 - gcx)
+    row_px = (np.arange(rows) + 0.5) * factor                               # aligned pixel row of each voxel row
+    k = max(round_px, 1e-3)
+    total = np.zeros((rows, len(y), len(x)))
+    for name in hull.used:
+        mask = views[name].mask
+        sdf = (ndimage.distance_transform_edt(~mask) - ndimage.distance_transform_edt(mask)).astype(np.float32)
+        if outline_blur_px > 0:
+            sdf = ndimage.gaussian_filter(sdf, outline_blur_px)
+        if name not in anchors:
+            sdf -= tolerance_px
+        cam = camera(name)
+        col_px = (x[None, :] * cam.right[0] + y[:, None] * cam.right[1] + gcx + hull.shifts.get(name, 0)) * factor
+        for r in range(rows):
+            values = ndimage.map_coordinates(sdf, [np.full(col_px.size, row_px[r] - 0.5), col_px.ravel() - 0.5],
+                                             order=1, mode="nearest").reshape(col_px.shape)
+            total[r] += np.exp(np.clip(values / k, -60, 60))
+    field = k * np.log(total)                                               # smooth max, aligned pixels
+    field = np.pad(field, ((2, 2), (0, 0), (0, 0)), constant_values=field.max())
+    verts, faces, _n, _v = marching_cubes(field, level=0.0, allow_degenerate=False)  # no sliver triangles
+    row, yi, xi = verts[:, 0] - 2, verts[:, 1] - margin, verts[:, 2] - margin
+    voxel = factor * metres_per_px
+    points = np.column_stack([(xi + hull.x_start + 0.5 - gcx) * voxel, (yi + hull.y_start + 0.5 - gcx) * voxel,
+                              (BASELINE / factor - row - 0.5) * voxel])
+    mesh = Mesh(points, faces)
+    a, b, c = (mesh.vertices[mesh.faces[:, i]] for i in range(3))
+    if np.einsum("ij,ij->i", a, np.cross(b, c)).sum() < 0:                  # make the normals point out
+        mesh = Mesh(mesh.vertices, mesh.faces[:, ::-1].copy())
+    return drop_fragments(mesh)

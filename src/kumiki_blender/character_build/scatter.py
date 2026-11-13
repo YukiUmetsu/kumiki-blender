@@ -1,7 +1,7 @@
 """Scatter feather, fur or scale cards over a mesh region.
 
-The region is chosen by vertex colour (from ``project_colours``) and an
-optional height band. Each card is a tapered, slightly curved quad strip. Its
+The region is chosen by vertex colour (from ``project_colours``), an optional
+height band and an optional front-to-back band (Y, the back is +Y). Each card is a tapered, slightly curved quad strip. Its
 base sits on the surface, it points along a flow direction (by default down
 the surface, like feathers and fur), and it lifts away from the surface by a
 small angle so layers overlap. Output is one mesh of cards, separate from the
@@ -24,6 +24,8 @@ class ScatterSpec:
     max_delta_e: float = 18.0
     z_min_m: float = -np.inf
     z_max_m: float = np.inf
+    y_min_m: float = -np.inf  # front (-Y) to back (+Y): a tail is behind the body
+    y_max_m: float = np.inf
     density_per_m2: float = 20000.0
     length_m: float = 0.012
     width_m: float = 0.006
@@ -53,7 +55,8 @@ def scatter_cards(mesh: Mesh, spec: ScatterSpec) -> tuple[Mesh, dict]:
     rng = np.random.default_rng(spec.seed)
     normals_f, areas = mesh.face_normals()
     centres = mesh.vertices[mesh.faces].mean(axis=1)
-    select = (centres[:, 2] >= spec.z_min_m) & (centres[:, 2] <= spec.z_max_m)
+    select = ((centres[:, 2] >= spec.z_min_m) & (centres[:, 2] <= spec.z_max_m)
+              & (centres[:, 1] >= spec.y_min_m) & (centres[:, 1] <= spec.y_max_m))
     if spec.colour is not None:
         if mesh.colours is None:
             raise ValueError("Colour selection needs a mesh with vertex colours (run project first)")

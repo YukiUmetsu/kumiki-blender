@@ -111,10 +111,14 @@ def estimate_joints(mesh: Mesh, height_m: float, landmarks_z: dict | None = None
         if len(mass) < 10:
             raise ValueError("No tail mass found behind the body")
         base = np.array([mid, joints["hips"][1] + 0.6 * (back - joints["hips"][1]), z["hip"] * 0.9])
-        tip = mass[np.argmax(np.linalg.norm(mass - base, axis=1))]
+        # Joints at centroids of distance bands from the root follow the tail's spine. The single
+        # farthest point would land on the edge of a fanned tail.
+        distance = np.linalg.norm(mass - base, axis=1)
+        reach = distance.max()
         previous = "root"
-        for i in range(1, 4):
-            joints[f"tail{i}"] = base + (tip - base) * i / 3
+        for i, (low, high) in enumerate(((0.25, 0.42), (0.55, 0.72), (0.85, 1.0)), start=1):
+            band = mass[(distance >= low * reach) & (distance <= high * reach)]
+            joints[f"tail{i}"] = band.mean(axis=0) if len(band) else base + (mass.mean(axis=0) - base) * i / 3
         joints["tail0"] = base
         for i in range(1, 4):
             bones.append((f"tail{i}", f"tail{i - 1}", f"tail{i}", previous))
