@@ -44,13 +44,15 @@
   },
   "guards": {
     "max_view_mean_delta_e_increase": 1,
-    "max_unseen_fraction_increase": 0.005
+    "max_unseen_fraction_increase": 0.005,
+    "max_view_silhouette_iou_drop": 0.005
   },
   "weights": {
     "misplaced_part": 4,
     "contested_feature": 3,
     "unseen": 5,
     "tone_seam": 0.3,
-    "appearance": 0.75
+    "appearance": 0.75,
+    "silhouette": 1
   }
 }
