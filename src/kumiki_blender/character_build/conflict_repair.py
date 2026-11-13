@@ -326,6 +326,11 @@ def run_conflict_repair(
                 final_result = evaluate(source_mesh, dict(plan.settings), plan.final_size, tmp / 'diagnostics')
                 final_texture, final_conflicts, final_appearance = final_result[:3]
                 final_geometry = final_result[3] if len(final_result) > 3 else None
+        # Always represent the *final accepted output* in the preview. A candidate
+        # accepted at evaluation size may be rejected at final resolution.
+        Image.fromarray(final_texture).resize(
+            (plan.evaluation_size, plan.evaluation_size), Image.Resampling.LANCZOS
+        ).save(tmp / 'preview.png')
         Image.fromarray(final_texture).save(tmp / 'texture.png')
         if Path(winner['mesh']) != source_mesh:
             shutil.copy2(winner['mesh'], tmp / 'mesh.obj')
