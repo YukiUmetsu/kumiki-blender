@@ -72,6 +72,11 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--spec", type=Path, required=True, help="source-registered 2D landmark observations JSON")
     p.add_argument("--output", type=Path, required=True, help="immutable 3D landmark report directory")
 
+    p = sub.add_parser("resolve-anatomy-landmarks", help="substitute triangulated 3D landmarks into anatomical control points")
+    p.add_argument("--spec", type=Path, required=True, help="anatomy template with explicit {landmark: ID} markers")
+    p.add_argument("--landmarks", type=Path, required=True, help="source-verified landmarks.json")
+    p.add_argument("--output", type=Path, required=True, help="new resolved-anatomy.json with provenance")
+
     p = sub.add_parser("plan-anatomy", help="source-lock explicit 3D eye, lid and contour-loft anatomy recipes")
     p.add_argument("--blend", type=Path, required=True, help="approved source Blender character .blend")
     p.add_argument("--spec", type=Path, required=True, help="source-authored anatomical parts JSON")
@@ -412,6 +417,11 @@ def _run(args) -> int:
     if args.command == "triangulate-landmarks":
         from .landmark_triangulation import triangulate_landmarks
         report = triangulate_landmarks(args.spec, args.output)
+        print(json.dumps(report, indent=2))
+        return 0
+    if args.command == "resolve-anatomy-landmarks":
+        from .anatomy_landmark_resolver import resolve_anatomy_landmarks
+        report = resolve_anatomy_landmarks(args.spec, args.landmarks, args.output)
         print(json.dumps(report, indent=2))
         return 0
     if args.command == "plan-anatomy":

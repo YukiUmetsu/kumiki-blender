@@ -21,6 +21,12 @@ The additive triangulate-landmarks command reconstructs candidate 3D eye, muzzle
 
 Commands plan-anatomy / build-anatomy create **separate, fully editable real 3D anatomy** for source-placed eyes (sclera/iris/pupil), curved eyelids and brow/lip rims, and contour-lofted beaks/muzzles without voxel-remeshing finished parts or silently mirroring anatomy. Blender 4.5 produces an immutable anatomy.blend, independent part OBJ files and provenance/topology reports. Coordinates and colors must be reviewed against the character references; this is a procedural modeling tool, **not automatic original-image reconstruction or artistic approval**.
 
+### Registered 2D landmarks to native 3D parts
+
+[Automatic landmark substitution guide](docs/CHARACTER_LANDMARK_TO_ANATOMY.md)
+
+Use resolve-anatomy-landmarks to fill explicitly named eyeball, eyelid, beak and muzzle control-point placeholders from triangulate-landmarks 3D results. The resolver validates source-image provenance, rejects unsolved landmarks and leaves the existing Blender source unchanged. Run independent reference alignment and deformation QA on each modeled part.
+
 ## Character Production v2: isolated parts and Blender-native rig audits
 
 [Implementation guide](docs/CHARACTER_PRODUCTION_V2.md) · [example CharacterSpec](examples/character-v2.example.json) · [region sculpt plan](examples/character-region-sculpt.example.json) · [rig pose QA plan](examples/character-rig-pose-qa.example.json)
