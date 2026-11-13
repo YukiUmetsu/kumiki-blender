@@ -84,6 +84,18 @@ def deformation(rest: dict, current: dict) -> dict:
     }
 
 
+
+def world_bvh(obj, depsgraph):
+    """Build collision geometry in WORLD coordinates, not Blender object-local BVH space."""
+    evaluated = obj.evaluated_get(depsgraph)
+    mesh = evaluated.to_mesh()
+    try:
+        vertices = [evaluated.matrix_world @ vertex.co for vertex in mesh.vertices]
+        polygons = [tuple(poly.vertices) for poly in mesh.polygons]
+        return BVHTree.FromPolygons(vertices, polygons)
+    finally:
+        evaluated.to_mesh_clear()
+
 def main() -> None:
     args = arguments()
     output = Path(args["output"]).resolve()
@@ -149,8 +161,8 @@ def main() -> None:
                     problems.append(f"{item['name']}/{obj.name}: edge stretch exceeded {limit}")
             for first, second in plan.get("collision_pairs", []):
                 a, b = bpy.data.objects[first], bpy.data.objects[second]
-                tree_a = BVHTree.FromObject(a, depsgraph)
-                tree_b = BVHTree.FromObject(b, depsgraph)
+                tree_a = world_bvh(a, depsgraph)
+                tree_b = world_bvh(b, depsgraph)
                 overlap = len(tree_a.overlap(tree_b))
                 if overlap:
                     entry["collision_candidates"].append({
