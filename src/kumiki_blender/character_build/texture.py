@@ -18,7 +18,7 @@ from PIL import Image
 from scipy import ndimage
 
 from .mesh import Mesh, rasterize, surface_samples
-from .views import DIAGONAL_VIEWS, camera
+from .views import CX, DIAGONAL_VIEWS, camera
 
 
 def read_obj_uv(path: Path) -> tuple[Mesh, np.ndarray]:
@@ -93,7 +93,8 @@ def bake_texture(handoff: Path, mesh: Mesh, corner_uv: np.ndarray, *, size: int 
                  diagonal_weight: float = 1.0, depth_scale: float = 1.0, depth_tolerance_px: float = 1.5,
                  edge_px: float = 12.0, views: list[str] | None = None, min_cosine: float = 0.35,
                  vote_samples: int = 150_000, vote_neighbours: int = 24, vote_rounds: int = 2,
-                 agree_delta_e: float = 15.0) -> tuple[np.ndarray, dict]:
+                 agree_delta_e: float = 15.0, mirror_missing: bool = False, mirror_weight: float = 0.3
+                 ) -> tuple[np.ndarray, dict]:
     """RGB texture (size x size, uint8) and a report with the coverage of each view.
 
     Each texel takes its colour from one view, not a blend: AI views of one character
@@ -107,6 +108,11 @@ def bake_texture(handoff: Path, mesh: Mesh, corner_uv: np.ndarray, *, size: int 
     Before the choice, each view's score is scaled by exp(-d / ``agree_delta_e``), with d the
     mean colour difference to the other views that see the same point. A drawing that shows
     a different part there (the views disagree about the 3D shape) then rarely wins.
+
+    ``mirror_missing`` adds each missing side view (right, front_right, back_right or the
+    left ones) as the mirror image of its opposite. Use it only for a symmetric character:
+    a one-sided accessory then appears on both sides. Mirrored views score ``mirror_weight``
+    times a real view, so they paint mainly where no real drawing sees the surface.
     """
     spec = json.loads((handoff / "spec.json").read_text(encoding="utf-8"))
     px = spec["metres_per_aligned_px"]
@@ -115,14 +121,23 @@ def bake_texture(handoff: Path, mesh: Mesh, corner_uv: np.ndarray, *, size: int 
     names = [n for n in spec["raw"] if (views is None or n in views) and (handoff / "raw" / f"{n}.png").is_file()]
     if not names:
         raise ValueError("No reference view to bake from")
+    source = {n: (n, False) for n in names}  # view -> (image it samples, mirrored)
+    if mirror_missing:
+        pairs = (("left", "right"), ("front_left", "front_right"), ("back_left", "back_right"))
+        for a, b in pairs:
+            for have, missing in ((a, b), (b, a)):
+                if have in source and not source[have][1] and missing not in source:
+                    source[missing] = (have, True)
+        names = list(source)
     count = len(points)
     score = np.full((len(names), count), -1.0, dtype=np.float32)  # -1: the view does not paint the texel
     colours = np.zeros((len(names), count, 3), dtype=np.uint8)
     edge_trust = np.zeros((len(names), count), dtype=np.float32)
     coverage = {}
     for index, name in enumerate(names):
-        raw_map = spec["raw"][name]
-        rgba = np.asarray(Image.open(handoff / "raw" / f"{name}.png").convert("RGBA")).astype(np.float64)
+        image_name, mirrored = source[name]
+        raw_map = spec["raw"][image_name]
+        rgba = np.asarray(Image.open(handoff / "raw" / f"{image_name}.png").convert("RGBA")).astype(np.float64)
         # Wispy fur at a silhouette edge is blended with the background colour, inside the cut-out
         # mask. Trust a pixel more the further it is from the edge: full trust edge_px inside.
         inner = ndimage.distance_transform_edt(rgba[..., 3] > 200)
@@ -138,6 +153,8 @@ def bake_texture(handoff: Path, mesh: Mesh, corner_uv: np.ndarray, *, size: int 
         slope = np.minimum(np.sqrt(np.maximum(1 - cosine ** 2, 0)) / np.maximum(cosine, 1e-3), 10)
         visible = inside & (point_depth >= nearest - (depth_tolerance_px + 1.5 * slope) * px / depth_scale)
         u, v = col / depth_scale, row / depth_scale  # camera-frame aligned pixels
+        if mirrored:  # the opposite camera sees the mirror image about the frame centre
+            u = 2 * CX - u
         raw_x = (u + raw_map["shift_px"] - raw_map["x0"]) / raw_map["scale"] + raw_map["left"]
         raw_y = (v - raw_map["y0"]) / raw_map["scale"] + raw_map["top"]
         h, w = core.shape
@@ -145,6 +162,8 @@ def bake_texture(handoff: Path, mesh: Mesh, corner_uv: np.ndarray, *, size: int 
         use = visible & (rx >= 0) & (rx < w) & (ry >= 0) & (ry < h) & (cosine > min_cosine)
         use[use] = core[ry[use], rx[use]]
         score[index, use] = cosine[use] ** power * (diagonal_weight if name in DIAGONAL_VIEWS else 1.0)
+        if mirrored:  # a real drawing of a point beats a mirrored one
+            score[index, use] *= mirror_weight
         edge_trust[index, use] = trust[ry[use], rx[use]]
         colours[index, use] = np.clip(np.round(_bilinear(rgba[..., :3], raw_x[use], raw_y[use])), 0, 255)
         coverage[name] = round(float(use.mean()), 4)
@@ -214,6 +233,7 @@ def bake_texture(handoff: Path, mesh: Mesh, corner_uv: np.ndarray, *, size: int 
     winners = np.bincount(label[seen], minlength=len(names)) / max(1, seen.sum())
     report = {"size": size, "texels": int(covered.sum()), "seen_fraction": round(float(seen.mean()), 4),
               "per_view": coverage, "owned": {n: round(float(w), 4) for n, w in zip(names, winners)},
+              "mirrored_views": sorted(n for n, (_, m) in source.items() if m),
               "vote_flipped_last_round": flipped}
     return np.clip(np.round(image), 0, 255).astype(np.uint8), report
 

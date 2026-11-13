@@ -329,6 +329,17 @@ class TextureTests(SharedSet):
         self.assertLess(front["median_delta_e"], 5)
         self.assertGreater(front["within_10"], 0.8)
 
+    def test_mirror_missing_paints_the_unseen_side(self):
+        """Without the right views, the right side is unseen; mirrored left views paint it."""
+        mesh = read_mesh(self.handoff / "blockout.obj")
+        low, high = mesh.bounds()
+        uv = (mesh.vertices[:, [1, 2]] - low[[1, 2]]) / (high[[1, 2]] - low[[1, 2]])
+        corner_uv = uv[mesh.faces] * 0.98 + 0.01
+        _, plain = bake_texture(self.handoff, mesh, corner_uv, size=128, views=["left"])
+        _, mirrored = bake_texture(self.handoff, mesh, corner_uv, size=128, views=["left"], mirror_missing=True)
+        self.assertEqual(mirrored["mirrored_views"], ["right"])
+        self.assertGreater(mirrored["seen_fraction"], plain["seen_fraction"] + 0.2)
+
     def test_obj_uv_reader(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "q.obj"

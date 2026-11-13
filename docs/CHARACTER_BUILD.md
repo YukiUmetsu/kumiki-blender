@@ -73,6 +73,10 @@ Pip, multi-view route (2026-11-13): silhouette IoU 0.93 to 0.95 in all six views
 Median delta E: 3.8 (front), 4.4 (back, right), 7.1 (left), 8.6 to 9.1 (3/4 views).
 The 3/4 drawings disagree most with the others, so no single texture matches them closely.
 
+Quill, multi-view route with the right side mirrored from the left (`texture
+--assume-symmetric`): silhouette IoU 0.90 to 0.95. Median delta E: 1.1 (back), 2.1
+(front), 2.9 (left), 9.2 (front 3/4). 15-bone wing rig, all vertices heat-weighted.
+
 ## Image-to-3D route
 
 A shape from silhouettes knows only the outlines. Ears, a snout and a tail

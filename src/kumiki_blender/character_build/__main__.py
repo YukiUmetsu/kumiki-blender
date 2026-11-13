@@ -105,6 +105,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--size", type=int, default=2048)
     p.add_argument("--diagonal-weight", type=float, default=1.0, help="score factor of 3/4 views")
     p.add_argument("--min-cosine", type=float, default=0.35, help="views at a grazing angle below this do not paint")
+    p.add_argument("--assume-symmetric", action="store_true",
+                   help="paint a side without a drawing from the mirrored opposite side")
 
     p = sub.add_parser("appearance", help="colour agreement of a textured mesh with each reference view")
     p.add_argument("handoff", type=Path)
@@ -278,7 +280,8 @@ def _run(args) -> int:
         _new_file(args.output)
         mesh, corner_uv = read_obj_uv(args.mesh)
         image, report = bake_texture(args.handoff, mesh, corner_uv, size=args.size,
-                                     diagonal_weight=args.diagonal_weight, min_cosine=args.min_cosine)
+                                     diagonal_weight=args.diagonal_weight, min_cosine=args.min_cosine,
+                                     mirror_missing=args.assume_symmetric)
         Image.fromarray(image).save(args.output)
         _write_json(args.output.with_suffix(".json"), report)
         print(json.dumps(report, indent=2))
