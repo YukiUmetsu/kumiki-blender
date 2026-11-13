@@ -130,3 +130,28 @@ def test_no_improvement_keeps_baseline(tmp_path):
     report = run_conflict_repair(handoff, mesh, config, tmp_path / 'no-improve', evaluator=uniform)
     assert report['status'] == 'baseline-retained'
     assert report['selected_attempt_index'] == 0
+
+
+
+def test_geometry_candidate_cannot_hide_silhouette_regression(tmp_path):
+    handoff, mesh, config = _setup(tmp_path)
+    candidate = tmp_path / 'alternate.obj'
+    candidate.write_text(mesh.read_text())
+    raw = json.loads(config.read_text())
+    raw['candidate_meshes'] = ['alternate.obj']
+    config.write_text(json.dumps(raw))
+
+    def geometry_sensitive(path, settings, size, diagnostics):
+        image, conflicts, appearance = _evaluation(path, {**settings, 'power': 4.0}, size, diagnostics)
+        iou = 0.7 if path == candidate else 0.95
+        if path == candidate:
+            # The alternative looks good in the overlapping pixels but loses
+            # 25% of the silhouette. It must not be accepted.
+            for row in appearance['views']:
+                row['mean_delta_e'] = 1
+        return image, conflicts, appearance, {'views': [{'view': 'front', 'iou': iou}]}
+
+    report = run_conflict_repair(handoff, mesh, config, tmp_path / 'silhouette-guard',
+                                 evaluator=geometry_sensitive)
+    assert report['status'] == 'baseline-retained'
+    assert any('silhouette_regression:front' in row['rejected'] for row in report['attempts'])
