@@ -68,6 +68,10 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="kumiki-character-build", description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
 
+    p = sub.add_parser("triangulate-landmarks", help="recover registered 3D anatomical points from verified 2D views")
+    p.add_argument("--spec", type=Path, required=True, help="source-registered 2D landmark observations JSON")
+    p.add_argument("--output", type=Path, required=True, help="immutable 3D landmark report directory")
+
     p = sub.add_parser("plan-character", help="validate CharacterSpec v2 and freeze a source-hashed character plan")
     p.add_argument("--spec", type=Path, required=True)
     p.add_argument("--output", type=Path, required=True, help="new immutable character plan directory")
@@ -392,6 +396,11 @@ def main(argv: list[str] | None = None) -> int:
 def _run(args) -> int:
     from .views import ingest
 
+    if args.command == "triangulate-landmarks":
+        from .landmark_triangulation import triangulate_landmarks
+        report = triangulate_landmarks(args.spec, args.output)
+        print(json.dumps(report, indent=2))
+        return 0
     if args.command == "plan-character":
         from .character_spec_v2 import plan_character
         report = plan_character(args.spec, args.output)

@@ -15,6 +15,7 @@ on:
       - "tests/test_character_performance_plan.py"
       - "tests/test_character_glb_performance.py"
       - "tests/test_character_talking_plan.py"
+      - "tests/test_character_landmark_triangulation.py"
       - ".github/workflows/character-v2.yml"
   workflow_dispatch:
 
@@ -48,7 +49,8 @@ jobs:
             tests.test_character_viseme_plan \
             tests.test_character_performance_plan \
             tests.test_character_glb_performance \
-            tests.test_character_talking_plan
+            tests.test_character_talking_plan \
+            tests.test_character_landmark_triangulation
 
 
   character-blender-smoke:
