@@ -218,6 +218,12 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--axial-alignment-min", type=float, default=.6)
     p.add_argument("--output", type=Path, required=True)
 
+    p = sub.add_parser("refine-surface", help="feature-preserving pre-rig surface fairing with optional source QA")
+    p.add_argument("--blend", type=Path, required=True, help="approved editable source .blend")
+    p.add_argument("--config", type=Path, required=True, help="validated smoothing and protection policy JSON")
+    p.add_argument("--output", type=Path, required=True, help="new immutable candidate/QA revision")
+    p.add_argument("--blender", help="Blender executable")
+
     p = sub.add_parser("refine-joint-topology", help="add bounded Blender BMesh hinge loops on an unskinned quad cage")
     p.add_argument("--plan", type=Path, required=True, help="joint-refine-plan.json")
     p.add_argument("--output", type=Path, required=True, help="new hinge-retopo.blend and OBJ revision")
@@ -724,6 +730,11 @@ def _run(args) -> int:
                                         axial_alignment_min=args.axial_alignment_min)
         print(json.dumps(report, indent=2))
         return 0
+    if args.command == "refine-surface":
+        from .surface_refinement_runner import run_surface_refinement
+        report = run_surface_refinement(args.blend, args.config, args.output, blender=args.blender)
+        print(json.dumps(report, indent=2))
+        return 1 if report["status"] == "reference-regression-rejected" else 0
     if args.command == "refine-joint-topology":
         from .joint_refine_plan import load_joint_refine_plan
         from .topology_zones import load_topology_plan
