@@ -41,6 +41,8 @@ or newer. The other commands need only NumPy, SciPy, scikit-image and Pillow.
 | Texture | `texture HANDOFF retopo/low.obj --output base.png` | UV texture baked from the full-resolution reference views (sharp clothes, buttons, fur painting) |
 | Texture | `appearance HANDOFF retopo/low.obj base.png --output app/` | Colour agreement per view (median delta E) with side-by-side images |
 | Texture | `conflicts HANDOFF retopo/low.obj --output conflicts/` | Where the views overlap and disagree on the mesh, with pictures and advice |
+| Texture | `parts HANDOFF retopo/low.obj --output parts/` | The character's parts, from shape and colour, on the mesh and in each drawing |
+| Texture | `texture-parts HANDOFF retopo/low.obj parts/ --output base.png` | Each part baked from its own pixels, with smooth fill and polished seams |
 | Texture | `repaint HANDOFF retopo/low.obj base.png --output rp/` | Pictures of the angles between the drawings, repainted from renders by a local image model |
 | References | `trim REFS front --output front.png` | A view without the part that its opposite view has no room for |
 | Fit | `fit HANDOFF mesh.ply --lattice auto` | Lattice deformation for detailed generator meshes. A finer lattice is kept only if it does no harm |
@@ -142,6 +144,90 @@ A feature that two drawings put in two places on the surface shows twice where e
 drawing paints alone. Pip's left eye was 60 px further round the head in the side
 drawing. No rule on the drawings removes that. A picture that faces the feature
 does: see the next section.
+
+## Recognise the parts, then bake each part from its own pixels
+
+The rules above compare colours. They do not know what a part is, so some conflicts
+stay. Examples are a sliver of vest on the edge of the tail, and a seam that still
+shows on close view. `parts` recognises the parts from the shape and from the colours. Then
+`texture-parts` bakes each part only from the pixels that show that part.
+
+```bash
+kumiki-character-build parts HANDOFF retopo/low.obj --output parts/
+kumiki-character-build texture-parts HANDOFF retopo/low.obj parts/ --output base.png --diagnostics d/
+```
+
+Give both commands the same sources: `--views`, `--assume-symmetric` and `--extra`.
+A side without a source has no colours, and `parts` cannot recognise it.
+
+How `parts` works:
+
+1. **Shapes, from geometry.** The tail, the wings and the ears meet the body in
+   concave creases. The mesh is smoothed, then flooded from its most convex places.
+   Two areas stay apart if the border between them bends inward more sharply than
+   `--crease-radius-px` (default 60). On Pip this gives two shapes: the tail and
+   the body. No colour is used.
+2. **Parts, from colour.** A sharp border makes two parts. A different colour does
+   not: fur changes from cream to brown without an edge, and a vest ends with one.
+   Two touching patches join if the colour step across their border is below
+   `--contrast` (default 10 delta E). Patches below `--min-share` join a neighbour.
+3. **Materials.** Parts with almost the same mean colour are one material
+   (`--material-delta-e`). A strap cuts a vest into two parts, and both are vest.
+4. **Shape against colour.** The colours come from a bake. Where the mesh is wider
+   than a drawing, the bake puts a part on the wrong shape. A material on less
+   than `--bleed-share` of a shape (default 5%), with most of its area on other
+   shapes, is such a bleed. Its area goes to the material around it on that shape.
+   On Pip this found the scarf on the edge of the tail (1.5% of the tail).
+5. **Parts in each drawing.** The parts of the mesh are projected into each drawing.
+   A pixel moves to a different part only if it shows a main colour of that part
+   and that part is near (`--slack-px`).
+
+Output:
+
+- `parts.json`: parts, materials, bleed, and the agreement between mesh and drawings.
+- `uv_labels.png`, `uv_shapes.png` and a mask for each part in each view.
+- `turnaround.png`: the first bake, the parts and the shapes from eight sides.
+- `semantic.json`: the same masks as a semantic policy for `resolve-conflicts`.
+
+The parts are estimates. Look at `turnaround.png` before you use them. A real part
+that crosses a crease on a small area, such as the end of a sleeve, is also taken
+for a bleed. Set `--bleed-share 0` if that is wrong for your character.
+
+How `texture-parts` works:
+
+- **One bake for each material.** Each source image is masked to the material. A
+  fur texel can take only fur pixels. A texel that no view sees is filled only from
+  its own material.
+- **Smooth fill.** The tone of an unseen area runs smoothly between the painted
+  areas around it. The plain bake copies the nearest colour, which gives flat
+  patches with hard borders.
+- **Polish.** Each texel near a seam gets a small colour offset. The offsets close
+  the colour step across the seam and fade over `--polish-reach-px` (default 12).
+  The grain of the texture stays. No offset crosses from one material to another,
+  so the edge of a scarf on fur stays sharp. `--no-polish` turns both steps off.
+- **UV islands.** Texels on two sides of an island border are neighbours for the
+  fill and the polish, so a seam is not cut there.
+
+The report gives the seam contrast: the colour step across a seam, divided by the
+step between texels beside it. At 1.0 a seam is no stronger than the grain.
+
+| | Seam contrast, plain parts bake | After polish | Bleed found |
+| --- | --- | --- | --- |
+| Pip, second set, with three repaints | 3.2 | 1.4 | scarf on the tail |
+| Quill, three drawings, mirrored | 4.7 | 1.7 | none |
+
+Median error against the drawings stays about the same (Pip front 4.5 to 4.7 delta
+E, Quill front 2.6 to 3.2).
+
+Limits:
+
+- Shapes come from valleys in the surface. A limb that joins the body in a saddle
+  (a neck, an arm) is not separated.
+- A feature that two drawings put in two places still shows twice. Pip has a second
+  eyelid line above the left eye at 45 degrees. A picture from that angle removes it.
+- A part that the mesh shapes differently from the drawings is only kept clean. To
+  remove the cause, correct the shape. On Pip, a sliver of vest stays on the left
+  edge of the tail in the back view. The border of the tail shape lies beside it.
 
 ## A view that shows a part the others have no room for
 

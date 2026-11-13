@@ -115,7 +115,7 @@ def bake_texture(handoff: Path, mesh: Mesh, corner_uv: np.ndarray, *, size: int 
                  edge_px: float = 12.0, views: list[str] | None = None, min_cosine: float = 0.35,
                  region_px: float = 24.0, min_region_px: float = 40.0, occlusion_px: float = 30.0,
                  occlusion_jump_px: float = 15.0,
-                 level: bool = True, level_reach_px: float = 150.0,
+                 level: bool = True, level_reach_px: float = 150.0, seam_robust_delta_e: float = 18.0,
                  agree_delta_e: float = 15.0, slack_px: float = 60.0, contest_delta_e: float = 20.0,
                  mirror_missing: bool = False, mirror_weight: float = 0.3,
                  extra: list[dict] | None = None, diagnostics: Path | None = None) -> tuple[np.ndarray, dict]:
@@ -140,7 +140,8 @@ def bake_texture(handoff: Path, mesh: Mesh, corner_uv: np.ndarray, *, size: int 
     part (the views disagree about the 3D shape).
 
     ``level`` adds a smooth colour offset to each region so that the two sides of every
-    seam meet; the offset fades over ``level_reach_px``. The drawings differ in tone (Pip's
+    seam meet; the offset fades over ``level_reach_px``. A difference above about twice
+    ``seam_robust_delta_e`` is taken for two different parts and left alone. The drawings differ in tone (Pip's
     tail is light in the side view and dark in the back view), and without it each seam shows.
 
     ``mirror_missing`` adds each missing side view (right, front_right, back_right or the
@@ -260,7 +261,8 @@ def bake_texture(handoff: Path, mesh: Mesh, corner_uv: np.ndarray, *, size: int 
     chosen = choose_sources(regions, np.arange(len(names)) < drawn, testimony, agree_delta_e=agree_delta_e,
                             slack_cells=max(1, round(slack_px / step)), contest_delta_e=contest_delta_e,
                             min_region_nodes=max(1, round((min_region_px / step) ** 2)))
-    offset, seams = level_seams(regions, reach=level_reach_px * px) if len(names) > 1 else (None, {})
+    offset, seams = (level_seams(regions, reach=level_reach_px * px, robust_delta_e=seam_robust_delta_e)
+                     if len(names) > 1 else (None, {}))
     if not level:   # the seams are still measured for the report
         offset = None
         seams.pop("seam_delta_e_after", None)
