@@ -77,11 +77,22 @@ def _editable(obj) -> None:
         raise ValueError(f"{obj.name}: moving object transform must not be mirrored/singular")
 
 
-def _nearest_signed(tree):
+def _nearest_signed(tree, aabb: tuple[np.ndarray, np.ndarray], clearance: float):
+    """Avoid BVH searches for vertices demonstrably outside the blocker AABB."""
+    low, high = aabb
+
     def query(points: np.ndarray):
         signed = np.empty(len(points), dtype=float)
-        normals = np.empty_like(points)
-        for i, p in enumerate(points):
+        normals = np.zeros_like(points)
+        # The AABB separation is a conservative lower bound for distance to
+        # a closed mesh. Vertices farther than clearance cannot penetrate.
+        gap = np.maximum(np.maximum(low - points, points - high), 0.0)
+        outside = np.linalg.norm(gap, axis=1)
+        far = outside > clearance + 1e-8
+        signed[far] = outside[far]
+        normals[far, 0] = 1.0
+        for i in np.flatnonzero(~far):
+            p = points[i]
             loc, norm, _face, distance = tree.find_nearest(Vector(p))
             if loc is None or norm is None or norm.length < 1e-9:
                 raise ValueError("Fixed mesh has no nearest surface")
@@ -110,7 +121,7 @@ def main() -> None:
         raise FileExistsError("Output revision must be new and separate from source .blend")
     plan = args["plan"]
     plan["pairs"] = [CollisionPolicy(**pair) for pair in plan["pairs"]]
-    objects = {name: obj for name, obj in bpy.data.objects.items() if obj.type == "MESH"}
+    objects = {obj.name: obj for obj in bpy.data.objects if obj.type == "MESH"}
     targets = {p.moving for p in plan["pairs"]}
     before_all = {name: _mesh_digest(obj) for name, obj in objects.items()}
     for policy in plan["pairs"]:
@@ -133,8 +144,10 @@ def main() -> None:
         before_tree = _bvh(movable)
         fixed_tree = _bvh(fixed)
         before_overlap = len(before_tree.overlap(fixed_tree))
+        blocker = _mesh_world(fixed)
+        bounds = (blocker.min(axis=0), blocker.max(axis=0))
         candidate, metrics = repair_penetration(original, _triangles(movable), policy,
-                                                _nearest_signed(fixed_tree))
+                                                _nearest_signed(fixed_tree, bounds, policy.clearance_m))
         applied = False
         after_overlap = before_overlap
         blocked_reason = None
