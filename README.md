@@ -21,6 +21,8 @@ cloud inference or extra model downloads. **This is an initial production
 foundation, not yet a complete face/wing animation or automatic sculpting
 solution**; full source and animation quality still require visual review.
 
+Native Blender IK/FK controls, per-joint topology review and source-locked skeletal Action-to-GLB baking are also implemented. See the [character animation export guide](docs/CHARACTER_ANIMATION_BAKE.md); final animation and source likeness still require visual review.
+
 ## Character-sheet fidelity QA (Blender vs original artwork)
 
 **[Start here: Character Fidelity Review](docs/CHARACTER_FIDELITY_REVIEW.md)** — reusable anatomy, costume and accessory comparison. Inspect shape and position independently, compare unlit colors and actual mesh depth/normals, propose masks with optional local SAM 2.1 and relative depth with optional local MoGe 2. New `review-masks` and `propose-registration` commands expose uncertain part ownership and camera alignment instead of silently approving them. No Hugging Face approval or mandatory model download.

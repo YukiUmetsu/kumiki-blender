@@ -9,6 +9,8 @@ on:
       - "tests/test_character_pose_spec.py"
       - "tests/test_character_rig_controls.py"
       - "tests/test_character_topology_zones.py"
+      - "tests/test_character_animation_bake_plan.py"
+      - "tests/test_character_glb_animation.py"
       - ".github/workflows/character-v2.yml"
   workflow_dispatch:
 
@@ -36,7 +38,9 @@ jobs:
             tests.test_character_region_sculpt_plan \
             tests.test_character_pose_spec \
             tests.test_character_rig_controls \
-            tests.test_character_topology_zones
+            tests.test_character_topology_zones \
+            tests.test_character_animation_bake_plan \
+            tests.test_character_glb_animation
 
 
   character-blender-smoke:
