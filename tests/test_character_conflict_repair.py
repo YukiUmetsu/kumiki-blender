@@ -46,10 +46,12 @@ def test_semantic_refuses_overlapping_and_misregistered_masks(tmp_path):
         load_semantic_projection({'parts': [part, {**part, 'id': 'two'}]}, tmp_path, handoff,
                                  2, np.array([0, 1]), np.array([0, 1]))
     # Two distinct UV parts cannot claim the same visible source pixel.
+    _png(tmp_path / 'uv1.png', np.array([[1, 1], [0, 0]], dtype=bool))
     _png(tmp_path / 'uv2.png', np.array([[0, 0], [1, 1]], dtype=bool))
+    first = {**part, 'uv_mask': 'uv1.png'}
     second = {'id': 'two', 'uv_mask': 'uv2.png', 'view_masks': {'front': 'src.png'}}
     with pytest.raises(ValueError, match='source masks overlap'):
-        load_semantic_projection({'parts': [part, second]}, tmp_path, handoff,
+        load_semantic_projection({'parts': [first, second]}, tmp_path, handoff,
                                  2, np.array([0, 1]), np.array([0, 1]))
     _png(tmp_path / 'bad.png', np.ones((3, 3), dtype=bool))
     with pytest.raises(ValueError, match='dimensions'):
