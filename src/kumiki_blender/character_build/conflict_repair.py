@@ -29,7 +29,7 @@ DEFAULT_SETTINGS = {
     'level_reach_px': 150.0,
 }
 DEFAULT_WEIGHTS = {'misplaced_part': 4.0, 'contested_feature': 3.0,
-                   'unseen': 5.0, 'tone_seam': 0.3, 'appearance': 0.75}
+                   'unseen': 5.0, 'tone_seam': 0.3, 'appearance': 0.75, 'silhouette': 1.0}
 _LIMITS = {'power': (0.5, 12.0), 'diagonal_weight': (0.05, 3.0),
            'min_cosine': (0.0, 0.95), 'region_px': (4.0, 120.0),
            'min_region_px': (4.0, 180.0), 'occlusion_px': (0.0, 200.0),
@@ -70,6 +70,7 @@ class RepairPlan:
     min_improvement: float
     max_view_regression: float
     max_unseen_increase: float
+    max_view_silhouette_iou_drop: float
     weights: dict[str, float]
     evaluation_size: int
     final_size: int
@@ -110,7 +111,7 @@ def read_repair_plan(path: str | Path) -> RepairPlan:
         seen.add(name)
         steps.append((name, tuple(_positive_number(x, name, *_LIMITS[name]) for x in values)))
     guards = raw.get('guards', {})
-    if not isinstance(guards, dict) or set(guards) - {'max_view_mean_delta_e_increase', 'max_unseen_fraction_increase'}:
+    if not isinstance(guards, dict) or set(guards) - {'max_view_mean_delta_e_increase', 'max_unseen_fraction_increase', 'max_view_silhouette_iou_drop'}:
         raise ValueError('Unrecognized guard')
     weights = {**DEFAULT_WEIGHTS}
     for name, value in raw.get('weights', {}).items():
@@ -140,6 +141,8 @@ def read_repair_plan(path: str | Path) -> RepairPlan:
                                              'max_view_mean_delta_e_increase', 0, 100),
         max_unseen_increase=_positive_number(guards.get('max_unseen_fraction_increase', 0.005),
                                              'max_unseen_fraction_increase', 0, 1),
+        max_view_silhouette_iou_drop=_positive_number(guards.get('max_view_silhouette_iou_drop', 0.005),
+                                                    'max_view_silhouette_iou_drop', 0, 1),
         weights=weights,
         evaluation_size=int(_positive_number(raw.get('evaluation_size', 512), 'evaluation_size', 128, 2048)),
         final_size=int(_positive_number(raw.get('final_size', 2048), 'final_size', 128, 8192)),
@@ -149,7 +152,7 @@ def read_repair_plan(path: str | Path) -> RepairPlan:
     )
 
 
-def _objective(conflicts: dict, appearance: dict, weights: dict[str, float]) -> float:
+def _objective(conflicts: dict, appearance: dict, weights: dict[str, float], geometry: dict | None = None) -> float:
     surface = conflicts['surface']
     view_rows = appearance['views']
     if not view_rows:
@@ -157,11 +160,13 @@ def _objective(conflicts: dict, appearance: dict, weights: dict[str, float]) -> 
     if any(not math.isfinite(row['mean_delta_e']) for row in view_rows):
         raise ValueError('Nonfinite appearance error')
     measured = float(np.mean([row['mean_delta_e'] for row in view_rows])) / 100.0
-    return float(sum(weights[key] * surface[key] for key in _RETAINED)
-                 + weights['appearance'] * measured)
+    score = sum(weights[key] * surface[key] for key in _RETAINED) + weights['appearance'] * measured
+    if geometry and geometry.get('views'):
+        score += weights['silhouette'] * (1 - float(np.mean([v['iou'] for v in geometry['views']])))
+    return float(score)
 
 
-def _rejection(conflicts: dict, appearance: dict, baseline: dict, plan: RepairPlan) -> list[str]:
+def _rejection(conflicts: dict, appearance: dict, baseline: dict, plan: RepairPlan, geometry: dict | None = None) -> list[str]:
     reasons = []
     if conflicts['surface']['unseen'] > baseline['conflicts']['surface']['unseen'] + plan.max_unseen_increase:
         reasons.append('unseen_surface_regression')
@@ -172,6 +177,14 @@ def _rejection(conflicts: dict, appearance: dict, baseline: dict, plan: RepairPl
     else:
         reasons.extend(f'view_regression:{name}' for name, value in current.items()
                        if value > original[name] + plan.max_view_regression)
+    if geometry is not None and baseline.get('geometry') is not None:
+        previous = {v['view']: v['iou'] for v in baseline['geometry']['views']}
+        current_iou = {v['view']: v['iou'] for v in geometry['views']}
+        if set(previous) != set(current_iou):
+            reasons.append('silhouette_view_coverage_changed')
+        else:
+            reasons.extend(f'silhouette_regression:{view}' for view, score in current_iou.items()
+                           if previous[view] - score > plan.max_view_silhouette_iou_drop)
     return reasons
 
 
@@ -206,6 +219,14 @@ def run_conflict_repair(
     mesh_files = (source_mesh,) + plan.candidate_meshes
     if evaluator is None:
         from .texture import appearance_report, bake_texture, read_obj_uv
+        from .handoff import reference_masks
+        from .mesh import rasterize, surface_samples
+        from .views import camera
+        px = json.loads((handoff / 'spec.json').read_text(encoding='utf-8'))['metres_per_aligned_px']
+        silhouette_scale = 0.25
+        masks = reference_masks(handoff, silhouette_scale)
+        if not masks:
+            raise ValueError('Need reference silhouette masks for geometry regression guards')
         baseline_mesh, baseline_uv = read_obj_uv(source_mesh)
         meshes = {}
         for name in mesh_files:
@@ -224,7 +245,14 @@ def run_conflict_repair(
                 handoff, mesh, uv, size=size, views=list(plan.views) if plan.views else None,
                 diagnostics=diagnostics, semantic=plan.semantic, semantic_root=plan.root, **settings)
             appearance = appearance_report(handoff, mesh, uv, image, scale=plan.appearance_scale)
-            return image, report['conflicts'], appearance
+            samples = surface_samples(mesh, 0.5 * px / silhouette_scale)
+            geometry = {'views': []}
+            for view, source_mask in masks.items():
+                rendered_mask, _depth = rasterize(mesh, camera(view), px, silhouette_scale, samples)
+                intersect = np.logical_and(source_mask, rendered_mask).sum()
+                union = np.logical_or(source_mask, rendered_mask).sum()
+                geometry['views'].append({'view': view, 'iou': float(intersect / max(1, union))})
+            return image, report['conflicts'], appearance, geometry
     else:
         evaluate = evaluator
     attempts: list[dict] = []
@@ -239,13 +267,16 @@ def run_conflict_repair(
             if fingerprint in visited or len(attempts) >= plan.max_evaluations:
                 return None
             visited.add(fingerprint)
-            image, conflicts, appearance = evaluate(mesh_file, settings, plan.evaluation_size, None)
-            score = _objective(conflicts, appearance, plan.weights)
+            evaluated = evaluate(mesh_file, settings, plan.evaluation_size, None)
+            image, conflicts, appearance = evaluated[:3]
+            geometry = evaluated[3] if len(evaluated) > 3 else None
+            score = _objective(conflicts, appearance, plan.weights, geometry)
             reference = baseline if attempts else None
-            reasons = _rejection(conflicts, appearance, reference, plan) if reference is not None else []
+            reasons = _rejection(conflicts, appearance, reference, plan, geometry) if reference is not None else []
             improved = best is None or (not reasons and score < best['score'] - plan.min_improvement)
             info = {'index': len(attempts), 'mesh': str(mesh_file), 'settings': settings.copy(),
                     'score': round(score, 8), 'conflicts': conflicts, 'appearance': appearance,
+                    'geometry': geometry,
                     'rejected': reasons, 'accepted': improved}
             attempts.append(info)
             if improved:
@@ -277,20 +308,24 @@ def run_conflict_repair(
             if best['index'] == before:
                 break
         winner = best
-        final_texture, final_conflicts, final_appearance = evaluate(
-            Path(winner['mesh']), winner['settings'], plan.final_size, tmp / 'diagnostics')
+        final_result = evaluate(Path(winner['mesh']), winner['settings'], plan.final_size, tmp / 'diagnostics')
+        final_texture, final_conflicts, final_appearance = final_result[:3]
+        final_geometry = final_result[3] if len(final_result) > 3 else None
         # Recheck guards at output resolution, not just the coarser search resolution.
         if plan.final_size != plan.evaluation_size:
-            _, final_baseline_conflicts, final_baseline_appearance = evaluate(
-                source_mesh, dict(plan.settings), plan.final_size, None)
+            final_baseline_result = evaluate(source_mesh, dict(plan.settings), plan.final_size, None)
+            _, final_baseline_conflicts, final_baseline_appearance = final_baseline_result[:3]
+            final_baseline_geometry = final_baseline_result[3] if len(final_baseline_result) > 3 else None
             final_reasons = _rejection(final_conflicts, final_appearance,
                                        {'conflicts': final_baseline_conflicts,
-                                        'appearance': final_baseline_appearance}, plan)
-            final_baseline_score = _objective(final_baseline_conflicts, final_baseline_appearance, plan.weights)
-            if final_reasons or _objective(final_conflicts, final_appearance, plan.weights) >= final_baseline_score:
+                                        'appearance': final_baseline_appearance,
+                                        'geometry': final_baseline_geometry}, plan, final_geometry)
+            final_baseline_score = _objective(final_baseline_conflicts, final_baseline_appearance, plan.weights, final_baseline_geometry)
+            if final_reasons or _objective(final_conflicts, final_appearance, plan.weights, final_geometry) >= final_baseline_score:
                 winner = baseline
-                final_texture, final_conflicts, final_appearance = evaluate(
-                    source_mesh, dict(plan.settings), plan.final_size, tmp / 'diagnostics')
+                final_result = evaluate(source_mesh, dict(plan.settings), plan.final_size, tmp / 'diagnostics')
+                final_texture, final_conflicts, final_appearance = final_result[:3]
+                final_geometry = final_result[3] if len(final_result) > 3 else None
         Image.fromarray(final_texture).save(tmp / 'texture.png')
         if Path(winner['mesh']) != source_mesh:
             shutil.copy2(winner['mesh'], tmp / 'mesh.obj')
@@ -302,7 +337,8 @@ def run_conflict_repair(
             'selected_mesh_sha256': _sha(Path(winner['mesh'])),
             'selected_settings': winner['settings'],
             'selected_attempt_index': winner['index'],
-            'selected_score': round(_objective(final_conflicts, final_appearance, plan.weights), 8),
+            'selected_score': round(_objective(final_conflicts, final_appearance, plan.weights, final_geometry), 8),
+            'final_geometry': final_geometry,
             'final_conflicts': final_conflicts,
             'final_appearance': final_appearance,
             'attempts': attempts,
