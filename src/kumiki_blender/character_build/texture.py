@@ -194,7 +194,10 @@ def bake_texture(handoff: Path, mesh: Mesh, corner_uv: np.ndarray, *, size: int 
     if len(set(names)) != len(names):
         raise ValueError(f"Two sources paint from the same camera: {sorted(names)}")
     count = len(points)
-    regions = build_regions(points, normals, sigma=region_px * px, spacing=region_px * px / 3)
+    regions = build_regions(
+        points, normals, sigma=region_px * px, spacing=region_px * px / 3,
+        group_labels=semantic_projection.labels if semantic_projection is not None else None,
+    )
     # The facing of the surface without its bumps: on modelled fur the true normal swings by
     # tens of degrees from texel to texel, and a view that faces the tail squarely would score low.
     facing = regions.normal[regions.cell]
