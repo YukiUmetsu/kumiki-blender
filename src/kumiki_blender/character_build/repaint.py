@@ -162,25 +162,29 @@ def alignment(repainted: Image.Image, render_mask: np.ndarray, margin_px: int = 
     return float((figure & render_mask).sum() / max(1, (figure | render_mask).sum())), trusted
 
 
-def match_tone(repainted: np.ndarray, render: np.ndarray, mask: np.ndarray, erode_px: int = 6) -> np.ndarray:
-    """Give the repaint the Lab mean and spread of the render inside the figure.
+def match_tone(repainted: np.ndarray, render: np.ndarray, drawn: np.ndarray, *, sigma_px: float | None = None,
+               max_shift: float = 40.0, erode_px: int = 4) -> np.ndarray:
+    """Give the repaint the tone of the render, smoothly, around the pixels that a drawing painted.
 
     The editor adds its own shading: Pip's repaints were 5 to 10 L* darker than their
-    renders, which carry the drawings' colours, and baked dark patches into the texture.
-    Matching the statistics keeps the repainted detail and the drawings' tone. The edge
-    band is left out of the statistics: it holds background-blended fur.
+    renders, and baked dark patches into the texture. The render carries the drawings'
+    colours, but only on ``drawn`` pixels; elsewhere it is a fill colour. So the correction
+    is the low-pass difference between render and repaint over the drawn pixels (radius
+    ``sigma_px``, default a tenth of the picture: wider than an eye, so a feature that the
+    repaint moved or removed does not come back as a smudge). It fades where less than a
+    quarter of the neighbourhood is drawn, and the repaint keeps its own tone there. One
+    shift for the whole picture made a face pale when the drawn pixels were all on the tail.
     """
-    from skimage.color import lab2rgb, rgb2lab
-
-    core = ndimage.binary_erosion(mask, iterations=erode_px)
-    if core.sum() < 100:
+    sigma = sigma_px if sigma_px is not None else max(repainted.shape[:2]) / 10
+    core = ndimage.binary_erosion(drawn, iterations=erode_px)   # the outline band holds background-blended fur
+    if not core.any():
         return repainted
-    source, target = rgb2lab(repainted), rgb2lab(render)
-    mu_s, mu_t = source[core].mean(axis=0), target[core].mean(axis=0)
-    # Clip the spread ratio: a repaint that only cleaned up a smear should not be stretched.
-    ratio = np.clip(target[core].std(axis=0) / np.maximum(source[core].std(axis=0), 1e-6), 0.75, 1.33)
-    matched = (source - mu_s) * ratio + mu_t
-    return np.clip(np.round(lab2rgb(matched) * 255), 0, 255).astype(np.uint8)
+    weight = ndimage.gaussian_filter(core.astype(np.float64), sigma)
+    difference = (render.astype(np.float64) - repainted.astype(np.float64)) * core[..., None]
+    shift = np.dstack([ndimage.gaussian_filter(difference[..., i], sigma) for i in range(3)])
+    shift = np.clip(shift / np.maximum(weight, 1e-6)[..., None], -max_shift, max_shift)
+    shift *= np.clip(weight / 0.25, 0, 1)[..., None]
+    return np.clip(np.round(repainted + shift), 0, 255).astype(np.uint8)
 
 
 def _fingerprint(render: Image.Image, style: Image.Image, prompt: str, **settings) -> dict:
@@ -192,8 +196,7 @@ def _fingerprint(render: Image.Image, style: Image.Image, prompt: str, **setting
 def repaint_views(handoff: Path, mesh: Mesh, corner_uv: np.ndarray, texture: np.ndarray, views: list[str],
                   out: Path, client, *, subject: str = "the character", size: int = 768, steps: int = 20,
                   denoise: float = 1.0, seed: int = 7, min_iou: float = 0.75, min_usable: float = 0.5,
-                  weight: float = 0.8,
-                  overwrite: bool = False) -> dict:
+                  weight: float = 0.8, owners: np.ndarray | None = None, overwrite: bool = False) -> dict:
     """Repaint each view and write ``out/manifest.json`` for ``texture --extra``.
 
     A repaint counts only where its outline agrees with the render (``alignment``): the
@@ -201,6 +204,11 @@ def repaint_views(handoff: Path, mesh: Mesh, corner_uv: np.ndarray, texture: np.
     repaint is rejected only if its IoU with the render is below ``min_iou`` (the editor
     moved the figure) or less than ``min_usable`` of the figure is left. Accepted
     repaints score ``weight`` times a drawing in the bake.
+
+    Each accepted repaint gets the tone of its render around the pixels that a drawing
+    painted (``match_tone``). ``owners`` is the ``owners.png`` of the bake that made
+    ``texture`` (black: no view saw the texel, the colour is a fill). Without it, every
+    pixel of the render counts as drawn; pass it when a side has no drawing.
 
     A finished repaint (``<view>_repainted.png`` with ``<view>_repainted.json`` recording
     the same render, style image and settings) is reused unless ``overwrite`` is set, so
@@ -247,7 +255,12 @@ def repaint_views(handoff: Path, mesh: Mesh, corner_uv: np.ndarray, texture: np.
         rows.append(row)
         if row["accepted"]:
             # The repaint's colours count only where its figure and the mesh agree (see ``alignment``).
-            toned = match_tone(np.asarray(repainted), np.asarray(render.convert("RGB")), trusted)
+            drawn = trusted
+            if owners is not None:
+                shown, _, _ = render_condition(mesh, corner_uv, owners, view, px, size)
+                drawn = trusted & (np.asarray(shown).max(axis=2) > 40)   # not the black of an unseen texel
+            row["drawn"] = round(float(drawn.sum() / max(1, trusted.sum())), 4)
+            toned = match_tone(np.asarray(repainted), np.asarray(render.convert("RGB")), drawn)
             image = np.dstack([toned, np.where(trusted, 255, 0).astype(np.uint8)])
             painted = out / f"{view}_paint.png"
             Image.fromarray(image).save(painted)

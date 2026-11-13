@@ -373,6 +373,49 @@ class TextureTests(SharedSet):
 
 
 class RepaintTests(SharedSet):
+    def test_tone_comes_only_from_pixels_that_a_drawing_painted(self):
+        """The editor returns a darker picture. Tone matching undoes that, unless the render is only fill."""
+        import io
+        from kumiki_blender.character_build import repaint
+        mesh = read_mesh(self.handoff / "blockout.obj")
+        corner_uv = two_sided_uv(mesh)
+        texture = np.full((64, 64, 3), 160, np.uint8)
+
+        class Client:
+            def upload_image(self, path):
+                return Path(path).name
+
+        def darker(client, workflow):
+            picture = np.asarray(Image.open(out / workflow["4"]["inputs"]["image"]).convert("RGB")).astype(float)
+            figure = np.abs(picture - repaint.BACKGROUND).max(axis=2) > 24
+            picture[figure] *= 0.8
+            data = io.BytesIO()
+            Image.fromarray(picture.astype(np.uint8)).save(data, format="PNG")
+            return data.getvalue()
+
+        def painted_grey(owners):
+            manifest = repaint.repaint_views(self.handoff, mesh, corner_uv, texture, ["az30_el0"], out, Client(),
+                                             size=128, owners=owners, overwrite=True)
+            paint = np.asarray(Image.open(manifest["extra"][0]["image"]))
+            return manifest["views"][0], float(paint[..., 0][paint[..., 3] > 0].mean())
+
+        original = repaint.run_comfy
+        repaint.run_comfy = darker
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                out = Path(tmp)
+                row, grey = painted_grey(None)
+                self.assertEqual(row["drawn"], 1.0)
+                self.assertAlmostEqual(grey, 160, delta=8)
+                row, grey = painted_grey(np.zeros((64, 64, 3), np.uint8))      # no drawing painted this side
+                self.assertLess(row["drawn"], 0.05)
+                self.assertAlmostEqual(grey, 128, delta=8)
+                row, grey = painted_grey(np.full((64, 64, 3), 200, np.uint8))  # all of it was drawn
+                self.assertGreater(row["drawn"], 0.9)
+                self.assertAlmostEqual(grey, 160, delta=8)
+        finally:
+            repaint.run_comfy = original
+
     def test_free_cameras(self):
         from kumiki_blender.character_build.views import camera
         level = camera("az-45_el0")
@@ -430,19 +473,24 @@ class RepaintTests(SharedSet):
             _, report = bake_texture(self.handoff, mesh, corner_uv, size=128, power=4, views=["front"], extra=extra)
         self.assertGreater(report["owned"]["front"], max(report["owned"][v] for v in report["owned"] if v != "front"))
 
-    def test_tone_matching_restores_the_render_brightness(self):
+    def test_tone_matching_follows_the_render_only_near_drawn_pixels(self):
         from kumiki_blender.character_build.checks import lab
         from kumiki_blender.character_build.repaint import match_tone
         rng = np.random.default_rng(0)
         render = np.clip(rng.normal((170, 130, 100), 12, (96, 96, 3)), 0, 255).astype(np.uint8)
         darker = (render * 0.8).astype(np.uint8)            # the editor's own shading
-        mask = np.zeros((96, 96), bool)
-        mask[10:86, 10:86] = True
-        matched = match_tone(darker, render, mask)
-        before = abs(lab(darker[mask]).mean(0)[0] - lab(render[mask]).mean(0)[0])
-        after = abs(lab(matched[mask]).mean(0)[0] - lab(render[mask]).mean(0)[0])
-        self.assertGreater(before, 5)
-        self.assertLess(after, 0.5)
+        drawn = np.zeros((96, 96), bool)
+        drawn[:, :48] = True                                # a drawing painted the left half of the render
+
+        def lightness(image, columns):
+            return float(lab(image[10:86, columns].reshape(-1, 3)).mean(axis=0)[0])
+
+        matched = match_tone(darker, render, drawn, sigma_px=6)
+        near, far = slice(8, 36), slice(78, 96)
+        self.assertGreater(abs(lightness(darker, near) - lightness(render, near)), 5)
+        self.assertLess(abs(lightness(matched, near) - lightness(render, near)), 1.0)
+        self.assertLess(abs(lightness(matched, far) - lightness(darker, far)), 1.0, "no drawing there: its own tone")
+        np.testing.assert_array_equal(match_tone(darker, render, np.zeros((96, 96), bool)), darker)
 
     def test_screen_drops_a_repaint_that_contradicts_the_drawings(self):
         from kumiki_blender.character_build.repaint import mirror_twin, render_condition, screen_extras
