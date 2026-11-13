@@ -12,7 +12,7 @@ import math
 import re
 from pathlib import Path
 
-from .rig import validate_joints
+from .joints_contract import validate_joints
 
 PROFILE_KINDS = {
     "stylized-biped-tail": "arms",
