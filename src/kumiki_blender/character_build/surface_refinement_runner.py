@@ -105,8 +105,7 @@ def run_surface_refinement(source: str | Path, config: str | Path,
         shutil.move(str(stage), str(out))
         # The source-review tool records absolute artifact paths; relocate those
         # strings after moving, without altering any immutable mesh bytes/hashes.
-        for report_path in (out / "report.json", out / "source-review/report.json"):
-            if report_path.exists():
-                value = report_path.read_text(encoding="utf-8").replace(str(stage), str(out))
-                report_path.write_text(value, encoding="utf-8")
+        for report_path in out.rglob("*.json"):
+            value = report_path.read_text(encoding="utf-8").replace(str(stage), str(out))
+            report_path.write_text(value, encoding="utf-8")
         return report
