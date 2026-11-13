@@ -55,6 +55,7 @@ def main():
             "max_displacement_m": .08, "max_edge_strain": .50,
             "max_volume_change": .10, "min_roughness_improvement": .0001,
             "protected_vertex_groups": ["Eyes"],
+            "guard_pairs": [["Body", "Unrelated"]],
         }))
         policy = load_surface_policy(config)
         dest = root / "candidate"
@@ -75,6 +76,11 @@ def main():
         assert report["status"] == "surface-candidate-art-review-required", report
         assert report["final_roughness"] < report["baseline_roughness"]
         assert report["maximum_displacement_m"] <= .08 + 1e-7
+        assert report["collision_guards"] == [
+            {"objects": ["Body", "Unrelated"],
+             "before_triangle_overlap_pairs": 0,
+             "after_triangle_overlap_pairs": 0,
+             "pass": True}]
         assert report["other_meshes_preserved"]
         assert report["source_blend_preserved"]
         assert (dest / "surface-candidate.blend").is_file()
