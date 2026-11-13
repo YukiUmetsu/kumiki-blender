@@ -44,9 +44,9 @@ region_px, min_region_px, occlusion_px, level_reach_px.
 Importantly, conflict-identification thresholds are *not* searchable: simply
 raising a threshold to suppress red or yellow errors is not a fix.
 The objective combines fixed misplaced-part, contested-feature, unseen-surface,
-tone-seam and per-view appearance terms. Guardrails compare against the original
+tone-seam, per-view appearance and per-view silhouette terms. Guardrails compare against the original
 baseline, not just against the previous accepted candidate. Every view has its
-own maximum allowed mean Delta E increase, and the solver checks that the unseen
+own maximum allowed mean Delta E increase and silhouette IoU decrease, and the solver checks that the unseen
 area does not grow too much. The final-resolution selection is revalidated
 against the final-resolution baseline.
 
@@ -121,7 +121,7 @@ bounded region sculpting and a collision detector.
 - Semantic labels are supplied, not inferred by the loop.
 - A high surface-conflict count may be caused by wrong geometry or inconsistent
   art. Stop texture optimization when reference geometry needs correction.
-- The library entrypoint is run_conflict_repair(..., evaluator=optional_callback);
+- Geometry candidates must pass a separate per-view silhouette guard; texture\nerrors alone cannot justify shrinking the character to hide missing regions.\n\nThe library entrypoint is run_conflict_repair(..., evaluator=optional_callback);
   an alternative character pipeline can supply its own candidate evaluator.
   Callback output must keep conflict definitions and view comparisons stable.
 
