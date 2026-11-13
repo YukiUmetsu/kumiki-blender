@@ -107,6 +107,15 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--region", required=True, help="stable semantic region id, e.g. eye.L")
     p.add_argument("--output", type=Path, required=True, help="new immutable region task directory")
 
+    p = sub.add_parser("audit-region-revision", help="reject a part edit that worsens any registered source silhouette")
+    p.add_argument("--character", type=Path, required=True, help="source-hashed CharacterSpec v2 plan folder")
+    p.add_argument("--region", required=True, help="verified semantic region ID, e.g. eye.L")
+    p.add_argument("--before", type=Path, help="canonical baseline mesh; defaults to source_mesh in CharacterSpec")
+    p.add_argument("--after", type=Path, required=True, help="new canonical source-frame OBJ, PLY or GLB")
+    p.add_argument("--max-regression", type=float, default=.01, help="maximum allowed per-camera IoU decline")
+    p.add_argument("--min-iou", type=float, help="optional absolute per-camera source silhouette floor")
+    p.add_argument("--output", type=Path, required=True, help="new immutable before/after report and overlays")
+
     p = sub.add_parser("compare-region", help="compare a region mesh with verified registered source masks")
     p.add_argument("--character", type=Path, required=True, help="directory with character-plan.json")
     p.add_argument("--region", required=True)
@@ -503,6 +512,13 @@ def _run(args) -> int:
         report = plan_region(args.character, args.region, args.output)
         print(json.dumps(report, indent=2))
         return 0
+    if args.command == "audit-region-revision":
+        from .region_revision_gate import gate_region_revision
+        report = gate_region_revision(
+            args.character, args.region, args.after, args.output, before=args.before,
+            max_regression=args.max_regression, min_iou=args.min_iou)
+        print(json.dumps(report, indent=2))
+        return 0 if report["numeric_gate_pass"] else 1
     if args.command == "compare-region":
         from .region_compare import compare_region
         report = compare_region(args.character, args.region, args.mesh, args.output,
