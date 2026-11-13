@@ -139,8 +139,17 @@ class RegionRevisionGateTest(unittest.TestCase):
 
     def test_missing_source_baseline_requires_explicit_before(self):
         self.candidate.write_bytes(self.source_mesh.read_bytes())
+        # Keep registered front/right evidence, but remove the optional
+        # source_mesh from this *separate* frozen CharacterSpec fixture.
+        spec = json.loads(self.spec_path.read_text(encoding="utf-8"))
+        del spec["regions"][1]["source_mesh"]
+        no_baseline_spec = self.root / "no-baseline.json"
+        no_baseline_spec.write_text(json.dumps(spec), encoding="utf-8")
+        no_baseline_plan = self.root / "no-baseline-plan"
+        plan_character(no_baseline_spec, no_baseline_plan)
         with self.assertRaisesRegex(ValueError, "no original source_mesh"):
-            gate_region_revision(self.plan, "eye.R", self.candidate, self.root/"invalid")
+            gate_region_revision(no_baseline_plan, "eye.L", self.candidate,
+                                 self.root/"invalid")
         self.assertFalse((self.root/"invalid").exists())
 
     def test_unchanged_source_art_is_enforced_before_writing(self):
