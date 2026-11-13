@@ -39,6 +39,15 @@ Use resolve-anatomy-landmarks to fill explicitly named eyeball, eyelid, beak and
 
 Commands plan-landmark-fit and fit-landmark-surface move explicitly mapped, pre-rig mesh vertices toward triangulated original-art landmarks using surface-connected (geodesic) influence rather than a spatial brush. Protected vertices, UVs, materials, neighboring components and original Blender sources are guarded. This is a controlled geometric revision, not inferred anatomy or artistic approval.
 
+### Unattended source-fidelity checks during geodesic fitting
+
+Use fit-landmark-surface with --character and --region to automatically audit
+every verified reference camera after a new detailed mesh fit, before accepting
+the part. Bad source registration, character identity or incompatible figure
+height are rejected before Blender starts. Numeric camera regressions return
+a failing exit code but keep the editable Blender candidate and detailed
+review evidence.
+
 ### Reject source-fidelity regressions before accepting 3D edits
 
 [Per-region source-fidelity release gate](docs/CHARACTER_REGION_REVISION_GATE.md)

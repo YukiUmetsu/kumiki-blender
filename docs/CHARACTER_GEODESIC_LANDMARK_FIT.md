@@ -82,6 +82,40 @@ Use that one with `compare-region`, never the legacy file.
 Native Blender tests verify both that source-frame vertices stay in original
 world coordinates and that legacy OBJ files still import in the prior frame.
 
+## Automatically enforce verified source QA during fitting
+
+For unattended character production, pass the frozen CharacterSpec plan and the
+precise semantic region directly to fit-landmark-surface:
+
+~~~bash
+kumiki-character-build fit-landmark-surface \
+  --plan .review/characters/pip/fit-plan-r01/landmark-fit-plan.json \
+  --output .review/characters/pip/geodesic-candidate-r01 \
+  --character .review/characters/pip/source-plan-r01 \
+  --region eye.L \
+  --max-regression 0.01 \
+  --min-iou 0.80 \
+  --blender /Applications/Blender.app/Contents/MacOS/Blender
+~~~
+
+The CLI **validates the source plan, character identity, scale, verified cameras
+and available baseline before starting Blender**. After the source-pinned Blender
+mesh fit succeeds, it automatically invokes audit-region-revision against the
+generated Z-up landmark-fitted-source.obj and the original region's source_mesh.
+If the CharacterSpec region lacks source_mesh, provide --qa-before with another
+registered source-frame mesh.
+
+The output contains the usual editable Blender .blend and OBJ candidates, plus
+source-fidelity/report.json, camera overlays/panels, and a concise
+source-fidelity-receipt.json for batch orchestration. **A regression returns exit
+code 1** but retains the candidate and review artifacts so the artist/agent can
+revise the region. An invalid source plan or missing registered camera returns
+exit code 2 and avoids the expensive Blender worker. A numeric success returns
+0 but still requires artistic and pose inspection.
+
+This source check is **opt-in** for existing CLI users. Calling fit-landmark-surface
+without --character / --region retains the previous behavior.
+
 ## Required source and deformation QA
 
 Run **compare-region** with verified source-image masks and inspect the original front, side and three-quarter drawings. Then run joint/topology audits and **validate-rig** after re-skinning.
