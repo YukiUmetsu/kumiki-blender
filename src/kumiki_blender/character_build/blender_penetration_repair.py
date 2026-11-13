@@ -11,6 +11,7 @@ from __future__ import annotations
 import hashlib
 import math
 import struct
+from dataclasses import replace
 import sys
 from pathlib import Path
 
@@ -103,6 +104,22 @@ def _nearest_signed(tree, aabb: tuple[np.ndarray, np.ndarray], clearance: float)
     return query
 
 
+def _resolve_vertex_groups(obj, policy: CollisionPolicy) -> CollisionPolicy:
+    """Preserve artist-authored attachments using stable Blender vertex groups."""
+    protected = set(policy.protected_vertices)
+    for name in policy.protected_vertex_groups:
+        group = obj.vertex_groups.get(name)
+        if group is None:
+            raise ValueError(f"{obj.name}: missing protected vertex group {name!r}")
+        members = {vertex.index for vertex in obj.data.vertices
+                   if any(weight.group == group.index and weight.weight >= 0.5
+                          for weight in vertex.groups)}
+        if not members:
+            raise ValueError(f"{obj.name}: protected vertex group {name!r} is empty (weight >= 0.5)")
+        protected.update(members)
+    return replace(policy, protected_vertices=tuple(sorted(protected)))
+
+
 def _apply_world(obj, points: np.ndarray):
     inverse = obj.matrix_world.inverted_safe()
     for vertex, position in zip(obj.data.vertices, points):
@@ -121,6 +138,7 @@ def main() -> None:
         raise FileExistsError("Output revision must be new and separate from source .blend")
     plan = args["plan"]
     plan["pairs"] = [CollisionPolicy(**pair) for pair in plan["pairs"]]
+    guard_pairs = plan.get("guard_pairs", [])
     objects = {obj.name: obj for obj in bpy.data.objects if obj.type == "MESH"}
     targets = {p.moving for p in plan["pairs"]}
     before_all = {name: _mesh_digest(obj) for name, obj in objects.items()}
@@ -131,11 +149,18 @@ def main() -> None:
         _closed_outward(objects[policy.fixed])
         if objects[policy.fixed].modifiers:
             raise ValueError("Fixed collision mesh with modifiers is unsupported")
+    for a, b in guard_pairs:
+        if a not in objects or b not in objects:
+            raise ValueError(f"Unknown guarded object pair: {a} / {b}")
+    # Resolve protection *before* any mesh changes, so misspelled groups fail fast.
+    plan["pairs"] = [_resolve_vertex_groups(objects[p.moving], p) for p in plan["pairs"]]
     # Copy-on-write avoids editing other scene objects using the same datablock.
     for name in targets:
         obj = objects[name]
         if obj.data.users > 1:
             obj.data = obj.data.copy()
+    guard_baseline = {(a, b): len(_bvh(objects[a]).overlap(_bvh(objects[b])))
+                      for a, b in guard_pairs}
     results = []
     accepted_pairs = {}
     for policy in plan["pairs"]:
@@ -164,6 +189,12 @@ def main() -> None:
                     current_count = len(_bvh(objects[prev_moving]).overlap(_bvh(objects[prev_fixed])))
                     if current_count > previous_count:
                         blocked_reason = "earlier_collision_pair_regression"
+            for (a, b), permitted in guard_baseline.items():
+                # Explicitly declared contacts are conserved at their original
+                # overlap count, even if neither object is currently being repaired.
+                current = len(_bvh(objects[a]).overlap(_bvh(objects[b])))
+                if current > permitted:
+                    blocked_reason = f"guard_pair_regression:{a}:{b}"
             if blocked_reason:
                 _apply_world(movable, original)
                 after_overlap = before_overlap
@@ -198,9 +229,14 @@ def main() -> None:
         "source_blend": str(source),
         "changed_objects": sorted(changed),
         "pairs": results,
+        "guard_pairs": [{"objects": [a, b], "baseline_triangle_overlap_pairs": count,
+                         "final_triangle_overlap_pairs": len(_bvh(objects[a]).overlap(_bvh(objects[b])))}
+                        for (a, b), count in guard_baseline.items()],
         "files": files,
         "limitations": [
             "Only explicitly named parts may move; no inferred object or anatomical intent.",
+            "Protected vertex groups require Blender weights >= 0.5 and are combined with protected indices.",
+            "Guard pairs preserve initial triangle-overlap counts, not visually verified contact quality.",
             "Closest-surface normals approximate penetration only for closed/outward fixed meshes.",
             "BVH triangle-overlap candidates may include allowed contacts, and cannot prove volume penetration.",
             "A mesh with crossing faces but no penetrating vertices may remain unresolved.",
