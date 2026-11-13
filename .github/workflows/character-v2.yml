@@ -11,6 +11,10 @@ on:
       - "tests/test_character_topology_zones.py"
       - "tests/test_character_animation_bake_plan.py"
       - "tests/test_character_glb_animation.py"
+      - "tests/test_character_viseme_plan.py"
+      - "tests/test_character_performance_plan.py"
+      - "tests/test_character_glb_performance.py"
+      - "tests/test_character_talking_plan.py"
       - ".github/workflows/character-v2.yml"
   workflow_dispatch:
 
@@ -40,7 +44,11 @@ jobs:
             tests.test_character_rig_controls \
             tests.test_character_topology_zones \
             tests.test_character_animation_bake_plan \
-            tests.test_character_glb_animation
+            tests.test_character_glb_animation \
+            tests.test_character_viseme_plan \
+            tests.test_character_performance_plan \
+            tests.test_character_glb_performance \
+            tests.test_character_talking_plan
 
 
   character-blender-smoke:

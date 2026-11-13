@@ -62,6 +62,78 @@ def _check_animated(rig, shape_keys, frames):
     }
 
 
+
+def _apply_offline_cues(face, viseme, performance):
+    """Key existing, neutral facial geometry in memory without mutating base mesh vertices."""
+    keys = face.data.shape_keys
+    if keys is None or not keys.use_relative:
+        raise ValueError("Offline mouth cues need existing relative shape keys")
+    if keys.animation_data and (keys.animation_data.action or keys.animation_data.nla_tracks):
+        raise ValueError("Facial mesh already has animation; refuse to overwrite it")
+    if face.data.users != 1 or face.library or face.data.library:
+        raise ValueError("Authored mouth data must be local, unique and editable")
+    if any(abs(key.value) > 1e-6 for key in keys.key_blocks[1:]):
+        raise ValueError("Source face must start with all authored mouth shapes neutral")
+    if (viseme["source_blend"] != performance["source_blend"] or
+            viseme["source_blend_sha256"] != performance["source_sha256"] or
+            viseme["mouth_object"] != performance["mouth_object"] or
+            viseme["clip"] != performance["clip"] or
+            viseme["fps"] != performance["fps"] or
+            viseme["first_frame"] != performance["start_frame"]):
+        raise ValueError("Body and viseme plans must reference the same source, clip and timeline")
+    start, end = performance["start_frame"], performance["end_frame"]
+    if start + viseme["cues"][-1]["end"] * viseme["fps"] > end + 1e-6:
+        raise ValueError("Face cue track exceeds the body clip timeline")
+    mapping = viseme["shape_keys"]
+    if any(name not in keys.key_blocks for name in mapping.values()):
+        raise ValueError("Face is missing an authored cue shape key")
+    blocks = {code: keys.key_blocks[name] for code, name in mapping.items()}
+    used = {cue["value"] for cue in viseme["cues"]} - {"X"}
+    if not used:
+        raise ValueError("No non-silent facial cue to animate")
+    basis = keys.key_blocks[0]
+    moved = {}
+    for code, block in blocks.items():
+        changed = sum(1 for a, b in zip(basis.data, block.data)
+                      if (a.co - b.co).length > 1e-6)
+        if code in used and changed == 0:
+            raise ValueError(f"Shape key {block.name} contains no authored geometry")
+        moved[code] = changed
+    # World geometry and armature bone motions remain untouched. Frame bounds
+    # intentionally match the body Action, including a neutral key at its end.
+    def key(block, frame, weight):
+        block.value = float(weight)
+        if not block.keyframe_insert(data_path="value", frame=frame, group="KumikiVisemes"):
+            raise RuntimeError(f"Could not key authored shape {block.name} at frame {frame}")
+
+    ordered = list(blocks.values())
+    for block in ordered:
+        key(block, start, 0.0)
+    for cue in viseme["cues"]:
+        first = start + cue["start"] * viseme["fps"]
+        last = start + cue["end"] * viseme["fps"]
+        ramp = min(float(viseme["ramp_frames"]), .35 * (last - first))
+        target = blocks.get(cue["value"])
+        for block in ordered:
+            key(block, first, 0)
+        if target:
+            key(target, first + ramp, 1)
+            key(target, last - ramp, 1)
+        for block in ordered:
+            key(block, last, 0)
+    for block in ordered:
+        key(block, end, 0)
+    if not keys.animation_data or not keys.animation_data.action:
+        raise RuntimeError("Offline cues did not create a facial Blender Action")
+    keys.animation_data.action.name = performance["clip"] + "_face"
+    return {
+        "cue_count": len(viseme["cues"]),
+        "source_cues_sha256": viseme["source_cues_sha256"],
+        "moved_vertices_by_viseme": moved,
+        "timeline_frames": [start, end],
+    }
+
+
 def main():
     args = arguments()
     plan = args["plan"]
@@ -78,6 +150,9 @@ def main():
     if face is None or face.type != "MESH" or not face.data.shape_keys:
         raise ValueError(f"Authored face mesh/shape keys not found: {plan['mouth_object']}")
     keys = face.data.shape_keys
+    automatic_cues = None
+    if args.get("viseme_plan") is not None:
+        automatic_cues = _apply_offline_cues(face, args["viseme_plan"], plan)
     if (rig.library or rig.data.library or face.library or face.data.library):
         raise ValueError("Linked character meshes/armatures are unsupported for export")
     if (rig.animation_data is None or rig.animation_data.action is None or
@@ -141,6 +216,7 @@ def main():
         "frames": [start, end],
         "fps": plan["fps"],
         "motion_verified": motion,
+        "auto_applied_offline_cues": automatic_cues,
         "exported_skinned_meshes": sorted(ob.name for ob in bound),
         "glb": combined,
         "files": ["combined.blend", "performance.glb"],
