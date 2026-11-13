@@ -389,6 +389,39 @@ class RepaintTests(SharedSet):
         self.assertIn("above", describe("az0_el35"))
         self.assertEqual(nearest_drawing("az170_el20", ["front", "back", "left"]), "back")
 
+    def test_repaints_do_not_outvote_a_drawing(self):
+        """Extra images share one source: three that agree must not overrule the drawing they face."""
+        from kumiki_blender.character_build.repaint import render_condition
+        mesh = read_mesh(self.handoff / "blockout.obj")
+        low, high = mesh.bounds()
+        uv = (mesh.vertices[:, [0, 2]] - low[[0, 2]]) / (high[[0, 2]] - low[[0, 2]])
+        corner_uv = uv[mesh.faces] * 0.98 + 0.01
+        texture = np.full((64, 64, 3), 128, np.uint8)
+        with tempfile.TemporaryDirectory() as tmp:
+            extra = []
+            for view in ("az20_el0", "az-20_el0", "az0_el20"):
+                _, mask, mapping = render_condition(mesh, corner_uv, texture, view, HEIGHT_M / 1000, size=256)
+                green = np.zeros((256, 256, 4), np.uint8)
+                green[..., 1], green[..., 3] = 200, np.where(mask, 255, 0)
+                Image.fromarray(green).save(Path(tmp) / f"{view}.png")
+                extra.append({"name": view, "image": str(Path(tmp) / f"{view}.png"), "map": mapping, "weight": 1.0})
+            _, report = bake_texture(self.handoff, mesh, corner_uv, size=128, power=4, views=["front"], extra=extra)
+        self.assertGreater(report["owned"]["front"], max(report["owned"][v] for v in report["owned"] if v != "front"))
+
+    def test_tone_matching_restores_the_render_brightness(self):
+        from kumiki_blender.character_build.checks import lab
+        from kumiki_blender.character_build.repaint import match_tone
+        rng = np.random.default_rng(0)
+        render = np.clip(rng.normal((170, 130, 100), 12, (96, 96, 3)), 0, 255).astype(np.uint8)
+        darker = (render * 0.8).astype(np.uint8)            # the editor's own shading
+        mask = np.zeros((96, 96), bool)
+        mask[10:86, 10:86] = True
+        matched = match_tone(darker, render, mask)
+        before = abs(lab(darker[mask]).mean(0)[0] - lab(render[mask]).mean(0)[0])
+        after = abs(lab(matched[mask]).mean(0)[0] - lab(render[mask]).mean(0)[0])
+        self.assertGreater(before, 5)
+        self.assertLess(after, 0.5)
+
     def test_workflow_starts_from_the_render(self):
         from kumiki_blender.character_build.repaint import klein_workflow
         workflow = klein_workflow("r.png", "s.png", "p", size=768, steps=20, seed=1, denoise=0.6)

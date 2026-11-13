@@ -153,9 +153,36 @@ def alignment(repainted: Image.Image, render_mask: np.ndarray) -> float:
     return float((figure & render_mask).sum() / max(1, (figure | render_mask).sum()))
 
 
+def match_tone(repainted: np.ndarray, render: np.ndarray, mask: np.ndarray, erode_px: int = 6) -> np.ndarray:
+    """Give the repaint the Lab mean and spread of the render inside the figure.
+
+    The editor adds its own shading: Pip's repaints were 5 to 10 L* darker than their
+    renders, which carry the drawings' colours, and baked dark patches into the texture.
+    Matching the statistics keeps the repainted detail and the drawings' tone. The edge
+    band is left out of the statistics: it holds background-blended fur.
+    """
+    from skimage.color import lab2rgb, rgb2lab
+
+    core = ndimage.binary_erosion(mask, iterations=erode_px)
+    if core.sum() < 100:
+        return repainted
+    source, target = rgb2lab(repainted), rgb2lab(render)
+    mu_s, mu_t = source[core].mean(axis=0), target[core].mean(axis=0)
+    # Clip the spread ratio: a repaint that only cleaned up a smear should not be stretched.
+    ratio = np.clip(target[core].std(axis=0) / np.maximum(source[core].std(axis=0), 1e-6), 0.75, 1.33)
+    matched = (source - mu_s) * ratio + mu_t
+    return np.clip(np.round(lab2rgb(matched) * 255), 0, 255).astype(np.uint8)
+
+
+def _fingerprint(render: Image.Image, style: Image.Image, prompt: str, **settings) -> dict:
+    return {"render_sha256": hashlib.sha256(np.asarray(render).tobytes()).hexdigest(),
+            "style_sha256": hashlib.sha256(np.asarray(style).tobytes()).hexdigest(),
+            "prompt": prompt, **settings}
+
+
 def repaint_views(handoff: Path, mesh: Mesh, corner_uv: np.ndarray, texture: np.ndarray, views: list[str],
                   out: Path, client, *, subject: str = "the character", size: int = 768, steps: int = 20,
-                  denoise: float = 1.0, seed: int = 7, min_iou: float = 0.9, weight: float = 1.5,
+                  denoise: float = 1.0, seed: int = 7, min_iou: float = 0.9, weight: float = 0.8,
                   overwrite: bool = False) -> dict:
     """Repaint each view and write ``out/manifest.json`` for ``texture --extra``.
 
@@ -164,9 +191,10 @@ def repaint_views(handoff: Path, mesh: Mesh, corner_uv: np.ndarray, texture: np.
     surface. Accepted repaints score ``weight`` times a drawing in the bake. A finished
     repaint (``<view>_repainted.png`` with ``<view>_repainted.json`` recording the same
     render, style image and settings) is reused unless ``overwrite`` is set, so a batch cut
-    short can be rerun into the same folder. With
-    ``texture --power 4`` (Pip) a drawing keeps the surface it faces and the repaints take
-    the angles in between: front delta E 3.1 -> 4.1, no doubled eye in the 3/4 view.
+    short can be rerun into the same folder. With ``texture --power 4`` a drawing keeps the
+    surface it faces and the repaints take the angles in between. On Pip (7 of 8 repaints
+    accepted, weight 0.8) the doubled eye in the 3/4 view is gone; front delta E 3.1 -> 3.4,
+    right 4.5 -> 6.5, mostly the tail, whose tone the side and back drawings disagree on.
     """
     spec = json.loads((handoff / "spec.json").read_text(encoding="utf-8"))
     px = spec["metres_per_aligned_px"]
@@ -187,9 +215,7 @@ def repaint_views(handoff: Path, mesh: Mesh, corner_uv: np.ndarray, texture: np.
         prompt = prompt_for(view, subject)
         # A repaint takes minutes; reusing finished ones lets an interrupted batch resume. The
         # fingerprint ties a repaint to its inputs, so a changed mesh, texture or prompt repaints again.
-        fingerprint = {"render_sha256": hashlib.sha256(np.asarray(render).tobytes()).hexdigest(),
-                       "style_sha256": hashlib.sha256(np.asarray(flat).tobytes()).hexdigest(),
-                       "prompt": prompt, "size": size, "steps": steps, "seed": seed, "denoise": denoise}
+        fingerprint = _fingerprint(render, flat, prompt, size=size, steps=steps, seed=seed, denoise=denoise)
         repainted_path = out / f"{view}_repainted.png"
         inputs_path = out / f"{view}_repainted.json"
         reused = (not overwrite and repainted_path.is_file() and inputs_path.is_file()
@@ -209,7 +235,8 @@ def repaint_views(handoff: Path, mesh: Mesh, corner_uv: np.ndarray, texture: np.
         rows.append(row)
         if row["accepted"]:
             # The render silhouette marks the figure: the repaint's colours only count where the mesh is.
-            image = np.dstack([np.asarray(repainted), np.where(mask, 255, 0).astype(np.uint8)])
+            toned = match_tone(np.asarray(repainted), np.asarray(render.convert("RGB")), mask)
+            image = np.dstack([toned, np.where(mask, 255, 0).astype(np.uint8)])
             painted = out / f"{view}_paint.png"
             Image.fromarray(image).save(painted)
             accepted.append({"name": view, "image": str(painted.resolve()), "map": mapping, "weight": weight})

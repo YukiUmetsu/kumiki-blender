@@ -96,8 +96,20 @@ because the drawings place them slightly differently on the shape.
 3. `texture HANDOFF low.obj --views front,back,left,right --extra rp/manifest.json --power 4 --output final.png`
 
 Each drawing keeps the surface that it faces. The repaints take the angles between
-the drawings and the tops of the head and tail, which no drawing shows. On Pip the
-doubled eye disappeared, and the front view error rose only from 3.1 to 4.1 delta E.
+the drawings and the tops of the head and tail, which no drawing shows.
+
+On Pip, 7 of 8 repaints passed. The doubled eye disappeared. The front view error rose from 3.1 to
+3.4 delta E. The right view error rose from 4.5 to 6.5, mostly on the tail. The side
+drawing shows a light tail and the back drawing shows a darker tail.
+
+Two rules keep the drawings in charge:
+
+- Each repaint gets the colour statistics of its render before the bake. The editor
+  adds its own shading, and Pip's repaints were 5 to 10 L* darker than their renders.
+- Only drawings vote in the colour agreement check. The repaints all come from one
+  render, so three of them would outvote one drawing.
+
+A repaint scores 0.8 times a drawing. With 1.5, the right view error was 7.8.
 
 Notes:
 

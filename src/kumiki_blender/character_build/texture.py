@@ -133,6 +133,7 @@ def bake_texture(handoff: Path, mesh: Mesh, corner_uv: np.ndarray, *, size: int 
             for real, missing in ((a, b), (b, a)):
                 if real in have and missing not in have:
                     sources.append((missing, handoff / "raw" / f"{real}.png", spec["raw"][real], True, mirror_weight))
+    drawn = len(sources)
     for item in extra or []:
         sources.append((item["name"], Path(item["image"]), item["map"], False, float(item["weight"])))
     if not sources:
@@ -177,12 +178,15 @@ def bake_texture(handoff: Path, mesh: Mesh, corner_uv: np.ndarray, *, size: int 
         coverage[name] = round(float(use.mean()), 4)
     every = np.arange(count)
     if agree_delta_e and len(names) > 1:
-        # Agreement: a view whose colour differs from what the other views show at the same point
-        # (a side drawing showing body fur where the back drawings show tail) loses score.
+        # Agreement: a view whose colour differs from what the drawings show at the same point
+        # (a side drawing showing body fur where the back drawings show tail) loses score. Only
+        # drawings are witnesses: extra images repainted from this mesh share one source, so three
+        # of them would outvote a drawing (Pip: right view delta E 4.5 -> 7.9).
         from .checks import lab
 
         lab_colours = np.stack([lab(colours[i]) for i in range(len(names))]).astype(np.float32)  # (V, N, 3)
-        weights = np.clip(score, 0, None)
+        witness = np.array([index < drawn for index in range(len(names))], dtype=np.float32)
+        weights = np.clip(score, 0, None) * witness[:, None]
         disagreement = np.zeros_like(score)
         for i in range(len(names)):
             others = weights.copy()
