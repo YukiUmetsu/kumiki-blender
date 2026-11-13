@@ -235,7 +235,7 @@ The focused Python suite is accompanied by a synthetic **Blender 4.5 LTS native 
 
 ## 8. Remaining roadmap (not implemented in this slice)
 
-1. Fully semantic Blender geometry authoring and optional Open3D ARAP deformation.
+1. Extend the implemented source-anchored ocular, swept-rim and contour-loft anatomical primitives with anatomy templates, multi-reference landmark verification and optional Open3D ARAP edits; see [native anatomical part authoring](CHARACTER_ANATOMY_AUTHORING.md).
 2. Non-destructive seam bridging and retopology guided by eyes, mouth, wing, hip, knee and tail bends.
 3. Expand the existing native biped, avian and tail FK/IK controls to Rigify-compatible and additional species profiles; add skin-weight exclusion masks and corrective shape keys.
 4. Facial expression and viseme shape-key generation with optional MIT Rhubarb Lip Sync.

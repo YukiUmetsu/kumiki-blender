@@ -72,6 +72,16 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--spec", type=Path, required=True, help="source-registered 2D landmark observations JSON")
     p.add_argument("--output", type=Path, required=True, help="immutable 3D landmark report directory")
 
+    p = sub.add_parser("plan-anatomy", help="source-lock explicit 3D eye, lid and contour-loft anatomy recipes")
+    p.add_argument("--blend", type=Path, required=True, help="approved source Blender character .blend")
+    p.add_argument("--spec", type=Path, required=True, help="source-authored anatomical parts JSON")
+    p.add_argument("--output", type=Path, required=True, help="new immutable anatomy plan revision")
+
+    p = sub.add_parser("build-anatomy", help="build source-anchored editable Blender anatomical parts")
+    p.add_argument("--plan", type=Path, required=True, help="anatomy-plan.json")
+    p.add_argument("--output", type=Path, required=True, help="new anatomy.blend + part-only OBJ files")
+    p.add_argument("--blender")
+
     p = sub.add_parser("plan-character", help="validate CharacterSpec v2 and freeze a source-hashed character plan")
     p.add_argument("--spec", type=Path, required=True)
     p.add_argument("--output", type=Path, required=True, help="new immutable character plan directory")
@@ -399,6 +409,22 @@ def _run(args) -> int:
     if args.command == "triangulate-landmarks":
         from .landmark_triangulation import triangulate_landmarks
         report = triangulate_landmarks(args.spec, args.output)
+        print(json.dumps(report, indent=2))
+        return 0
+    if args.command == "plan-anatomy":
+        from .anatomy_plan import plan_anatomy
+        report = plan_anatomy(args.blend, args.spec, args.output)
+        print(json.dumps(report, indent=2))
+        return 0
+    if args.command == "build-anatomy":
+        from .anatomy_plan import load_anatomy_plan
+        from .blender import run_worker
+        if args.output.exists():
+            raise FileExistsError(f"Anatomy output revision exists: {args.output}")
+        plan = load_anatomy_plan(args.plan)
+        report = run_worker("anatomy", {
+            "plan": plan, "output": str(args.output.resolve()),
+        }, blender=args.blender, blend_file=Path(plan["source_blend"]))
         print(json.dumps(report, indent=2))
         return 0
     if args.command == "plan-character":
