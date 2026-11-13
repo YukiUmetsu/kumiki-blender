@@ -78,6 +78,11 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--plan", type=Path, required=True, help="validated source-landmark geodesic fit plan")
     p.add_argument("--output", type=Path, required=True, help="new landmark-fitted.blend + OBJ revision")
     p.add_argument("--blender")
+    p.add_argument("--character", type=Path, help="CharacterSpec v2 plan for automatic registered-view source QA")
+    p.add_argument("--region", help="semantic region to audit, e.g. eye.L; requires --character")
+    p.add_argument("--qa-before", type=Path, help="optional baseline canonical mesh when region has no source_mesh")
+    p.add_argument("--max-regression", type=float, default=.01, help="max permitted source IoU decline in any view")
+    p.add_argument("--min-iou", type=float, help="optional per-camera absolute source silhouette floor")
 
     p = sub.add_parser("triangulate-landmarks", help="recover registered 3D anatomical points from verified 2D views")
     p.add_argument("--spec", type=Path, required=True, help="source-registered 2D landmark observations JSON")
@@ -470,12 +475,69 @@ def _run(args) -> int:
         from .blender import run_worker
         if args.output.exists():
             raise FileExistsError(f"Output revision already exists: {args.output}")
+        if (args.character is None) != (args.region is None):
+            raise ValueError("Automatic source QA requires both --character and --region")
+        if args.qa_before is not None and args.character is None:
+            raise ValueError("--qa-before requires a --character and --region")
         plan = load_landmark_fit_plan(args.plan)
+        source_gate_before = None
+        if args.character is not None:
+            import math
+            from .character_spec_v2 import open_plan
+            from .landmark_triangulation import load_triangulated_landmarks
+            from .region_revision_gate import _canonical_mesh
+            if (not math.isfinite(args.max_regression)
+                    or not 0 <= args.max_regression <= 1):
+                raise ValueError("--max-regression must be a finite fraction from 0 to 1")
+            if args.min_iou is not None and (
+                    not math.isfinite(args.min_iou) or not 0 <= args.min_iou <= 1):
+                raise ValueError("--min-iou must be a finite fraction from 0 to 1")
+            source_plan, character_spec = open_plan(args.character)
+            if character_spec["character_id"] != plan["character_id"]:
+                raise ValueError("The fit and CharacterSpec must refer to the same character ID")
+            landmarks = load_triangulated_landmarks(plan["landmark_report"])
+            if abs(character_spec["height_m"] - landmarks["height_m"]) > 1e-6:
+                raise ValueError("Triangulated landmark height and CharacterSpec reference scale differ")
+            region = next((r for r in character_spec["regions"] if r["id"] == args.region), None)
+            if region is None or not region.get("verified_views"):
+                raise ValueError("Automatic source QA requires a region with verified reference masks")
+            if args.qa_before is None and "source_mesh" not in region:
+                raise ValueError("Region has no source_mesh; supply --qa-before")
+            source_gate_before = _canonical_mesh(
+                args.qa_before if args.qa_before is not None
+                else Path(source_plan["source_spec"]).parent / region["source_mesh"],
+                "baseline")
         report = run_worker("geodesic-fit", {
             "plan": plan, "output": str(args.output.resolve()),
         }, blender=args.blender, blend_file=Path(plan["source_blend"]))
-        print(json.dumps(report, indent=2))
-        return 0
+        if args.character is None:
+            print(json.dumps(report, indent=2))
+            return 0
+        from .region_revision_gate import gate_region_revision
+        source_qa = gate_region_revision(
+            args.character, args.region, args.output / "landmark-fitted-source.obj",
+            args.output / "source-fidelity", before=source_gate_before,
+            max_regression=args.max_regression, min_iou=args.min_iou)
+        receipt = {
+            "schema_version": 1,
+            "status": ("source-regression-rejected" if not source_qa["numeric_gate_pass"]
+                       else "source-numeric-gate-artistic-review-required"),
+            "modeling_status": report.get("status"),
+            "character_id": plan["character_id"],
+            "region_id": args.region,
+            "modeling_report": "report.json",
+            "source_qa_report": "source-fidelity/report.json",
+            "modeling_blend": "landmark-fitted.blend",
+            "modeling_source_frame_obj": "landmark-fitted-source.obj",
+            "source_sha256": source_qa["source_spec_sha256"],
+            "failed_views": source_qa["failed_views"],
+            "numeric_gate_pass": source_qa["numeric_gate_pass"],
+            "artistic_review_required": True,
+        }
+        (args.output / "source-fidelity-receipt.json").write_text(
+            json.dumps(receipt, indent=2) + "\n", encoding="utf-8")
+        print(json.dumps(receipt, indent=2))
+        return 0 if source_qa["numeric_gate_pass"] else 1
     if args.command == "triangulate-landmarks":
         from .landmark_triangulation import triangulate_landmarks
         report = triangulate_landmarks(args.spec, args.output)
