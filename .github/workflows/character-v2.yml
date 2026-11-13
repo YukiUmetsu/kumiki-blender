@@ -84,3 +84,6 @@ jobs:
           blender --background --factory-startup --threads 2 \
             --python-exit-code 1 \
             --python scripts/smoke_character_controls_topology_blender.py
+          blender --background --factory-startup --threads 2 \
+            --python-exit-code 1 \
+            --python scripts/smoke_character_visemes_blender.py

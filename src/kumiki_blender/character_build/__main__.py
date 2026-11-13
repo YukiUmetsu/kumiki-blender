@@ -86,6 +86,21 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--baseline", type=Path, help="prior report.json to reject registered-view regressions")
     p.add_argument("--max-regression", type=float, default=0.01, help="maximum per-view drop in IoU")
 
+    p = sub.add_parser("plan-visemes", help="plan authored facial morph motion from Rhubarb mouth-cue JSON")
+    p.add_argument("--blend", type=Path, required=True, help="existing authored face Blender .blend")
+    p.add_argument("--cues", type=Path, required=True, help="local Rhubarb JSON containing mouthCues")
+    p.add_argument("--mouth-object", required=True, help="exact Blender mesh object containing shape keys")
+    p.add_argument("--clip", required=True)
+    p.add_argument("--fps", type=int, default=24)
+    p.add_argument("--first-frame", type=int, default=1)
+    p.add_argument("--ramp-frames", type=float, default=1.5)
+    p.add_argument("--output", type=Path, required=True, help="new immutable face animation plan")
+
+    p = sub.add_parser("animate-visemes", help="write authored shape-key animation and a morph-target GLB")
+    p.add_argument("--plan", type=Path, required=True, help="viseme-plan.json")
+    p.add_argument("--output", type=Path, required=True, help="new visemes.blend and face-animated.glb")
+    p.add_argument("--blender")
+
     p = sub.add_parser("plan-animation-bake", help="lock an animated Blender control rig and one clip range")
     p.add_argument("--blend", type=Path, required=True, help="animated source control-rig .blend")
     p.add_argument("--clip", required=True, help="filename-safe clip name")
@@ -368,6 +383,24 @@ def _run(args) -> int:
             "plan": plan, "output": str(args.output.resolve()),
             "source_blend": str(args.blend.resolve())},
             blender=args.blender, blend_file=args.blend.resolve())
+        print(json.dumps(report, indent=2))
+        return 0
+    if args.command == "plan-visemes":
+        from .viseme_plan import save_viseme_plan
+        plan = save_viseme_plan(args.blend, args.cues, args.mouth_object,
+                               args.clip, args.output, fps=args.fps,
+                               first_frame=args.first_frame, ramp_frames=args.ramp_frames)
+        print(json.dumps(plan, indent=2))
+        return 0
+    if args.command == "animate-visemes":
+        from .viseme_plan import load_viseme_plan
+        from .blender import run_worker
+        if args.output.exists():
+            raise FileExistsError(f"Output revision already exists: {args.output}")
+        plan = load_viseme_plan(args.plan)
+        report = run_worker("visemes", {
+            "plan": plan, "output": str(args.output.resolve()),
+        }, blender=args.blender, blend_file=Path(plan["source_blend"]))
         print(json.dumps(report, indent=2))
         return 0
     if args.command == "plan-animation-bake":
