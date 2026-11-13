@@ -422,6 +422,34 @@ class RepaintTests(SharedSet):
         self.assertGreater(before, 5)
         self.assertLess(after, 0.5)
 
+    def test_screen_drops_a_repaint_that_contradicts_the_drawings(self):
+        from kumiki_blender.character_build.repaint import mirror_twin, render_condition, screen_extras
+        mesh = read_mesh(self.handoff / "blockout.obj")
+        low, high = mesh.bounds()
+        uv = (mesh.vertices[:, [0, 2]] - low[[0, 2]]) / (high[[0, 2]] - low[[0, 2]])
+        # Front-facing faces in the left half of the UV square, back-facing ones in the right
+        # half: a planar projection alone would give both sides the same texels.
+        corners = mesh.vertices[mesh.faces]
+        back = np.cross(corners[:, 1] - corners[:, 0], corners[:, 2] - corners[:, 0])[:, 1] > 0
+        corner_uv = uv[mesh.faces] * [0.49, 0.98] + [0.005, 0.01]
+        corner_uv[back, :, 0] += 0.5
+        drawn, _ = bake_texture(self.handoff, mesh, corner_uv, size=256, power=4)
+        with tempfile.TemporaryDirectory() as tmp:
+            extra = []
+            for view, tint in (("az30_el20", (1.0, 1.0, 1.0)), ("az-30_el20", (1.0, 0.7, 0.7))):
+                picture, mask, mapping = render_condition(mesh, corner_uv, drawn, view, HEIGHT_M / 1000, size=256)
+                # The second repaint drew something else: close enough in colour to survive the
+                # agreement check, different enough to show in the drawn views.
+                rgb = np.clip(np.asarray(picture) * np.array(tint), 0, 255).astype(np.uint8)
+                Image.fromarray(np.dstack([rgb, np.where(mask, 255, 0).astype(np.uint8)])).save(Path(tmp) / f"{view}.png")
+                extra.append({"name": view, "image": str(Path(tmp) / f"{view}.png"), "map": mapping, "weight": 3.0})
+            # Agreement off: test the screen alone (in the fixture the agreement check already catches this one).
+            kept, rows = screen_extras(self.handoff, mesh, corner_uv, extra, size=256, power=4, agree_delta_e=0)
+        self.assertEqual([e["name"] for e in kept], ["az30_el20"], rows)
+        self.assertEqual(mirror_twin("az45_el0"), "az-45_el0")
+        self.assertEqual(mirror_twin("az180_el35"), "az180_el35")
+        self.assertIsNone(mirror_twin("front"))
+
     def test_workflow_starts_from_the_render(self):
         from kumiki_blender.character_build.repaint import klein_workflow
         workflow = klein_workflow("r.png", "s.png", "p", size=768, steps=20, seed=1, denoise=0.6)

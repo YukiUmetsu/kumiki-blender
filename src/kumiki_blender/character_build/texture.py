@@ -318,6 +318,7 @@ def appearance_report(handoff: Path, mesh: Mesh, corner_uv: np.ndarray, texture:
         delta = np.linalg.norm(lab(ref[..., :3][both].astype(np.uint8)) - lab(rendered[both].astype(np.uint8)),
                                axis=1)
         rows.append({"view": view, "median_delta_e": round(float(np.median(delta)), 2),
+                     "mean_delta_e": round(float(delta.mean()), 2),
                      "within_10": round(float((delta <= 10).mean()), 4)})
         if out is not None:
             out.mkdir(parents=True, exist_ok=True)

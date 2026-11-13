@@ -111,6 +111,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--power", type=float, default=1.0,
                    help="view score = cos^power; use 4 with --extra so each source keeps the surface it faces")
     p.add_argument("--views", help="comma-separated drawings to use (default: all)")
+    p.add_argument("--screen-extra", type=float, metavar="DELTA_E",
+                   help="drop a repaint that alone raises any drawn view's error by more than this (e.g. 0.5)")
 
     p = sub.add_parser("repaint", help="repaint views of the model with a local FLUX.2 [klein] in ComfyUI")
     p.add_argument("handoff", type=Path)
@@ -298,10 +300,18 @@ def _run(args) -> int:
         _new_file(args.output)
         mesh, corner_uv = read_obj_uv(args.mesh)
         extra = json.loads(args.extra.read_text(encoding="utf-8"))["extra"] if args.extra else None
-        image, report = bake_texture(args.handoff, mesh, corner_uv, size=args.size,
-                                     diagonal_weight=args.diagonal_weight, min_cosine=args.min_cosine,
-                                     mirror_missing=args.assume_symmetric, extra=extra, power=args.power,
-                                     views=args.views.split(",") if args.views else None)
+        settings = dict(diagonal_weight=args.diagonal_weight, min_cosine=args.min_cosine,
+                        mirror_missing=args.assume_symmetric, power=args.power,
+                        views=args.views.split(",") if args.views else None)
+        screened = None
+        if extra and args.screen_extra is not None:
+            from .repaint import screen_extras
+
+            extra, screened = screen_extras(args.handoff, mesh, corner_uv, extra,
+                                            max_added_delta_e=args.screen_extra, **settings)
+        image, report = bake_texture(args.handoff, mesh, corner_uv, size=args.size, extra=extra, **settings)
+        if screened is not None:
+            report["screen_extra"] = screened
         Image.fromarray(image).save(args.output)
         _write_json(args.output.with_suffix(".json"), report)
         print(json.dumps(report, indent=2))
