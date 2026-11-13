@@ -9,6 +9,18 @@ python -m pip install -e '.[character-build]'
 kumiki-character-build check refs/ && kumiki-character-build handoff refs/ --height-m 0.35
 ```
 
+## Character Production v2: isolated parts and Blender-native rig audits
+
+[Implementation guide](docs/CHARACTER_PRODUCTION_V2.md) · [example CharacterSpec](examples/character-v2.example.json) · [region sculpt plan](examples/character-region-sculpt.example.json) · [rig pose QA plan](examples/character-rig-pose-qa.example.json)
+
+The additive `kumiki-character-build` commands `plan-character`, `plan-region`,
+`compare-region`, `refine-region` and `validate-rig` support immutable, source-hashed
+part tasks, verified source-mask comparisons, bounded local edits to named Blender
+mesh objects, and reproducible pose-based geometry/skin audits. No mandatory
+cloud inference or extra model downloads. **This is an initial production
+foundation, not yet a complete face/wing animation or automatic sculpting
+solution**; full source and animation quality still require visual review.
+
 ## Character-sheet fidelity QA (Blender vs original artwork)
 
 **[Start here: Character Fidelity Review](docs/CHARACTER_FIDELITY_REVIEW.md)** — reusable anatomy, costume and accessory comparison. Inspect shape and position independently, compare unlit colors and actual mesh depth/normals, propose masks with optional local SAM 2.1 and relative depth with optional local MoGe 2. New `review-masks` and `propose-registration` commands expose uncertain part ownership and camera alignment instead of silently approving them. No Hugging Face approval or mandatory model download.

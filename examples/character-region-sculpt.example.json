@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "object": "Eye.L",
+  "expected_vertex_count": 800,
+  "max_displacement_m": 0.008,
+  "operations": [
+    {
+      "center_m": [
+        0.035,
+        -0.064,
+        0.26
+      ],
+      "radius_m": 0.014,
+      "move_m": [
+        0,
+        -0.004,
+        0
+      ],
+      "falloff": "smoothstep"
+    }
+  ]
+}

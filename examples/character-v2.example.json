@@ -1,0 +1,64 @@
+{
+  "schema_version": 2,
+  "character_id": "example-character",
+  "height_m": 0.35,
+  "profile": "stylized-biped-tail",
+  "reference_frame": {
+    "width": 1600,
+    "height": 1200,
+    "figure_px": 1000
+  },
+  "regions": [
+    {
+      "id": "head",
+      "type": "head",
+      "source_confidence": "estimated",
+      "geometry_policy": "separate"
+    },
+    {
+      "id": "eye.L",
+      "type": "eye",
+      "parent": "head",
+      "source_confidence": "verified",
+      "reference_masks": {
+        "front": "refs/front-eye-L-mask.png"
+      },
+      "verified_views": [
+        "front"
+      ],
+      "geometry_policy": "separate",
+      "attachment": {
+        "mode": "bone-parent",
+        "bone": "head"
+      },
+      "detail_critical": true,
+      "landmarks": {
+        "center": [
+          0.035,
+          -0.065,
+          0.26
+        ]
+      }
+    },
+    {
+      "id": "eye.R",
+      "type": "eye",
+      "parent": "head",
+      "source_confidence": "estimated",
+      "geometry_policy": "separate",
+      "attachment": {
+        "mode": "bone-parent",
+        "bone": "head"
+      }
+    },
+    {
+      "id": "tail",
+      "type": "tail",
+      "source_confidence": "estimated",
+      "geometry_policy": "separate",
+      "attachment": {
+        "mode": "skinned"
+      }
+    }
+  ]
+}

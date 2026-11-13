@@ -68,6 +68,67 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="kumiki-character-build", description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
 
+    p = sub.add_parser("plan-character", help="validate CharacterSpec v2 and freeze a source-hashed character plan")
+    p.add_argument("--spec", type=Path, required=True)
+    p.add_argument("--output", type=Path, required=True, help="new immutable character plan directory")
+
+    p = sub.add_parser("plan-region", help="isolate one anatomical region and its dependencies")
+    p.add_argument("--character", type=Path, required=True, help="directory with character-plan.json")
+    p.add_argument("--region", required=True, help="stable semantic region id, e.g. eye.L")
+    p.add_argument("--output", type=Path, required=True, help="new immutable region task directory")
+
+    p = sub.add_parser("compare-region", help="compare a region mesh with verified registered source masks")
+    p.add_argument("--character", type=Path, required=True, help="directory with character-plan.json")
+    p.add_argument("--region", required=True)
+    p.add_argument("--mesh", type=Path, required=True, help="aligned OBJ, PLY or GLB candidate")
+    p.add_argument("--output", type=Path, required=True, help="new comparison directory")
+    p.add_argument("--min-iou", type=float, help="optional per-view geometry threshold; no automatic art approval")
+    p.add_argument("--baseline", type=Path, help="prior report.json to reject registered-view regressions")
+    p.add_argument("--max-regression", type=float, default=0.01, help="maximum per-view drop in IoU")
+
+    p = sub.add_parser("plan-rig-controls", help="generate native FK/IK animator control rig from reviewed joints")
+    p.add_argument("--joints", type=Path, required=True, help="validated joints.json from existing character rig")
+    p.add_argument("--profile", required=True, choices=("generic-biped", "stylized-biped-tail", "avian-biped-wings"))
+    p.add_argument("--armature", default="CharacterRig")
+    p.add_argument("--pole-angle", type=float, default=0.0, help="explicit knee pole angle degrees")
+    p.add_argument("--output", type=Path, required=True, help="new controls plan folder")
+
+    p = sub.add_parser("apply-rig-controls", help="add optional IK/FK control bones to an existing rig .blend")
+    p.add_argument("--blend", type=Path, required=True)
+    p.add_argument("--plan", type=Path, required=True, help="controls.json from plan-rig-controls")
+    p.add_argument("--output", type=Path, required=True, help="new editable controlled.blend")
+    p.add_argument("--blender")
+
+    p = sub.add_parser("plan-topology", help="generate joint-specific topology cross-section review zones")
+    p.add_argument("--joints", type=Path, required=True)
+    p.add_argument("--mesh-name", default="Low", help="exact Blender mesh object name")
+    p.add_argument("--joint", action="append", help="specific named joint; repeat (default key hinges)")
+    p.add_argument("--min-coverage", type=float, default=0.7)
+    p.add_argument("--min-edges", type=int, default=8)
+    p.add_argument("--strict", action="store_true", help="fail numeric thresholds instead of report-only")
+    p.add_argument("--output", type=Path, required=True)
+
+    p = sub.add_parser("audit-topology", help="evaluate joint topology and optional Blender review rings")
+    p.add_argument("--blend", type=Path, required=True, help="existing retopologized .blend")
+    p.add_argument("--plan", type=Path, required=True, help="topology-plan.json")
+    p.add_argument("--annotate", action="store_true", help="save new editable .blend with joint guide rings")
+    p.add_argument("--output", type=Path, required=True)
+    p.add_argument("--blender")
+
+    p = sub.add_parser("validate-rig", help="native Blender pose tests for a skinned .blend")
+    p.add_argument("--blend", type=Path, required=True, help="existing rigged source .blend")
+    p.add_argument("--plan", type=Path, required=True, help="bounded pose battery JSON")
+    p.add_argument("--output", type=Path, required=True, help="new immutable report directory")
+    p.add_argument("--blender", help="local Blender executable path")
+
+    p = sub.add_parser("refine-region", help="bounded local sculpt edit; preserve all other .blend objects")
+    p.add_argument("--blend", type=Path, required=True, help="editable source Blender file")
+    p.add_argument("--plan", type=Path, required=True, help="region sculpt correction JSON")
+    p.add_argument("--output", type=Path, required=True, help="new revision containing refined.blend and region.obj")
+    p.add_argument("--blender")
+
+
+
     p = sub.add_parser("ingest", help="copy generator output into canonical view names")
     p.add_argument("source", type=Path)
     p.add_argument("mapping", type=Path, help='JSON {"file.png": "front", ...}')
@@ -249,6 +310,7 @@ def main(argv: list[str] | None = None) -> int:
         if name == "rig":
             p.add_argument("--rom-deg", type=float, default=45.0)
             p.add_argument("--render-rom", action="store_true")
+            p.add_argument("--preserve-volume", action="store_true", help="enable Blender armature Preserve Volume skinning")
     args = parser.parse_args(argv)
     try:
         return _run(args)
@@ -260,6 +322,90 @@ def main(argv: list[str] | None = None) -> int:
 def _run(args) -> int:
     from .views import ingest
 
+    if args.command == "plan-character":
+        from .character_spec_v2 import plan_character
+        report = plan_character(args.spec, args.output)
+        print(json.dumps(report, indent=2))
+        return 0
+    if args.command == "plan-region":
+        from .character_spec_v2 import plan_region
+        report = plan_region(args.character, args.region, args.output)
+        print(json.dumps(report, indent=2))
+        return 0
+    if args.command == "compare-region":
+        from .region_compare import compare_region
+        report = compare_region(args.character, args.region, args.mesh, args.output,
+                                min_iou=args.min_iou, baseline=args.baseline,
+                                max_regression=args.max_regression)
+        print(json.dumps(report, indent=2))
+        return 1 if report["failed_views"] else 0
+    if args.command == "refine-region":
+        from .region_sculpt_plan import load_region_sculpt_plan
+        from .blender import run_worker
+        if not args.blend.is_file() or args.blend.suffix.lower() != ".blend":
+            raise ValueError("--blend must be an existing Blender .blend file")
+        if args.output.exists():
+            raise FileExistsError(f"Output revision already exists: {args.output}")
+        plan = load_region_sculpt_plan(args.plan)
+        report = run_worker("region-sculpt", {
+            "plan": plan, "output": str(args.output.resolve()),
+            "source_blend": str(args.blend.resolve())},
+            blender=args.blender, blend_file=args.blend.resolve())
+        print(json.dumps(report, indent=2))
+        return 0
+    if args.command == "plan-rig-controls":
+        from .rig_control_plan import save_control_plan
+        report = save_control_plan(args.joints, args.profile, args.output,
+                                   armature=args.armature, pole_angle_deg=args.pole_angle)
+        print(json.dumps(report, indent=2))
+        return 0
+    if args.command == "apply-rig-controls":
+        from .rig_control_plan import load_control_plan
+        from .blender import run_worker
+        if not args.blend.is_file() or args.blend.suffix.lower() != ".blend":
+            raise ValueError("--blend must be an existing Blender .blend")
+        if args.output.exists():
+            raise FileExistsError(f"Output revision already exists: {args.output}")
+        plan = load_control_plan(args.plan)
+        report = run_worker("rig-controls", {
+            "plan": plan, "source_blend": str(args.blend.resolve()),
+            "output": str(args.output.resolve()),
+        }, blender=args.blender, blend_file=args.blend.resolve())
+        print(json.dumps(report, indent=2))
+        return 0
+    if args.command == "plan-topology":
+        from .topology_zones import save_topology_plan
+        report = save_topology_plan(args.joints, args.output, mesh=args.mesh_name,
+                                    joints=args.joint, min_coverage=args.min_coverage,
+                                    min_edges=args.min_edges, strict=args.strict)
+        print(json.dumps(report, indent=2))
+        return 0
+    if args.command == "audit-topology":
+        from .topology_zones import load_topology_plan
+        from .blender import run_worker
+        if not args.blend.is_file() or args.blend.suffix.lower() != ".blend":
+            raise ValueError("--blend must be an existing retopologized Blender .blend")
+        if args.output.exists():
+            raise FileExistsError(f"Output revision already exists: {args.output}")
+        plan = load_topology_plan(args.plan)
+        report = run_worker("topology-qa", {
+            "plan": plan, "annotate": args.annotate,
+            "source_blend": str(args.blend.resolve()), "output": str(args.output.resolve()),
+        }, blender=args.blender, blend_file=args.blend.resolve())
+        print(json.dumps(report, indent=2))
+        return 1 if report["status"] == "structural-review-failed" else 0
+    if args.command == "validate-rig":
+        from .pose_spec import load_pose_plan
+        from .blender import run_worker
+        if not args.blend.is_file() or args.blend.suffix.lower() != ".blend":
+            raise ValueError("--blend must be an existing Blender .blend file")
+        if args.output.exists():
+            raise FileExistsError(f"Output revision already exists: {args.output}")
+        plan = load_pose_plan(args.plan)
+        report = run_worker("pose-qa", {"plan": plan, "output": str(args.output.resolve())},
+                            blender=args.blender, blend_file=args.blend.resolve())
+        print(json.dumps(report, indent=2))
+        return 1 if report["status"] == "structural-fail" else 0
     if args.command == "ingest":
         used = ingest(args.source, args.mapping, args.destination)
         print(json.dumps(used, indent=2))
@@ -583,7 +729,8 @@ def _run(args) -> int:
         joints = json.loads(args.joints.read_text(encoding="utf-8"))
         validate_joints(joints)
         report = run_worker("rig", {"mesh": str(args.input.resolve()), "joints": joints, "output": str(out.resolve()),
-                                    "rom_deg": args.rom_deg, "render_rom": args.render_rom}, blender=args.blender)
+                                    "rom_deg": args.rom_deg, "render_rom": args.render_rom,
+                                    "preserve_volume": args.preserve_volume}, blender=args.blender)
     print(json.dumps(report, indent=2))
     return 0
 

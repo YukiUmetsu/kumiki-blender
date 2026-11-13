@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "armature": "CharacterRig",
+  "poses": [
+    {
+      "name": "head-left",
+      "bones": {
+        "head": {
+          "axis": "Z",
+          "degrees": 25
+        }
+      }
+    },
+    {
+      "name": "head-right",
+      "bones": {
+        "head": {
+          "axis": "Z",
+          "degrees": -25
+        }
+      }
+    },
+    {
+      "name": "tail-flex",
+      "bones": {
+        "tail1": {
+          "axis": "X",
+          "degrees": 40
+        }
+      }
+    }
+  ],
+  "collision_pairs": [],
+  "max_p95_edge_stretch": 0.5,
+  "render": false
+}
