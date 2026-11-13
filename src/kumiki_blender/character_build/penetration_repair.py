@@ -31,6 +31,7 @@ class CollisionPolicy:
     max_relative_edge_change: float
     protected_vertices: tuple[int, ...]
     min_improvement_fraction: float
+    protected_vertex_groups: tuple[str, ...] = ()
 
 
 def _number(value, name: str, minimum: float, maximum: float) -> float:
@@ -42,16 +43,29 @@ def _number(value, name: str, minimum: float, maximum: float) -> float:
 def load_collision_plan(path: str | Path) -> dict:
     """Validate an explicit collision-pair policy without reading a .blend file."""
     raw = json.loads(Path(path).read_text(encoding="utf-8"))
-    if not isinstance(raw, dict) or set(raw) != {"schema_version", "pairs"} or raw["schema_version"] != 1:
+    if not isinstance(raw, dict) or set(raw) != {"schema_version", "pairs", "guard_pairs"} or raw["schema_version"] != 1:
         raise ValueError("Collision plan needs schema_version 1 and pairs")
     pairs = raw["pairs"]
     if not isinstance(pairs, list) or not 1 <= len(pairs) <= 32:
         raise ValueError("Collision plan needs 1 to 32 pairs")
+    guards = raw.get("guard_pairs", [])
+    if not isinstance(guards, list) or len(guards) > 64:
+        raise ValueError("guard_pairs must be a list of at most 64 named object pairs")
+    unique_guards = set()
+    for pair in guards:
+        if (not isinstance(pair, list) or len(pair) != 2
+                or any(not isinstance(name, str) or not _NAME.fullmatch(name) for name in pair)
+                or pair[0] == pair[1]):
+            raise ValueError("guard_pairs require two distinct mesh object names")
+        key = tuple(sorted(pair))
+        if key in unique_guards:
+            raise ValueError("Duplicate unordered guard pair")
+        unique_guards.add(key)
     cleaned = []
     seen = set()
     allowed = {"moving", "fixed", "max_displacement_m", "clearance_m", "iterations",
                "smoothing_iterations", "max_relative_edge_change", "protected_vertices",
-               "min_improvement_fraction"}
+               "min_improvement_fraction", "protected_vertex_groups"}
     for pair in pairs:
         if not isinstance(pair, dict) or set(pair) - allowed:
             raise ValueError("Unrecognized collision-pair setting")
@@ -67,6 +81,11 @@ def load_collision_plan(path: str | Path) -> dict:
                 or any(type(x) is not int or x < 0 for x in protected)
                 or len(set(protected)) != len(protected)):
             raise ValueError("protected_vertices must be unique nonnegative vertex indices")
+        groups = pair.get("protected_vertex_groups", [])
+        if (not isinstance(groups, list) or len(groups) > 32
+                or any(not isinstance(name, str) or not _NAME.fullmatch(name) for name in groups)
+                or len(set(groups)) != len(groups)):
+            raise ValueError("protected_vertex_groups must contain unique Blender vertex-group names")
         iterations = pair.get("iterations", 8)
         smoothing = pair.get("smoothing_iterations", 2)
         if type(iterations) is not int or not 1 <= iterations <= 24:
@@ -82,10 +101,11 @@ def load_collision_plan(path: str | Path) -> dict:
             max_relative_edge_change=_number(pair.get("max_relative_edge_change", 0.25),
                                              "max_relative_edge_change", 0, 1),
             protected_vertices=tuple(protected),
+            protected_vertex_groups=tuple(groups),
             min_improvement_fraction=_number(pair.get("min_improvement_fraction", 0.02),
                                              "min_improvement_fraction", 0, 1),
         ))
-    return {"schema_version": 1, "pairs": cleaned}
+    return {"schema_version": 1, "pairs": cleaned, "guard_pairs": guards}
 
 
 def _edges(faces: np.ndarray) -> np.ndarray:
