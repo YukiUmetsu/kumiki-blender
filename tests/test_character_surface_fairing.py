@@ -200,3 +200,24 @@ def test_staging_does_not_publish_on_worker_exception(tmp_path):
     with pytest.raises(RuntimeError, match="broken Blender"):
         run_surface_refinement(source, config, tmp_path / "revision", worker=failure)
     assert not (tmp_path / "revision").exists()
+
+
+
+def test_surface_policy_accepts_adjacent_collision_guards(tmp_path):
+    file = _config(tmp_path, guard_pairs=[["Body", "Scarf"], ["Tail", "Body"]])
+    policy = load_surface_policy(file)
+    assert policy.guard_pairs == (("Body", "Scarf"), ("Tail", "Body"))
+
+
+@pytest.mark.parametrize("bad", [
+    [["Body", "Body"]],
+    [["Scarf", "Hat"]],
+    [["Body", "Scarf"], ["Scarf", "Body"]],
+    [["Body", "../Scarf"]],
+    [["Body", "Scarf", "Hat"]],
+    "Body-Scarf",
+])
+def test_surface_policy_rejects_unsafe_collision_guard_pairs(tmp_path, bad):
+    file = _config(tmp_path, guard_pairs=bad)
+    with pytest.raises(ValueError, match="guard"):
+        load_surface_policy(file)
