@@ -40,6 +40,9 @@ or newer. The other commands need only NumPy, SciPy, scikit-image and Pillow.
 | Generators | `swap BASE DONOR --region "y>0.05" --output sw/` | One region taken from another generation (`--ellipsoid`, `--align-region`) |
 | Texture | `texture HANDOFF retopo/low.obj --output base.png` | UV texture baked from the full-resolution reference views (sharp clothes, buttons, fur painting) |
 | Texture | `appearance HANDOFF retopo/low.obj base.png --output app/` | Colour agreement per view (median delta E) with side-by-side images |
+| Texture | `conflicts HANDOFF retopo/low.obj --output conflicts/` | Where the views overlap and disagree on the mesh, with pictures and advice |
+| Texture | `repaint HANDOFF retopo/low.obj base.png --output rp/` | Pictures of the angles between the drawings, repainted from renders by a local image model |
+| References | `trim REFS front --output front.png` | A view without the part that its opposite view has no room for |
 | Fit | `fit HANDOFF mesh.ply --lattice 8,8,16` | Lattice deformation for detailed generator meshes |
 | Texture | `retopo fitted.ply --colour-from ranked/x.placement.json` | The generator's own texture baked as `low_basecolor.png` |
 | Fur | `fur-weights coloured.ply --clothing-top-m 0.2 --eye-band-m 0.21,0.27` | Per-vertex fur weight from the drawings' colours (no fur on clothing or eyes) |
@@ -134,6 +137,27 @@ A feature that two drawings put in two places on the surface shows twice where e
 drawing paints alone. Pip's left eye was 60 px further round the head in the side
 drawing. No rule on the drawings removes that. A picture that faces the feature
 does: see the next section.
+
+## A view that shows a part the others have no room for
+
+When you replace a view, the old opposite view can still show the old design. Pip's
+new back view has a narrow tail. The old front view showed the old tail as two large
+shapes beside the head. A front and a back view of one object have mirror outlines,
+so `check` fails ("back is the mirror image of front": 0.75).
+
+```bash
+kumiki-character-build trim refs/ front --output refs2/front.png
+```
+
+`trim` cuts from the view each thick part that lies outside the mirror outline of
+the opposite view (`--against` names a different view to trust). A small difference
+in the outline stays: `--slack-px` (default 15) and `--min-thickness-px` (default
+40) set the limits. On Pip it removed 11% of the front figure. The mirror agreement
+rose to 0.84, and the silhouette that the other views cannot explain fell from 16%
+to 5%.
+
+The better fix is a new drawing of that view. `trim` cannot change the part of the
+drawing that stays: Pip's front view keeps its bare arms, and the new views have sleeves.
 
 ## Repaint the angles between the drawings
 
