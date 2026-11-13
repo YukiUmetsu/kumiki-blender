@@ -75,6 +75,8 @@ Do not silently alter those files or pass a canonical source OBJ to the default 
 
 For registered source-art comparisons, each exporter also emits a separate
 **Z-up, -Y-forward source-frame OBJ** (`*-source.obj`, or `parts/<id>.source.obj`).
+Blender's OBJ operator preserves native coordinates with `forward_axis=Y, up_axis=Z`;
+this does not change the character's own -Y-facing anatomy.
 Use that one with `compare-region`, never the legacy file.
 
 Native Blender tests verify both that source-frame vertices stay in original
