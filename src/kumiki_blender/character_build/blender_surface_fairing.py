@@ -143,6 +143,9 @@ def main():
                 "baseline_roughness", "final_roughness", "maximum_displacement_m")}
             candidate = original_positions.copy()
             report["changed_vertices"] = 0
+            report["accepted_iterations"] = 0
+            report["improvement_fraction"] = 0.0
+            report["volume_change_fraction"] = 0.0
             report["maximum_displacement_m"] = 0.0
             report["final_roughness"] = report["baseline_roughness"]
     report["collision_guards"] = collision_guards
