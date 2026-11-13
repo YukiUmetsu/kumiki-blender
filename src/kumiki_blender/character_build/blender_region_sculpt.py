@@ -16,7 +16,7 @@ import bpy
 from mathutils import Vector
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from kumiki_blender.character_build.blender_common import arguments, write_report  # noqa: E402
+from kumiki_blender.character_build.blender_common import arguments, export_registered_obj, write_report  # noqa: E402
 
 
 def mesh_digest(obj) -> str:
@@ -104,8 +104,7 @@ def main() -> None:
     bpy.ops.object.select_all(action="DESELECT")
     obj.select_set(True)
     bpy.context.view_layer.objects.active = obj
-    bpy.ops.wm.obj_export(filepath=str(out / "region.obj"), export_selected_objects=True,
-                          export_materials=False)
+    export_registered_obj(out / "region.obj")
     write_report(out, {
         "schema_version": 1, "status": "geometric-candidate-art-review-required",
         "source_blend": str(Path(args["source_blend"]).resolve()),

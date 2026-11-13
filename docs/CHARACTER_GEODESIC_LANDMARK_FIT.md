@@ -67,6 +67,17 @@ The output contains a separate **landmark-fitted.blend**, part-only **landmark-f
 
 The new part mesh retains original vertex indices, UV corner coordinates, material slots and mesh topology. All unrelated meshes are verified unchanged. Multiple overlapping landmark influences are blended, but the explicitly pinned vertex is moved exactly to the triangulated target. Incompatible pins, boundary moves, oversized displacements, surface flips, collapsed faces and excessive edge strain fail without saving an output.
 
+## Source-coordinate export guarantee
+
+Every character-build OBJ exporter now calls a shared Blender helper that
+**explicitly preserves Blender coordinates**: +Z up, -Y forward, metres.
+Blender 4.5's default OBJ settings would convert this to Y up and invalidate
+2D source mask comparisons. This applies to native anatomy, sculpt, hinge
+retopo, coarse retopo, swap, assembly and the geodesic-fitted candidate.
+
+The native smoke suite checks exported OBJ vertex positions against Blender
+world coordinates rather than only checking that an OBJ file exists.
+
 ## Required source and deformation QA
 
 Run **compare-region** with verified source-image masks and inspect the original front, side and three-quarter drawings. Then run joint/topology audits and **validate-rig** after re-skinning.

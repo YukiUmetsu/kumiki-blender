@@ -72,6 +72,14 @@ def main():
         assert report["original_source_vertices_preserved"] is True
         assert report["unrelated_character_meshes_preserved"] is True
         assert (target/"hinge-retopo.obj").is_file()
+        with (target/"hinge-retopo.obj").open("r", encoding="utf-8") as stream:
+            exported = [
+                tuple(float(v) for v in line.split()[1:4])
+                for line in stream if line.startswith("v ")]
+        assert exported
+        assert any(.17 <= vertex[2] <= .32 and abs(vertex[1]) < .05
+                   for vertex in exported), (
+                   "Joint OBJ was rotated out of Z-up registered source frame")
         assert hashlib.sha256(source.read_bytes()).hexdigest() == source_digest
         bpy.ops.wm.open_mainfile(filepath=str(target/"hinge-retopo.blend"))
         updated = bpy.data.objects["Neck"]

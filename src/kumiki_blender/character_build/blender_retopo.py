@@ -19,7 +19,7 @@ from mathutils import Matrix
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from kumiki_blender.character_build.blender_common import (activate, arguments, clear_startup_scene,  # noqa: E402
-                                                           import_mesh, mesh_stats, remove_debris, write_report)
+                                                           export_registered_obj, import_mesh, mesh_stats, remove_debris, write_report)
 
 
 def uv_coverage(obj) -> float:
@@ -217,7 +217,7 @@ def main() -> None:
     activate(low)
     bpy.ops.export_scene.gltf(filepath=str(output / "low.glb"), export_format="GLB", use_selection=True)
     # glTF stores triangles only. The OBJ keeps the quads (and UVs) for rigging and sculpting.
-    bpy.ops.wm.obj_export(filepath=str(output / "low.obj"), export_selected_objects=True, export_materials=False)
+    export_registered_obj(output / "low.obj")
     write_report(output, {"high": high_stats, "low": mesh_stats(low), "uv_coverage": round(uv_coverage(low), 4),
                           "steps": steps, "warnings": warnings, "files": files})
 

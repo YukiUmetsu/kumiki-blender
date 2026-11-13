@@ -18,7 +18,7 @@ import bpy
 from mathutils import Vector
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from kumiki_blender.character_build.blender_common import arguments, write_report  # noqa: E402
+from kumiki_blender.character_build.blender_common import arguments, export_registered_obj, write_report  # noqa: E402
 
 
 def _hash(obj):
@@ -165,8 +165,7 @@ def main():
     bpy.ops.object.select_all(action="DESELECT")
     obj.select_set(True)
     bpy.context.view_layer.objects.active = obj
-    bpy.ops.wm.obj_export(filepath=str(output / "hinge-retopo.obj"),
-                          export_selected_objects=True, export_materials=False)
+    export_registered_obj(output / "hinge-retopo.obj")
     write_report(output, {
         "schema_version": 1,
         "status": "local-hinge-topology-candidate-review-required",

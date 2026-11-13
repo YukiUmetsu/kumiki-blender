@@ -17,7 +17,7 @@ import numpy as np
 from mathutils import Vector
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from kumiki_blender.character_build.blender_common import arguments, write_report  # noqa: E402
+from kumiki_blender.character_build.blender_common import arguments, export_registered_obj, write_report  # noqa: E402
 from kumiki_blender.character_build.geodesic_fit import LandmarkPin, fit_landmark_surface  # noqa: E402
 
 
@@ -126,9 +126,7 @@ def main():
     bpy.context.view_layer.objects.active = obj
     # Source-view QA uses Blender metres, +Z up and -Y forward. The OBJ
     # operator otherwise defaults to Y-up and silently breaks registration.
-    bpy.ops.wm.obj_export(filepath=str(folder / "landmark-fitted.obj"),
-                          export_selected_objects=True, export_materials=False,
-                          forward_axis="NEGATIVE_Y", up_axis="Z")
+    export_registered_obj(folder / "landmark-fitted.obj")
     write_report(folder, {
         "schema_version": 1,
         "character_id": plan["character_id"],
