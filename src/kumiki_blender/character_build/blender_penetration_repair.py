@@ -22,7 +22,7 @@ from mathutils.bvhtree import BVHTree
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from kumiki_blender.character_build.blender_common import arguments, write_report  # noqa: E402
-from kumiki_blender.character_build.penetration_repair import repair_penetration  # noqa: E402
+from kumiki_blender.character_build.penetration_repair import CollisionPolicy, repair_penetration  # noqa: E402
 
 
 def _mesh_digest(obj) -> str:
@@ -109,6 +109,7 @@ def main() -> None:
     if out.exists() or out == source.parent or source.is_relative_to(out):
         raise FileExistsError("Output revision must be new and separate from source .blend")
     plan = args["plan"]
+    plan["pairs"] = [CollisionPolicy(**pair) for pair in plan["pairs"]]
     objects = {name: obj for name, obj in bpy.data.objects.items() if obj.type == "MESH"}
     targets = {p.moving for p in plan["pairs"]}
     before_all = {name: _mesh_digest(obj) for name, obj in objects.items()}
