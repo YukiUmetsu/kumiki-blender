@@ -39,6 +39,12 @@ Use resolve-anatomy-landmarks to fill explicitly named eyeball, eyelid, beak and
 
 Commands plan-landmark-fit and fit-landmark-surface move explicitly mapped, pre-rig mesh vertices toward triangulated original-art landmarks using surface-connected (geodesic) influence rather than a spatial brush. Protected vertices, UVs, materials, neighboring components and original Blender sources are guarded. This is a controlled geometric revision, not inferred anatomy or artistic approval.
 
+### Reject source-fidelity regressions before accepting 3D edits
+
+[Per-region source-fidelity release gate](docs/CHARACTER_REGION_REVISION_GATE.md)
+
+The new audit-region-revision CLI compares original and edited character parts against the same registered orthographic reference masks. It rejects a source silhouette drop in **any** verified view, produces immutable before/after overlays and camera-specific failure reasons, and accepts only explicitly Z-up source-frame OBJ candidates (or already aligned PLY/GLB). Its results are numeric quality checks, **never automatic likeness or animation approval**.
+
 ## Character Production v2: isolated parts and Blender-native rig audits
 
 [Implementation guide](docs/CHARACTER_PRODUCTION_V2.md) · [example CharacterSpec](examples/character-v2.example.json) · [region sculpt plan](examples/character-region-sculpt.example.json) · [rig pose QA plan](examples/character-rig-pose-qa.example.json)
