@@ -14,6 +14,7 @@ from pathlib import Path
 import bpy
 import numpy as np
 from mathutils import Vector
+from mathutils.bvhtree import BVHTree
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from kumiki_blender.character_build.blender_common import (  # noqa: E402
@@ -71,6 +72,15 @@ def _triangles(obj):
     return np.asarray([tuple(triangle.vertices) for triangle in obj.data.loop_triangles], dtype=np.int64)
 
 
+def _world_bvh(obj, points=None):
+    vertices = ([Vector(row) for row in points] if points is not None else
+                [obj.matrix_world @ v.co for v in obj.data.vertices])
+    polygons = [tuple(poly.vertices) for poly in obj.data.polygons]
+    if not polygons:
+        raise ValueError(f"{obj.name}: collision guard has no polygonal faces")
+    return BVHTree.FromPolygons(vertices, polygons)
+
+
 def main():
     args = arguments()
     policy = SurfacePolicy(**args["plan"])
@@ -94,6 +104,15 @@ def main():
         raise ValueError("Surface fairing is pre-rig only; remove modifiers/armature only on a source copy")
     if obj.matrix_world.determinant() <= 0:
         raise ValueError("Mirrored/singular transforms unsupported")
+    guard_objects = []
+    for first, second in policy.guard_pairs:
+        name = second if first == policy.mesh else first
+        neighbour = bpy.data.objects.get(name)
+        if neighbour is None or neighbour.type != "MESH":
+            raise ValueError(f"Collision guard requires an existing mesh object {name}")
+        if neighbour.modifiers:
+            raise ValueError(f"Collision guard {name} has modifiers; evaluated mesh QA is required")
+        guard_objects.append((name, neighbour))
     originals = {entry.name: _mesh_digest(entry) for entry in bpy.data.objects if entry.type == "MESH"}
     protected = np.zeros(len(obj.data.vertices), dtype=bool)
     for name in policy.protected_vertex_groups:
@@ -103,6 +122,30 @@ def main():
     original_positions = _coordinates(obj)
     candidate, report = fair_surface(
         original_positions, _triangles(obj), policy, protected=protected, editable=editable)
+    collision_guards = []
+    if guard_objects and report["status"] != "no-safe-improvement":
+        previous_tree = _world_bvh(obj, original_positions)
+        updated_tree = _world_bvh(obj, candidate)
+        for name, neighbour in guard_objects:
+            fixed_tree = _world_bvh(neighbour)
+            previous_count = len(previous_tree.overlap(fixed_tree))
+            revised_count = len(updated_tree.overlap(fixed_tree))
+            collision_guards.append({
+                "objects": [obj.name, name],
+                "before_triangle_overlap_pairs": previous_count,
+                "after_triangle_overlap_pairs": revised_count,
+                "pass": revised_count <= previous_count,
+            })
+        if any(not entry["pass"] for entry in collision_guards):
+            report["status"] = "no-safe-improvement"
+            report["reason"] = "adjacent_part_collision_regression"
+            report["rejected_candidate_metrics"] = {k: report[k] for k in (
+                "baseline_roughness", "final_roughness", "maximum_displacement_m")}
+            candidate = original_positions.copy()
+            report["changed_vertices"] = 0
+            report["maximum_displacement_m"] = 0.0
+            report["final_roughness"] = report["baseline_roughness"]
+    report["collision_guards"] = collision_guards
     if obj.data.users > 1 and report["status"] != "no-safe-improvement":
         obj.data = obj.data.copy()  # Never edit another object sharing the same datablock.
 
