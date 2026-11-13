@@ -436,7 +436,8 @@ def _run(args) -> int:
             "output": str(args.output.resolve()),
         }, blender=args.blender, blend_file=args.blend.resolve())
         print(json.dumps(report, indent=2))
-        return 0 if report["status"] != "no-safe-improvement" else 1
+        # A no-op collision check is a valid, non-destructive result.
+        return 0
     if args.command == "refine-region":
         from .region_sculpt_plan import load_region_sculpt_plan
         from .blender import run_worker
