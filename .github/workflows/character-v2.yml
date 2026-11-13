@@ -28,6 +28,8 @@ on:
       - "tests/test_character_joint_refine_plan.py"
       - "tests/test_character_geodesic_fit.py"
       - "tests/test_character_region_revision_gate.py"
+      - "tests/test_character_surface_fairing.py"
+      - "scripts/smoke_character_surface_fairing_blender.py"
       - "tests/test_character_fit_source_qa.py"
       - ".github/workflows/character-v2.yml"
   workflow_dispatch:
@@ -81,7 +83,7 @@ jobs:
       - name: Test opt-in semantic conflict repair and regression safety
         env:
           PYTHONPATH: src
-        run: python -m pytest -q tests/test_character_conflict_repair.py tests/test_character_penetration_repair.py tests/test_character_semantic_regions.py
+        run: python -m pytest -q tests/test_character_conflict_repair.py tests/test_character_penetration_repair.py tests/test_character_semantic_regions.py tests/test_character_surface_fairing.py
 
   character-blender-smoke:
     name: Native Blender character worker smoke
@@ -159,3 +161,6 @@ jobs:
           blender --background --factory-startup --threads 2 \
             --python-exit-code 1 \
             --python scripts/smoke_character_penetration_repair_blender.py
+          blender --background --factory-startup --threads 2 \
+            --python-exit-code 1 \
+            --python scripts/smoke_character_surface_fairing_blender.py
