@@ -34,6 +34,11 @@ def main():
         protected = [vertex.index for vertex in moving.data.vertices
                      if (moving.matrix_world @ vertex.co).x > 0.5]
         assert protected, "Need protected vertices on the visible side"
+        root_group = moving.vertex_groups.new(name="TailRoot")
+        root_group.add(protected, 1.0, "REPLACE")
+        bpy.ops.mesh.primitive_cube_add(size=0.2, location=(2.0, 0, 0))
+        guard = bpy.context.object
+        guard.name = "OtherAccessory"
         source = root / "original.blend"
         bpy.ops.wm.save_as_mainfile(filepath=str(source))
         before_sha = hashlib.sha256(source.read_bytes()).hexdigest()
@@ -42,9 +47,10 @@ def main():
         config = root / "policy.json"
         config.write_text(json.dumps({
             "schema_version": 1,
+            "guard_pairs": [["Tail", "OtherAccessory"]],
             "pairs": [{
                 "moving": "Tail", "fixed": "Body",
-                "protected_vertices": protected,
+                "protected_vertex_groups": ["TailRoot"],
                 "clearance_m": 0.002,
                 "max_displacement_m": 0.20,
                 "iterations": 8,
@@ -56,7 +62,8 @@ def main():
         destination = root / "revision"
         args = root / "args.json"
         args.write_text(json.dumps({
-            "plan": {"schema_version": 1, "pairs": [asdict(p) for p in policy["pairs"]]},
+            "plan": {"schema_version": 1, "pairs": [asdict(p) for p in policy["pairs"]],
+                     "guard_pairs": policy["guard_pairs"]},
             "source_blend": str(source), "output": str(destination),
         }))
         old_args = sys.argv
@@ -70,6 +77,10 @@ def main():
         assert report["status"] == "geometric-candidate-review-required", report
         assert (destination / "collision-candidate.blend").is_file()
         assert report["pairs"][0]["accepted"]
+        assert report["pairs"][0]["protected_vertices"] == len(protected)
+        assert report["guard_pairs"][0]["objects"] == ["Tail", "OtherAccessory"]
+        assert report["guard_pairs"][0]["baseline_triangle_overlap_pairs"] == 0
+        assert report["guard_pairs"][0]["final_triangle_overlap_pairs"] == 0
         assert report["pairs"][0]["before_triangle_overlap_pairs"] > 0
         assert report["pairs"][0]["after_triangle_overlap_pairs"] <= report["pairs"][0]["before_triangle_overlap_pairs"]
         assert [tuple(v.co) for v in fixed.data.vertices] == original_fixed
