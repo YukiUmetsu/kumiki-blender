@@ -37,6 +37,19 @@ class SemanticProjection:
                 accepted = np.zeros(len(selected_ids), dtype=bool)
                 accepted[valid] = mask[ys[valid], xs[valid]]
                 allowed[selected_ids] = accepted
+        # Unlabeled UV surfaces may not borrow source pixels already claimed
+        # by a labeled body part. Otherwise scalp/scarf colors can still leak
+        # onto unclassified geometry even when labeled parts are protected.
+        unlabelled = np.flatnonzero(allowed & (self.labels < 0))
+        for mask in self.source_masks.get(view, {}).values():
+            if not len(unlabelled):
+                break
+            xs, ys = x[unlabelled], y[unlabelled]
+            valid = (xs >= 0) & (ys >= 0) & (xs < mask.shape[1]) & (ys < mask.shape[0])
+            conflict = np.zeros(len(unlabelled), dtype=bool)
+            conflict[valid] = mask[ys[valid], xs[valid]]
+            allowed[unlabelled[conflict]] = False
+            unlabelled = unlabelled[~conflict]
         return allowed
 
 
@@ -122,5 +135,8 @@ def load_semantic_projection(
             source_mask = _read_mask(_safe_file(root, file), shape)
             if not source_mask.any():
                 raise ValueError(f'{name}: empty source mask for {view}')
-            sources.setdefault(view, {})[index] = source_mask
+            previous = sources.setdefault(view, {})
+            if any(np.any(source_mask & other) for other in previous.values()):
+                raise ValueError(f'{name}: source masks overlap in {view}; visible pixels need unique ownership')
+            previous[index] = source_mask
     return SemanticProjection(labels, tuple(names), sources)
