@@ -13,8 +13,8 @@ kumiki-character-build check refs/ && kumiki-character-build handoff refs/ --hei
 
 [Implementation guide](docs/CHARACTER_PRODUCTION_V2.md) · [example CharacterSpec](examples/character-v2.example.json) · [region sculpt plan](examples/character-region-sculpt.example.json) · [rig pose QA plan](examples/character-rig-pose-qa.example.json)
 
-The additive \`kumiki-character-build\` commands \`plan-character\`, \`plan-region\`,
-\`compare-region\`, \`refine-region\` and \`validate-rig\` support immutable, source-hashed
+The additive `kumiki-character-build` commands `plan-character`, `plan-region`,
+`compare-region`, `refine-region` and `validate-rig` support immutable, source-hashed
 part tasks, verified source-mask comparisons, bounded local edits to named Blender
 mesh objects, and reproducible pose-based geometry/skin audits. No mandatory
 cloud inference or extra model downloads. **This is an initial production
