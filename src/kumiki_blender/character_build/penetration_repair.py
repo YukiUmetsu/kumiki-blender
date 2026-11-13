@@ -43,7 +43,9 @@ def _number(value, name: str, minimum: float, maximum: float) -> float:
 def load_collision_plan(path: str | Path) -> dict:
     """Validate an explicit collision-pair policy without reading a .blend file."""
     raw = json.loads(Path(path).read_text(encoding="utf-8"))
-    if not isinstance(raw, dict) or set(raw) != {"schema_version", "pairs", "guard_pairs"} or raw["schema_version"] != 1:
+    if (not isinstance(raw, dict) or not {"schema_version", "pairs"} <= set(raw)
+            or set(raw) - {"schema_version", "pairs", "guard_pairs"}
+            or type(raw["schema_version"]) is not int or raw["schema_version"] != 1):
         raise ValueError("Collision plan needs schema_version 1 and pairs")
     pairs = raw["pairs"]
     if not isinstance(pairs, list) or not 1 <= len(pairs) <= 32:
