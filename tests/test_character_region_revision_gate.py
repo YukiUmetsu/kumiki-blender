@@ -10,6 +10,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from PIL import Image, ImageDraw
 
@@ -120,6 +121,54 @@ class RegionRevisionGateTest(unittest.TestCase):
         self.assertEqual(result["status"], "no-registered-regression-artistic-review-required")
         self.assertTrue(result["any_geometry_change"])
         self.assertGreaterEqual(result["worst_iou_delta"], -1)
+
+    def test_contour_rejects_thin_feature_loss_even_if_area_iou_passes(self):
+        """One view can lose detail while its registered IoU stays high."""
+        self.candidate.write_bytes(self.source_mesh.read_bytes())
+
+        def synthetic_camera_reports(character, region, mesh, destination, **kwargs):
+            dest = Path(destination)
+            dest.mkdir(parents=True)
+            (dest/"overlays").mkdir()
+            Image.new("RGB", (400, 300)).save(dest/"overlays"/"front.png")
+            Image.new("RGB", (400, 300)).save(dest/"overlays"/"right.png")
+            candidate = dest.name == "candidate"
+            rows = []
+            for view in ("front", "right"):
+                f1 = (.81 if candidate and view == "front" else .99)
+                rows.append({
+                    "view": view, "iou": (.965 if candidate else .97),
+                    "boundary_f1_2px": f1,
+                    "boundary_p95_distance_px": 7.5 if candidate else 0.,
+                    "missing_pixels": 20 if candidate else 0,
+                    "extra_pixels": 0,
+                })
+            report = {"views": rows}
+            (dest/"report.json").write_text(json.dumps(report))
+            return report
+
+        with patch(
+            "kumiki_blender.character_build.region_revision_gate.compare_region",
+            side_effect=synthetic_camera_reports
+        ):
+            result = gate_region_revision(
+                self.plan, "eye.L", self.candidate, self.root/"contour-rejected",
+                max_regression=.05, max_contour_regression=.03)
+            self.assertFalse(result["numeric_gate_pass"])
+            self.assertEqual(result["failed_views"], ["front"])
+            front = next(v for v in result["views"] if v["view"] == "front")
+            self.assertEqual(front["iou_delta"], -.005)
+            self.assertEqual(front["boundary_f1_2px_delta"], -.18)
+            self.assertIn("registered_contour_regression", front["rejection_reasons"])
+            self.assertNotIn("registered_silhouette_regression", front["rejection_reasons"])
+            self.assertTrue(
+                (self.root/"contour-rejected"/"panels"/"front.png").is_file())
+            # The threshold is independently configurable, without disabling
+            # the existing per-view IoU regression gate.
+            allowed = gate_region_revision(
+                self.plan, "eye.L", self.candidate, self.root/"contour-allowed",
+                max_regression=.05, max_contour_regression=.20)
+            self.assertTrue(allowed["numeric_gate_pass"])
 
     def test_absolute_iou_floor_is_independent_from_regression(self):
         _box(self.candidate, dx=.031)

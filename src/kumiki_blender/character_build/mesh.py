@@ -1,7 +1,9 @@
 """Triangle meshes for character builds: read, write, measure and rasterize.
 
 Pure NumPy and SciPy. No Blender. Coordinates are Blender metres (Z up).
-OBJ and glTF use Y up; the readers and writers convert. GLB support covers
+Legacy OBJ and glTF use Y up; the readers convert. An explicitly named
+*-source.obj or *.source.obj preserves native Z-up coordinates instead.
+GLB support covers
 triangle primitives with float positions and node transforms, which is what
 image-to-3D generators export.
 """
@@ -141,7 +143,12 @@ def orient_faces(mesh: Mesh) -> tuple[Mesh, int]:
 def read_mesh(path: Path, *, max_faces: int = 3_000_000) -> Mesh:
     suffix = path.suffix.lower()
     if suffix == ".obj":
-        mesh = _read_obj(path)
+        # Legacy interchange OBJ is Y-up, but native Blender character
+        # workers also export explicitly named Z-up source-camera artifacts.
+        # Applying the legacy rotation to the latter corrupts all registered
+        # silhouette and landmark comparisons, sometimes silently.
+        source_frame = path.name.endswith(("-source.obj", ".source.obj"))
+        mesh = _read_obj(path, source_frame=source_frame)
     elif suffix == ".ply":
         mesh = _read_ply(path)
     elif suffix in (".glb", ".gltf"):
@@ -165,7 +172,7 @@ def _z_up_to_y_up(points: np.ndarray) -> np.ndarray:
     return np.column_stack([points[:, 0], points[:, 2], -points[:, 1]])
 
 
-def _read_obj(path: Path) -> Mesh:
+def _read_obj(path: Path, *, source_frame: bool = False) -> Mesh:
     vertices, colours, faces = [], [], []
     with path.open(encoding="utf-8", errors="replace") as handle:
         for line in handle:
@@ -181,10 +188,7 @@ def _read_obj(path: Path) -> Mesh:
                     ids.append(index - 1 if index > 0 else len(vertices) + index)
                 faces.extend([ids[0], ids[i], ids[i + 1]] for i in range(1, len(ids) - 1))
     points = np.array(vertices, dtype=np.float64).reshape(-1, 3)
-    # Native Blender source-registered exports explicitly preserve Z-up
-    # world coordinates. Do not silently rotate these like interchange OBJ;
-    # the registered source-camera comparison would become meaningless.
-    if not (path.name.endswith("-source.obj") or path.name.endswith(".source.obj")):
+    if not source_frame:
         points = _y_up_to_z_up(points)
     rgb = None
     if colours and len(colours) == len(vertices):

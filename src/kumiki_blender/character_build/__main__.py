@@ -82,6 +82,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--region", help="semantic region to audit, e.g. eye.L; requires --character")
     p.add_argument("--qa-before", type=Path, help="optional baseline canonical mesh when region has no source_mesh")
     p.add_argument("--max-regression", type=float, default=.01, help="max permitted source IoU decline in any view")
+    p.add_argument("--max-contour-regression", type=float, default=.03, help="maximum permitted source boundary F1 decline in any view")
     p.add_argument("--min-iou", type=float, help="optional per-camera absolute source silhouette floor")
 
     p = sub.add_parser("triangulate-landmarks", help="recover registered 3D anatomical points from verified 2D views")
@@ -118,6 +119,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--before", type=Path, help="canonical baseline mesh; defaults to source_mesh in CharacterSpec")
     p.add_argument("--after", type=Path, required=True, help="new canonical source-frame OBJ, PLY or GLB")
     p.add_argument("--max-regression", type=float, default=.01, help="maximum allowed per-camera IoU decline")
+    p.add_argument("--max-contour-regression", type=float, default=.03, help="maximum allowed per-camera 2-pixel contour F1 decline")
     p.add_argument("--min-iou", type=float, help="optional absolute per-camera source silhouette floor")
     p.add_argument("--output", type=Path, required=True, help="new immutable before/after report and overlays")
 
@@ -383,6 +385,37 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--resume", action="store_true",
                    help="reuse finished repaints in --output whose render and settings match; repaint the rest")
 
+    p = sub.add_parser("parts", help="recognise the character's parts on the mesh and in each drawing")
+    _bake_arguments(p)
+    p.add_argument("--output", type=Path, required=True, help="new folder: parts.json, masks, turnaround.png")
+    p.add_argument("--size", type=int, default=1024)
+    p.add_argument("--classes", type=int, default=10, help="colour classes to start from")
+    p.add_argument("--contrast", type=float, default=10.0,
+                   help="two touching parts join if the colour step across their border is below this (delta E)")
+    p.add_argument("--max-parts", type=int, default=24, help="join the weakest borders until at most this many are left")
+    p.add_argument("--crease-radius-px", type=float, default=60.0,
+                   help="shapes (tail, body, ...) are separated by creases that bend inward more sharply than this")
+    p.add_argument("--bleed-share", type=float, default=0.05,
+                   help="a material on less than this share of a shape, with most of it on other shapes, is taken "
+                        "for a part that the bake put on the wrong shape (0: off)")
+    p.add_argument("--material-delta-e", type=float, default=8.0,
+                   help="parts whose mean colours differ by less than this are one material and are baked together")
+    p.add_argument("--min-share", type=float, default=0.005,
+                   help="a part smaller than this share of the surface joins a neighbour")
+
+    p = sub.add_parser("texture-parts", help="bake each recognised part only from the pixels that show it")
+    _bake_arguments(p)
+    p.add_argument("parts", type=Path, help="folder from `parts`")
+    p.add_argument("--output", type=Path, required=True, help=".png")
+    p.add_argument("--size", type=int, default=2048)
+    p.add_argument("--diagnostics", type=Path, help="new folder for owners.png, parts.png and turnaround.png")
+    p.add_argument("--no-polish", action="store_true",
+                   help="do not close the seams inside the parts or fill the unseen texels smoothly")
+    p.add_argument("--tone-delta-e", type=float, default=18.0,
+                   help="inside one material, level differences between two views up to about twice this")
+    p.add_argument("--polish-reach-px", type=float, default=12.0,
+                   help="distance from a seam over which the polish works (aligned px)")
+
     p = sub.add_parser("appearance", help="colour agreement of a textured mesh with each reference view")
     p.add_argument("handoff", type=Path)
     p.add_argument("mesh", type=Path, help="OBJ with UVs")
@@ -495,6 +528,9 @@ def _run(args) -> int:
             if (not math.isfinite(args.max_regression)
                     or not 0 <= args.max_regression <= 1):
                 raise ValueError("--max-regression must be a finite fraction from 0 to 1")
+            if (not math.isfinite(args.max_contour_regression)
+                    or not 0 <= args.max_contour_regression <= 1):
+                raise ValueError("--max-contour-regression must be a finite fraction from 0 to 1")
             if args.min_iou is not None and (
                     not math.isfinite(args.min_iou) or not 0 <= args.min_iou <= 1):
                 raise ValueError("--min-iou must be a finite fraction from 0 to 1")
@@ -523,7 +559,8 @@ def _run(args) -> int:
         source_qa = gate_region_revision(
             args.character, args.region, args.output / "landmark-fitted-source.obj",
             args.output / "source-fidelity", before=source_gate_before,
-            max_regression=args.max_regression, min_iou=args.min_iou)
+            max_regression=args.max_regression, min_iou=args.min_iou,
+            max_contour_regression=args.max_contour_regression)
         receipt = {
             "schema_version": 1,
             "status": ("source-regression-rejected" if not source_qa["numeric_gate_pass"]
@@ -538,6 +575,7 @@ def _run(args) -> int:
             "source_sha256": source_qa["source_spec_sha256"],
             "failed_views": source_qa["failed_views"],
             "numeric_gate_pass": source_qa["numeric_gate_pass"],
+            "max_boundary_f1_2px_regression_per_view": source_qa["max_boundary_f1_2px_regression_per_view"],
             "artistic_review_required": True,
         }
         (args.output / "source-fidelity-receipt.json").write_text(
@@ -584,7 +622,8 @@ def _run(args) -> int:
         from .region_revision_gate import gate_region_revision
         report = gate_region_revision(
             args.character, args.region, args.after, args.output, before=args.before,
-            max_regression=args.max_regression, min_iou=args.min_iou)
+            max_regression=args.max_regression, min_iou=args.min_iou,
+            max_contour_regression=args.max_contour_regression)
         print(json.dumps(report, indent=2))
         return 0 if report["numeric_gate_pass"] else 1
     if args.command == "compare-region":
@@ -951,6 +990,39 @@ def _run(args) -> int:
                                  subject=args.subject, size=args.size, steps=args.steps, denoise=args.denoise,
                                  min_iou=args.min_iou, min_usable=args.min_usable, weight=args.weight, owners=owners)
         print(json.dumps(manifest["views"], indent=2))
+        return 0
+    if args.command == "parts":
+        from .parts import find_parts
+        from .texture import read_obj_uv
+
+        out = _new_dir(args.output)
+        mesh, corner_uv = read_obj_uv(args.mesh)
+        extra = json.loads(args.extra.read_text(encoding="utf-8"))["extra"] if args.extra else None
+        report = find_parts(args.handoff, mesh, corner_uv, out, size=args.size, classes=args.classes,
+                            contrast=args.contrast, min_share=args.min_share, max_parts=args.max_parts,
+                            material_delta_e=args.material_delta_e, crease_radius_px=args.crease_radius_px,
+                            bleed_share=args.bleed_share, extra=extra, **_bake_settings(args))
+        print(json.dumps({k: report[k] for k in ("source_confidence", "review", "shapes", "bleed", "parts",
+                                                 "agreement", "advice")},
+                         indent=2))
+        return 0
+    if args.command == "texture-parts":
+        from PIL import Image
+
+        from .parts import bake_parts
+        from .texture import read_obj_uv
+
+        _new_file(args.output)
+        diagnostics = _new_dir(args.diagnostics) if args.diagnostics else None
+        mesh, corner_uv = read_obj_uv(args.mesh)
+        extra = json.loads(args.extra.read_text(encoding="utf-8"))["extra"] if args.extra else None
+        image, report = bake_parts(args.handoff, mesh, corner_uv, args.parts, size=args.size, extra=extra,
+                                   polish=not args.no_polish, polish_reach_px=args.polish_reach_px,
+                                   tone_delta_e=args.tone_delta_e,
+                                   diagnostics=diagnostics, **_bake_settings(args))
+        Image.fromarray(image).save(args.output)
+        _write_json(args.output.with_suffix(".json"), report)
+        print(json.dumps(report, indent=2))
         return 0
     if args.command == "appearance":
         import numpy as np
