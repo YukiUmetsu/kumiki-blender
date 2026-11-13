@@ -107,6 +107,24 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--min-cosine", type=float, default=0.35, help="views at a grazing angle below this do not paint")
     p.add_argument("--assume-symmetric", action="store_true",
                    help="paint a side without a drawing from the mirrored opposite side")
+    p.add_argument("--extra", type=Path, help="manifest.json from `repaint`: add the repainted views")
+    p.add_argument("--power", type=float, default=1.0,
+                   help="view score = cos^power; use 4 with --extra so each source keeps the surface it faces")
+    p.add_argument("--views", help="comma-separated drawings to use (default: all)")
+
+    p = sub.add_parser("repaint", help="repaint views of the model with a local FLUX.2 [klein] in ComfyUI")
+    p.add_argument("handoff", type=Path)
+    p.add_argument("mesh", type=Path, help="OBJ with UVs")
+    p.add_argument("texture", type=Path, help="current texture (e.g. baked from the drawings)")
+    p.add_argument("--output", type=Path, required=True, help="new folder: renders, repaints, manifest.json")
+    p.add_argument("--views", help="comma-separated cameras (default: four 3/4 views and four from above)")
+    p.add_argument("--subject", default="the character", help='e.g. "the cartoon squirrel"')
+    p.add_argument("--server", default="http://127.0.0.1:8188", help="local ComfyUI (loopback only)")
+    p.add_argument("--steps", type=int, default=20)
+    p.add_argument("--denoise", type=float, default=1.0)
+    p.add_argument("--size", type=int, default=768)
+    p.add_argument("--resume", action="store_true",
+                   help="reuse finished repaints in --output whose render and settings match; repaint the rest")
 
     p = sub.add_parser("appearance", help="colour agreement of a textured mesh with each reference view")
     p.add_argument("handoff", type=Path)
@@ -279,12 +297,30 @@ def _run(args) -> int:
 
         _new_file(args.output)
         mesh, corner_uv = read_obj_uv(args.mesh)
+        extra = json.loads(args.extra.read_text(encoding="utf-8"))["extra"] if args.extra else None
         image, report = bake_texture(args.handoff, mesh, corner_uv, size=args.size,
                                      diagonal_weight=args.diagonal_weight, min_cosine=args.min_cosine,
-                                     mirror_missing=args.assume_symmetric)
+                                     mirror_missing=args.assume_symmetric, extra=extra, power=args.power,
+                                     views=args.views.split(",") if args.views else None)
         Image.fromarray(image).save(args.output)
         _write_json(args.output.with_suffix(".json"), report)
         print(json.dumps(report, indent=2))
+        return 0
+    if args.command == "repaint":
+        import numpy as np
+        from PIL import Image
+
+        from ..reconstruction.completion_image_generation import _LocalComfyClient
+        from .repaint import default_views, repaint_views
+        from .texture import read_obj_uv
+
+        out = args.output if args.resume else _new_dir(args.output)
+        mesh, corner_uv = read_obj_uv(args.mesh)
+        texture = np.asarray(Image.open(args.texture).convert("RGB"))
+        views = args.views.split(",") if args.views else default_views()
+        manifest = repaint_views(args.handoff, mesh, corner_uv, texture, views, out, _LocalComfyClient(args.server),
+                                 subject=args.subject, size=args.size, steps=args.steps, denoise=args.denoise)
+        print(json.dumps(manifest["views"], indent=2))
         return 0
     if args.command == "appearance":
         import numpy as np

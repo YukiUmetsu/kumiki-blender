@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -41,22 +42,34 @@ class ViewError(ValueError):
 
 @dataclass(frozen=True)
 class Camera:
-    """An orthographic camera around the character."""
+    """An orthographic camera around the character.
+
+    ``elevation`` (degrees) tilts the camera above the horizon. A level camera maps a
+    point at height z to row BASELINE - z / metres_per_px, as the aligned frame does. A
+    tilted camera turns about the point at half the figure height (FIGURE_PX / 2 above
+    the soles), so the figure stays centred in the frame.
+    """
 
     name: str
     azimuth: float
+    elevation: float = 0.0
 
     @property
     def toward(self) -> np.ndarray:
-        """Unit vector from the character to the camera (horizontal)."""
-        a = math.radians(self.azimuth)
-        return np.array([math.sin(a), -math.cos(a), 0.0])
+        """Unit vector from the character to the camera."""
+        a, e = math.radians(self.azimuth), math.radians(self.elevation)
+        return np.array([math.sin(a) * math.cos(e), -math.cos(a) * math.cos(e), math.sin(e)])
 
     @property
     def right(self) -> np.ndarray:
-        """Unit screen-right vector in world space."""
-        d = self.toward
-        return np.array([-d[1], d[0], 0.0])
+        """Unit screen-right vector in world space (always horizontal)."""
+        a = math.radians(self.azimuth)
+        return np.array([math.cos(a), math.sin(a), 0.0])
+
+    @property
+    def up(self) -> np.ndarray:
+        """Unit screen-up vector in world space."""
+        return np.cross(self.toward, self.right)
 
     def project(self, points: np.ndarray, metres_per_px: float, scale: float = 1.0
                 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -66,15 +79,24 @@ class Camera:
         """
         u = points @ self.right
         col = (u / metres_per_px + CX) * scale
-        row = (BASELINE - points[:, 2] / metres_per_px) * scale
+        pivot = FIGURE_PX / 2 * metres_per_px
+        height = points @ self.up - pivot * self.up[2]
+        row = (BASELINE - FIGURE_PX / 2 - height / metres_per_px) * scale
         return col, row, points @ self.toward
 
 
+_FREE_VIEW = re.compile(r"^az(-?\d+(?:\.\d+)?)_el(-?\d+(?:\.\d+)?)$")
+
+
 def camera(name: str) -> Camera:
+    """A named view (front, left, ...) or a free view named az<deg>_el<deg>, e.g. az45_el30."""
     name = ALIASES.get(name, name)
-    if name not in AZIMUTH:
-        raise ViewError(f"Unknown orthographic view {name!r}")
-    return Camera(name, AZIMUTH[name])
+    if name in AZIMUTH:
+        return Camera(name, AZIMUTH[name])
+    match = _FREE_VIEW.match(name)
+    if match and -89 <= float(match[2]) <= 89:
+        return Camera(name, float(match[1]), float(match[2]))
+    raise ViewError(f"Unknown orthographic view {name!r}")
 
 
 def mirror_of(name: str) -> str:

@@ -93,8 +93,8 @@ def bake_texture(handoff: Path, mesh: Mesh, corner_uv: np.ndarray, *, size: int 
                  diagonal_weight: float = 1.0, depth_scale: float = 1.0, depth_tolerance_px: float = 1.5,
                  edge_px: float = 12.0, views: list[str] | None = None, min_cosine: float = 0.35,
                  vote_samples: int = 150_000, vote_neighbours: int = 24, vote_rounds: int = 2,
-                 agree_delta_e: float = 15.0, mirror_missing: bool = False, mirror_weight: float = 0.3
-                 ) -> tuple[np.ndarray, dict]:
+                 agree_delta_e: float = 15.0, mirror_missing: bool = False, mirror_weight: float = 0.3,
+                 extra: list[dict] | None = None) -> tuple[np.ndarray, dict]:
     """RGB texture (size x size, uint8) and a report with the coverage of each view.
 
     Each texel takes its colour from one view, not a blend: AI views of one character
@@ -113,31 +113,41 @@ def bake_texture(handoff: Path, mesh: Mesh, corner_uv: np.ndarray, *, size: int 
     left ones) as the mirror image of its opposite. Use it only for a symmetric character:
     a one-sided accessory then appears on both sides. Mirrored views score ``mirror_weight``
     times a real view, so they paint mainly where no real drawing sees the surface.
+
+    ``extra`` adds images that are not drawings, such as views repainted from renders of
+    this mesh (``repaint.py``): dicts with ``name`` (a camera name, e.g. az30_el40),
+    ``image`` (RGBA path; alpha marks the figure), ``map`` (the camera-frame to image
+    mapping, same keys as ``spec["raw"]``) and ``weight`` (score factor).
     """
     spec = json.loads((handoff / "spec.json").read_text(encoding="utf-8"))
     px = spec["metres_per_aligned_px"]
     rows, cols, points, normals = texel_samples(mesh, corner_uv, size)
     samples = surface_samples(mesh, 0.5 * px / depth_scale)
-    names = [n for n in spec["raw"] if (views is None or n in views) and (handoff / "raw" / f"{n}.png").is_file()]
-    if not names:
-        raise ValueError("No reference view to bake from")
-    source = {n: (n, False) for n in names}  # view -> (image it samples, mirrored)
+    # One source per painting camera: (camera name, image path, camera-frame -> image map,
+    # mirrored about the frame centre, score factor).
+    sources = [(n, handoff / "raw" / f"{n}.png", spec["raw"][n], False, 1.0) for n in spec["raw"]
+               if (views is None or n in views) and (handoff / "raw" / f"{n}.png").is_file()]
     if mirror_missing:
-        pairs = (("left", "right"), ("front_left", "front_right"), ("back_left", "back_right"))
-        for a, b in pairs:
-            for have, missing in ((a, b), (b, a)):
-                if have in source and not source[have][1] and missing not in source:
-                    source[missing] = (have, True)
-        names = list(source)
+        have = {source[0] for source in sources}
+        for a, b in (("left", "right"), ("front_left", "front_right"), ("back_left", "back_right")):
+            for real, missing in ((a, b), (b, a)):
+                if real in have and missing not in have:
+                    sources.append((missing, handoff / "raw" / f"{real}.png", spec["raw"][real], True, mirror_weight))
+    drawn = len(sources)
+    for item in extra or []:
+        sources.append((item["name"], Path(item["image"]), item["map"], False, float(item["weight"])))
+    if not sources:
+        raise ValueError("No reference view to bake from")
+    names = [source[0] for source in sources]
+    if len(set(names)) != len(names):
+        raise ValueError(f"Two sources paint from the same camera: {sorted(names)}")
     count = len(points)
     score = np.full((len(names), count), -1.0, dtype=np.float32)  # -1: the view does not paint the texel
     colours = np.zeros((len(names), count, 3), dtype=np.uint8)
     edge_trust = np.zeros((len(names), count), dtype=np.float32)
     coverage = {}
-    for index, name in enumerate(names):
-        image_name, mirrored = source[name]
-        raw_map = spec["raw"][image_name]
-        rgba = np.asarray(Image.open(handoff / "raw" / f"{image_name}.png").convert("RGBA")).astype(np.float64)
+    for index, (name, image_path, raw_map, mirrored, factor) in enumerate(sources):
+        rgba = np.asarray(Image.open(image_path).convert("RGBA")).astype(np.float64)
         # Wispy fur at a silhouette edge is blended with the background colour, inside the cut-out
         # mask. Trust a pixel more the further it is from the edge: full trust edge_px inside.
         inner = ndimage.distance_transform_edt(rgba[..., 3] > 200)
@@ -161,20 +171,22 @@ def bake_texture(handoff: Path, mesh: Mesh, corner_uv: np.ndarray, *, size: int 
         rx, ry = np.floor(raw_x).astype(int), np.floor(raw_y).astype(int)
         use = visible & (rx >= 0) & (rx < w) & (ry >= 0) & (ry < h) & (cosine > min_cosine)
         use[use] = core[ry[use], rx[use]]
-        score[index, use] = cosine[use] ** power * (diagonal_weight if name in DIAGONAL_VIEWS else 1.0)
-        if mirrored:  # a real drawing of a point beats a mirrored one
-            score[index, use] *= mirror_weight
+        score[index, use] = (cosine[use] ** power * factor
+                             * (diagonal_weight if name in DIAGONAL_VIEWS else 1.0))
         edge_trust[index, use] = trust[ry[use], rx[use]]
         colours[index, use] = np.clip(np.round(_bilinear(rgba[..., :3], raw_x[use], raw_y[use])), 0, 255)
         coverage[name] = round(float(use.mean()), 4)
     every = np.arange(count)
     if agree_delta_e and len(names) > 1:
-        # Agreement: a view whose colour differs from what the other views show at the same point
-        # (a side drawing showing body fur where the back drawings show tail) loses score.
+        # Agreement: a view whose colour differs from what the drawings show at the same point
+        # (a side drawing showing body fur where the back drawings show tail) loses score. Only
+        # drawings are witnesses: extra images repainted from this mesh share one source, so three
+        # of them would outvote a drawing (Pip: right view delta E 4.5 -> 7.9).
         from .checks import lab
 
         lab_colours = np.stack([lab(colours[i]) for i in range(len(names))]).astype(np.float32)  # (V, N, 3)
-        weights = np.clip(score, 0, None)
+        witness = np.array([index < drawn for index in range(len(names))], dtype=np.float32)
+        weights = np.clip(score, 0, None) * witness[:, None]
         disagreement = np.zeros_like(score)
         for i in range(len(names)):
             others = weights.copy()
@@ -233,7 +245,7 @@ def bake_texture(handoff: Path, mesh: Mesh, corner_uv: np.ndarray, *, size: int 
     winners = np.bincount(label[seen], minlength=len(names)) / max(1, seen.sum())
     report = {"size": size, "texels": int(covered.sum()), "seen_fraction": round(float(seen.mean()), 4),
               "per_view": coverage, "owned": {n: round(float(w), 4) for n, w in zip(names, winners)},
-              "mirrored_views": sorted(n for n, (_, m) in source.items() if m),
+              "mirrored_views": sorted(source[0] for source in sources if source[3]),
               "vote_flipped_last_round": flipped}
     return np.clip(np.round(image), 0, 255).astype(np.uint8), report
 
