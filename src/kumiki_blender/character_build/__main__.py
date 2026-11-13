@@ -72,6 +72,21 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--spec", type=Path, required=True, help="source-registered 2D landmark observations JSON")
     p.add_argument("--output", type=Path, required=True, help="immutable 3D landmark report directory")
 
+    p = sub.add_parser("resolve-anatomy-landmarks", help="substitute triangulated 3D landmarks into anatomical control points")
+    p.add_argument("--spec", type=Path, required=True, help="anatomy template with explicit {landmark: ID} markers")
+    p.add_argument("--landmarks", type=Path, required=True, help="source-verified landmarks.json")
+    p.add_argument("--output", type=Path, required=True, help="new resolved-anatomy.json with provenance")
+
+    p = sub.add_parser("plan-anatomy", help="source-lock explicit 3D eye, lid and contour-loft anatomy recipes")
+    p.add_argument("--blend", type=Path, required=True, help="approved source Blender character .blend")
+    p.add_argument("--spec", type=Path, required=True, help="source-authored anatomical parts JSON")
+    p.add_argument("--output", type=Path, required=True, help="new immutable anatomy plan revision")
+
+    p = sub.add_parser("build-anatomy", help="build source-anchored editable Blender anatomical parts")
+    p.add_argument("--plan", type=Path, required=True, help="anatomy-plan.json")
+    p.add_argument("--output", type=Path, required=True, help="new anatomy.blend + part-only OBJ files")
+    p.add_argument("--blender")
+
     p = sub.add_parser("plan-character", help="validate CharacterSpec v2 and freeze a source-hashed character plan")
     p.add_argument("--spec", type=Path, required=True)
     p.add_argument("--output", type=Path, required=True, help="new immutable character plan directory")
@@ -317,6 +332,9 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--min-usable", type=float, default=0.5,
                    help="reject a repaint if less than this share of the figure keeps its outline")
     p.add_argument("--weight", type=float, default=0.8, help="quality of a repaint relative to a drawing")
+    p.add_argument("--owners", type=Path,
+                   help="owners.png from `texture --diagnostics` of the same texture: take the tone only from "
+                        "pixels that a drawing painted")
     p.add_argument("--resume", action="store_true",
                    help="reuse finished repaints in --output whose render and settings match; repaint the rest")
 
@@ -411,6 +429,27 @@ def _run(args) -> int:
     if args.command == "triangulate-landmarks":
         from .landmark_triangulation import triangulate_landmarks
         report = triangulate_landmarks(args.spec, args.output)
+        print(json.dumps(report, indent=2))
+        return 0
+    if args.command == "resolve-anatomy-landmarks":
+        from .anatomy_landmark_resolver import resolve_anatomy_landmarks
+        report = resolve_anatomy_landmarks(args.spec, args.landmarks, args.output)
+        print(json.dumps(report, indent=2))
+        return 0
+    if args.command == "plan-anatomy":
+        from .anatomy_plan import plan_anatomy
+        report = plan_anatomy(args.blend, args.spec, args.output)
+        print(json.dumps(report, indent=2))
+        return 0
+    if args.command == "build-anatomy":
+        from .anatomy_plan import load_anatomy_plan
+        from .blender import run_worker
+        if args.output.exists():
+            raise FileExistsError(f"Anatomy output revision exists: {args.output}")
+        plan = load_anatomy_plan(args.plan)
+        report = run_worker("anatomy", {
+            "plan": plan, "output": str(args.output.resolve()),
+        }, blender=args.blender, blend_file=Path(plan["source_blend"]))
         print(json.dumps(report, indent=2))
         return 0
     if args.command == "plan-character":
@@ -756,9 +795,10 @@ def _run(args) -> int:
         mesh, corner_uv = read_obj_uv(args.mesh)
         texture = np.asarray(Image.open(args.texture).convert("RGB"))
         views = args.views.split(",") if args.views else default_views()
+        owners = np.asarray(Image.open(args.owners).convert("RGB")) if args.owners else None
         manifest = repaint_views(args.handoff, mesh, corner_uv, texture, views, out, _LocalComfyClient(args.server),
                                  subject=args.subject, size=args.size, steps=args.steps, denoise=args.denoise,
-                                 min_iou=args.min_iou, min_usable=args.min_usable, weight=args.weight)
+                                 min_iou=args.min_iou, min_usable=args.min_usable, weight=args.weight, owners=owners)
         print(json.dumps(manifest["views"], indent=2))
         return 0
     if args.command == "appearance":
