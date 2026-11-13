@@ -45,6 +45,7 @@ class Regions:
     lowpass: np.ndarray | None = None   # (V, M, 3) mean sRGB colour a source shows around a node
     has: np.ndarray | None = None       # (V, M) the source shows enough of the neighbourhood for ``lowpass``
     label: np.ndarray | None = None     # (M,) source that paints the node, -1 if none sees it
+    group: np.ndarray | None = None     # (M,) semantic owner of each node, or None for legacy behavior
 
     def per_node(self, values: np.ndarray) -> np.ndarray:
         return np.bincount(self.cell, weights=values, minlength=len(self.texels))
@@ -69,17 +70,28 @@ class Regions:
 
 
 def build_regions(points: np.ndarray, normals: np.ndarray, *, sigma: float, spacing: float,
-                  neighbours: int = 48) -> Regions:
+                  neighbours: int = 48, group_labels: np.ndarray | None = None) -> Regions:
     """Surface nodes: one per ``spacing`` cell and facing direction, linked to their neighbours."""
     keys = np.floor(points / spacing).astype(np.int64)
     keys -= keys.min(axis=0)
     dims = keys.max(axis=0) + 1
     axis = np.argmax(np.abs(normals), axis=1)
     facing = axis * 2 + (normals[np.arange(len(normals)), axis] > 0)
-    flat = ((keys[:, 0] * dims[1] + keys[:, 1]) * dims[2] + keys[:, 2]) * 6 + facing
-    _, cell = np.unique(flat, return_inverse=True)
+    if group_labels is None:
+        flat = ((keys[:, 0] * dims[1] + keys[:, 1]) * dims[2] + keys[:, 2]) * 6 + facing
+        _, cell = np.unique(flat, return_inverse=True)
+    else:
+        group_labels = np.asarray(group_labels, dtype=np.int64)
+        if group_labels.shape != (len(points),):
+            raise ValueError("Semantic group labels must match surface sample count")
+        # A cell/facing pair occupied by two different physical parts creates
+        # two separate nodes. Never average a scarf with the nearby tail.
+        bins = np.column_stack([keys, facing, group_labels])
+        _, cell = np.unique(bins, axis=0, return_inverse=True)
     count = cell.max() + 1
     texels = np.bincount(cell, minlength=count).astype(np.float64)
+    group = None if group_labels is None else (
+        np.rint(np.bincount(cell, weights=group_labels, minlength=count) / texels).astype(np.int64))
 
     def per_node(values):
         return np.bincount(cell, weights=values, minlength=count)
@@ -92,14 +104,21 @@ def build_regions(points: np.ndarray, normals: np.ndarray, *, sigma: float, spac
     smooth = total / np.maximum(np.linalg.norm(total, axis=1), 1e-12)[:, None]
     distance, around = cKDTree(centre / sigma).query(centre / sigma, k=min(neighbours, count), workers=-1)
     weight = np.exp(-0.5 * distance ** 2)
+    if group is not None:
+        weight *= group[around] == group[:, None]
     for _ in range(2):
         same_side = np.clip(np.einsum("mc,mkc->mk", smooth, smooth[around]), 0, 1)
         smooth = np.einsum("mk,mkc->mc", weight * same_side, total[around])
         smooth /= np.maximum(np.linalg.norm(smooth, axis=1), 1e-12)[:, None]
     feature = np.hstack([centre / sigma, smooth * NORMAL_WEIGHT])
+    if group is not None:
+        feature = np.column_stack([feature, group * 20.0])
     tree = cKDTree(feature)
     distance, near = tree.query(feature, k=min(neighbours, count), workers=-1)
-    return Regions(cell, texels, centre, feature, smooth, tree, near, np.exp(-0.5 * distance ** 2), sigma, spacing)
+    gauss = np.exp(-0.5 * distance ** 2)
+    if group is not None:
+        gauss *= group[near] == group[:, None]
+    return Regions(cell, texels, centre, feature, smooth, tree, near, gauss, sigma, spacing, group=group)
 
 
 @dataclass
@@ -193,6 +212,8 @@ def choose_sources(regions: Regions, witness: np.ndarray, testimony: list[Testim
     label = np.where(score.max(axis=0) > 0, np.argmax(score, axis=0), -1)
     rows = np.repeat(np.arange(count), min(SEAM_EDGES, regions.near.shape[1] - 1))
     cols = regions.near[:, 1:SEAM_EDGES + 1].ravel()
+    same_group = (np.ones(len(rows), dtype=bool) if regions.group is None
+                  else regions.group[rows] == regions.group[cols])
     contested_nodes = 0
     if contest_delta_e and sources > 1:
         order = np.argsort(score, axis=0)
@@ -204,7 +225,7 @@ def choose_sources(regions: Regions, witness: np.ndarray, testimony: list[Testim
         contested = close & both & (apart > contest_delta_e) & (label >= 0)
         contested_nodes = int(contested.sum())
         if contested.any():
-            parts, part = _components(label, rows, cols, contested[rows] & contested[cols])
+            parts, part = _components(label, rows, cols, contested[rows] & contested[cols] & same_group)
             ids = np.nonzero(contested)[0]
             sums = np.zeros((parts, sources))
             for v in range(sources):
@@ -214,7 +235,7 @@ def choose_sources(regions: Regions, witness: np.ndarray, testimony: list[Testim
             label[ids[can]] = winner[can]
     merged = 0
     for _ in range(6):
-        parts, part = _components(label, rows, cols, label[rows] == label[cols])
+        parts, part = _components(label, rows, cols, (label[rows] == label[cols]) & same_group)
         small = (np.bincount(part, minlength=parts)[part] < min_region_nodes) & (label >= 0)
         if not small.any():
             break
@@ -223,6 +244,8 @@ def choose_sources(regions: Regions, witness: np.ndarray, testimony: list[Testim
         votes = np.zeros((len(ids), sources))
         neighbour = regions.near[ids]
         valid = ~small[neighbour] & (label[neighbour] >= 0)
+        if regions.group is not None:
+            valid &= regions.group[neighbour] == regions.group[ids, None]
         strength = regions.gauss[ids] * valid * score[np.clip(label[neighbour], 0, None), neighbour]
         np.add.at(votes, (np.repeat(np.arange(len(ids)), neighbour.shape[1]),
                           np.clip(label[neighbour], 0, None).ravel()), strength.ravel())
@@ -257,8 +280,13 @@ def level_seams(regions: Regions, *, reach: float, robust_delta_e: float = 18.0,
     j = near[:, 1:width + 1].ravel()
     g = regions.gauss[:, 1:width + 1].ravel()
     keep = (i < j) & (label[i] >= 0) & (label[j] >= 0)
+    # Physical part seams are not color-adjustment seams.
+    if regions.group is not None:
+        keep &= regions.group[i] == regions.group[j]
     # An edge listed from both ends counts once: sort the pair and drop duplicates.
     reverse = (i > j) & (label[i] >= 0) & (label[j] >= 0)
+    if regions.group is not None:
+        reverse &= regions.group[i] == regions.group[j]
     pairs = np.concatenate([np.stack([i[keep], j[keep]], axis=1), np.stack([j[reverse], i[reverse]], axis=1)])
     weights = np.concatenate([g[keep], g[reverse]])
     _, first = np.unique(pairs[:, 0] * count + pairs[:, 1], return_index=True)
@@ -324,16 +352,21 @@ def per_texel(regions: Regions, points: np.ndarray, score: np.ndarray, offset: n
     count = len(points)
     label = np.full(count, -1)
     shift = np.zeros((count, 3), dtype=np.float32)
-    node_normal = regions.feature[:, 3:]
+    node_normal = regions.feature[:, 3:6]
     k = min(4, len(regions.label))
     for start in range(0, count, chunk):
         stop = min(count, start + chunk)
         feature = np.hstack([points[start:stop] / regions.sigma, node_normal[regions.cell[start:stop]]])
+        if regions.group is not None:
+            feature = np.column_stack([feature, regions.group[regions.cell[start:stop]] * 20.0])
         distance, idx = regions.tree.query(feature, k=k, workers=-1)
         if k == 1:
             distance, idx = distance[:, None], idx[:, None]
         weight = 1.0 / (distance + 1e-3) ** 2
-        weight /= weight.sum(axis=1, keepdims=True)
+        if regions.group is not None:
+            owners = regions.group[regions.cell[start:stop]]
+            weight *= regions.group[idx] == owners[:, None]
+        weight /= np.maximum(weight.sum(axis=1, keepdims=True), 1e-20)
         node_label = regions.label[idx]
         best = np.full(stop - start, -np.inf)
         chosen = np.full(stop - start, -1)
@@ -386,7 +419,10 @@ def suggest_views(regions: Regions, mask: np.ndarray, *, min_nodes: int = 40, st
     count = len(mask)
     rows = np.repeat(np.arange(count), min(SEAM_EDGES, regions.near.shape[1] - 1))
     cols = regions.near[:, 1:SEAM_EDGES + 1].ravel()
-    parts, part = _components(mask, rows, cols, mask[rows] & mask[cols])
+    connected = mask[rows] & mask[cols]
+    if regions.group is not None:
+        connected &= regions.group[rows] == regions.group[cols]
+    parts, part = _components(mask, rows, cols, connected)
     sizes = np.bincount(part[mask], minlength=parts)
     found: dict[str, int] = {}
     for index in np.argsort(-sizes):
