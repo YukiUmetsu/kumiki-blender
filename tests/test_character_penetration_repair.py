@@ -104,3 +104,46 @@ def test_plan_is_character_independent(tmp_path):
     parsed = load_collision_plan(path)
     assert parsed["pairs"][0].moving == "Wing.L"
     assert parsed["pairs"][0].protected_vertices == (0, 2, 7)
+
+
+
+def test_vertex_group_and_contact_guard_policy(tmp_path):
+    config = tmp_path / "contact-guards.json"
+    config.write_text(json.dumps({
+        "schema_version": 1,
+        "guard_pairs": [["Tail", "Satchel"], ["Wing.L", "Torso"]],
+        "pairs": [
+            {"moving": "Tail", "fixed": "Body",
+             "protected_vertex_groups": ["TailRoot", "TailAttachment.L"],
+             "protected_vertices": [10, 12]}
+        ],
+    }))
+    parsed = load_collision_plan(config)
+    policy = parsed["pairs"][0]
+    assert policy.protected_vertex_groups == ("TailRoot", "TailAttachment.L")
+    assert policy.protected_vertices == (10, 12)
+    assert parsed["guard_pairs"] == [["Tail", "Satchel"], ["Wing.L", "Torso"]]
+
+
+@pytest.mark.parametrize("bad", [
+    [["Tail", "Tail"]],
+    [["Tail", "Satchel"], ["Satchel", "Tail"]],
+    [["Tail", "Satchel", "Body"]],
+    [["Tail", "../Satchel"]],
+])
+def test_invalid_guard_pairs_rejected(tmp_path, bad):
+    path = tmp_path / "bad-guard.json"
+    path.write_text(json.dumps({"schema_version": 1, "pairs": [
+        {"moving": "Tail", "fixed": "Body"}], "guard_pairs": bad}))
+    with pytest.raises(ValueError, match="guard"):
+        load_collision_plan(path)
+
+
+@pytest.mark.parametrize("groups", [["TailRoot", "TailRoot"], ["../Tail"],
+                                     [""], [1], "TailRoot"])
+def test_invalid_vertex_groups_rejected(tmp_path, groups):
+    path = tmp_path / "bad-groups.json"
+    path.write_text(json.dumps({"schema_version": 1, "pairs": [{
+        "moving": "Tail", "fixed": "Body", "protected_vertex_groups": groups}]}))
+    with pytest.raises(ValueError, match="protected_vertex_groups"):
+        load_collision_plan(path)
