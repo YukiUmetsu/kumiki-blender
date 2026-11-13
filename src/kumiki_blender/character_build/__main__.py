@@ -86,6 +86,22 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--baseline", type=Path, help="prior report.json to reject registered-view regressions")
     p.add_argument("--max-regression", type=float, default=0.01, help="maximum per-view drop in IoU")
 
+    p = sub.add_parser("plan-performance", help="lock one simultaneous skeletal and facial Action timeline")
+    p.add_argument("--blend", type=Path, required=True, help="source .blend with both active Actions")
+    p.add_argument("--clip", required=True, help="single output glTF animation name")
+    p.add_argument("--start", type=int, required=True, help="inclusive start frame")
+    p.add_argument("--end", type=int, required=True, help="inclusive end frame")
+    p.add_argument("--armature", default="CharacterRig")
+    p.add_argument("--mouth-object", default="Mouth")
+    p.add_argument("--fps", type=int, default=24)
+    p.add_argument("--time-alignment-tolerance-s", type=float, default=.05)
+    p.add_argument("--output", type=Path, required=True, help="new immutable performance plan")
+
+    p = sub.add_parser("export-performance", help="combine active deform-bone and shape-key Actions into one GLB clip")
+    p.add_argument("--plan", type=Path, required=True, help="performance-plan.json")
+    p.add_argument("--output", type=Path, required=True, help="new combined.blend and performance.glb")
+    p.add_argument("--blender")
+
     p = sub.add_parser("plan-visemes", help="plan authored facial morph motion from Rhubarb mouth-cue JSON")
     p.add_argument("--blend", type=Path, required=True, help="existing authored face Blender .blend")
     p.add_argument("--cues", type=Path, required=True, help="local Rhubarb JSON containing mouthCues")
@@ -383,6 +399,25 @@ def _run(args) -> int:
             "plan": plan, "output": str(args.output.resolve()),
             "source_blend": str(args.blend.resolve())},
             blender=args.blender, blend_file=args.blend.resolve())
+        print(json.dumps(report, indent=2))
+        return 0
+    if args.command == "plan-performance":
+        from .performance_plan import save_performance_plan
+        report = save_performance_plan(args.blend, args.clip, args.start, args.end,
+                 args.output, armature=args.armature, mouth_object=args.mouth_object,
+                 fps=args.fps,
+                 time_alignment_tolerance_s=args.time_alignment_tolerance_s)
+        print(json.dumps(report, indent=2))
+        return 0
+    if args.command == "export-performance":
+        from .performance_plan import load_performance_plan
+        from .blender import run_worker
+        if args.output.exists():
+            raise FileExistsError(f"Output revision already exists: {args.output}")
+        plan = load_performance_plan(args.plan)
+        report = run_worker("performance", {
+            "plan": plan, "output": str(args.output.resolve()),
+        }, blender=args.blender, blend_file=Path(plan["source_blend"]))
         print(json.dumps(report, indent=2))
         return 0
     if args.command == "plan-visemes":
