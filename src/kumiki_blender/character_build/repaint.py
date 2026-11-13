@@ -28,7 +28,7 @@ from scipy import ndimage
 
 from .mesh import Mesh
 from .texture import render_textured
-from .views import AZIMUTH, CANVAS_H, CANVAS_W, camera, figure_mask
+from .views import _FREE_VIEW, AZIMUTH, CANVAS_H, CANVAS_W, camera, figure_mask
 
 BACKGROUND = (217, 217, 217)
 
@@ -243,6 +243,54 @@ def repaint_views(handoff: Path, mesh: Mesh, corner_uv: np.ndarray, texture: np.
     manifest = {"schema_version": 1, "views": rows, "extra": accepted}
     (out / "manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     return manifest
+
+
+def mirror_twin(view: str) -> str | None:
+    """The free camera seen in a mirror across the character's centre plane (az -> -az)."""
+    match = _FREE_VIEW.match(view)
+    if not match:
+        return None
+    azimuth, elevation = float(match.group(1)), match.group(2)
+    if azimuth % 180 == 0:  # straight front or back: its own mirror image
+        return view
+    return f"az{-azimuth:g}_el{elevation}"
+
+
+def screen_extras(handoff: Path, mesh: Mesh, corner_uv: np.ndarray, extra: list[dict], *,
+                  max_added_delta_e: float = 0.5, size: int = 1024, **bake) -> tuple[list[dict], list[dict]]:
+    """Keep the repaints that do not contradict the drawings.
+
+    A repaint can keep the outline and still draw a different face: Quill's view from
+    above the front lost the glasses, passed the IoU check and raised the front view
+    median error from 1.5 to 2.6 delta E. Each repaint is baked alone on top of the
+    drawings, and it is dropped if it raises the mean error of any drawn view by more
+    than ``max_added_delta_e``. With ``mirror_missing`` one side has no drawing to measure, so
+    a repaint is judged by the worse of itself and its mirror twin.
+    """
+    from .texture import appearance_report, bake_texture
+
+    def errors(items):
+        texture, _ = bake_texture(handoff, mesh, corner_uv, size=size, extra=items or None, **bake)
+        # The mean, not the median: lost glasses cover a few percent of a view and leave the median as it was.
+        return {r["view"]: r["mean_delta_e"] for r in appearance_report(handoff, mesh, corner_uv, texture)["views"]}
+
+    drawn = bake.get("views")
+    base = errors([])
+    measured = [v for v in base if drawn is None or v in drawn]
+    added = {}
+    for item in extra:
+        after = errors([item])
+        added[item["name"]] = max((after[v] - base[v] for v in measured), default=0.0)
+    rows, kept = [], []
+    for item in extra:
+        twin = mirror_twin(item["name"]) if bake.get("mirror_missing") else None
+        twin = None if twin == item["name"] else twin
+        cost = max(added[item["name"]], added.get(twin, 0.0))
+        rows.append({"view": item["name"], "added_delta_e": round(added[item["name"]], 2),
+                     "judged_with": twin if twin in added else None, "kept": cost <= max_added_delta_e})
+        if rows[-1]["kept"]:
+            kept.append(item)
+    return kept, rows
 
 
 def default_views(elevation: float = 35.0) -> list[str]:

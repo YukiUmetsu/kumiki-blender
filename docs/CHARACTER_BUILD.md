@@ -111,6 +111,20 @@ Two rules keep the drawings in charge:
 
 A repaint scores 0.8 times a drawing. With 1.5, the right view error was 7.8.
 
+A repaint can keep the outline and still draw something else. On Quill, the repaint
+from above the front lost the glasses and passed the IoU check. Add
+`--screen-extra 0.5` to `texture`. It bakes each repaint alone on top of the drawings.
+If the mean error of a drawn view rises by more than 0.5 delta E, it drops the repaint.
+
+The mean shows a small change such as lost glasses, which the median can miss. With
+`--assume-symmetric`, a repaint of the side without a drawing is judged by its mirror
+twin on the drawn side.
+
+On Pip the screen kept the repaint that removes the doubled eye and dropped four:
+front 3.5, back 3.6, left 4.0, right 5.1 delta E. On Quill it dropped all six. The
+three axis drawings, mirrored, already look right from every angle, and each repaint
+changed the face or streaked the coat.
+
 Notes:
 
 - Start ComfyUI with `--disable-smart-memory` on a 24 GB Mac. The diffusion model and
