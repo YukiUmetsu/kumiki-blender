@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "pairs": [
+    {
+      "moving": "Tail",
+      "fixed": "Body",
+      "max_displacement_m": 0.008,
+      "clearance_m": 0.0005,
+      "iterations": 8,
+      "smoothing_iterations": 2,
+      "max_relative_edge_change": 0.2,
+      "protected_vertices": [
+        0,
+        1,
+        2
+      ],
+      "min_improvement_fraction": 0.05
+    }
+  ]
+}
