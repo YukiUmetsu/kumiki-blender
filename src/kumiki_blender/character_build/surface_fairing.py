@@ -32,6 +32,7 @@ class SurfacePolicy:
     protected_vertex_groups: tuple[str, ...]
     editable_vertex_group: str | None
     reference_gate: dict | None
+    guard_pairs: tuple[tuple[str, str], ...] = ()
 
 
 def _finite(value, name, lower, upper):
@@ -46,7 +47,8 @@ def load_surface_policy(path: str | Path) -> SurfacePolicy:
     keys = {"schema_version", "mesh", "iterations", "lambda_step", "mu_step",
             "feature_angle_deg", "curvature_stop", "max_displacement_m",
             "max_edge_strain", "max_volume_change", "min_roughness_improvement",
-            "protected_vertex_groups", "editable_vertex_group", "reference_gate"}
+            "protected_vertex_groups", "editable_vertex_group", "reference_gate",
+            "guard_pairs"}
     if (not isinstance(raw, dict) or set(raw) - keys
             or type(raw.get("schema_version")) is not int or raw["schema_version"] != 1):
         raise ValueError("Surface policy requires schema_version 1 and recognized properties")
@@ -64,6 +66,19 @@ def load_surface_policy(path: str | Path) -> SurfacePolicy:
     editable = raw.get("editable_vertex_group")
     if editable is not None and (not isinstance(editable, str) or not _SAFE_NAME.fullmatch(editable)):
         raise ValueError("editable_vertex_group must be a named Blender group or null")
+    guards = raw.get("guard_pairs", [])
+    if not isinstance(guards, list) or len(guards) > 32:
+        raise ValueError("guard_pairs must be a list of up to 32 pairs")
+    seen_guards = set()
+    for pair in guards:
+        if (not isinstance(pair, list) or len(pair) != 2
+                or any(not isinstance(x, str) or not _SAFE_NAME.fullmatch(x) for x in pair)
+                or pair[0] == pair[1] or mesh not in pair):
+            raise ValueError("Every guard_pair must name the edited mesh and one other mesh")
+        key = tuple(sorted(pair))
+        if key in seen_guards:
+            raise ValueError("Duplicate guarded object pair")
+        seen_guards.add(key)
     gate = raw.get("reference_gate")
     if gate is not None:
         if not isinstance(gate, dict) or set(gate) - {"character_plan", "region", "max_iou_regression", "min_iou"}:
@@ -93,7 +108,7 @@ def load_surface_policy(path: str | Path) -> SurfacePolicy:
         min_roughness_improvement=_finite(raw.get("min_roughness_improvement", .005),
                                           "min_roughness_improvement", 0, .5),
         protected_vertex_groups=tuple(groups), editable_vertex_group=editable,
-        reference_gate=gate,
+        reference_gate=gate, guard_pairs=tuple(tuple(pair) for pair in guards),
     )
 
 
