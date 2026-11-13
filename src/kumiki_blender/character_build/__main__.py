@@ -33,6 +33,24 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="kumiki-character-build", description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
 
+    p = sub.add_parser("plan-character", help="validate CharacterSpec v2 and freeze a source-hashed character plan")
+    p.add_argument("--spec", type=Path, required=True)
+    p.add_argument("--output", type=Path, required=True, help="new immutable character plan directory")
+
+    p = sub.add_parser("plan-region", help="isolate one anatomical region and its dependencies")
+    p.add_argument("--character", type=Path, required=True, help="directory with character-plan.json")
+    p.add_argument("--region", required=True, help="stable semantic region id, e.g. eye.L")
+    p.add_argument("--output", type=Path, required=True, help="new immutable region task directory")
+
+    p = sub.add_parser("compare-region", help="compare a region mesh with verified registered source masks")
+    p.add_argument("--character", type=Path, required=True, help="directory with character-plan.json")
+    p.add_argument("--region", required=True)
+    p.add_argument("--mesh", type=Path, required=True, help="aligned OBJ, PLY or GLB candidate")
+    p.add_argument("--output", type=Path, required=True, help="new comparison directory")
+    p.add_argument("--min-iou", type=float, help="optional per-view geometry threshold; no automatic art approval")
+    p.add_argument("--baseline", type=Path, help="prior report.json to reject registered-view regressions")
+    p.add_argument("--max-regression", type=float, default=0.01, help="maximum per-view drop in IoU")
+
     p = sub.add_parser("ingest", help="copy generator output into canonical view names")
     p.add_argument("source", type=Path)
     p.add_argument("mapping", type=Path, help='JSON {"file.png": "front", ...}')
@@ -215,6 +233,23 @@ def main(argv: list[str] | None = None) -> int:
 def _run(args) -> int:
     from .views import ingest
 
+    if args.command == "plan-character":
+        from .character_spec_v2 import plan_character
+        report = plan_character(args.spec, args.output)
+        print(json.dumps(report, indent=2))
+        return 0
+    if args.command == "plan-region":
+        from .character_spec_v2 import plan_region
+        report = plan_region(args.character, args.region, args.output)
+        print(json.dumps(report, indent=2))
+        return 0
+    if args.command == "compare-region":
+        from .region_compare import compare_region
+        report = compare_region(args.character, args.region, args.mesh, args.output,
+                                min_iou=args.min_iou, baseline=args.baseline,
+                                max_regression=args.max_regression)
+        print(json.dumps(report, indent=2))
+        return 1 if report["failed_views"] else 0
     if args.command == "ingest":
         used = ingest(args.source, args.mapping, args.destination)
         print(json.dumps(used, indent=2))
