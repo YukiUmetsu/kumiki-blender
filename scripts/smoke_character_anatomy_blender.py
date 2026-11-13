@@ -92,6 +92,29 @@ def main():
                 for line in stream if line.startswith("v ")]
         assert world_vertices
         assert (target / "parts" / "eye.L.obj").is_file()
+        bpy.ops.wm.open_mainfile(filepath=str(target / "anatomy.blend"))
+        eye_components = [
+            bpy.data.objects[f"ANATOMY.eye.L.{component}"]
+            for component in ("sclera", "iris", "pupil")
+        ]
+        expected_world_vertices = [
+            tuple(obj.matrix_world @ vertex.co)
+            for obj in eye_components for vertex in obj.data.vertices
+        ]
+        print("KUMIKI_EYE_BLENDER_WORLD_BOUNDS " + json.dumps({
+            "min_xyz": [round(min(v[axis] for v in expected_world_vertices), 6)
+                        for axis in range(3)],
+            "max_xyz": [round(max(v[axis] for v in expected_world_vertices), 6)
+                        for axis in range(3)],
+            "first_xyz": [round(v, 6) for v in expected_world_vertices[0]],
+            "count": len(expected_world_vertices),
+        }), flush=True)
+        print("KUMIKI_EYE_SOURCE_OBJ_BOUNDS " + json.dumps({
+            "min_xyz": [round(min(v[axis] for v in world_vertices), 6) for axis in range(3)],
+            "max_xyz": [round(max(v[axis] for v in world_vertices), 6) for axis in range(3)],
+            "first_xyz": [round(v, 6) for v in world_vertices[0]],
+            "count": len(world_vertices),
+        }), flush=True)
         assert any(.25 < z < .29 and -.09 < y < -.04
                    for _x, y, z in world_vertices), (
                    "Eye OBJ was rotated out of canonical source-camera frame")
