@@ -163,3 +163,23 @@ def test_geometry_candidate_cannot_hide_silhouette_regression(tmp_path):
                                  evaluator=geometry_sensitive)
     assert report['status'] == 'baseline-retained'
     assert any('silhouette_regression:front' in row['rejected'] for row in report['attempts'])
+
+
+def test_final_resolution_rollback_preview_matches_selected_output(tmp_path):
+    handoff, mesh, config = _setup(tmp_path, final_size=256)
+
+    def resolution_sensitive(path, settings, size, diagnostics):
+        image, conflicts, appearance = _evaluation(path, settings, size, diagnostics)
+        if size == 256 and settings['power'] == 6:
+            for view in appearance['views']:
+                view['mean_delta_e'] = 50
+        return image, conflicts, appearance
+
+    output = tmp_path / 'rolled-back'
+    report = run_conflict_repair(handoff, mesh, config, output, evaluator=resolution_sensitive)
+    assert report['status'] == 'baseline-retained'
+    assert report['selected_attempt_index'] == 0
+    with Image.open(output / 'texture.png') as final, Image.open(output / 'preview.png') as preview:
+        assert final.size == (256, 256)
+        assert preview.size == (128, 128)
+        assert final.getpixel((0, 0)) == preview.getpixel((0, 0)) == (80, 0, 0)
