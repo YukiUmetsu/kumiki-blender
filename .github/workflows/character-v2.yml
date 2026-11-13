@@ -91,14 +91,31 @@ jobs:
         run: |
           set -euo pipefail
           archive="$RUNNER_TEMP/blender-4.5.15-linux-x64.tar.xz"
+          digest_file="$RUNNER_TEMP/blender-4.5.15.sha256"
+          official="https://download.blender.org/release/Blender4.5"
+          foundation_mirror="https://mirror.blender.org/release/Blender4.5"
+          # GitHub-hosted runners occasionally receive HTTP 403 from the
+          # legacy download host. The fallback is Blender Foundation's
+          # own official mirror (advertised at blender.org/download).
+          download_checked() {
+            local url="$1" dest="$2"
+            rm -f "$dest.partial"
+            if curl --fail --location --retry 2 --connect-timeout 20 \
+              --max-time 600 --output "$dest.partial" "$url"; then
+              mv "$dest.partial" "$dest"
+              return 0
+            fi
+            rm -f "$dest.partial"
+            return 1
+          }
           if [ ! -f "$archive" ]; then
-            curl --fail --location --retry 3 \
-              "https://download.blender.org/release/Blender4.5/blender-4.5.15-linux-x64.tar.xz" \
-              --output "$archive"
+            download_checked "$official/blender-4.5.15-linux-x64.tar.xz" "$archive" ||
+              download_checked "$foundation_mirror/blender-4.5.15-linux-x64.tar.xz" "$archive" ||
+              { echo "::error::Blender Foundation official download and mirror are unavailable"; exit 1; }
           fi
-          curl --fail --location --retry 3 \
-            "https://download.blender.org/release/Blender4.5/blender-4.5.15.sha256" \
-            --output "$RUNNER_TEMP/blender-4.5.15.sha256"
+          download_checked "$official/blender-4.5.15.sha256" "$digest_file" ||
+            download_checked "$foundation_mirror/blender-4.5.15.sha256" "$digest_file" ||
+            { echo "::error::Blender Foundation checksum manifest unavailable"; exit 1; }
           checksum="$(sha256sum "$archive" | cut -d ' ' -f 1)"
           grep -q "$checksum.*blender-4.5.15-linux-x64.tar.xz" "$RUNNER_TEMP/blender-4.5.15.sha256"
           mkdir -p "$RUNNER_TEMP/blender"
