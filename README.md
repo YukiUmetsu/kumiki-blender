@@ -48,6 +48,14 @@ height are rejected before Blender starts. Numeric camera regressions return
 a failing exit code but keep the editable Blender candidate and detailed
 review evidence.
 
+### Automatic source verification during part-specific texture baking
+
+texture-parts can now take --qa-baseline to automatically check the new
+candidate against the original reference views before accepting it. A failed
+candidate is preserved with color difference panels, a structured receipt and
+exit code 1; a source/evidence preflight error prevents baking entirely.
+This is an optional mode, preserving previous texture-parts behavior.
+
 ### Offline before/after texture fidelity gate
 
 For constrained local machines, the texture gate now preflights the estimated

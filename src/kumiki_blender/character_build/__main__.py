@@ -409,6 +409,13 @@ def main(argv: list[str] | None = None) -> int:
                    help="inside one material, level differences between two views up to about twice this")
     p.add_argument("--polish-reach-px", type=float, default=12.0,
                    help="distance from a seam over which the polish works (aligned px)")
+    p.add_argument("--qa-baseline", type=Path, help="prior texture; opt into source-art QA of the newly baked candidate")
+    p.add_argument("--qa-output", type=Path, help="new evidence folder; default <texture-stem>-source-qa")
+    p.add_argument("--qa-max-mean-increase", type=float, default=1.5, help="allowed per-camera increase in mean Lab delta E")
+    p.add_argument("--qa-max-p90-increase", type=float, default=3.0, help="allowed per-camera increase in P90 Lab delta E")
+    p.add_argument("--qa-max-within-10-drop", type=float, default=.02, help="allowed fraction of source pixels leaving delta E <= 10")
+    p.add_argument("--qa-max-projection-samples", type=int, default=2_000_000, help="per-camera safe UV projection sample cap")
+
 
     p = sub.add_parser("audit-texture-revision", help="reject a texture change that worsens original-art colors in any aligned camera")
     p.add_argument("handoff", type=Path, help="reference handoff with aligned images and fixed camera scale")
@@ -1014,18 +1021,87 @@ def _run(args) -> int:
         from .parts import bake_parts
         from .texture import read_obj_uv
 
-        _new_file(args.output)
+        if args.qa_output is not None and args.qa_baseline is None:
+            raise ValueError("--qa-output requires --qa-baseline")
+        new_report = args.output.with_suffix(".json")
+        qa_receipt = args.output.with_suffix(".source-fidelity.json")
+        qa_folder = (args.qa_output if args.qa_output is not None else
+                     args.output.parent / f"{args.output.stem}-source-qa")
+        for reserved in [args.output, new_report] + (
+                [qa_folder, qa_receipt] if args.qa_baseline else []):
+            if reserved.exists():
+                raise FileExistsError(f"Output revision already exists: {reserved}")
         diagnostics = _new_dir(args.diagnostics) if args.diagnostics else None
         mesh, corner_uv = read_obj_uv(args.mesh)
         extra = json.loads(args.extra.read_text(encoding="utf-8"))["extra"] if args.extra else None
+        qa_views = args.views.split(",") if args.views else None
+        if args.qa_baseline is not None:
+            from .texture import estimate_uv_projection_samples
+            from .texture_revision_gate import _fraction, _image
+
+            # Fail early, before the expensive multi-material bake. Candidate
+            # output and original reviewed masks are always separate revisions.
+            _image(args.qa_baseline)
+            for key, value, hi in (
+                ("qa_max_mean_increase", args.qa_max_mean_increase, 50),
+                ("qa_max_p90_increase", args.qa_max_p90_increase, 80),
+                ("qa_max_within_10_drop", args.qa_max_within_10_drop, 1),
+            ):
+                _fraction(value, key, 0, hi)
+            if (type(args.qa_max_projection_samples) is not int
+                    or not 10_000 <= args.qa_max_projection_samples <= 10_000_000):
+                raise ValueError("--qa-max-projection-samples must be in [10000, 10000000]")
+            spec = json.loads((args.handoff / "spec.json").read_text(encoding="utf-8"))
+            declared = spec.get("views", [])
+            selected = qa_views if qa_views is not None else declared
+            if (not isinstance(selected, list) or not selected or
+                    len(set(selected)) != len(selected) or
+                    not set(selected) <= set(declared)):
+                raise ValueError("Source QA requires distinct cameras in the original handoff")
+            if not all((args.handoff / "aligned" / f"{name}.png").is_file()
+                       for name in selected):
+                raise ValueError("All selected source cameras need aligned reference images")
+            predicted = estimate_uv_projection_samples(
+                mesh, metres_per_px=spec["metres_per_aligned_px"], scale=.25)
+            if predicted > args.qa_max_projection_samples:
+                raise ValueError(
+                    f"Projection sample budget exceeded ({predicted:,} > "
+                    f"{args.qa_max_projection_samples:,}); use an approved coarser QA cage")
+        _new_file(args.output)
         image, report = bake_parts(args.handoff, mesh, corner_uv, args.parts, size=args.size, extra=extra,
                                    polish=not args.no_polish, polish_reach_px=args.polish_reach_px,
                                    tone_delta_e=args.tone_delta_e,
                                    diagnostics=diagnostics, **_bake_settings(args))
         Image.fromarray(image).save(args.output)
-        _write_json(args.output.with_suffix(".json"), report)
-        print(json.dumps(report, indent=2))
-        return 0
+        _write_json(new_report, report)
+        if args.qa_baseline is None:
+            print(json.dumps(report, indent=2))
+            return 0
+        from .texture_revision_gate import audit_texture_revision
+
+        evidence = audit_texture_revision(
+            args.handoff, args.mesh, args.qa_baseline, args.output,
+            qa_folder, views=qa_views,
+            max_mean_increase=args.qa_max_mean_increase,
+            max_p90_increase=args.qa_max_p90_increase,
+            max_within_10_drop=args.qa_max_within_10_drop,
+            max_projection_samples=args.qa_max_projection_samples)
+        receipt = {
+            "schema_version": 1,
+            "status": ("texture-source-regression-rejected"
+                       if not evidence["numeric_gate_pass"]
+                       else "texture-numeric-gate-artistic-review-required"),
+            "candidate": str(args.output),
+            "candidate_bake_report": str(new_report),
+            "source_qa_report": str(qa_folder / "report.json"),
+            "source_qa_numeric_pass": evidence["numeric_gate_pass"],
+            "failed_views": evidence["failed_views"],
+            "input_sha256": evidence["input_sha256"],
+            "artistic_review_required": True,
+        }
+        _write_json(qa_receipt, receipt)
+        print(json.dumps(receipt, indent=2))
+        return 0 if evidence["numeric_gate_pass"] else 1
     if args.command == "audit-texture-revision":
         from .texture_revision_gate import audit_texture_revision
         report = audit_texture_revision(
