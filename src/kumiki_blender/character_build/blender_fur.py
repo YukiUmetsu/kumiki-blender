@@ -3,7 +3,8 @@
 Arguments (JSON): mesh (with a UV map), basecolor (PNG on that UV map), output, render (bool),
 weights (optional PLY: red channel = fur weight, see ``scatter.fur_weights``),
 systems: [{name, mask (PNG on the UV map, white = fur), density_per_m2, length_m, radius_m,
-clump, frizz_m, seed, box_min, box_max (optional, metres)}].
+clump, frizz_m, seed, box_min, box_max (optional, metres), use_fur_attribute, comb (direction
+vector), comb_strength}].
 
 Each system is a geometry-nodes modifier on the mesh: Generate Hair Curves (density and
 mask texture on the UV map) -> Clump -> Frizz -> Set Hair Curve Profile. The mesh stays in
@@ -111,7 +112,24 @@ def fur_tree(name: str, groups: dict, system: dict, material, mask_image):
     profile = group("Set Hair Curve Profile")
     profile.inputs["Radius"].default_value = system["radius_m"]
     join = nodes.new("GeometryNodeJoinGeometry")
-    links.new(generate.outputs["Curves"], clump.inputs["Geometry"])
+    comb_target = generate.outputs["Curves"]
+    if system.get("comb"):
+        # Brush the strands: each point moves along the comb direction by length * strength * t^1.5,
+        # with t the position along the strand (0 at the root, which stays on the surface).
+        comb = nodes.new("GeometryNodeSetPosition")
+        parameter = nodes.new("GeometryNodeSplineParameter")
+        power = nodes.new("ShaderNodeMath")
+        power.operation, power.inputs[1].default_value = "POWER", 1.5
+        scale = nodes.new("ShaderNodeVectorMath")
+        scale.operation = "SCALE"
+        scale.inputs[0].default_value = [c * system["length_m"] * system.get("comb_strength", 0.8)
+                                         for c in system["comb"]]
+        links.new(parameter.outputs["Factor"], power.inputs[0])
+        links.new(power.outputs[0], scale.inputs["Scale"])
+        links.new(generate.outputs["Curves"], comb.inputs["Geometry"])
+        links.new(scale.outputs["Vector"], comb.inputs["Offset"])
+        comb_target = comb.outputs["Geometry"]
+    links.new(comb_target, clump.inputs["Geometry"])
     links.new(clump.outputs["Geometry"], frizz.inputs["Geometry"])
     links.new(frizz.outputs["Geometry"], profile.inputs["Geometry"])
     links.new(group_in.outputs[0], join.inputs["Geometry"])
@@ -169,8 +187,19 @@ def main() -> None:
     renders = []
     if args.get("render"):
         scene = bpy.context.scene
-        scene.render.engine = "BLENDER_EEVEE"
-        scene.render.hair_type = "STRIP"  # "STRAND" draws one-pixel lines and ignores the radius
+        if args.get("engine", "CYCLES") == "CYCLES":  # hair needs ray tracing to read as fur
+            scene.render.engine = "CYCLES"
+            scene.cycles.samples = int(args.get("samples", 48))
+            scene.cycles.use_denoising = True
+            try:
+                bpy.context.preferences.addons["cycles"].preferences.compute_device_type = "METAL"
+                bpy.context.preferences.addons["cycles"].preferences.get_devices()
+                scene.cycles.device = "GPU"
+            except Exception:  # no Metal device: CPU
+                scene.cycles.device = "CPU"
+        else:
+            scene.render.engine = "BLENDER_EEVEE"
+            scene.render.hair_type = "STRIP"  # "STRAND" draws one-pixel lines and ignores the radius
         scene.render.resolution_x = scene.render.resolution_y = int(args.get("render_px", 900))
         world = bpy.data.worlds.new("Studio")
         scene.world, world.use_nodes = world, True

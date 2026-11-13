@@ -156,12 +156,55 @@ def _iou(a: np.ndarray, b: np.ndarray) -> float:
     return float((a & b).sum() / max(1, (a | b).sum()))
 
 
+class Lattice:
+    """Trilinear deformation lattice over a bounding box (like Blender's Lattice modifier)."""
+
+    def __init__(self, points: np.ndarray, cells: tuple[int, int, int], pad: float = 0.05):
+        low, high = points.min(axis=0), points.max(axis=0)
+        margin = pad * (high - low)
+        self.low, self.size = low - margin, (high - low) + 2 * margin
+        self.cells = np.array(cells)
+        local = (points - self.low) / self.size * self.cells
+        base = np.clip(np.floor(local).astype(int), 0, self.cells - 1)
+        frac = local - base
+        corners, weights = [], []
+        for dx in (0, 1):
+            for dy in (0, 1):
+                for dz in (0, 1):
+                    corner = base + [dx, dy, dz]
+                    corners.append(np.ravel_multi_index(corner.T, tuple(self.cells + 1)))
+                    weights.append(np.prod(np.where([dx, dy, dz], frac, 1 - frac), axis=1))
+        self.corners, self.weights = np.stack(corners, axis=1), np.stack(weights, axis=1)  # (N, 8)
+        self.nodes = int(np.prod(self.cells + 1))
+
+    def pool(self, move: np.ndarray, weight: np.ndarray) -> np.ndarray:
+        """Node moves: the weighted mean of the desired moves of the vertices around each node."""
+        w = self.weights * weight[:, None]
+        total = np.zeros((self.nodes, 3))
+        count = np.zeros(self.nodes)
+        for k in range(8):
+            np.add.at(total, self.corners[:, k], move * w[:, k:k + 1])
+            np.add.at(count, self.corners[:, k], w[:, k])
+        node = np.zeros((self.nodes, 3))
+        has = count > 1e-9
+        node[has] = total[has] / count[has, None]
+        return node
+
+    def apply(self, node: np.ndarray) -> np.ndarray:
+        return np.einsum("nk,nkd->nd", self.weights, node[self.corners])
+
+
 def fit_silhouettes(mesh: Mesh, masks: dict[str, np.ndarray], height_m: float, *, scale: float = 0.25,
                     iterations: int = 40, step: float = 0.6, rim_cos: float = 0.35, smooth_radius_px: float = 4.0,
                     outline_blur_px: float = 12.0,
-                    max_move_px: float = 3.0, anchor_weight: float = 2.0, normalise_first: bool = True
-                    ) -> FitResult:
-    """Fit ``mesh`` to reference ``masks`` (camera frame at ``scale`` of the aligned frame)."""
+                    max_move_px: float = 3.0, anchor_weight: float = 2.0, normalise_first: bool = True,
+                    lattice_cells: tuple[int, int, int] | None = None) -> FitResult:
+    """Fit ``mesh`` to reference ``masks`` (camera frame at ``scale`` of the aligned frame).
+
+    ``lattice_cells`` (e.g. 8, 8, 16) deforms the mesh only through a coarse trilinear
+    lattice. Use it for a detailed generator mesh: per-vertex moves on fur tufts act like
+    noise and crumple the surface, a lattice changes proportions and keeps the detail.
+    """
     px = height_m / FIGURE_PX
     transform = {}
     if normalise_first:
@@ -182,6 +225,7 @@ def fit_silhouettes(mesh: Mesh, masks: dict[str, np.ndarray], height_m: float, *
     anchors = {"front", "right" if "right" in masks else "left"}
     weights = {n: anchor_weight if n in anchors else 1.0 for n in masks}
     history, best = [], None
+    lattice = Lattice(vertices, lattice_cells) if lattice_cells else None
     faces = mesh.faces
     start_normals = np.cross(vertices[faces[:, 1]] - vertices[faces[:, 0]], vertices[faces[:, 2]] - vertices[faces[:, 0]])
     for iteration in range(iterations + 1):
@@ -217,10 +261,14 @@ def fit_silhouettes(mesh: Mesh, masks: dict[str, np.ndarray], height_m: float, *
         field = np.zeros_like(vertices)
         moved = votes > 0
         field[moved] = move_sum[moved] / votes[moved, None]
-        # Smooth the displacement, not the shape: neighbours follow a move, unmoved detail stays.
-        # The radius is physical (grid pixels), so a dense generator mesh does not crumple.
-        for _ in range(smooth_rounds):
-            field = 0.5 * field + 0.5 * (adjacency @ field)
+        if lattice is not None:
+            # Vertices that need no move vote for zero, so a node moves only as far as its region agrees.
+            field = lattice.apply(lattice.pool(field, np.ones(len(field))))
+        else:
+            # Smooth the displacement, not the shape: neighbours follow a move, unmoved detail stays.
+            # The radius is physical (grid pixels), so a dense generator mesh does not crumple.
+            for _ in range(smooth_rounds):
+                field = 0.5 * field + 0.5 * (adjacency @ field)
         # Flip guard: a move that turns a triangle over folds the surface (QuadriFlow then refuses
         # the mesh). Compare with the starting orientation, not the last iteration: a triangle can
         # also turn over a little at a time. Cancel the moves at the corners of each triangle that

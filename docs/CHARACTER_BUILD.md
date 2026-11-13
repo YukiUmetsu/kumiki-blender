@@ -39,6 +39,8 @@ or newer. The other commands need only NumPy, SciPy, scikit-image and Pillow.
 | Generators | `solidify mesh.glb --output solid.ply` | A hollow or badly wound mesh rebuilt as one solid |
 | Generators | `swap BASE DONOR --region "y>0.05" --output sw/` | One region taken from another generation (`--ellipsoid`, `--align-region`) |
 | Texture | `texture HANDOFF retopo/low.obj --output base.png` | UV texture baked from the full-resolution reference views (sharp clothes, buttons, fur painting) |
+| Texture | `appearance HANDOFF retopo/low.obj base.png --output app/` | Colour agreement per view (median delta E) with side-by-side images |
+| Fit | `fit HANDOFF mesh.ply --lattice 8,8,16` | Lattice deformation for detailed generator meshes |
 | Texture | `retopo fitted.ply --colour-from ranked/x.placement.json` | The generator's own texture baked as `low_basecolor.png` |
 | Fur | `fur-weights coloured.ply --clothing-top-m 0.2 --eye-band-m 0.21,0.27` | Per-vertex fur weight from the drawings' colours (no fur on clothing or eyes) |
 | Fur | `fur retopo/low.obj --basecolor low_basecolor.png --weights w.ply --systems s.json` | Strand fur with Blender's procedural hair assets |
@@ -46,7 +48,32 @@ or newer. The other commands need only NumPy, SciPy, scikit-image and Pillow.
 
 Each command writes a new file or folder. It does not overwrite an output.
 
-## Image-to-3D route (recommended for detail)
+## Multi-view route (best results so far)
+
+Hunyuan3D-2mv makes one shape from the front, left, back and right views together, so the
+face and the tail come from one consistent shape. On Pip it beat every single-image
+TRELLIS.2 candidate.
+
+1. **Shape.** `scripts/hunyuan_mv_shape.py` with `handoff/raw/{front,left,back,right}.png`
+   (about 30 minutes on an M4: diffusion on MPS in fp16, decoding on MPS in fp32).
+   If the character is symmetric and has no view of one side, mirror the other side.
+2. **Place.** `place HANDOFF shape.glb --output ranked/`.
+3. **Fit through a lattice.** `fit HANDOFF ranked/shape.ply --no-normalise --lattice 8,8,16 --iterations 60`.
+   A coarse lattice changes proportions and keeps the generated detail. Finer
+   lattices raise IoU but bend the shape at cell boundaries.
+4. **Retopology.** `retopo fitted.ply --output retopo/ --target-faces 20000`.
+5. **Texture.** `texture HANDOFF retopo/low.obj --output base.png --size 4096`.
+   Each texel takes its colour from one view. The choice depends on the viewing angle
+   and on agreement with the other views. A vote on the surface then smooths it.
+6. **Measure.** `compare` for silhouettes, `appearance HANDOFF low.obj base.png` for
+   colour (median delta E per view and side-by-side images).
+7. **Rig.** `joints` and `rig` as before.
+
+Pip, multi-view route (2026-11-13): silhouette IoU 0.93 to 0.95 in all six views.
+Median delta E: 3.8 (front), 4.4 (back, right), 7.1 (left), 8.6 to 9.1 (3/4 views).
+The 3/4 drawings disagree most with the others, so no single texture matches them closely.
+
+## Image-to-3D route
 
 A shape from silhouettes knows only the outlines. Ears, a snout and a tail
 volume need an image-to-3D generator. The pipeline then places, scores,
@@ -76,8 +103,10 @@ corrects, colours and rigs the generated mesh.
    fails where the fit moved the surface further.
 7. **Fur.** `fur-weights` marks clothing and eyes from the colours projected
    from the drawings. A generator texture often paints clothing in fur colours.
-   `fur` then grows strands with Blender's hair node assets. Strands thinner
-   than a pixel need a Cycles render and grooming to read as fur.
+   `fur` then grows strands with Blender's hair node assets (optional combing,
+   Cycles render). Each strand takes one colour from its root, so ungroomed
+   strands read as a mosaic. On Pip the painted fur in the texture looked
+   better. Treat strand fur as a starting point for manual grooming.
 
 TRELLIS.2 exports a hollow, inconsistently wound shell, so `place` and
 `solidify` rebuild it as one solid. On a 24 GB Mac the 512 pipeline peaked at

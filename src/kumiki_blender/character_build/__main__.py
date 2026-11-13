@@ -65,6 +65,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--smooth-radius-px", type=float, default=4.0,
                    help="displacement smoothing radius in fit-grid pixels (about 1.3 mm each for a 0.32 m figure); "
                         "use about 40 for a detailed generator mesh, so only proportions change")
+    p.add_argument("--lattice", help="nx,ny,nz cells: deform only through a coarse lattice (best for generator meshes)")
 
     p = sub.add_parser("project", help="vertex colours from the views; optional clay relief")
     p.add_argument("handoff", type=Path)
@@ -102,6 +103,14 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("mesh", type=Path, help="OBJ with UVs, e.g. retopo/low.obj")
     p.add_argument("--output", type=Path, required=True, help=".png")
     p.add_argument("--size", type=int, default=2048)
+    p.add_argument("--diagonal-weight", type=float, default=1.0, help="score factor of 3/4 views")
+    p.add_argument("--min-cosine", type=float, default=0.35, help="views at a grazing angle below this do not paint")
+
+    p = sub.add_parser("appearance", help="colour agreement of a textured mesh with each reference view")
+    p.add_argument("handoff", type=Path)
+    p.add_argument("mesh", type=Path, help="OBJ with UVs")
+    p.add_argument("texture", type=Path)
+    p.add_argument("--output", type=Path, required=True, help="new folder: report.json and side-by-side images")
 
     p = sub.add_parser("fur-mask", help="UV-space fur mask from a base-colour texture (clothing excluded)")
     p.add_argument("basecolor", type=Path)
@@ -139,6 +148,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--output", type=Path, required=True)
     p.add_argument("--weights", type=Path, help="PLY from fur-weights (red = fur); systems use it with use_fur_attribute")
     p.add_argument("--render", action="store_true")
+    p.add_argument("--engine", choices=("CYCLES", "BLENDER_EEVEE"), default="CYCLES")
+    p.add_argument("--samples", type=int, default=48)
     p.add_argument("--blender")
 
     p = sub.add_parser("fur-weights", help="per-vertex fur weights from colours projected from the drawings")
@@ -211,7 +222,7 @@ def _run(args) -> int:
         from .mesh import orient_faces, weld
 
         # Generator files split UV seams and can have inconsistent winding.
-        spec, (mesh, _flipped) = _spec(args.handoff), orient_faces(weld(read_mesh(args.mesh)))
+        spec, (mesh, _) = _spec(args.handoff), orient_faces(weld(read_mesh(args.mesh)))
         _new_file(args.output)
         if args.command == "fit":
             from .fit import fit_silhouettes
@@ -222,7 +233,8 @@ def _run(args) -> int:
             if args.views:
                 masks = {n: m for n, m in masks.items() if n in args.views}
             result = fit_silhouettes(mesh, masks, spec["height_m"], scale=scale, iterations=args.iterations,
-                                     normalise_first=not args.no_normalise, smooth_radius_px=args.smooth_radius_px)
+                                     normalise_first=not args.no_normalise, smooth_radius_px=args.smooth_radius_px,
+                                     lattice_cells=tuple(int(v) for v in args.lattice.split(",")) if args.lattice else None)
             write_mesh(result.mesh, args.output)
             report = {"input": str(args.mesh), "normalise": result.transform, "best_iteration": result.best_iteration,
                       "folds": result.folds,
@@ -265,9 +277,23 @@ def _run(args) -> int:
 
         _new_file(args.output)
         mesh, corner_uv = read_obj_uv(args.mesh)
-        image, report = bake_texture(args.handoff, mesh, corner_uv, size=args.size)
+        image, report = bake_texture(args.handoff, mesh, corner_uv, size=args.size,
+                                     diagonal_weight=args.diagonal_weight, min_cosine=args.min_cosine)
         Image.fromarray(image).save(args.output)
         _write_json(args.output.with_suffix(".json"), report)
+        print(json.dumps(report, indent=2))
+        return 0
+    if args.command == "appearance":
+        import numpy as np
+        from PIL import Image
+
+        from .texture import appearance_report, read_obj_uv
+
+        out = _new_dir(args.output)
+        mesh, corner_uv = read_obj_uv(args.mesh)
+        texture = np.asarray(Image.open(args.texture).convert("RGB"))
+        report = appearance_report(args.handoff, mesh, corner_uv, texture, out=out)
+        _write_json(out / "report.json", report)
         print(json.dumps(report, indent=2))
         return 0
     if args.command == "fur-weights":
@@ -302,6 +328,9 @@ def _run(args) -> int:
         from .hull import solidify
         from .mesh import orient_faces, read_mesh, weld, write_ply
 
+        stems = [path.stem for path in args.meshes]
+        if len(set(stems)) != len(stems):  # outputs are named by stem
+            raise ValueError(f"Candidate file names must differ: {sorted(stems)}")
         spec, out = _spec(args.handoff), _new_dir(args.output)
         out.mkdir(parents=True, exist_ok=True)
         masks = reference_masks(args.handoff, 0.25)
@@ -365,7 +394,8 @@ def _run(args) -> int:
         out = _new_dir(args.output)
         report = run_worker("fur", {"mesh": str(args.mesh.resolve()), "basecolor": str(args.basecolor.resolve()),
                                     "weights": str(args.weights.resolve()) if args.weights else None,
-                                    "systems": systems, "render": args.render, "output": str(out.resolve())},
+                                    "systems": systems, "render": args.render, "engine": args.engine,
+                                    "samples": args.samples, "output": str(out.resolve())},
                             blender=args.blender)
         print(json.dumps({k: report[k] for k in ("strands", "renders")}, indent=2))
         return 0

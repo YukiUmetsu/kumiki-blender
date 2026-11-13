@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import struct
 import tempfile
 import unittest
 from pathlib import Path
@@ -13,7 +12,7 @@ from PIL import Image, ImageDraw
 
 from character_build_fixtures import (HEIGHT_M, MARGINS, SKIN, ellipsoid_mesh, figure_points, glb_bytes, render_view,
                                       signed_volume, write_views)
-from kumiki_blender.character_build import checks, hull, views
+from kumiki_blender.character_build import checks, views
 from kumiki_blender.character_build.__main__ import main as cli
 from kumiki_blender.character_build.assembly import load_assembly
 from kumiki_blender.character_build.fit import fit_silhouettes, fold_faces, normalise
@@ -21,7 +20,7 @@ from kumiki_blender.character_build.handoff import build_handoff, compare, refer
 from kumiki_blender.character_build.hull import solidify
 from kumiki_blender.character_build.mesh import Mesh, orient_faces, rasterize, read_mesh, write_mesh
 from kumiki_blender.character_build.swap import align, parse_region, region_box
-from kumiki_blender.character_build.texture import bake_texture, read_obj_uv
+from kumiki_blender.character_build.texture import appearance_report, bake_texture, read_obj_uv
 from kumiki_blender.character_build.project import mirror_missing, project_images, relief, subdivide
 from kumiki_blender.character_build.rig import estimate_joints, validate_joints
 from kumiki_blender.character_build.scatter import ScatterSpec, fur_mask, scatter_cards
@@ -318,6 +317,18 @@ class TextureTests(SharedSet):
         distance = np.abs(centre - np.array(SKIN)).sum(axis=1)
         self.assertGreater(float((distance < 40).mean()), 0.7, "the belly is skin-coloured")
 
+    def test_appearance_of_a_baked_texture(self):
+        """Baked from the views and rendered back from the front camera, the colours agree."""
+        mesh = read_mesh(self.handoff / "blockout.obj")
+        low, high = mesh.bounds()
+        uv = (mesh.vertices[:, [0, 2]] - low[[0, 2]]) / (high[[0, 2]] - low[[0, 2]])
+        corner_uv = uv[mesh.faces] * 0.98 + 0.01
+        image, _ = bake_texture(self.handoff, mesh, corner_uv, size=512)
+        report = appearance_report(self.handoff, mesh, corner_uv, image)
+        front = next(r for r in report["views"] if r["view"] == "front")
+        self.assertLess(front["median_delta_e"], 5)
+        self.assertGreater(front["within_10"], 0.8)
+
     def test_obj_uv_reader(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "q.obj"
@@ -395,6 +406,15 @@ class CliTests(SharedSet):
         compare(self.handoff, self.handoff / "blockout.obj", output=out)
         with self.assertRaises(FileExistsError):
             compare(self.handoff, self.handoff / "blockout.obj", output=out)
+
+    def test_place_rejects_duplicate_file_names(self):
+        first, second = self.root / "a" / "mesh.obj", self.root / "b" / "mesh.obj"
+        for path in (first, second):
+            path.parent.mkdir(exist_ok=True)
+            path.write_bytes((self.handoff / "blockout.obj").read_bytes())
+        code = cli(["place", str(self.handoff), str(first), str(second), "--output", str(self.root / "ranked")])
+        self.assertEqual(code, 2)
+        self.assertFalse((self.root / "ranked").exists())
 
     def test_outputs_are_new_revisions(self):
         out = self.root / "fitted.ply"
