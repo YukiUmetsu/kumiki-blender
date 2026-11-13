@@ -410,6 +410,18 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--polish-reach-px", type=float, default=12.0,
                    help="distance from a seam over which the polish works (aligned px)")
 
+    p = sub.add_parser("audit-texture-revision", help="reject a texture change that worsens original-art colors in any aligned camera")
+    p.add_argument("handoff", type=Path, help="reference handoff with aligned images and fixed camera scale")
+    p.add_argument("mesh", type=Path, help="unchanged OBJ mesh with UVs (source-frame or legacy interchange)")
+    p.add_argument("before", type=Path, help="previous texture image")
+    p.add_argument("after", type=Path, help="candidate texture image")
+    p.add_argument("--views", help="comma-separated source cameras; default all aligned handoff views")
+    p.add_argument("--max-mean-increase", type=float, default=1.5, help="maximum increase in mean Lab delta E per camera")
+    p.add_argument("--max-p90-increase", type=float, default=3.0, help="maximum increase in P90 Lab delta E per camera")
+    p.add_argument("--max-within-10-drop", type=float, default=.02, help="maximum decrease in fraction of pixels within delta E 10")
+    p.add_argument("--min-pixels-per-view", type=int, default=150, help="minimum common reference/model pixels")
+    p.add_argument("--output", type=Path, required=True, help="new immutable per-camera QA panels and report")
+
     p = sub.add_parser("appearance", help="colour agreement of a textured mesh with each reference view")
     p.add_argument("handoff", type=Path)
     p.add_argument("mesh", type=Path, help="OBJ with UVs")
@@ -1013,6 +1025,17 @@ def _run(args) -> int:
         _write_json(args.output.with_suffix(".json"), report)
         print(json.dumps(report, indent=2))
         return 0
+    if args.command == "audit-texture-revision":
+        from .texture_revision_gate import audit_texture_revision
+        report = audit_texture_revision(
+            args.handoff, args.mesh, args.before, args.after, args.output,
+            views=args.views.split(",") if args.views else None,
+            max_mean_increase=args.max_mean_increase,
+            max_p90_increase=args.max_p90_increase,
+            max_within_10_drop=args.max_within_10_drop,
+            min_pixels_per_view=args.min_pixels_per_view)
+        print(json.dumps(report, indent=2))
+        return 0 if report["numeric_gate_pass"] else 1
     if args.command == "appearance":
         import numpy as np
         from PIL import Image

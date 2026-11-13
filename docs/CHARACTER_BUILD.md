@@ -145,6 +145,15 @@ drawing paints alone. Pip's left eye was 60 px further round the head in the sid
 drawing. No rule on the drawings removes that. A picture that faces the feature
 does: see the next section.
 
+## Check every new texture against the original art
+
+After baking or polishing a texture, run
+[audit-texture-revision](CHARACTER_TEXTURE_REVISION_GATE.md) with the original
+and candidate texture files on the **same** registered OBJ/UV layout.
+It checks every requested source view independently, refuses missing aligned
+images and retains panels on numerical regressions. A lower mean color error
+alone does not override a worse 90th-percentile or color-coverage result.
+
 ## Recognise the parts, then bake each part from its own pixels
 
 The rules above compare colours. They do not know what a part is, so some conflicts
