@@ -63,8 +63,8 @@ TRELLIS.2 candidate.
    lattices raise IoU but bend the shape at cell boundaries.
 4. **Retopology.** `retopo fitted.ply --output retopo/ --target-faces 20000`.
 5. **Texture.** `texture HANDOFF retopo/low.obj --output base.png --size 4096`.
-   Each texel takes its colour from one view. The choice depends on the viewing angle
-   and on agreement with the other views. A vote on the surface then smooths it.
+   One view paints each region of the surface, and the tone is leveled where two
+   views meet. See [Conflicts between the views](#conflicts-between-the-views).
 6. **Measure.** `compare` for silhouettes, `appearance HANDOFF low.obj base.png` for
    colour (median delta E per view and side-by-side images).
 7. **Rig.** `joints` and `rig` as before.
@@ -76,6 +76,64 @@ The 3/4 drawings disagree most with the others, so no single texture matches the
 Quill, multi-view route with the right side mirrored from the left (`texture
 --assume-symmetric`): silhouette IoU 0.90 to 0.95. Median delta E: 1.1 (back), 2.1
 (front), 2.9 (left), 9.2 (front 3/4). 15-bone wing rig, all vertices heat-weighted.
+
+## Conflicts between the views
+
+AI drawings of one character do not agree, and no mesh matches all of them. A
+texture from several drawings shows each disagreement. `conflicts` finds them, and
+`texture` corrects what it can:
+
+```bash
+kumiki-character-build conflicts HANDOFF retopo/low.obj --output conflicts/
+```
+
+It writes `report.json` and `turnaround.png`: the texture, the view that paints each
+area, and the conflicts, from eight sides. `owners.png` and `conflicts.png` show the
+same in the UV layout.
+
+| Conflict | Colour | Cause | What `texture` does |
+| --- | --- | --- | --- |
+| Tone seam | blue | Two drawings differ in tone where they meet. | A smooth colour offset makes the two sides meet. It fades with distance from the seam. |
+| Misplaced part | red | The mesh is wider or narrower than a drawing, so a part lands on the wrong surface. | The drawing does not paint there. The area takes the colour around it. |
+| Contested feature | yellow | Two drawings show different things at the same place. | One drawing paints each patch whole. |
+| Unseen | grey | No view sees the area. | The area takes the nearest painted colour. |
+
+The report gives the share of the surface for each conflict. It also lists each pair
+of views with the surface that both see (`overlap`) and their tone difference
+there. `different` is the share where they show different things. `views_that_face` names cameras
+(`az<deg>_el<deg>`) that look at the faults. Use them for a new drawing or for
+`repaint --views`. `advice` says what to do in plain sentences.
+
+How the bake decides:
+
+- **Regions, not texels.** The view that sees the neighbourhood of a point best
+  paints it (`--region-px`, default 24). On modelled fur the better-facing view
+  changes with every bump. A choice for each texel mixes the drawings in streaks.
+- **Trust.** A view counts less near its own outline (rim light) and near a place
+  where one part hides another (`--occlusion-px`).
+- **Objections.** A drawing that sees a point can object to a colour there. It
+  objects if it shows something else at that point and nothing like the colour
+  within `--slack-px` (default 60). The slack matters. Two drawings put the same eye a little apart, and that is no
+  objection. Comparisons count lightness less than hue, because tone is what differs
+  most between drawings.
+- **Leveling.** `--level-reach-px` sets how far an offset reaches (default 150).
+  A surface that its view sees squarely keeps its colour. `--no-level` turns it off.
+
+Results (2048 px, colour difference between the two sides of a seam, in delta E):
+
+| | Seams before | Seams after | Misplaced | Contested | Unseen |
+| --- | --- | --- | --- | --- | --- |
+| Pip, four drawings and two repaints | 11.4 | 3.0 | 1.6% | 0.9% | 10.8% |
+| Quill, three drawings, mirrored | 14.4 | 4.0 | 0.7% | 2.0% | 22.2% |
+
+The cost is a small tone shift against each drawing. On Pip the median error of the
+front view is 4.6 delta E with leveling and 4.2 without it. The earlier bake, which
+chose a view for each texel, reached 3.5 but showed streaks on the tail.
+
+A feature that two drawings put in two places on the surface shows twice where each
+drawing paints alone. Pip's left eye was 60 px further round the head in the side
+drawing. No rule on the drawings removes that. A picture that faces the feature
+does: see the next section.
 
 ## Repaint the angles between the drawings
 
@@ -91,39 +149,42 @@ because the drawings place them slightly differently on the shape.
 2. `repaint HANDOFF low.obj axis.png --subject "the cartoon squirrel" --output rp/`
    renders the model from the four 3/4 directions and from 35 degrees above the four
    sides (free cameras are named `az<deg>_el<deg>`). A local FLUX.2 [klein] in ComfyUI
-   repaints each render in the style of the nearest drawing. A repaint whose silhouette
-   differs from the render (IoU below 0.9) is rejected.
-3. `texture HANDOFF low.obj --views front,back,left,right --extra rp/manifest.json --power 4 --output final.png`
+   repaints each render in the style of the nearest drawing. A repaint counts only
+   where its outline agrees with the render. The editor often redraws a tail. The
+   area around that change is masked out, and the face beside it is kept.
+3. `texture HANDOFF low.obj --views front,back,left,right --extra rp/manifest.json --output final.png`
 
 Each drawing keeps the surface that it faces. The repaints take the angles between
 the drawings and the tops of the head and tail, which no drawing shows.
 
-On Pip, 7 of 8 repaints passed. The doubled eye disappeared. The front view error rose from 3.1 to
-3.4 delta E. The right view error rose from 4.5 to 6.5, mostly on the tail. The side
-drawing shows a light tail and the back drawing shows a darker tail.
+On Pip, the repaints from the two front 3/4 directions removed the doubled eyes.
+Median error against the drawings: front 4.6, back 5.0, left 5.9, right 6.7 delta E.
 
 Two rules keep the drawings in charge:
 
 - Each repaint gets the colour statistics of its render before the bake. The editor
   adds its own shading, and Pip's repaints were 5 to 10 L* darker than their renders.
-- Only drawings vote in the colour agreement check. The repaints all come from one
-  render, so three of them would outvote one drawing.
+- Only drawings are witnesses in the objections and in the agreement score. The
+  repaints all come from one render, so three of them would outvote one drawing.
 
-A repaint scores 0.8 times a drawing. With 1.5, the right view error was 7.8.
+A repaint scores 0.8 times a drawing.
 
 A repaint can keep the outline and still draw something else. On Quill, the repaint
-from above the front lost the glasses and passed the IoU check. Add
-`--screen-extra 0.5` to `texture`. It bakes each repaint alone on top of the drawings.
-If the mean error of a drawn view rises by more than 0.5 delta E, it drops the repaint.
+from above the front lost the glasses. `texture --screen-extra 0.5` measures that. It
+bakes each repaint alone on top of the drawings. If the mean error of a drawn view
+rises by more than 0.5 delta E, it drops the repaint.
 
 The mean shows a small change such as lost glasses, which the median can miss. With
 `--assume-symmetric`, a repaint of the side without a drawing is judged by its mirror
 twin on the drawn side.
 
-On Pip the screen kept the repaint that removes the doubled eye and dropped four:
-front 3.5, back 3.6, left 4.0, right 5.1 delta E. On Quill it dropped all six. The
-three axis drawings, mirrored, already look right from every angle, and each repaint
-changed the face or streaked the coat.
+The screen is a measure, not a verdict. On Quill it dropped all eight repaints. The
+three drawings, mirrored, already look right from every angle. On Pip it kept four
+and dropped four.
+
+One of the dropped repaints is the one that removes the second
+left eye (+1.0 delta E). A repaint that removes a duplicate must differ from the
+drawing that showed the duplicate. Look at `turnaround.png` before you drop it.
 
 Notes:
 
