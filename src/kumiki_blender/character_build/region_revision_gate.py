@@ -59,7 +59,8 @@ def _mosaic(baseline: Path, candidate: Path, destination: Path):
 def gate_region_revision(character: str | Path, region_id: str, after: str | Path,
                          output: str | Path, *, before: str | Path | None = None,
                          max_regression: float = _DEFAULT_LIMIT,
-                         min_iou: float | None = None) -> dict:
+                         min_iou: float | None = None,
+                         max_contour_regression: float = 0.03) -> dict:
     """Evaluate a changed part against unchanged full-frame source masks.
 
     The original source mesh is used as baseline when CharacterSpec provides
@@ -69,6 +70,7 @@ def gate_region_revision(character: str | Path, region_id: str, after: str | Pat
     and view-specific reasons. Invalid inputs never produce partial outputs.
     """
     _number(max_regression, "max_regression", 0, 1)
+    _number(max_contour_regression, "max_contour_regression", 0, 1)
     if min_iou is not None:
         _number(min_iou, "min_iou", 0, 1)
     plan, spec = open_plan(character)
@@ -116,7 +118,17 @@ def gate_region_revision(character: str | Path, region_id: str, after: str | Pat
             if old["iou"] is None or new["iou"] is None:
                 raise ValueError(f"Source region {region_id} has empty/undefined IoU in {view}")
             delta = round(new["iou"] - old["iou"], 6)
+            previous_outline = old.get("boundary_f1_2px")
+            revised_outline = new.get("boundary_f1_2px")
+            if previous_outline is None:
+                raise ValueError(f"{view}: baseline has no measurable registered silhouette contour")
+            contour_delta = (round(revised_outline - previous_outline, 6)
+                             if revised_outline is not None else None)
             reasons = []
+            if revised_outline is None:
+                reasons.append("candidate_contour_missing")
+            elif contour_delta < -max_contour_regression - 1e-6:
+                reasons.append("registered_contour_regression")
             if delta < -max_regression - 1e-6:
                 reasons.append("registered_silhouette_regression")
             if min_iou is not None and new["iou"] < min_iou - 1e-6:
@@ -130,6 +142,10 @@ def gate_region_revision(character: str | Path, region_id: str, after: str | Pat
                 "baseline_iou": old["iou"],
                 "candidate_iou": new["iou"],
                 "iou_delta": delta,
+                "baseline_boundary_f1_2px": previous_outline,
+                "candidate_boundary_f1_2px": revised_outline,
+                "boundary_f1_2px_delta": contour_delta,
+                "candidate_boundary_p95_distance_px": new["boundary_p95_distance_px"],
                 "missing_pixels_after": new["missing_pixels"],
                 "extra_pixels_after": new["extra_pixels"],
                 "baseline_overlay": f"baseline/overlays/{view}.png",
@@ -160,6 +176,7 @@ def gate_region_revision(character: str | Path, region_id: str, after: str | Pat
             "region_input_sha256": plan["regions"][region_id]["input_sha256"],
             "verified_views": list(verified),
             "max_iou_regression_per_view": float(max_regression),
+            "max_boundary_f1_2px_regression_per_view": float(max_contour_regression),
             "min_iou_per_view": float(min_iou) if min_iou is not None else None,
             "failed_views": failures,
             "any_geometry_change": changed,
@@ -167,6 +184,7 @@ def gate_region_revision(character: str | Path, region_id: str, after: str | Pat
             "worst_iou_delta": min(row["iou_delta"] for row in statuses),
             "views": statuses,
             "limitations": [
+                "Source-registered boundary F1 measures 400x300 image contours; tiny details under about 4 original pixels remain unresolved.",
                 "A source-registered silhouette check cannot prove likeness, colors, textures, depth or hidden anatomy.",
                 "Only independently verified cameras listed in CharacterSpec v2 are evaluated.",
                 "No automatic source registration, camera retargeting, pose matching or per-region recentering.",

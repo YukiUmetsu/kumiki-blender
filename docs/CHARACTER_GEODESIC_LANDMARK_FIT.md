@@ -94,6 +94,7 @@ kumiki-character-build fit-landmark-surface \
   --character .review/characters/pip/source-plan-r01 \
   --region eye.L \
   --max-regression 0.01 \
+  --max-contour-regression 0.03 \
   --min-iou 0.80 \
   --blender /Applications/Blender.app/Contents/MacOS/Blender
 ~~~
@@ -104,6 +105,12 @@ mesh fit succeeds, it automatically invokes audit-region-revision against the
 generated Z-up landmark-fitted-source.obj and the original region's source_mesh.
 If the CharacterSpec region lacks source_mesh, provide --qa-before with another
 registered source-frame mesh.
+
+The automatic gate also rejects a decline in the **registered 2-pixel
+boundary F1** of more than 0.03 in any view by default. This catches thin
+facial/feather contours that a high area IoU can hide. Source-frame OBJ
+coordinates are now read as-is; previous Y-up interchange OBJ handling is
+retained only for legacy filenames.
 
 The output contains the usual editable Blender .blend and OBJ candidates, plus
 source-fidelity/report.json, camera overlays/panels, and a concise

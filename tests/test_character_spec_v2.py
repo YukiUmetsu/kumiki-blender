@@ -135,6 +135,39 @@ class CharacterPlanV2Test(unittest.TestCase):
         self.assertEqual(third["status"], "geometric-review-failed")
         self.assertIn("front", third["failed_views"])
 
+    def test_native_source_obj_and_legacy_interchange_project_identically(self):
+        """The Blender source OBJ must not be silently rotated during QA."""
+        plan_character(self.spec_path, self.root / "plan")
+        ply = self.root / "mesh" / "eye.ply"
+        expected = compare_region(self.root / "plan", "eye.L", ply,
+                                  self.root / "from-ply", min_iou=.25)
+        # Coordinates are already in Blender Z-up, character facing -Y.
+        sources = [
+            (-.01, 0, .18), (.01, 0, .18),
+            (.01, 0, .20), (-.01, 0, .20),
+        ]
+        native = self.root / "mesh" / "eye.L.source.obj"
+        legacy = self.root / "mesh" / "eye.L.obj"
+        for path, rows in (
+            (native, sources),
+            # Existing OBJ uses Y-up interchange with the inverse transform.
+            (legacy, [(x, z, -y) for x, y, z in sources]),
+        ):
+            path.write_text(
+                "\n".join("v " + " ".join(str(v) for v in vertex)
+                          for vertex in rows)
+                + "\nf 1 2 3\nf 1 3 4\n",
+                encoding="utf-8")
+        a = compare_region(self.root / "plan", "eye.L", native,
+                           self.root / "from-native-source", min_iou=.25)
+        b = compare_region(self.root / "plan", "eye.L", legacy,
+                           self.root / "from-legacy", min_iou=.25)
+        self.assertEqual(a["views"][0]["iou"], expected["views"][0]["iou"])
+        self.assertEqual(b["views"][0]["iou"], expected["views"][0]["iou"])
+        self.assertGreater(a["views"][0]["boundary_f1_2px"], 0)
+        self.assertEqual(a["views"][0]["boundary_f1_2px"],
+                         b["views"][0]["boundary_f1_2px"])
+
     def test_cli_and_unverified_source_rejection(self):
         self.assertEqual(cli(["plan-character", "--spec", str(self.spec_path), "--output",
                               str(self.root / "cli-plan")]), 0)

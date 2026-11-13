@@ -29,6 +29,7 @@ on:
       - "tests/test_character_geodesic_fit.py"
       - "tests/test_character_region_revision_gate.py"
       - "tests/test_character_fit_source_qa.py"
+      - "tests/test_character_source_contours.py"
       - ".github/workflows/character-v2.yml"
   workflow_dispatch:
 
@@ -75,7 +76,8 @@ jobs:
             tests.test_character_joint_refine_plan \
             tests.test_character_geodesic_fit \
             tests.test_character_region_revision_gate \
-            tests.test_character_fit_source_qa
+            tests.test_character_fit_source_qa \
+            tests.test_character_source_contours
 
 
       - name: Test opt-in semantic conflict repair and regression safety
