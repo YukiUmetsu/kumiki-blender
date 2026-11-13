@@ -1,0 +1,91 @@
+"""Helpers shared by the character_build Blender workers. Imported only inside Blender."""
+
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+
+import bpy
+
+
+def arguments() -> dict:
+    """Read the JSON argument file that follows '--' on the Blender command line."""
+    if "--" not in sys.argv or len(sys.argv) <= sys.argv.index("--") + 1:
+        raise SystemExit("Pass the JSON argument file after --")
+    return json.loads(Path(sys.argv[sys.argv.index("--") + 1]).read_text(encoding="utf-8"))
+
+
+def clear_startup_scene() -> None:
+    """Remove the factory cube, light and camera. Only for a new, unsaved file."""
+    if bpy.data.filepath:
+        return
+    for name in ("Cube", "Light", "Camera"):
+        obj = bpy.data.objects.get(name)
+        if obj is not None:
+            bpy.data.objects.remove(obj)
+
+
+def import_mesh(path: str, name: str):
+    """Import an OBJ (Y up), PLY (Z up) or GLB and join it into one mesh object called ``name``."""
+    before = set(bpy.data.objects)
+    suffix = Path(path).suffix.lower()
+    if suffix == ".obj":
+        bpy.ops.wm.obj_import(filepath=path)
+    elif suffix == ".ply":
+        bpy.ops.wm.ply_import(filepath=path)
+    elif suffix == ".glb":
+        bpy.ops.import_scene.gltf(filepath=path)
+    else:
+        raise ValueError(f"Unsupported mesh file {path}")
+    meshes = [o for o in set(bpy.data.objects) - before if o.type == "MESH"]
+    others = [o for o in set(bpy.data.objects) - before if o.type != "MESH"]
+    if not meshes:
+        raise ValueError(f"{path} contains no mesh")
+    for obj in meshes:  # keep the world transform from parent nodes, then drop helper empties
+        world = obj.matrix_world.copy()
+        obj.parent = None
+        obj.matrix_world = world
+    for obj in others:
+        bpy.data.objects.remove(obj)
+    bpy.ops.object.select_all(action="DESELECT")
+    for obj in meshes:
+        obj.select_set(True)
+    bpy.context.view_layer.objects.active = meshes[0]
+    if len(meshes) > 1:
+        bpy.ops.object.join()
+    obj = bpy.context.view_layer.objects.active
+    bpy.ops.object.transform_apply(location=True, rotation=True, scale=True)
+    # glTF and OBJ split vertices at UV seams and hard edges. Merge them back, or the mesh is a
+    # set of disconnected patches (heat weighting and QuadriFlow both fail). UVs are per corner.
+    bpy.ops.object.mode_set(mode="EDIT")
+    bpy.ops.mesh.select_all(action="SELECT")
+    bpy.ops.mesh.remove_doubles(threshold=1e-6)
+    bpy.ops.object.mode_set(mode="OBJECT")
+    obj.name = obj.data.name = name
+    return obj
+
+
+def activate(obj) -> None:
+    bpy.ops.object.select_all(action="DESELECT")
+    obj.select_set(True)
+    bpy.context.view_layer.objects.active = obj
+
+
+def mesh_stats(obj) -> dict:
+    import bmesh
+
+    bm = bmesh.new()
+    bm.from_mesh(obj.data)
+    faces = len(bm.faces)
+    quads = sum(1 for f in bm.faces if len(f.verts) == 4)
+    stats = {"vertices": len(bm.verts), "faces": faces, "quad_fraction": round(quads / max(1, faces), 4),
+             "non_manifold_edges": sum(1 for e in bm.edges if not e.is_manifold),
+             "volume_m3": round(abs(bm.calc_volume()), 8)}
+    bm.free()
+    return stats
+
+
+def write_report(output: Path, report: dict) -> None:
+    output.mkdir(parents=True, exist_ok=True)
+    (output / "report.json").write_text(json.dumps(report, indent=2), encoding="utf-8")

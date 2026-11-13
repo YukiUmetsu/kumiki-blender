@@ -34,6 +34,12 @@ jobs:
         run: |
           python -m pip install 'scipy>=1.13,<2'
           python -m unittest tests.test_mask_object_components tests.test_mask_fragmentation_repair tests.test_mask_track_guidance tests.test_mesh_fragments
+      - name: Test character reference checks, blockout, fit, projection, rig joints and assembly plans
+        env:
+          PYTHONPATH: src:tests
+        run: |
+          python -m pip install 'scipy>=1.13,<2' 'scikit-image>=0.24,<1'
+          python -m unittest tests.test_character_build -v
       - name: Test multi-photo OpenSplat staging, training boundary and CLI (no GPU needed)
         env:
           PYTHONPATH: src

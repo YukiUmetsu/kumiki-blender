@@ -1,5 +1,14 @@
 # Kumiki Blender
 
+## Character build: reference images to a fitted, rigged model
+
+**[Character build pipeline](docs/CHARACTER_BUILD.md)**: check orthographic character views against each other and in 3D, then make a blockout, fit any mesh (for example an image-to-3D result) to every view, project colours, scatter feather or fur cards, retopologize, estimate joints and rig. Each stage reports IoU against the approved images.
+
+```bash
+python -m pip install -e '.[character-build]'
+kumiki-character-build check refs/ && kumiki-character-build handoff refs/ --height-m 0.35
+```
+
 ## Character-sheet fidelity QA (Blender vs original artwork)
 
 **[Start here: Character Fidelity Review](docs/CHARACTER_FIDELITY_REVIEW.md)** — reusable anatomy, costume and accessory comparison. Inspect shape and position independently, compare unlit colors and actual mesh depth/normals, propose masks with optional local SAM 2.1 and relative depth with optional local MoGe 2. New `review-masks` and `propose-registration` commands expose uncertain part ownership and camera alignment instead of silently approving them. No Hugging Face approval or mandatory model download.
