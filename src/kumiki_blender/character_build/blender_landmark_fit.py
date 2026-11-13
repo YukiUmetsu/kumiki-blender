@@ -131,7 +131,6 @@ def main():
                           forward_axis="NEGATIVE_Y", up_axis="Z")
     write_report(folder, {
         "schema_version": 1,
-        "status": "geodesic-landmark-candidate-visual-qa-required",
         "character_id": plan["character_id"],
         "source_blend": str(source), "source_blend_sha256": plan["source_sha256"],
         "landmark_report_sha256": plan["landmark_report_sha256"],
@@ -139,6 +138,7 @@ def main():
         "mesh": obj.name, "original_mesh_hash": before_target,
         "fitted_mesh_hash": _digest_mesh(obj),
         **measurements,
+        "status": "geodesic-landmark-candidate-visual-qa-required",
         "unrelated_meshes_unchanged": True,
         "original_materials_and_uvs_unchanged": True,
         "files": ["landmark-fitted.blend", "landmark-fitted.obj"],
