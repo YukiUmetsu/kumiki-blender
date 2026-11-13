@@ -9,6 +9,12 @@ python -m pip install -e '.[character-build]'
 kumiki-character-build check refs/ && kumiki-character-build handoff refs/ --height-m 0.35
 ```
 
+## Orthographic source landmark recovery
+
+[Registered multiview landmark guide](docs/CHARACTER_LANDMARK_TRIANGULATION.md)
+
+The additive triangulate-landmarks command reconstructs candidate 3D eye, muzzle, beak, wing and other landmark positions from at least two **independently registered 1600x1200** drawings. It preserves original cameras and rejects unobservable baselines, inconsistent annotated positions, modified source images and unverified image dimensions. Results can guide the explicit 3D anatomy part authoring workflow. Source alignment and real likeness still require artistic review.
+
 ## Character Production v2: isolated parts and Blender-native rig audits
 
 [Implementation guide](docs/CHARACTER_PRODUCTION_V2.md) · [example CharacterSpec](examples/character-v2.example.json) · [region sculpt plan](examples/character-region-sculpt.example.json) · [rig pose QA plan](examples/character-rig-pose-qa.example.json)
