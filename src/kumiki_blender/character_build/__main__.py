@@ -422,6 +422,7 @@ def _run(args) -> int:
         print(json.dumps(report, indent=2))
         return 1 if report["failed_views"] else 0
     if args.command == "repair-penetrations":
+        from dataclasses import asdict
         from .penetration_repair import load_collision_plan
         from .blender import run_worker
         if not args.blend.is_file() or args.blend.suffix.lower() != ".blend":
@@ -429,7 +430,8 @@ def _run(args) -> int:
         if args.output.exists():
             raise FileExistsError(f"Revision exists: {args.output}")
         report = run_worker("penetration-repair", {
-            "plan": load_collision_plan(args.plan),
+            "plan": {"schema_version": 1,
+                     "pairs": [asdict(p) for p in load_collision_plan(args.plan)["pairs"]]},
             "source_blend": str(args.blend.resolve()),
             "output": str(args.output.resolve()),
         }, blender=args.blender, blend_file=args.blend.resolve())
