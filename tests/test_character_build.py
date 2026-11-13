@@ -643,6 +643,38 @@ class SeamTests(SharedSet):
         self.assertFalse((trusted & ~render_mask).any())
 
 
+class ReconcileTests(unittest.TestCase):
+    def test_a_part_without_room_in_the_opposite_view_is_cut(self):
+        """The front shows a lobe beside the body; the back has no room for it. A thin offset stays."""
+        from kumiki_blender.character_build.reconcile import parts_without_room, trim_view
+        from kumiki_blender.character_build.views import CX, load
+
+        def draw(lobe: bool, shift: int = 0) -> Image.Image:
+            image = Image.new("RGB", (400, 600), (217, 217, 217))
+            pen = ImageDraw.Draw(image)
+            pen.rectangle((140 + shift, 60, 260 + shift, 560), fill=(150, 100, 80))   # body; shift: a small disagreement
+            if lobe:
+                pen.ellipse((30, 100, 150, 260), fill=(110, 80, 60))                  # a tail lobe on the image left
+            return image
+
+        with tempfile.TemporaryDirectory() as tmp:
+            draw(True).save(Path(tmp) / "front.png")
+            draw(False, shift=4).save(Path(tmp) / "back.png")
+            front, back = load(Path(tmp) / "front.png"), load(Path(tmp) / "back.png")
+        # Each view is centred on its own outline; the lobe moved the front body off centre.
+        self.assertGreater(abs(np.nonzero(front.mask[600])[0].mean() - np.nonzero(back.mask[600])[0].mean()), 30)
+        remove = parts_without_room(front.mask, back.mask)
+        self.assertGreater(remove.sum(), 0.8 * (front.mask[:, :CX - 150]).sum(), "most of the lobe")
+        self.assertFalse(remove[:, CX:].any(), "nothing on the side without a lobe")
+        image, share = trim_view(front, remove)
+        self.assertEqual(image.mode, "RGBA")
+        self.assertGreater(share, 0.1)
+        alpha = np.asarray(image)[..., 3]
+        self.assertEqual(alpha[180, 60], 0, "the lobe is transparent")
+        self.assertEqual(alpha[300, 200], 255, "the body is kept")
+        self.assertFalse(parts_without_room(front.mask, front.mask[:, ::-1] | front.mask).any())
+
+
 class FurMaskTests(unittest.TestCase):
     def test_clothing_and_empty_texels_get_no_fur(self):
         texture = np.zeros((40, 40, 3), np.uint8)

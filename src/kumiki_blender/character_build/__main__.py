@@ -76,6 +76,14 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("check", help="check reference images alone, against each other and in 3D")
     p.add_argument("folder", type=Path)
 
+    p = sub.add_parser("trim", help="cut from a view the part that its opposite view has no room for")
+    p.add_argument("folder", type=Path)
+    p.add_argument("view", help="the view to trim, e.g. front")
+    p.add_argument("--against", help="the view to trust (default: the opposite view, e.g. back)")
+    p.add_argument("--output", type=Path, required=True, help="new .png (RGBA)")
+    p.add_argument("--slack-px", type=int, default=15, help="outline difference that is not a part (aligned px)")
+    p.add_argument("--min-thickness-px", type=int, default=40, help="only parts this thick are cut")
+
     p = sub.add_parser("handoff", help="aligned views, masks, blockout, spec, generator inputs")
     p.add_argument("folder", type=Path)
     p.add_argument("--height-m", type=float, required=True, help="soles to highest point, metres")
@@ -262,6 +270,22 @@ def _run(args) -> int:
         report = check_folder(args.folder)
         print((args.folder / "check" / "report.md").read_text(encoding="utf-8"))
         return 0 if report["pass"] else 1
+    if args.command == "trim":
+        from .reconcile import parts_without_room, trim_view
+        from .views import ALIASES, load_folder, mirror_of
+
+        name = ALIASES.get(args.view, args.view)
+        against = ALIASES.get(args.against, args.against) if args.against else mirror_of(name)
+        loaded, errors = load_folder(args.folder, {name, against})
+        for needed in (name, against):
+            if needed not in loaded:
+                raise SystemExit(f"error: no usable view {needed!r} in {args.folder}: {errors.get(needed, 'missing')}")
+        image, share = trim_view(loaded[name], parts_without_room(
+            loaded[name].mask, loaded[against].mask, slack_px=args.slack_px, min_thickness_px=args.min_thickness_px))
+        image.save(_new_file(args.output))
+        print(json.dumps({"view": name, "against": against, "removed_share_of_figure": round(share, 4),
+                          "output": str(args.output)}, indent=2))
+        return 0
     if args.command == "handoff":
         from .handoff import build_handoff
 
