@@ -186,6 +186,28 @@ class FitProjectScatterTests(SharedSet):
         self.assertEqual(result.folds, 0, "the flip guard and untangle leave no folded triangles")
         self.assertEqual(len(fold_faces(result.mesh, 0.0)), 0, "no crease sharper than 90 degrees")
 
+    def test_ladder_keeps_only_stages_that_do_no_harm(self):
+        from kumiki_blender.character_build.fit import edge_distortion, fit_ladder
+        masks = reference_masks(self.handoff, 0.25)
+        mesh = ellipsoid_mesh(radii=(.12, .1, .17), centre=(0, 0, .17), subdivisions=3)
+        result, stages = fit_ladder(mesh, masks, HEIGHT_M, iterations=15, max_distortion=1.0)
+        self.assertEqual([stage["lattice"] for stage in stages], [None, [4, 4, 8], [8, 8, 16]])
+        self.assertTrue(all(stage["kept"] for stage in stages))
+        self.assertGreater(stages[1]["weighted_iou"], stages[0]["weighted_iou"])
+        self.assertGreaterEqual(stages[2]["weighted_iou"], stages[1]["weighted_iou"] - 0.005)
+        # A limit that no real fit can meet: the ladder stops at the first stage and returns the unfitted mesh.
+        strict, rows = fit_ladder(mesh, masks, HEIGHT_M, iterations=15, max_distortion=0.0)
+        self.assertEqual([row["kept"] for row in rows], [True, False])
+        self.assertGreater(rows[1]["distorted_edges"], 0)
+        self.assertEqual(edge_distortion(strict.mesh, strict.mesh), 0.0)
+        placed, _ = fit_ladder(mesh, masks, HEIGHT_M, ladder=(), iterations=15)
+        np.testing.assert_allclose(strict.mesh.vertices, placed.mesh.vertices)
+        # Half of a mesh stretched to double length: half of its edges are distorted.
+        stretched = Mesh(mesh.vertices * np.where(mesh.vertices[:, [2]] > .17, [1, 1, 2.0], [1, 1, 1.0]), mesh.faces)
+        self.assertGreater(edge_distortion(mesh, stretched), 0.15)
+        with self.assertRaises(ValueError):
+            edge_distortion(mesh, ellipsoid_mesh(subdivisions=2))
+
     def test_orientation_search_finds_a_turned_generator_mesh(self):
         """A generator mesh comes turned (45 degrees from a 3/4 view), scaled and moved. Front and
         back silhouettes are mirror images, so the side views must settle a half turn."""

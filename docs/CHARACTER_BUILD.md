@@ -43,7 +43,7 @@ or newer. The other commands need only NumPy, SciPy, scikit-image and Pillow.
 | Texture | `conflicts HANDOFF retopo/low.obj --output conflicts/` | Where the views overlap and disagree on the mesh, with pictures and advice |
 | Texture | `repaint HANDOFF retopo/low.obj base.png --output rp/` | Pictures of the angles between the drawings, repainted from renders by a local image model |
 | References | `trim REFS front --output front.png` | A view without the part that its opposite view has no room for |
-| Fit | `fit HANDOFF mesh.ply --lattice 8,8,16` | Lattice deformation for detailed generator meshes |
+| Fit | `fit HANDOFF mesh.ply --lattice auto` | Lattice deformation for detailed generator meshes. A finer lattice is kept only if it does no harm |
 | Texture | `retopo fitted.ply --colour-from ranked/x.placement.json` | The generator's own texture baked as `low_basecolor.png` |
 | Fur | `fur-weights coloured.ply --clothing-top-m 0.2 --eye-band-m 0.21,0.27` | Per-vertex fur weight from the drawings' colours (no fur on clothing or eyes) |
 | Fur | `fur retopo/low.obj --basecolor low_basecolor.png --weights w.ply --systems s.json` | Strand fur with Blender's procedural hair assets |
@@ -61,9 +61,14 @@ TRELLIS.2 candidate.
    (about 30 minutes on an M4: diffusion on MPS in fp16, decoding on MPS in fp32).
    If the character is symmetric and has no view of one side, mirror the other side.
 2. **Place.** `place HANDOFF shape.glb --output ranked/`.
-3. **Fit through a lattice.** `fit HANDOFF ranked/shape.ply --no-normalise --lattice 8,8,16 --iterations 60`.
-   A coarse lattice changes proportions and keeps the generated detail. Finer
-   lattices raise IoU but bend the shape at cell boundaries.
+3. **Fit through a lattice.** `fit HANDOFF ranked/shape.ply --no-normalise --lattice auto`.
+   A coarse lattice changes proportions and keeps the generated detail. A finer
+   lattice always raises the IoU. If the views disagree, it does so by bending the
+   mesh between them. `auto` fits through 4,4,8 and then 8,8,16. It keeps a stage
+   only if the stage adds no folds (`--max-new-folds`). Also, at most 3% of the
+   edges may change length by more than 1.5 times (`--max-distortion`). The report
+   lists each stage. On the second Pip set, 8,8,16 raised the IoU from 0.88 to 0.89.
+   But it turned the tail into a flat slab (8% of the edges). `auto` stopped at 4,4,8.
 4. **Retopology.** `retopo fitted.ply --output retopo/ --target-faces 20000`.
 5. **Texture.** `texture HANDOFF retopo/low.obj --output base.png --size 4096`.
    One view paints each region of the surface, and the tone is leveled where two

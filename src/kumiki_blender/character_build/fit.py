@@ -290,3 +290,54 @@ def fit_silhouettes(mesh: Mesh, masks: dict[str, np.ndarray], height_m: float, *
     # Folds and rim crumples that the flip guard let through shade as specks and spoil the bake.
     result = untangle(Mesh(best[1], mesh.faces))
     return FitResult(result, history, best[2], transform, count_folds(result))
+
+
+def edge_distortion(before: Mesh, after: Mesh, ratio: float = 1.5) -> float:
+    """Share of the edges whose length changed by more than ``ratio`` (longer or shorter).
+
+    A fit that only corrects proportions leaves about 1% of the edges of a generator mesh
+    this far off. A fit that bends the mesh toward views that disagree with each other
+    flattens whole parts: Pip's tail became a slab at 12%, with a higher IoU.
+    """
+    if before.faces.shape != after.faces.shape or len(before.vertices) != len(after.vertices):
+        raise ValueError("edge_distortion compares two states of one mesh")
+    edges = np.concatenate([before.faces[:, [0, 1]], before.faces[:, [1, 2]], before.faces[:, [2, 0]]])
+    start = np.linalg.norm(before.vertices[edges[:, 0]] - before.vertices[edges[:, 1]], axis=1)
+    end = np.linalg.norm(after.vertices[edges[:, 0]] - after.vertices[edges[:, 1]], axis=1)
+    change = end / np.maximum(start, 1e-12)
+    return float(((change > ratio) | (change < 1 / ratio)).mean())
+
+
+def fit_ladder(mesh: Mesh, masks: dict[str, np.ndarray], height_m: float, *,
+               ladder: tuple[tuple[int, int, int], ...] = ((4, 4, 8), (8, 8, 16)), max_new_folds: int = 0,
+               max_distortion: float = 0.03, normalise_first: bool = True, **options) -> tuple[FitResult, list[dict]]:
+    """Fit through a coarse lattice, then finer ones, and keep a stage only if it does no harm.
+
+    A finer lattice always raises the IoU. With views that disagree it does so by bending
+    the mesh between them. A stage is kept only if, against the mesh before any fit, it
+    adds at most ``max_new_folds`` folds and leaves at most ``max_distortion`` of the edges
+    stretched or squeezed by more than 1.5 (``edge_distortion``). The ladder stops at the
+    first stage that fails. Returns the result of the last kept stage (the unfitted mesh
+    if none is kept) and one row per stage tried; the first row is the unfitted mesh.
+    ``options`` go to ``fit_silhouettes``.
+    """
+    options.pop("lattice_cells", None)
+    placed = fit_silhouettes(mesh, masks, height_m, iterations=0, normalise_first=normalise_first,
+                             **{k: v for k, v in options.items() if k != "iterations"})
+    start_folds = count_folds(placed.mesh)
+    kept = placed
+    stages = [{"lattice": None, "weighted_iou": placed.history[0]["weighted_iou"], "views": placed.history[0]["views"],
+               "new_folds": 0, "distorted_edges": 0.0, "kept": True}]
+    for cells in ladder:
+        result = fit_silhouettes(kept.mesh, masks, height_m, normalise_first=False, lattice_cells=cells, **options)
+        distortion = edge_distortion(placed.mesh, result.mesh)
+        row = {"lattice": list(cells), "weighted_iou": result.history[result.best_iteration]["weighted_iou"],
+               "views": result.history[result.best_iteration]["views"], "new_folds": result.folds - start_folds,
+               "distorted_edges": round(distortion, 4),
+               "kept": result.folds - start_folds <= max_new_folds and distortion <= max_distortion}
+        stages.append(row)
+        if not row["kept"]:
+            break
+        kept = FitResult(result.mesh, result.history, result.best_iteration, placed.transform, result.folds)
+    return kept, stages
+
