@@ -168,10 +168,10 @@ Setup notes for trellis-silicon:
 Remade Pip through TRELLIS.2 used the front-left view, seed 42, the best of
 four seeds. Results:
 
-- placed IoU 0.848, fitted IoU 0.880, height error -0.4%;
-- 87% of the surface coloured from the views;
-- QuadriFlow retopology with 13k quads, low-poly IoU 0.877;
-- an 18-bone rig with every vertex heat-weighted.
+- Placed IoU 0.848, fitted IoU 0.880, height error -0.4%.
+- 87% of the surface coloured from the views.
+- QuadriFlow retopology with 13k quads, low-poly IoU 0.877.
+- An 18-bone rig with every vertex heat-weighted.
 
 All four seeds read the fanned tail as two lobes. The fit narrows the gap.
 
