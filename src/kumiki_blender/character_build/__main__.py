@@ -57,6 +57,13 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--output", type=Path, required=True, help="new immutable report directory")
     p.add_argument("--blender", help="local Blender executable path")
 
+    p = sub.add_parser("refine-region", help="bounded local sculpt edit; preserve all other .blend objects")
+    p.add_argument("--blend", type=Path, required=True, help="editable source Blender file")
+    p.add_argument("--plan", type=Path, required=True, help="region sculpt correction JSON")
+    p.add_argument("--output", type=Path, required=True, help="new revision containing refined.blend and region.obj")
+    p.add_argument("--blender")
+
+
 
     p = sub.add_parser("ingest", help="copy generator output into canonical view names")
     p.add_argument("source", type=Path)
@@ -257,6 +264,20 @@ def _run(args) -> int:
                                 max_regression=args.max_regression)
         print(json.dumps(report, indent=2))
         return 1 if report["failed_views"] else 0
+    if args.command == "refine-region":
+        from .region_sculpt_plan import load_region_sculpt_plan
+        from .blender import run_worker
+        if not args.blend.is_file() or args.blend.suffix.lower() != ".blend":
+            raise ValueError("--blend must be an existing Blender .blend file")
+        if args.output.exists():
+            raise FileExistsError(f"Output revision already exists: {args.output}")
+        plan = load_region_sculpt_plan(args.plan)
+        report = run_worker("region-sculpt", {
+            "plan": plan, "output": str(args.output.resolve()),
+            "source_blend": str(args.blend.resolve())},
+            blender=args.blender, blend_file=args.blend.resolve())
+        print(json.dumps(report, indent=2))
+        return 0
     if args.command == "validate-rig":
         from .pose_spec import load_pose_plan
         from .blender import run_worker
