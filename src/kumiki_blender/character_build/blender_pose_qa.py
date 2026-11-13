@@ -18,10 +18,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from kumiki_blender.character_build.blender_common import arguments, write_report  # noqa: E402
 
 
-def skin_weights(mesh) -> dict:
+def skin_weights(mesh, deform_bones: set[str]) -> dict:
     count, missing, excessive, bad_sum = 0, 0, 0, 0
     for vertex in mesh.data.vertices:
-        influences = [g.weight for g in vertex.groups if g.weight > 1e-4]
+        influences = [g.weight for g in vertex.groups
+                      if g.weight > 1e-4 and mesh.vertex_groups[g.group].name in deform_bones]
         count += 1
         missing += not influences
         excessive += len(influences) > 4
@@ -134,7 +135,8 @@ def main() -> None:
     bpy.context.view_layer.update()
     depsgraph = bpy.context.evaluated_depsgraph_get()
     rest = {o.name: snapshot(o, depsgraph) for o in bound}
-    weights = {o.name: skin_weights(o) for o in bound}
+    deform_bones = {bone.name for bone in rig.data.bones if bone.use_deform}
+    weights = {o.name: skin_weights(o, deform_bones) for o in bound}
     problems: list[str] = []
     for name, result in weights.items():
         if any(result[key] for key in ("unweighted", "over_four_influences", "non_normalized")):

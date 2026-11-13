@@ -14,7 +14,7 @@ import re
 from pathlib import Path
 from typing import Any
 
-_ID = re.compile(r"^[a-z][a-z0-9_.-]{0,63}$")
+_ID = re.compile(r"^[a-z][A-Za-z0-9_.-]{0,63}$")
 _VIEW = re.compile(r"^az-?\d+(?:\.\d+)?_el-?\d+(?:\.\d+)?$")
 _VIEWS = frozenset({"front", "back", "left", "right", "front_left", "front_right",
                     "back_left", "back_right"})

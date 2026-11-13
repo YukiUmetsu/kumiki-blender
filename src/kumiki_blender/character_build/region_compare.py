@@ -5,14 +5,13 @@ optimizes a camera to inflate overlap. Source art remains independent evidence.
 """
 from __future__ import annotations
 
-import hashlib
 import json
 from pathlib import Path
 
 import numpy as np
 from PIL import Image
 
-from .character_spec_v2 import open_plan
+from .character_spec_v2 import _hash, open_plan
 from .mesh import rasterize, read_mesh
 from .views import FIGURE_PX, camera
 
@@ -106,7 +105,7 @@ def compare_region(character: str | Path, region_id: str, mesh: str | Path, outp
     candidate = read_mesh(source_mesh)
     if not np.isfinite(candidate.vertices).all() or len(candidate.faces) == 0:
         raise ValueError("Candidate mesh must have finite vertices and triangles")
-    source_hash = hashlib.sha256(source_mesh.read_bytes()).hexdigest() if source_mesh.stat().st_size <= 50_000_000 else None
+    source_hash = _hash(source_mesh)
     # The geometry is assumed to be in the canonical handoff frame. No automatic transform.
     rows = []
     previews = []
