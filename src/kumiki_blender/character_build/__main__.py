@@ -379,6 +379,37 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--resume", action="store_true",
                    help="reuse finished repaints in --output whose render and settings match; repaint the rest")
 
+    p = sub.add_parser("parts", help="recognise the character's parts on the mesh and in each drawing")
+    _bake_arguments(p)
+    p.add_argument("--output", type=Path, required=True, help="new folder: parts.json, masks, turnaround.png")
+    p.add_argument("--size", type=int, default=1024)
+    p.add_argument("--classes", type=int, default=10, help="colour classes to start from")
+    p.add_argument("--contrast", type=float, default=10.0,
+                   help="two touching parts join if the colour step across their border is below this (delta E)")
+    p.add_argument("--max-parts", type=int, default=24, help="join the weakest borders until at most this many are left")
+    p.add_argument("--crease-radius-px", type=float, default=60.0,
+                   help="shapes (tail, body, ...) are separated by creases that bend inward more sharply than this")
+    p.add_argument("--bleed-share", type=float, default=0.05,
+                   help="a material on less than this share of a shape, with most of it on other shapes, is taken "
+                        "for a part that the bake put on the wrong shape (0: off)")
+    p.add_argument("--material-delta-e", type=float, default=8.0,
+                   help="parts whose mean colours differ by less than this are one material and are baked together")
+    p.add_argument("--min-share", type=float, default=0.005,
+                   help="a part smaller than this share of the surface joins a neighbour")
+
+    p = sub.add_parser("texture-parts", help="bake each recognised part only from the pixels that show it")
+    _bake_arguments(p)
+    p.add_argument("parts", type=Path, help="folder from `parts`")
+    p.add_argument("--output", type=Path, required=True, help=".png")
+    p.add_argument("--size", type=int, default=2048)
+    p.add_argument("--diagnostics", type=Path, help="new folder for owners.png, parts.png and turnaround.png")
+    p.add_argument("--no-polish", action="store_true",
+                   help="do not close the seams inside the parts or fill the unseen texels smoothly")
+    p.add_argument("--tone-delta-e", type=float, default=18.0,
+                   help="inside one material, level differences between two views up to about twice this")
+    p.add_argument("--polish-reach-px", type=float, default=12.0,
+                   help="distance from a seam over which the polish works (aligned px)")
+
     p = sub.add_parser("appearance", help="colour agreement of a textured mesh with each reference view")
     p.add_argument("handoff", type=Path)
     p.add_argument("mesh", type=Path, help="OBJ with UVs")
@@ -948,6 +979,39 @@ def _run(args) -> int:
                                  subject=args.subject, size=args.size, steps=args.steps, denoise=args.denoise,
                                  min_iou=args.min_iou, min_usable=args.min_usable, weight=args.weight, owners=owners)
         print(json.dumps(manifest["views"], indent=2))
+        return 0
+    if args.command == "parts":
+        from .parts import find_parts
+        from .texture import read_obj_uv
+
+        out = _new_dir(args.output)
+        mesh, corner_uv = read_obj_uv(args.mesh)
+        extra = json.loads(args.extra.read_text(encoding="utf-8"))["extra"] if args.extra else None
+        report = find_parts(args.handoff, mesh, corner_uv, out, size=args.size, classes=args.classes,
+                            contrast=args.contrast, min_share=args.min_share, max_parts=args.max_parts,
+                            material_delta_e=args.material_delta_e, crease_radius_px=args.crease_radius_px,
+                            bleed_share=args.bleed_share, extra=extra, **_bake_settings(args))
+        print(json.dumps({k: report[k] for k in ("source_confidence", "review", "shapes", "bleed", "parts",
+                                                 "agreement", "advice")},
+                         indent=2))
+        return 0
+    if args.command == "texture-parts":
+        from PIL import Image
+
+        from .parts import bake_parts
+        from .texture import read_obj_uv
+
+        _new_file(args.output)
+        diagnostics = _new_dir(args.diagnostics) if args.diagnostics else None
+        mesh, corner_uv = read_obj_uv(args.mesh)
+        extra = json.loads(args.extra.read_text(encoding="utf-8"))["extra"] if args.extra else None
+        image, report = bake_parts(args.handoff, mesh, corner_uv, args.parts, size=args.size, extra=extra,
+                                   polish=not args.no_polish, polish_reach_px=args.polish_reach_px,
+                                   tone_delta_e=args.tone_delta_e,
+                                   diagnostics=diagnostics, **_bake_settings(args))
+        Image.fromarray(image).save(args.output)
+        _write_json(args.output.with_suffix(".json"), report)
+        print(json.dumps(report, indent=2))
         return 0
     if args.command == "appearance":
         import numpy as np
