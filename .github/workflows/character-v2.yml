@@ -7,6 +7,8 @@ on:
       - "tests/test_character_spec_v2.py"
       - "tests/test_character_region_sculpt_plan.py"
       - "tests/test_character_pose_spec.py"
+      - "tests/test_character_rig_controls.py"
+      - "tests/test_character_topology_zones.py"
       - ".github/workflows/character-v2.yml"
   workflow_dispatch:
 
@@ -32,4 +34,6 @@ jobs:
           PYTHONPATH=src:tests python -m unittest -q \
             tests.test_character_spec_v2 \
             tests.test_character_region_sculpt_plan \
-            tests.test_character_pose_spec
+            tests.test_character_pose_spec \
+            tests.test_character_rig_controls \
+            tests.test_character_topology_zones

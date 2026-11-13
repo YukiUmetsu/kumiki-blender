@@ -51,6 +51,35 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--baseline", type=Path, help="prior report.json to reject registered-view regressions")
     p.add_argument("--max-regression", type=float, default=0.01, help="maximum per-view drop in IoU")
 
+    p = sub.add_parser("plan-rig-controls", help="generate native FK/IK animator control rig from reviewed joints")
+    p.add_argument("--joints", type=Path, required=True, help="validated joints.json from existing character rig")
+    p.add_argument("--profile", required=True, choices=("generic-biped", "stylized-biped-tail", "avian-biped-wings"))
+    p.add_argument("--armature", default="CharacterRig")
+    p.add_argument("--pole-angle", type=float, default=0.0, help="explicit knee pole angle degrees")
+    p.add_argument("--output", type=Path, required=True, help="new controls plan folder")
+
+    p = sub.add_parser("apply-rig-controls", help="add optional IK/FK control bones to an existing rig .blend")
+    p.add_argument("--blend", type=Path, required=True)
+    p.add_argument("--plan", type=Path, required=True, help="controls.json from plan-rig-controls")
+    p.add_argument("--output", type=Path, required=True, help="new editable controlled.blend")
+    p.add_argument("--blender")
+
+    p = sub.add_parser("plan-topology", help="generate joint-specific topology cross-section review zones")
+    p.add_argument("--joints", type=Path, required=True)
+    p.add_argument("--mesh-name", default="Low", help="exact Blender mesh object name")
+    p.add_argument("--joint", action="append", help="specific named joint; repeat (default key hinges)")
+    p.add_argument("--min-coverage", type=float, default=0.7)
+    p.add_argument("--min-edges", type=int, default=8)
+    p.add_argument("--strict", action="store_true", help="fail numeric thresholds instead of report-only")
+    p.add_argument("--output", type=Path, required=True)
+
+    p = sub.add_parser("audit-topology", help="evaluate joint topology and optional Blender review rings")
+    p.add_argument("--blend", type=Path, required=True, help="existing retopologized .blend")
+    p.add_argument("--plan", type=Path, required=True, help="topology-plan.json")
+    p.add_argument("--annotate", action="store_true", help="save new editable .blend with joint guide rings")
+    p.add_argument("--output", type=Path, required=True)
+    p.add_argument("--blender")
+
     p = sub.add_parser("validate-rig", help="native Blender pose tests for a skinned .blend")
     p.add_argument("--blend", type=Path, required=True, help="existing rigged source .blend")
     p.add_argument("--plan", type=Path, required=True, help="bounded pose battery JSON")
@@ -279,6 +308,47 @@ def _run(args) -> int:
             blender=args.blender, blend_file=args.blend.resolve())
         print(json.dumps(report, indent=2))
         return 0
+    if args.command == "plan-rig-controls":
+        from .rig_control_plan import save_control_plan
+        report = save_control_plan(args.joints, args.profile, args.output,
+                                   armature=args.armature, pole_angle_deg=args.pole_angle)
+        print(json.dumps(report, indent=2))
+        return 0
+    if args.command == "apply-rig-controls":
+        from .rig_control_plan import load_control_plan
+        from .blender import run_worker
+        if not args.blend.is_file() or args.blend.suffix.lower() != ".blend":
+            raise ValueError("--blend must be an existing Blender .blend")
+        if args.output.exists():
+            raise FileExistsError(f"Output revision already exists: {args.output}")
+        plan = load_control_plan(args.plan)
+        report = run_worker("rig-controls", {
+            "plan": plan, "source_blend": str(args.blend.resolve()),
+            "output": str(args.output.resolve()),
+        }, blender=args.blender, blend_file=args.blend.resolve())
+        print(json.dumps(report, indent=2))
+        return 0
+    if args.command == "plan-topology":
+        from .topology_zones import save_topology_plan
+        report = save_topology_plan(args.joints, args.output, mesh=args.mesh_name,
+                                    joints=args.joint, min_coverage=args.min_coverage,
+                                    min_edges=args.min_edges, strict=args.strict)
+        print(json.dumps(report, indent=2))
+        return 0
+    if args.command == "audit-topology":
+        from .topology_zones import load_topology_plan
+        from .blender import run_worker
+        if not args.blend.is_file() or args.blend.suffix.lower() != ".blend":
+            raise ValueError("--blend must be an existing retopologized Blender .blend")
+        if args.output.exists():
+            raise FileExistsError(f"Output revision already exists: {args.output}")
+        plan = load_topology_plan(args.plan)
+        report = run_worker("topology-qa", {
+            "plan": plan, "annotate": args.annotate,
+            "source_blend": str(args.blend.resolve()), "output": str(args.output.resolve()),
+        }, blender=args.blender, blend_file=args.blend.resolve())
+        print(json.dumps(report, indent=2))
+        return 1 if report["status"] == "structural-review-failed" else 0
     if args.command == "validate-rig":
         from .pose_spec import load_pose_plan
         from .blender import run_worker

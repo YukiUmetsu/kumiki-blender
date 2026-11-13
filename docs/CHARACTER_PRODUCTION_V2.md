@@ -135,7 +135,90 @@ kumiki-character-build rig retopo/low.obj joints.json \
 
 Compare the standard and volume-preserving reports and posed renders. Preserve Volume can reduce collapses but will not resolve bad bone placement, collisions, or unnatural wing/tail articulation. The actual Blender-specific improvement remains subject to a local smoke run.
 
-## 5. Tests and runtime boundaries
+
+## 5. Native FK/IK animator controls (new)
+
+The existing armature generator creates deform bones and skinned meshes. You
+can now **add a separate non-deforming animator control layer** without copying
+Rigify or another GPL add-on into the MIT repository. This is an authoring
+feature; it does **not** magically produce good source anatomy or a finished
+GLB animation.
+
+Built-in profiles:
+- \`generic-biped\`: leg IK targets/poles plus FK controls for upper/fore arms.
+- \`stylized-biped-tail\`: the same with independently keyed FK tail chain.
+- \`avian-biped-wings\`: leg IK plus FK controls for primary and secondary wing bones.
+
+The profile **must match** the bones actually present in reviewed \`joints.json\`;
+a missing or disconnected chain is an error rather than an invented rig.
+
+\`\`\`bash
+kumiki-character-build plan-rig-controls \
+  --joints /path/to/rig/joints.json \
+  --profile avian-biped-wings \
+  --output .review/character/controls-plan-r01
+
+kumiki-character-build apply-rig-controls \
+  --blend /path/to/rigged.blend \
+  --plan .review/character/controls-plan-r01/controls.json \
+  --output .review/character/controls-r01 \
+  --blender /Applications/Blender.app/Contents/MacOS/Blender
+\`\`\`
+
+This writes a new \`controlled.blend\` and \`report.json\`. Existing deform
+bone positions, vertex groups, and mesh geometry are checked and retained.
+Controls are named \`CTRL_...\`, set non-deforming, and parented to the
+corresponding upstream controls or safe root/chest. Ordinary leg IK uses
+explicit knee poles; wing/tail bend uses Blender-native local FK.
+
+**Required QA:** inspect foot IK bend direction/pole angle, neutral mesh
+shifts, wing folding, and tail deformation under the \`validate-rig\` pose
+battery. These controls are **not exported to GLB as animation curves**.
+Bake animation onto the deform skeleton first (future milestone). The worker
+refuses existing deform-bone constraints rather than destructively overriding
+a professionally hand-authored rig.
+
+## 6. Joint-specific retopology review (new)
+
+The existing global QuadriFlow stage can produce evenly spaced quads while
+missing proper articulation loops. Now a *joint-local* Blender audit measures
+three surface cross sections around each reviewed joint and reports:
+- Distinct mesh-edge intersections and 16-bin circumferential coverage.
+- Largest unsampled angular gap at each section.
+- Nearby quad/triangle/n-gon fraction and unusual vertex valence.
+- Regions needing additional modeling or manual loop correction.
+
+\`\`\`bash
+kumiki-character-build plan-topology \
+  --joints /path/to/rig/joints.json \
+  --mesh-name Low \
+  --output .review/character/topology-plan-r01
+
+kumiki-character-build audit-topology \
+  --blend /path/to/retopo/retopo.blend \
+  --plan .review/character/topology-plan-r01/topology-plan.json \
+  --output .review/character/topology-review-r01 \
+  --annotate \
+  --blender /Applications/Blender.app/Contents/MacOS/Blender
+\`\`\`
+
+The default audits elbows, shoulders, knees, neck, hips and tail joints when
+the corresponding reviewed joints exist. Use \`--joint elbow.L --joint knee.L\`
+to narrow a run. \`--strict\` on **plan-topology** makes specified numeric
+cross-section thresholds blocking; by default all results require visual
+review and do not fail the pipeline merely for a low contour count.
+
+When \`--annotate\` is used, \`topology-reviewed.blend\` includes editable,
+non-rendering cross-section rings to help spot under-modeled bends. The
+original sculpt and original retopo \`.blend\` remain unchanged.
+
+**Important limitation:** closed cross sections and good quad ratios are
+neither an automatic retopology algorithm nor proof of deformation-friendly
+edge flow. This stage identifies specific regions worth repair and can be
+combined with pose strain QA. Guided automatic bridge loops and per-vertex
+skin-exclusion masks are still separate roadmap work.
+
+## 7. Tests and runtime boundaries
 
 Run the added CPU tests:
 
@@ -150,7 +233,7 @@ Also run the original character test suite; no existing command should change be
 
 Real Blender tests are **not** performed by these Python unit tests; use a local Blender executable with real mesh and rig fixtures. The feature is intentionally incomplete until real assets and Blender/Kumiki export checks have been exercised.
 
-## 6. Remaining roadmap (not implemented in this slice)
+## 8. Remaining roadmap (not implemented in this slice)
 
 1. Fully semantic Blender geometry authoring and optional Open3D ARAP deformation.
 2. Non-destructive seam bridging and retopology guided by eyes, mouth, wing, hip, knee and tail bends.
