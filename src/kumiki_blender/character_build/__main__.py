@@ -187,6 +187,12 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--output", type=Path, required=True, help="new immutable report directory")
     p.add_argument("--blender", help="local Blender executable path")
 
+    p = sub.add_parser("repair-penetrations", help="bounded BVH collision repair for named Blender object pairs")
+    p.add_argument("--blend", type=Path, required=True, help="original editable .blend file")
+    p.add_argument("--plan", type=Path, required=True, help="directed collision-pair JSON with protected anchors")
+    p.add_argument("--output", type=Path, required=True, help="new revision directory")
+    p.add_argument("--blender", help="local Blender binary")
+
     p = sub.add_parser("refine-region", help="bounded local sculpt edit; preserve all other .blend objects")
     p.add_argument("--blend", type=Path, required=True, help="editable source Blender file")
     p.add_argument("--plan", type=Path, required=True, help="region sculpt correction JSON")
@@ -415,6 +421,20 @@ def _run(args) -> int:
                                 max_regression=args.max_regression)
         print(json.dumps(report, indent=2))
         return 1 if report["failed_views"] else 0
+    if args.command == "repair-penetrations":
+        from .penetration_repair import load_collision_plan
+        from .blender import run_worker
+        if not args.blend.is_file() or args.blend.suffix.lower() != ".blend":
+            raise ValueError("--blend must be an existing .blend source")
+        if args.output.exists():
+            raise FileExistsError(f"Revision exists: {args.output}")
+        report = run_worker("penetration-repair", {
+            "plan": load_collision_plan(args.plan),
+            "source_blend": str(args.blend.resolve()),
+            "output": str(args.output.resolve()),
+        }, blender=args.blender, blend_file=args.blend.resolve())
+        print(json.dumps(report, indent=2))
+        return 0 if report["status"] != "no-safe-improvement" else 1
     if args.command == "refine-region":
         from .region_sculpt_plan import load_region_sculpt_plan
         from .blender import run_worker
