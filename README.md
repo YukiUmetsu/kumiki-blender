@@ -50,6 +50,11 @@ review evidence.
 
 ### Offline before/after texture fidelity gate
 
+For constrained local machines, the texture gate now preflights the estimated
+mesh UV projection sample count and rejects over-budget meshes before allocating
+large point arrays. The default ceiling is two million samples per source view.
+
+
 [Texture revision audit](docs/CHARACTER_TEXTURE_REVISION_GATE.md)
 
 Run audit-texture-revision on one fixed UV mesh and two texture candidates

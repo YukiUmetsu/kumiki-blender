@@ -5,12 +5,14 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import numpy as np
 from PIL import Image
 
 from kumiki_blender.character_build.mesh import Mesh
-from kumiki_blender.character_build.texture import read_obj_uv, render_textured
+from kumiki_blender.character_build.texture import (estimate_uv_projection_samples,
+    _uv_samples, read_obj_uv, render_textured)
 from kumiki_blender.character_build.texture_revision_gate import (
     _scores, audit_texture_revision,
 )
@@ -84,6 +86,31 @@ class TextureRevisionTest(unittest.TestCase):
         np.testing.assert_array_equal(uv1, uv2)
         np.testing.assert_allclose(one.vertices[0], [-.04, -.03, .14], atol=1e-12)
 
+    def test_estimated_sample_count_matches_native_surface_sampler(self):
+        mesh, _uv = read_obj_uv(self.model)
+        expected = estimate_uv_projection_samples(
+            mesh, metres_per_px=self.handoff_spec["metres_per_aligned_px"],
+            scale=.25)
+        sampled, _ = _uv_samples(mesh, _uv,
+                                .5 * self.handoff_spec["metres_per_aligned_px"] / .25)
+        self.assertEqual(expected, len(sampled))
+        self.assertGreater(expected, 1000)
+        self.assertLess(expected, 10000)
+
+    def test_dense_projection_budget_fails_before_memory_allocation(self):
+        # Two repeated triangles are sufficient to exceed a deliberately low
+        # 10k sample budget; the check must run before rasterization, never
+        # silently lowering resolution and hiding eye/feather detail.
+        with self.model.open("a", encoding="utf-8") as stream:
+            stream.write("f 1/1 2/2 3/3\nf 1/1 3/3 4/4\n")
+        with patch(
+            "kumiki_blender.character_build.texture_revision_gate.render_textured",
+            side_effect=AssertionError("expensive render must not start")
+        ):
+            with self.assertRaisesRegex(ValueError, "Projection sample budget exceeded"):
+                self.audit(max_projection_samples=10_000)
+        self.assertFalse((self.root/"report").exists())
+
     def test_identical_revision_is_not_claimed_as_artistic_improvement(self):
         result = self.audit()
         self.assertTrue(result["numeric_gate_pass"])
@@ -91,6 +118,7 @@ class TextureRevisionTest(unittest.TestCase):
         self.assertTrue(result["mesh_and_uv_fixed"])
         self.assertEqual(result["failed_views"], [])
         self.assertEqual(len(result["views"]), 2)
+        self.assertLess(result["estimated_uv_surface_samples_per_camera"], 2_000_000)
         for row in result["views"]:
             self.assertGreater(row["comparable_source_pixels"], 100)
             self.assertEqual(row["mean_delta_e_increase"], 0)
@@ -142,6 +170,8 @@ class TextureRevisionTest(unittest.TestCase):
             {"max_within_10_drop": float("inf")},
             {"min_pixels_per_view": 100000},
             {"scale": 0},
+            {"max_projection_samples": 0},
+            {"max_projection_samples": 1.5},
         ):
             with self.subTest(kwargs=kwargs):
                 with self.assertRaises(ValueError):

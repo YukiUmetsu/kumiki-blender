@@ -420,6 +420,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--max-p90-increase", type=float, default=3.0, help="maximum increase in P90 Lab delta E per camera")
     p.add_argument("--max-within-10-drop", type=float, default=.02, help="maximum decrease in fraction of pixels within delta E 10")
     p.add_argument("--min-pixels-per-view", type=int, default=150, help="minimum common reference/model pixels")
+    p.add_argument("--max-projection-samples", type=int, default=2_000_000, help="preflight cap on per-camera mesh UV samples for local RAM safety")
     p.add_argument("--output", type=Path, required=True, help="new immutable per-camera QA panels and report")
 
     p = sub.add_parser("appearance", help="colour agreement of a textured mesh with each reference view")
@@ -1033,7 +1034,8 @@ def _run(args) -> int:
             max_mean_increase=args.max_mean_increase,
             max_p90_increase=args.max_p90_increase,
             max_within_10_drop=args.max_within_10_drop,
-            min_pixels_per_view=args.min_pixels_per_view)
+            min_pixels_per_view=args.min_pixels_per_view,
+            max_projection_samples=args.max_projection_samples)
         print(json.dumps(report, indent=2))
         return 0 if report["numeric_gate_pass"] else 1
     if args.command == "appearance":
