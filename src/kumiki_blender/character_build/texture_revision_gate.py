@@ -21,7 +21,7 @@ from PIL import Image
 from scipy import ndimage
 
 from .checks import lab
-from .texture import read_obj_uv, render_textured
+from .texture import estimate_uv_projection_samples, read_obj_uv, render_textured
 
 _DEFAULT_SCALE = .25
 
@@ -97,6 +97,7 @@ def audit_texture_revision(handoff: str | Path, mesh_obj: str | Path,
                            max_p90_increase: float = 3.0,
                            max_within_10_drop: float = .02,
                            min_pixels_per_view: int = 150,
+                           max_projection_samples: int = 2_000_000,
                            scale: float = _DEFAULT_SCALE) -> dict:
     """Write immutable candidate evidence, including failures; return numeric QA.
 
@@ -111,6 +112,8 @@ def audit_texture_revision(handoff: str | Path, mesh_obj: str | Path,
     _fraction(scale, "scale", .125, 1)
     if type(min_pixels_per_view) is not int or not 1 <= min_pixels_per_view <= 500_000:
         raise ValueError("min_pixels_per_view must be an integer between 1 and 500000")
+    if type(max_projection_samples) is not int or not 10_000 <= max_projection_samples <= 10_000_000:
+        raise ValueError("max_projection_samples must be an integer between 10000 and 10000000")
     handoff = Path(handoff).resolve()
     mesh_obj = Path(mesh_obj).resolve()
     baseline_texture = Path(baseline_texture).resolve()
@@ -143,6 +146,13 @@ def audit_texture_revision(handoff: str | Path, mesh_obj: str | Path,
             or not np.isfinite(mesh.vertices).all()
             or not np.isfinite(corner_uv).all()):
         raise ValueError("Mesh/UVs are nonfinite or above source-QA budget")
+    projection_samples = estimate_uv_projection_samples(
+        mesh, metres_per_px=spec["metres_per_aligned_px"], scale=scale)
+    if projection_samples > max_projection_samples:
+        raise ValueError(
+            f"Projection sample budget exceeded ({projection_samples:,} > "
+            f"{max_projection_samples:,} per camera); use a coarser source-registered "
+            "QA cage instead of reducing camera fidelity or exhausting local RAM")
     inputs = {
         "handoff_spec": spec_file,
         "mesh_obj": mesh_obj,
@@ -223,8 +233,11 @@ def audit_texture_revision(handoff: str | Path, mesh_obj: str | Path,
             "mesh_and_uv_fixed": True,
             "same_camera_and_source_pixels_for_both_textures": True,
             "source_scale": float(scale),
+            "estimated_uv_surface_samples_per_camera": projection_samples,
+            "max_projection_samples": max_projection_samples,
             "views": rows,
             "limitations": [
+                "Projection preflight counts _uv_samples subdivisions and refuses excessive allocations on dense meshes.",
                 "CIE76 on unlit renders is not a material, shading, normal map or PBR fidelity assessment.",
                 "No source camera registration or silhouette optimization is performed.",
                 "Reference color differences may arise from illustration lighting or view inconsistency.",

@@ -14,6 +14,14 @@ The existing appearance report describes how well one UV texture matches origina
       --max-within-10-drop 0.02 \
       --output .review/pip/texture-qa-r01
 
+The default **--max-projection-samples 2000000** guards local RAM usage.
+It computes the exact number of mesh-face UV samples that the native software
+renderer would allocate **before rendering any source view**. For dense/high-poly
+input, the command fails with an actionable error recommending a source-registered,
+lower-resolution QA cage. Lowering QA image resolution just to hide oversampling
+can miss tiny eyelid or feather changes; use an intentionally approved cage.
+The sample budget is reported in report.json so runs can be audited.
+
 The OBJ needs actual UV (vt) records and per-face UV coordinates. Explicit source OBJ filenames (suffix -source.obj or .source.obj) are already Blender **Z-up**; legacy interchange OBJ names are Y-up and automatically converted. Both textures must be square and no larger than 8192 pixels.
 
 Pass --views front,right,front_right to evaluate only those existing source cameras; by default every aligned view in handoff/spec.json is required. Unlike the older appearance command, this gate **fails** if a specified source image is missing or fewer than the required **150 common original/model pixels** are present. The original source drawings must have already been checked for correct camera alignment and identity.

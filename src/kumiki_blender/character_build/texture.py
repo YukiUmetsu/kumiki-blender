@@ -419,6 +419,36 @@ def turnaround(mesh: Mesh, corner_uv: np.ndarray, textures: list[np.ndarray], me
     return sheet
 
 
+def estimate_uv_projection_samples(mesh: Mesh, *, metres_per_px: float,
+                                   scale: float = 0.25) -> int:
+    """Count projected UV surface samples *before* allocating the render arrays.
+
+    Mirrors the exact per-triangle subdivision rule in _uv_samples, including
+    its 64-step upper bound. A high-poly mesh with large face diameters can
+    otherwise create hundreds of millions of samples, exhausting Mac RAM.
+    This is an allocation budget estimate, not a geometric quality score.
+    """
+    if (not np.isfinite(metres_per_px) or not 0 < metres_per_px <= 1
+            or not np.isfinite(scale) or not 0 < scale <= 1):
+        raise ValueError("Projection pixel scale and image scale must be finite positive values")
+    if not len(mesh.faces):
+        return 0
+    corners = mesh.vertices[mesh.faces]
+    if not np.isfinite(corners).all():
+        raise ValueError("Nonfinite mesh coordinates cannot be projected")
+    a, b, c = corners[:, 0], corners[:, 1], corners[:, 2]
+    max_edge = np.maximum.reduce([
+        np.linalg.norm(b - a, axis=1),
+        np.linalg.norm(c - b, axis=1),
+        np.linalg.norm(a - c, axis=1),
+    ])
+    spacing_m = 0.5 * metres_per_px / scale
+    subdivisions = np.clip(np.ceil(max_edge / spacing_m).astype(np.int64), 1, 64)
+    # _uv_samples retains i+j<=n from a (n+1)x(n+1) grid:
+    # exact triangular-number count per mesh face.
+    return int(np.sum((subdivisions + 1) * (subdivisions + 2) // 2, dtype=np.int64))
+
+
 def _uv_samples(mesh: Mesh, corner_uv: np.ndarray, spacing_m: float) -> tuple[np.ndarray, np.ndarray]:
     """Surface points (spacing <= spacing_m) and their UVs, from a barycentric grid per triangle."""
     a, b, c = (mesh.vertices[mesh.faces[:, i]] for i in range(3))
