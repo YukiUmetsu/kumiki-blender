@@ -257,7 +257,7 @@ def choose_sources(regions: Regions, witness: np.ndarray, testimony: list[Testim
             break
         label[ids[moved]] = winner[moved]
     regions.label = label
-    parts, part = _components(label, rows, cols, label[rows] == label[cols])
+    parts, part = _components(label, rows, cols, (label[rows] == label[cols]) & same_group)
     return {"score": score, "regions": int(len(np.unique(part[label >= 0]))), "merged_nodes": merged,
             "rejected_claims": rejected, "contested_nodes": contested_nodes,
             "misplaced": misplaced, "contested": contested}
