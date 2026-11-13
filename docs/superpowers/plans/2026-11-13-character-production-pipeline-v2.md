@@ -18,11 +18,11 @@ Never improve one whole-character IoU by silently destroying eyes, facial featur
 ### Verified repository foundations
 
 Read before implementation:
-- [docs/CHARACTER_BUILD.md](../CHARACTER_BUILD.md): reference ingest/check/handoff, multi-view Hunyuan shape, fit, placement, project, retopo, joints, rig, part assembly and repaint, with Pip/Quill results.
-- [docs/CHARACTER_FIDELITY_QA.md](../CHARACTER_FIDELITY_QA.md) and [docs/CHARACTER_FIDELITY_REVIEW.md](../CHARACTER_FIDELITY_REVIEW.md): per semantic part registered 2D comparisons and limitations.
-- [docs/KUMIKI_DEFORMATION_BRIDGE.md](../KUMIKI_DEFORMATION_BRIDGE.md) and [docs/KUMIKI_MOTION_BRIDGE.md](../KUMIKI_MOTION_BRIDGE.md): portable deformation/motion handoff.
-- [docs/ARCHITECTURE.md](../ARCHITECTURE.md): immutable revisions, asset provenance, GLB integrity and Blender headless restrictions.
-- [docs/BLENDER_ECOSYSTEM.md](../BLENDER_ECOSYSTEM.md): prior ecosystem/licensing review.
+- [docs/CHARACTER_BUILD.md](../../CHARACTER_BUILD.md): reference ingest/check/handoff, multi-view Hunyuan shape, fit, placement, project, retopo, joints, rig, part assembly and repaint, with Pip/Quill results.
+- [docs/CHARACTER_FIDELITY_QA.md](../../CHARACTER_FIDELITY_QA.md) and [docs/CHARACTER_FIDELITY_REVIEW.md](../../CHARACTER_FIDELITY_REVIEW.md): per semantic part registered 2D comparisons and limitations.
+- [docs/KUMIKI_DEFORMATION_BRIDGE.md](../../KUMIKI_DEFORMATION_BRIDGE.md) and [docs/KUMIKI_MOTION_BRIDGE.md](../../KUMIKI_MOTION_BRIDGE.md): portable deformation/motion handoff.
+- [docs/ARCHITECTURE.md](../../ARCHITECTURE.md): immutable revisions, asset provenance, GLB integrity and Blender headless restrictions.
+- [docs/BLENDER_ECOSYSTEM.md](../../BLENDER_ECOSYSTEM.md): prior ecosystem/licensing review.
 
 Read code:
 - `src/kumiki_blender/character_build/{views,checks,handoff,fit,texture,rig,assembly,swap}.py`
