@@ -132,8 +132,16 @@ Safeguards and limitations:
 - Moving geometry must be an editable mesh without shape keys/modifiers,
   with stable vertex indices and no mirrored transforms. Fixed geometry must
   be a closed/manifold, outward-oriented mesh without modifiers.
-- `protected_vertices` should cover tail roots, wing sockets, clothing
-  attachment seams, etc.; these indices are specific to each character.
+- `protected_vertices` can contain stable mesh indices, but for production
+  characters prefer `protected_vertex_groups` such as `TailRoot` or `WingSocket.L`.
+  The worker protects all vertices assigned to each named group with weight >= 0.5.
+  The groups must exist and contain vertices; missing or empty groups fail before
+  any modification. This avoids stale numeric indices after topology revisions.
+- `guard_pairs` optionally lists additional object pairs such as `[["Tail", "Satchel"]]`.
+  Their initial BVH overlap count becomes an upper bound throughout the repair.
+  Use these for contacts not included in the primary moving/fixed repair pairs.
+  Guarding does not certify ideal contact spacing, just prevents new crossings.
+- Both options are additive: old schema v1 JSON policies without them still work.
 - Vertex clearance approximates penetration on the fixed mesh; BVH overlap
   detects triangle crossing but does not measure penetration volume. The
   result may be **partial** and always requires artistic inspection.
