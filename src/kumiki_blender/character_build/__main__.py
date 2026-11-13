@@ -184,6 +184,20 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--output", type=Path, required=True, help="new editable controlled.blend")
     p.add_argument("--blender")
 
+    p = sub.add_parser("plan-joint-refine", help="source-lock local quad-loop density changes around reviewed hinge joints")
+    p.add_argument("--blend", type=Path, required=True, help="pre-rig quad cage .blend")
+    p.add_argument("--topology", type=Path, required=True, help="existing topology-plan.json")
+    p.add_argument("--joint", action="append", required=True, help="reviewed joint name, repeat for multiple hinges")
+    p.add_argument("--cuts", type=int, default=2, help="additional axial cuts per crossing quad edge, 1–4")
+    p.add_argument("--max-added-vertices", type=int, default=25000)
+    p.add_argument("--axial-alignment-min", type=float, default=.6)
+    p.add_argument("--output", type=Path, required=True)
+
+    p = sub.add_parser("refine-joint-topology", help="add bounded Blender BMesh hinge loops on an unskinned quad cage")
+    p.add_argument("--plan", type=Path, required=True, help="joint-refine-plan.json")
+    p.add_argument("--output", type=Path, required=True, help="new hinge-retopo.blend and OBJ revision")
+    p.add_argument("--blender")
+
     p = sub.add_parser("plan-topology", help="generate joint-specific topology cross-section review zones")
     p.add_argument("--joints", type=Path, required=True)
     p.add_argument("--mesh-name", default="Low", help="exact Blender mesh object name")
@@ -205,6 +219,12 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--plan", type=Path, required=True, help="bounded pose battery JSON")
     p.add_argument("--output", type=Path, required=True, help="new immutable report directory")
     p.add_argument("--blender", help="local Blender executable path")
+
+    p = sub.add_parser("repair-penetrations", help="bounded BVH collision repair for named Blender object pairs")
+    p.add_argument("--blend", type=Path, required=True, help="original editable .blend file")
+    p.add_argument("--plan", type=Path, required=True, help="directed collision-pair JSON with protected anchors")
+    p.add_argument("--output", type=Path, required=True, help="new revision directory")
+    p.add_argument("--blender", help="local Blender binary")
 
     p = sub.add_parser("refine-region", help="bounded local sculpt edit; preserve all other .blend objects")
     p.add_argument("--blend", type=Path, required=True, help="editable source Blender file")
@@ -303,6 +323,12 @@ def main(argv: list[str] | None = None) -> int:
     _bake_arguments(p)
     p.add_argument("--output", type=Path, required=True, help="new folder: report.json, turnaround.png, ...")
     p.add_argument("--size", type=int, default=1024)
+
+    p = sub.add_parser("resolve-conflicts", help="bounded, rollback-safe semantic texture conflict repair")
+    p.add_argument("handoff", type=Path, help="existing character handoff folder")
+    p.add_argument("mesh", type=Path, help="source OBJ with UVs")
+    p.add_argument("--config", type=Path, required=True, help="character-independent repair policy JSON")
+    p.add_argument("--output", type=Path, required=True, help="new directory for best texture and QA report")
 
     p = sub.add_parser("repaint", help="repaint views of the model with a local FLUX.2 [klein] in ComfyUI")
     p.add_argument("handoff", type=Path)
@@ -488,6 +514,24 @@ def _run(args) -> int:
                                 max_regression=args.max_regression)
         print(json.dumps(report, indent=2))
         return 1 if report["failed_views"] else 0
+    if args.command == "repair-penetrations":
+        from dataclasses import asdict
+        from .penetration_repair import load_collision_plan
+        from .blender import run_worker
+        if not args.blend.is_file() or args.blend.suffix.lower() != ".blend":
+            raise ValueError("--blend must be an existing .blend source")
+        if args.output.exists():
+            raise FileExistsError(f"Revision exists: {args.output}")
+        validated = load_collision_plan(args.plan)
+        report = run_worker("penetration-repair", {
+            "plan": {"schema_version": 1, "pairs": [asdict(p) for p in validated["pairs"]],
+                     "guard_pairs": validated["guard_pairs"]},
+            "source_blend": str(args.blend.resolve()),
+            "output": str(args.output.resolve()),
+        }, blender=args.blender, blend_file=args.blend.resolve())
+        print(json.dumps(report, indent=2))
+        # A no-op collision check is a valid, non-destructive result.
+        return 0
     if args.command == "refine-region":
         from .region_sculpt_plan import load_region_sculpt_plan
         from .blender import run_worker
@@ -596,6 +640,27 @@ def _run(args) -> int:
             "plan": plan, "source_blend": str(args.blend.resolve()),
             "output": str(args.output.resolve()),
         }, blender=args.blender, blend_file=args.blend.resolve())
+        print(json.dumps(report, indent=2))
+        return 0
+    if args.command == "plan-joint-refine":
+        from .joint_refine_plan import save_joint_refine_plan
+        report = save_joint_refine_plan(args.blend, args.topology, args.joint,
+                                        args.output, cuts=args.cuts,
+                                        max_added_vertices=args.max_added_vertices,
+                                        axial_alignment_min=args.axial_alignment_min)
+        print(json.dumps(report, indent=2))
+        return 0
+    if args.command == "refine-joint-topology":
+        from .joint_refine_plan import load_joint_refine_plan
+        from .topology_zones import load_topology_plan
+        from .blender import run_worker
+        if args.output.exists():
+            raise FileExistsError(f"Output revision exists: {args.output}")
+        plan = load_joint_refine_plan(args.plan)
+        topology = load_topology_plan(plan["topology_plan"])
+        report = run_worker("joint-refine", {
+            "plan": plan, "topology": topology, "output": str(args.output.resolve()),
+        }, blender=args.blender, blend_file=Path(plan["source_blend"]))
         print(json.dumps(report, indent=2))
         return 0
     if args.command == "plan-topology":
@@ -775,6 +840,14 @@ def _run(args) -> int:
                    **{k: v for k, v in report.items() if k.startswith("seam_")}}
         _write_json(out / "report.json", summary)
         print(json.dumps(summary, indent=2))
+        return 0
+    if args.command == "resolve-conflicts":
+        from .conflict_repair import run_conflict_repair
+
+        report = run_conflict_repair(args.handoff, args.mesh, args.config, args.output)
+        print(json.dumps({"status": report["status"], "selected_settings": report["selected_settings"],
+                          "selected_score": report["selected_score"], "attempts": len(report["attempts"]),
+                          "output": str(args.output)}, indent=2))
         return 0
     if args.command == "repaint":
         import numpy as np
