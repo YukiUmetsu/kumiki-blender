@@ -81,10 +81,11 @@ def main():
         assert report["unrelated_meshes_unchanged"] is True
         assert report["original_materials_and_uvs_unchanged"] is True
         assert (output / "landmark-fitted.obj").is_file()
+        assert (output / "landmark-fitted-source.obj").is_file()
         # Explicitly audit OBJ world axes against the immutable registered
         # Blender frame. Default Blender export Y-up would fail this check.
         obj_vertices = []
-        with (output / "landmark-fitted.obj").open("r", encoding="utf-8") as stream:
+        with (output / "landmark-fitted-source.obj").open("r", encoding="utf-8") as stream:
             for line in stream:
                 if line.startswith("v "):
                     obj_vertices.append(Vector(tuple(float(x) for x in line.split()[1:4])))
@@ -99,6 +100,16 @@ def main():
             (placed - target).length, tuple(placed), tuple(target))
         assert [uv.name for uv in obj.data.uv_layers] == source_uv
         assert [tuple(v.co) for v in bpy.data.objects["UnrelatedNose"].data.vertices] == nose_vertices
+        # Existing retopo -> rig users import the legacy Y-up interchange
+        # file using default Blender import settings. Check that it still
+        # round-trips to the original Z-up world-space landmark.
+        seen = set(bpy.data.objects)
+        bpy.ops.wm.obj_import(filepath=str(output / "landmark-fitted.obj"))
+        imported = [o for o in set(bpy.data.objects)-seen if o.type == "MESH"]
+        assert imported, "Default Blender interchange OBJ did not import"
+        assert min((o.matrix_world @ v.co - target).length
+                   for o in imported for v in o.data.vertices) < 1e-6, (
+                   "Legacy OBJ no longer round-trips with Blender's default importer")
         print(json.dumps({
             "status": "native-source-geodesic-fit-verified",
             "blender": bpy.app.version_string,

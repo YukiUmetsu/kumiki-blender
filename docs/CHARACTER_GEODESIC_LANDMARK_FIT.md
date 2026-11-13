@@ -63,20 +63,22 @@ kumiki-character-build fit-landmark-surface \
   --blender /Applications/Blender.app/Contents/MacOS/Blender
 ~~~
 
-The output contains a separate **landmark-fitted.blend**, part-only **landmark-fitted.obj**, and **report.json**. The source .blend is never overwritten, and source Blender / landmark report / input specification hashes are checked.
+The output contains a separate **landmark-fitted.blend**, part-only **landmark-fitted.obj** (legacy interchange), **landmark-fitted-source.obj** (canonical source camera), and **report.json**. The source .blend is never overwritten, and source Blender / landmark report / input specification hashes are checked.
 
 The new part mesh retains original vertex indices, UV corner coordinates, material slots and mesh topology. All unrelated meshes are verified unchanged. Multiple overlapping landmark influences are blended, but the explicitly pinned vertex is moved exactly to the triangulated target. Incompatible pins, boundary moves, oversized displacements, surface flips, collapsed faces and excessive edge strain fail without saving an output.
 
-## Source-coordinate export guarantee
+## Explicit interchange versus source-camera OBJ formats
 
-Every character-build OBJ exporter now calls a shared Blender helper that
-**explicitly preserves Blender coordinates**: +Z up, -Y forward, metres.
-Blender 4.5's default OBJ settings would convert this to Y up and invalidate
-2D source mask comparisons. This applies to native anatomy, sculpt, hinge
-retopo, coarse retopo, swap, assembly and the geodesic-fitted candidate.
+Every character-build exporter retains the original OBJ filename in the historical
+**Y-up / -Z-forward interchange convention**, matching existing Blender importers.
+Do not silently alter those files or pass a canonical source OBJ to the default importer.
 
-The native smoke suite checks exported OBJ vertex positions against Blender
-world coordinates rather than only checking that an OBJ file exists.
+For registered source-art comparisons, each exporter also emits a separate
+**Z-up, -Y-forward source-frame OBJ** (`*-source.obj`, or `parts/<id>.source.obj`).
+Use that one with `compare-region`, never the legacy file.
+
+Native Blender tests verify both that source-frame vertices stay in original
+world coordinates and that legacy OBJ files still import in the prior frame.
 
 ## Required source and deformation QA
 

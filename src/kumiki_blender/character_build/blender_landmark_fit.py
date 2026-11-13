@@ -17,7 +17,7 @@ import numpy as np
 from mathutils import Vector
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from kumiki_blender.character_build.blender_common import arguments, export_registered_obj, write_report  # noqa: E402
+from kumiki_blender.character_build.blender_common import arguments, export_interchange_obj, export_registered_obj, write_report  # noqa: E402
 from kumiki_blender.character_build.geodesic_fit import LandmarkPin, fit_landmark_surface  # noqa: E402
 
 
@@ -126,7 +126,8 @@ def main():
     bpy.context.view_layer.objects.active = obj
     # Source-view QA uses Blender metres, +Z up and -Y forward. The OBJ
     # operator otherwise defaults to Y-up and silently breaks registration.
-    export_registered_obj(folder / "landmark-fitted.obj")
+    export_interchange_obj(folder / "landmark-fitted.obj")
+    export_registered_obj(folder / "landmark-fitted-source.obj")
     write_report(folder, {
         "schema_version": 1,
         "character_id": plan["character_id"],
@@ -139,7 +140,7 @@ def main():
         "status": "geodesic-landmark-candidate-visual-qa-required",
         "unrelated_meshes_unchanged": True,
         "original_materials_and_uvs_unchanged": True,
-        "files": ["landmark-fitted.blend", "landmark-fitted.obj"],
+        "files": ["landmark-fitted.blend", "landmark-fitted.obj", "landmark-fitted-source.obj"],
         "limitations": [
             "World-space source positions use manually annotated and registered original image landmarks.",
             "Blender is not solving unknown anatomical shape or vertex-to-landmark correspondence.",

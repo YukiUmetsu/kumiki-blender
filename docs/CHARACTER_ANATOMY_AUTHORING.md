@@ -30,7 +30,7 @@ kumiki-character-build build-anatomy \
 
 The planner hashes the original Blender source and anatomy specification, validates geometry bounds and limits the work to 32 parts and approximately 2 million generated vertices. Changed source/spec files invalidate the plan. Outputs are immutable; old source files are not overwritten.
 
-The Blender worker writes **anatomy.blend** and individual **parts/<part-id>.obj** files, plus **report.json** with per-part manifold/volume data, geometry/material metadata, provenance, source hashes and original-geometry immutability checks. Example object names: ANATOMY.eye.L.sclera, ANATOMY.eye.L.iris, ANATOMY.eye.L.pupil, ANATOMY.upper_lid.L and ANATOMY.beak.
+The Blender worker writes **anatomy.blend** and individual **parts/<part-id>.obj** (legacy interchange) and **parts/<part-id>.source.obj** (Z-up source-frame) files, plus **report.json** with per-part manifold/volume data, geometry/material metadata, provenance, source hashes and original-geometry immutability checks. Example object names: ANATOMY.eye.L.sclera, ANATOMY.eye.L.iris, ANATOMY.eye.L.pupil, ANATOMY.upper_lid.L and ANATOMY.beak.
 
 The existing original mesh, UVs, materials, shape keys, transforms and rig pose are checked for change. Parts can be left separate or parented explicitly to an existing Blender bone while preserving their world-space position. Rigid parenting **is not** a substitute for deforming flesh or feathers.
 
@@ -42,7 +42,7 @@ Exported part OBJ geometry can be passed to the existing CharacterSpec v2 **comp
 kumiki-character-build compare-region \
   --character .review/character/plan-r01 \
   --region eye.L \
-  --mesh .review/character/anatomy-r01/parts/eye.L.obj \
+  --mesh .review/character/anatomy-r01/parts/eye.L.source.obj \
   --output .review/character/eye-qa-r01
 ~~~
 
@@ -50,4 +50,4 @@ Review camera-projected silhouettes and materials against the originals, then te
 
 ## Tests
 
-The pure Python tests check authored mesh integrity, source/plan hashes, evidence provenance, boundary conditions and local geometry. The native Blender 4.5 LTS smoke creates a procedural head, five anatomy components, individual UVs/materials and three OBJ part exports. It checks unchanged original geometry/rig and that an eye follows its named head bone. **Synthetic test success is not a likeness score.**
+The pure Python tests check authored mesh integrity, source/plan hashes, evidence provenance, boundary conditions and local geometry. The native Blender 4.5 LTS smoke creates a procedural head, five anatomy components, individual UVs/materials and three legacy and three source-frame OBJ part exports. It checks unchanged original geometry/rig and that an eye follows its named head bone. **Synthetic test success is not a likeness score.**

@@ -135,13 +135,26 @@ def mesh_stats(obj) -> dict:
     return stats
 
 
+def export_interchange_obj(filepath: str | Path, *, selected: bool = True,
+                           materials: bool = False) -> None:
+    """Preserve historic character pipeline OBJ format (-Z forward / Y up).
+
+    The existing Blender importer uses the matching default convention. The
+    interchange file is for the retopo→rig and source-mesh→assembly handoffs,
+    NOT raw reference-mask comparisons. Do not silently change that contract.
+    """
+    bpy.ops.wm.obj_export(
+        filepath=str(filepath), export_selected_objects=selected,
+        export_materials=materials, forward_axis="NEGATIVE_Z", up_axis="Y")
+
+
 def export_registered_obj(filepath: str | Path, *, selected: bool = True,
                           materials: bool = False) -> None:
     """OBJ in the canonical source character frame: +Z up, -Y forward.
 
-    Blender 4.5 defaults to -Z forward / Y up. That is appropriate for some
-    target engines but rotates OBJ vertices away from CharacterSpec v2
-    cameras, silently corrupting original-art silhouette comparisons.
+    This explicit SOURCE format is for CharacterSpec v2 camera QA and cannot
+    be fed to the default Y-up interchange importer without opting into
+    Z-up import settings. See export_interchange_obj for legacy handoffs.
     """
     bpy.ops.wm.obj_export(
         filepath=str(filepath), export_selected_objects=selected,

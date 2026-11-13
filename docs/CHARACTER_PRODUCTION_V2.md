@@ -97,7 +97,7 @@ kumiki-character-build refine-region \
   --blender /Applications/Blender.app/Contents/MacOS/Blender
 ```
 
-The Blender worker applies world-space displacement to the named mesh in memory, with zero movement outside each requested radius and a smooth falloff at its boundary. It rejects source files inside the target output, linked library data, shape-key meshes (until a shape-key-aware implementation exists), missing vertices, excessive displacement, and face normal flips. All other meshes are hashed before and after editing. It writes a **new** `refined.blend` and `region.obj`, never the original.
+The Blender worker applies world-space displacement to the named mesh in memory, with zero movement outside each requested radius and a smooth falloff at its boundary. It rejects source files inside the target output, linked library data, shape-key meshes (until a shape-key-aware implementation exists), missing vertices, excessive displacement, and face normal flips. All other meshes are hashed before and after editing. It writes a **new** `refined.blend`, legacy `region.obj` and Z-up `region-source.obj`, never the original.
 
 The worker deliberately **does not** synthesize eyes, eyelids, individual feathers or hidden anatomy. It is a safe geometric correction step, not a substitute for authoring those shapes. Run `compare-region` on the resulting part geometry in a consistent frame, then perform visual and posed QA.
 

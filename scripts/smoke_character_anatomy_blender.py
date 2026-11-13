@@ -85,12 +85,13 @@ def main():
         assert all((target / "parts" / (pid + ".obj")).is_file() for pid in report["part_ids"])
         # A source eye at z=0.27m must stay z=0.27m in an exported
         # OBJ. Blender's implicit Y-up export would rotate it toward z≈0.07.
-        eye_obj = target / "parts" / "eye.L.obj"
+        eye_obj = target / "parts" / "eye.L.source.obj"
         with eye_obj.open("r", encoding="utf-8") as stream:
             world_vertices = [
                 tuple(float(x) for x in line.split()[1:4])
                 for line in stream if line.startswith("v ")]
         assert world_vertices
+        assert (target / "parts" / "eye.L.obj").is_file()
         assert any(.25 < z < .29 and -.09 < y < -.04
                    for _x, y, z in world_vertices), (
                    "Eye OBJ was rotated out of canonical source-camera frame")

@@ -72,11 +72,12 @@ def main():
         assert report["original_source_vertices_preserved"] is True
         assert report["unrelated_character_meshes_preserved"] is True
         assert (target/"hinge-retopo.obj").is_file()
-        with (target/"hinge-retopo.obj").open("r", encoding="utf-8") as stream:
+        with (target/"hinge-retopo-source.obj").open("r", encoding="utf-8") as stream:
             exported = [
                 tuple(float(v) for v in line.split()[1:4])
                 for line in stream if line.startswith("v ")]
         assert exported
+        assert (target/"hinge-retopo.obj").is_file()
         assert any(.17 <= vertex[2] <= .32 and abs(vertex[1]) < .05
                    for vertex in exported), (
                    "Joint OBJ was rotated out of Z-up registered source frame")

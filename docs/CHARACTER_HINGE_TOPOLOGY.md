@@ -38,7 +38,7 @@ kumiki-character-build refine-joint-topology \
 
 The worker locates existing quad-edge strips that cross each reviewed 3D joint plane and travel along the corresponding bone axis. It creates bounded cuts with native BMesh subdivision, retains source vertices, and rejects missing quad bands, nonmanifold topology, UV/material-name changes, source rest-volume regressions >2%, and damage to unrelated meshes.
 
-Outputs are an immutable **hinge-retopo.blend**, hinge-retopo.obj, and a report with before/after topology, per-joint cut counts, original vertex/UV/material protection and explicit quality limitations. The original .blend is never overwritten.
+Outputs are an immutable **hinge-retopo.blend**, hinge-retopo.obj (legacy interchange), hinge-retopo-source.obj (Z-up source QA), and a report with before/after topology, per-joint cut counts, original vertex/UV/material protection and explicit quality limitations. The original .blend is never overwritten.
 
 ## Mandatory follow-up
 
