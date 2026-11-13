@@ -58,6 +58,14 @@ def main() -> None:
     rig.select_set(True)
     bpy.context.view_layer.objects.active = rig
     bpy.ops.object.parent_set(type="ARMATURE_AUTO")
+    # Dual-quaternion "Preserve Volume" is an opt-in native Blender deformation
+    # setting. Keep the old behavior by default to preserve baseline comparisons.
+    modifiers = [modifier for modifier in body.modifiers if modifier.type == "ARMATURE"]
+    if not modifiers:
+        raise RuntimeError("Automatic armature parenting did not install a skinning modifier")
+    for modifier in modifiers:
+        modifier.use_deform_preserve_volume = bool(args.get("preserve_volume", False))
+
     activate(body)
     bpy.ops.object.vertex_group_limit_total(group_select_mode="ALL", limit=MAX_INFLUENCES)
     bpy.ops.object.vertex_group_normalize_all(group_select_mode="ALL", lock_active=False)
@@ -128,7 +136,7 @@ def main() -> None:
                         "Check that the mesh is one closed surface.")
     write_report(output, {"mesh": mesh_stats(body), "bones": len(bones), "vertices_given_nearest_bone": fixed,
                           "nearest_bone_fraction": round(fallback, 4), "warnings": warnings,
-                          "bones_without_weights": empty_bones, "max_influences": MAX_INFLUENCES,
+                          "bones_without_weights": empty_bones, "max_influences": MAX_INFLUENCES, "preserve_volume": bool(args.get("preserve_volume", False)),
                           "rom_deg": math.degrees(angle), "range_of_motion": rom, "worst_volume_change": worst,
                           "files": ["rigged.blend", "rigged.glb"]})
 

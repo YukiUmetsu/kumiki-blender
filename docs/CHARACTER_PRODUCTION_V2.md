@@ -123,6 +123,18 @@ The worker evaluates Blender's actual modified skinned mesh in neutral and nomin
 
 A structural failure produces exit code 1, and a passing structural audit retains **deformation-review-required**, because neither volume nor stretch proves that a wing, tail, or face looks correct. A contact intersection is an advisory review candidate, not an assumed penetration severity. Set \`render:true\` only if the source scene already has an appropriate active camera. The source \`.blend\` is never saved.
 
+### Optional native Preserve Volume skinning
+
+The pre-existing Blender rig builder now accepts \`--preserve-volume\`, which enables the Armature modifier's Preserve Volume (dual-quaternion) deformation before measuring range of motion. It is **opt-in** to retain the original linear-blend skinning baseline:
+
+\`\`\`bash
+kumiki-character-build rig retopo/low.obj joints.json \
+  --output .review/characters/example/rig-dual-quaternion-r01 \
+  --preserve-volume --render-rom
+\`\`\`
+
+Compare the standard and volume-preserving reports and posed renders. Preserve Volume can reduce collapses but will not resolve bad bone placement, collisions, or unnatural wing/tail articulation. The actual Blender-specific improvement remains subject to a local smoke run.
+
 ## 5. Tests and runtime boundaries
 
 Run the added CPU tests:

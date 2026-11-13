@@ -236,6 +236,7 @@ def main(argv: list[str] | None = None) -> int:
         if name == "rig":
             p.add_argument("--rom-deg", type=float, default=45.0)
             p.add_argument("--render-rom", action="store_true")
+            p.add_argument("--preserve-volume", action="store_true", help="enable Blender armature Preserve Volume skinning")
     args = parser.parse_args(argv)
     try:
         return _run(args)
@@ -579,7 +580,8 @@ def _run(args) -> int:
         joints = json.loads(args.joints.read_text(encoding="utf-8"))
         validate_joints(joints)
         report = run_worker("rig", {"mesh": str(args.input.resolve()), "joints": joints, "output": str(out.resolve()),
-                                    "rom_deg": args.rom_deg, "render_rom": args.render_rom}, blender=args.blender)
+                                    "rom_deg": args.rom_deg, "render_rom": args.render_rom,
+                                    "preserve_volume": args.preserve_volume}, blender=args.blender)
     print(json.dumps(report, indent=2))
     return 0
 
