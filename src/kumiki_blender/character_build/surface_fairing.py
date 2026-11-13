@@ -124,7 +124,7 @@ def _topology(points, faces, angle_deg):
     if np.any(counts != 2):
         raise ValueError("Surface must be closed/manifold; open seams are protected by refusing edit")
     original_normals = original_cross / magnitude[:, None]
-    which_face = np.repeat(np.arange(len(faces)), 3)
+    which_face = np.tile(np.arange(len(faces)), 3)
     first = np.full(len(edges), -1, dtype=np.int64)
     second = np.full(len(edges), -1, dtype=np.int64)
     for edge_id, face_id in zip(inverse, which_face):
