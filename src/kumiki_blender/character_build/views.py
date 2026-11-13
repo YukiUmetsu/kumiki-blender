@@ -93,6 +93,8 @@ class View:
     height_px: int
     notes: list[str] = field(default_factory=list)
     measure: dict = field(default_factory=dict)
+    # aligned = (raw - (left, top)) * scale + (x0, BASELINE - FIGURE_PX)
+    to_aligned: dict = field(default_factory=dict)
 
 
 def image_paths(folder: Path) -> dict[str, Path]:
@@ -189,7 +191,9 @@ def load(path: Path, name: str | None = None) -> View:
                "bottom_pct": round(100 * bottom / rows, 1),
                "centre_pct": round(100 * (left + right) / 2 / cols, 1),
                "width_to_height": round((right - left) / (bottom - top), 3)}
-    return View(name, path, cut, mask, aligned, np.asarray(aligned_mask) > 127, bottom - top, notes, measure)
+    to_aligned = {"left": left, "top": top, "scale": scale, "x0": x0, "y0": BASELINE - FIGURE_PX}
+    return View(name, path, cut, mask, aligned, np.asarray(aligned_mask) > 127, bottom - top, notes, measure,
+                to_aligned)
 
 
 def load_folder(folder: Path, names: set[str] | None = None) -> tuple[dict[str, View], dict[str, str]]:

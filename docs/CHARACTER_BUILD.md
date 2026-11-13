@@ -38,6 +38,7 @@ or newer. The other commands need only NumPy, SciPy, scikit-image and Pillow.
 | Generators | `place HANDOFF a.glb b.glb --output ranked/` | Repaired, solid, oriented candidates ranked by IoU |
 | Generators | `solidify mesh.glb --output solid.ply` | A hollow or badly wound mesh rebuilt as one solid |
 | Generators | `swap BASE DONOR --region "y>0.05" --output sw/` | One region taken from another generation (`--ellipsoid`, `--align-region`) |
+| Texture | `texture HANDOFF retopo/low.obj --output base.png` | UV texture baked from the full-resolution reference views (sharp clothes, buttons, fur painting) |
 | Texture | `retopo fitted.ply --colour-from ranked/x.placement.json` | The generator's own texture baked as `low_basecolor.png` |
 | Fur | `fur-weights coloured.ply --clothing-top-m 0.2 --eye-band-m 0.21,0.27` | Per-vertex fur weight from the drawings' colours (no fur on clothing or eyes) |
 | Fur | `fur retopo/low.obj --basecolor low_basecolor.png --weights w.ply --systems s.json` | Strand fur with Blender's procedural hair assets |

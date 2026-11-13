@@ -73,17 +73,20 @@ def build_handoff(folder: Path, height_m: float, *, factor: int = 5, tolerance_p
     out = folder / "handoff"
     if out.exists():
         raise FileExistsError(f"{out} exists. Move it away: each handoff is a new revision.")
-    for sub in ("aligned", "masks", "gen"):
+    for sub in ("aligned", "masks", "gen", "raw"):
         (out / sub).mkdir(parents=True)
     px = height_m / FIGURE_PX
     hull = carve(full, factor, tolerance_px)
     shifts_px = {n: s * factor for n, s in hull.shifts.items()}
+    raw_maps: dict[str, dict] = {}
     for name, view in full.items():
         image, mask = view.aligned, Image.fromarray(view.mask.astype(np.uint8) * 255)
         if name in shifts_px:  # move the image onto the camera frame
             image, mask = _shifted(image, -shifts_px[name]), _shifted(mask, -shifts_px[name])
         image.save(out / "aligned" / f"{name}.png")
         mask.save(out / "masks" / f"{name}.png")
+        view.raw.save(out / "raw" / f"{name}.png")  # full resolution, for texture baking
+        raw_maps[name] = {**view.to_aligned, "shift_px": shifts_px.get(name, 0)}
         clay = views.get(f"{name}_clay")
         if clay is not None:  # same frame as its colour view
             _shifted(clay.aligned, -shifts_px.get(name, 0)).save(out / "aligned" / f"{name}_clay.png")
@@ -112,6 +115,8 @@ def build_handoff(folder: Path, height_m: float, *, factor: int = 5, tolerance_p
         "bounding_box_m": {"width": round(float(front.any(0).sum()) * px, 5),
                            "depth": round(float(side.any(0).sum()) * px, 5), "height": height_m},
         "bands": bands,
+        # camera-frame pixel (u, v) -> raw pixel: ((u + shift_px - x0) / scale + left, (v - y0) / scale + top)
+        "raw": raw_maps,
         "cameras": {n: {**camera_spec(n, px, height_m), "image": f"aligned/{n}.png" if n in full else None}
                     for n in AZIMUTH},
         "references": {n: {"image": f"aligned/{n}.png", "size": round(CANVAS_W * px, 6),

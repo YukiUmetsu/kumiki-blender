@@ -97,6 +97,12 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--limbs", choices=("arms", "wings"), default="arms")
     p.add_argument("--tail", action="store_true")
 
+    p = sub.add_parser("texture", help="bake a UV texture from the full-resolution reference views")
+    p.add_argument("handoff", type=Path)
+    p.add_argument("mesh", type=Path, help="OBJ with UVs, e.g. retopo/low.obj")
+    p.add_argument("--output", type=Path, required=True, help=".png")
+    p.add_argument("--size", type=int, default=2048)
+
     p = sub.add_parser("fur-mask", help="UV-space fur mask from a base-colour texture (clothing excluded)")
     p.add_argument("basecolor", type=Path)
     p.add_argument("--exclude", action="append", default=[], help="r,g,b of a no-fur colour; repeat")
@@ -251,6 +257,18 @@ def _run(args) -> int:
             _write_json(args.output, report)
         print(json.dumps(report if args.command != "fit" else {k: report[k] for k in ("normalise", "start", "best", "folds")},
                          indent=2))
+        return 0
+    if args.command == "texture":
+        from PIL import Image
+
+        from .texture import bake_texture, read_obj_uv
+
+        _new_file(args.output)
+        mesh, corner_uv = read_obj_uv(args.mesh)
+        image, report = bake_texture(args.handoff, mesh, corner_uv, size=args.size)
+        Image.fromarray(image).save(args.output)
+        _write_json(args.output.with_suffix(".json"), report)
+        print(json.dumps(report, indent=2))
         return 0
     if args.command == "fur-weights":
         import numpy as np

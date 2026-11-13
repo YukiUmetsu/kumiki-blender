@@ -88,6 +88,8 @@ def align(donor: Mesh, base: Mesh, region: list[tuple[int, str, float]], *, iter
     else:
         fixed = base.vertices[~in_region(base.vertices, region)]
         moving = donor.vertices[~in_region(donor.vertices, region)]
+    if min(len(fixed), len(moving)) < 100:
+        raise ValueError(f"Too few points to align ({len(fixed)} base, {len(moving)} donor): widen the align region")
     fixed = fixed[rng.choice(len(fixed), min(sample, len(fixed)), replace=False)]
     moving = moving[rng.choice(len(moving), min(sample, len(moving)), replace=False)]
     tree = cKDTree(fixed)

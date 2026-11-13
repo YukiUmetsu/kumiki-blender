@@ -11,7 +11,7 @@ from pathlib import Path
 import numpy as np
 from PIL import Image, ImageDraw
 
-from character_build_fixtures import (HEIGHT_M, MARGINS, ellipsoid_mesh, figure_points, glb_bytes, render_view,
+from character_build_fixtures import (HEIGHT_M, MARGINS, SKIN, ellipsoid_mesh, figure_points, glb_bytes, render_view,
                                       signed_volume, write_views)
 from kumiki_blender.character_build import checks, hull, views
 from kumiki_blender.character_build.__main__ import main as cli
@@ -21,6 +21,7 @@ from kumiki_blender.character_build.handoff import build_handoff, compare, refer
 from kumiki_blender.character_build.hull import solidify
 from kumiki_blender.character_build.mesh import Mesh, orient_faces, rasterize, read_mesh, write_mesh
 from kumiki_blender.character_build.swap import align, parse_region, region_box
+from kumiki_blender.character_build.texture import bake_texture, read_obj_uv
 from kumiki_blender.character_build.project import mirror_missing, project_images, relief, subdivide
 from kumiki_blender.character_build.rig import estimate_joints, validate_joints
 from kumiki_blender.character_build.scatter import ScatterSpec, fur_mask, scatter_cards
@@ -301,6 +302,30 @@ class AlignmentTests(SharedSet):
         rz = np.array([[np.cos(b), -np.sin(b), 0], [np.sin(b), np.cos(b), 0], [0, 0, 1]])
         rebuilt = info["scale"] * source.vertices @ rz.T + info["offset_m"]
         np.testing.assert_allclose(rebuilt, placed.vertices, atol=1e-9)
+
+
+class TextureTests(SharedSet):
+    def test_bake_takes_reference_colours(self):
+        """A planar front UV on the blockout: texels must carry the figure's skin colour."""
+        mesh = read_mesh(self.handoff / "blockout.obj")
+        low, high = mesh.bounds()
+        uv = (mesh.vertices[:, [0, 2]] - low[[0, 2]]) / (high[[0, 2]] - low[[0, 2]])
+        corner_uv = uv[mesh.faces] * 0.98 + 0.01
+        image, report = bake_texture(self.handoff, mesh, corner_uv, size=256)
+        self.assertGreater(report["seen_fraction"], 0.8)
+        self.assertEqual(set(report["per_view"]), set(self.spec["views"]))
+        centre = image[96:160, 96:160].reshape(-1, 3).astype(int)
+        distance = np.abs(centre - np.array(SKIN)).sum(axis=1)
+        self.assertGreater(float((distance < 40).mean()), 0.7, "the belly is skin-coloured")
+
+    def test_obj_uv_reader(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "q.obj"
+            path.write_text("v 0 0 0\nv 1 0 0\nv 1 1 0\nv 0 1 0\nvt 0 0\nvt 1 0\nvt 1 1\nvt 0 1\nf 1/1 2/2 3/3 4/4\n")
+            mesh, corner_uv = read_obj_uv(path)
+        self.assertEqual(mesh.faces.shape, (2, 3))
+        np.testing.assert_allclose(corner_uv[1], [[0, 0], [1, 1], [0, 1]])
+        np.testing.assert_allclose(mesh.vertices[2], [1, 0, 1])  # OBJ Y up -> Blender Z up
 
 
 class FurMaskTests(unittest.TestCase):
