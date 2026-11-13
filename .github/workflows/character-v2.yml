@@ -22,6 +22,7 @@ on:
       - "scripts/smoke_character_penetration_repair_blender.py"
       - "tests/test_character_anatomy.py"
       - "tests/test_character_anatomy_landmark_resolver.py"
+      - "tests/test_character_joint_refine_plan.py"
       - ".github/workflows/character-v2.yml"
   workflow_dispatch:
 
@@ -58,7 +59,8 @@ jobs:
             tests.test_character_talking_plan \
             tests.test_character_landmark_triangulation \
             tests.test_character_anatomy \
-            tests.test_character_anatomy_landmark_resolver
+            tests.test_character_anatomy_landmark_resolver \
+            tests.test_character_joint_refine_plan
 
 
       - name: Test opt-in semantic conflict repair and regression safety
@@ -116,6 +118,9 @@ jobs:
           blender --background --factory-startup --threads 2 \
             --python-exit-code 1 \
             --python scripts/smoke_character_anatomy_blender.py
+          blender --background --factory-startup --threads 2 \
+            --python-exit-code 1 \
+            --python scripts/smoke_character_joint_refine_blender.py
           blender --background --factory-startup --threads 2 \
             --python-exit-code 1 \
             --python scripts/smoke_character_penetration_repair_blender.py
