@@ -21,6 +21,41 @@ def _new_dir(path: Path) -> Path:
     return path
 
 
+def _bake_arguments(p: argparse.ArgumentParser) -> None:
+    """Options that `texture` and `conflicts` share: which sources, and every threshold of the bake."""
+    p.add_argument("handoff", type=Path)
+    p.add_argument("mesh", type=Path, help="OBJ with UVs, e.g. retopo/low.obj")
+    p.add_argument("--views", help="comma-separated drawings to use (default: all)")
+    p.add_argument("--assume-symmetric", action="store_true",
+                   help="paint a side without a drawing from the mirrored opposite side")
+    p.add_argument("--extra", type=Path, help="manifest.json from `repaint`: add the repainted views")
+    p.add_argument("--power", type=float, default=4.0,
+                   help="view quality = cos^power: higher keeps each view to the surface it faces")
+    p.add_argument("--diagonal-weight", type=float, default=1.0, help="quality factor of 3/4 views")
+    p.add_argument("--min-cosine", type=float, default=0.35, help="views at a grazing angle below this do not paint")
+    p.add_argument("--region-px", type=float, default=24.0,
+                   help="radius of the neighbourhood that decides which view paints (aligned px)")
+    p.add_argument("--min-region-px", type=float, default=40.0, help="smaller regions join a neighbour")
+    p.add_argument("--occlusion-px", type=float, default=30.0,
+                   help="trust a view less this near a place where one part hides another (0: off)")
+    p.add_argument("--slack-px", type=float, default=60.0,
+                   help="how far apart two drawings may place the same feature")
+    p.add_argument("--contest-delta-e", type=float, default=20.0,
+                   help="two views show different things at a point above this difference (0: no contested features)")
+    p.add_argument("--agree-delta-e", type=float, default=15.0,
+                   help="scale of the score loss for disagreement with the other drawings (0: no objections either)")
+    p.add_argument("--no-level", action="store_true", help="do not level the tone across seams")
+    p.add_argument("--level-reach-px", type=float, default=150.0, help="distance over which a tone offset fades")
+
+
+def _bake_settings(args: argparse.Namespace) -> dict:
+    return dict(views=args.views.split(",") if args.views else None, mirror_missing=args.assume_symmetric,
+                power=args.power, diagonal_weight=args.diagonal_weight, min_cosine=args.min_cosine,
+                region_px=args.region_px, min_region_px=args.min_region_px, occlusion_px=args.occlusion_px,
+                slack_px=args.slack_px, contest_delta_e=args.contest_delta_e, agree_delta_e=args.agree_delta_e,
+                level=not args.no_level, level_reach_px=args.level_reach_px)
+
+
 def _spec(handoff: Path) -> dict:
     return json.loads((handoff / "spec.json").read_text(encoding="utf-8"))
 
@@ -99,20 +134,17 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--tail", action="store_true")
 
     p = sub.add_parser("texture", help="bake a UV texture from the full-resolution reference views")
-    p.add_argument("handoff", type=Path)
-    p.add_argument("mesh", type=Path, help="OBJ with UVs, e.g. retopo/low.obj")
+    _bake_arguments(p)
     p.add_argument("--output", type=Path, required=True, help=".png")
     p.add_argument("--size", type=int, default=2048)
-    p.add_argument("--diagonal-weight", type=float, default=1.0, help="score factor of 3/4 views")
-    p.add_argument("--min-cosine", type=float, default=0.35, help="views at a grazing angle below this do not paint")
-    p.add_argument("--assume-symmetric", action="store_true",
-                   help="paint a side without a drawing from the mirrored opposite side")
-    p.add_argument("--extra", type=Path, help="manifest.json from `repaint`: add the repainted views")
-    p.add_argument("--power", type=float, default=1.0,
-                   help="view score = cos^power; use 4 with --extra so each source keeps the surface it faces")
-    p.add_argument("--views", help="comma-separated drawings to use (default: all)")
+    p.add_argument("--diagnostics", type=Path, help="new folder for owners.png, conflicts.png and turnaround.png")
     p.add_argument("--screen-extra", type=float, metavar="DELTA_E",
                    help="drop a repaint that alone raises any drawn view's error by more than this (e.g. 0.5)")
+
+    p = sub.add_parser("conflicts", help="find where the drawings overlap and disagree on a mesh, with pictures")
+    _bake_arguments(p)
+    p.add_argument("--output", type=Path, required=True, help="new folder: report.json, turnaround.png, ...")
+    p.add_argument("--size", type=int, default=1024)
 
     p = sub.add_parser("repaint", help="repaint views of the model with a local FLUX.2 [klein] in ComfyUI")
     p.add_argument("handoff", type=Path)
@@ -125,6 +157,11 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--steps", type=int, default=20)
     p.add_argument("--denoise", type=float, default=1.0)
     p.add_argument("--size", type=int, default=768)
+    p.add_argument("--min-iou", type=float, default=0.75,
+                   help="reject a repaint whose figure overlaps the render less than this")
+    p.add_argument("--min-usable", type=float, default=0.5,
+                   help="reject a repaint if less than this share of the figure keeps its outline")
+    p.add_argument("--weight", type=float, default=0.8, help="quality of a repaint relative to a drawing")
     p.add_argument("--resume", action="store_true",
                    help="reuse finished repaints in --output whose render and settings match; repaint the rest")
 
@@ -298,23 +335,40 @@ def _run(args) -> int:
         from .texture import bake_texture, read_obj_uv
 
         _new_file(args.output)
+        diagnostics = _new_dir(args.diagnostics) if args.diagnostics else None
         mesh, corner_uv = read_obj_uv(args.mesh)
         extra = json.loads(args.extra.read_text(encoding="utf-8"))["extra"] if args.extra else None
-        settings = dict(diagonal_weight=args.diagonal_weight, min_cosine=args.min_cosine,
-                        mirror_missing=args.assume_symmetric, power=args.power,
-                        views=args.views.split(",") if args.views else None)
+        settings = _bake_settings(args)
         screened = None
         if extra and args.screen_extra is not None:
             from .repaint import screen_extras
 
             extra, screened = screen_extras(args.handoff, mesh, corner_uv, extra,
                                             max_added_delta_e=args.screen_extra, **settings)
-        image, report = bake_texture(args.handoff, mesh, corner_uv, size=args.size, extra=extra, **settings)
+        image, report = bake_texture(args.handoff, mesh, corner_uv, size=args.size, extra=extra,
+                                     diagnostics=diagnostics, **settings)
         if screened is not None:
             report["screen_extra"] = screened
         Image.fromarray(image).save(args.output)
         _write_json(args.output.with_suffix(".json"), report)
         print(json.dumps(report, indent=2))
+        return 0
+    if args.command == "conflicts":
+        from PIL import Image
+
+        from .texture import bake_texture, conflict_advice, read_obj_uv
+
+        out = _new_dir(args.output)
+        mesh, corner_uv = read_obj_uv(args.mesh)
+        extra = json.loads(args.extra.read_text(encoding="utf-8"))["extra"] if args.extra else None
+        image, report = bake_texture(args.handoff, mesh, corner_uv, size=args.size, extra=extra, diagnostics=out,
+                                     **_bake_settings(args))
+        Image.fromarray(image).save(out / "texture.png")
+        summary = {**report["conflicts"], "advice": conflict_advice(report),
+                   **{k: report[k] for k in ("owned", "owner_colours", "regions") if k in report},
+                   **{k: v for k, v in report.items() if k.startswith("seam_")}}
+        _write_json(out / "report.json", summary)
+        print(json.dumps(summary, indent=2))
         return 0
     if args.command == "repaint":
         import numpy as np
@@ -329,7 +383,8 @@ def _run(args) -> int:
         texture = np.asarray(Image.open(args.texture).convert("RGB"))
         views = args.views.split(",") if args.views else default_views()
         manifest = repaint_views(args.handoff, mesh, corner_uv, texture, views, out, _LocalComfyClient(args.server),
-                                 subject=args.subject, size=args.size, steps=args.steps, denoise=args.denoise)
+                                 subject=args.subject, size=args.size, steps=args.steps, denoise=args.denoise,
+                                 min_iou=args.min_iou, min_usable=args.min_usable, weight=args.weight)
         print(json.dumps(manifest["views"], indent=2))
         return 0
     if args.command == "appearance":

@@ -497,6 +497,152 @@ class RepaintTests(SharedSet):
                 repaint.run_comfy = original
 
 
+def two_sided_uv(mesh):
+    """Front-facing faces in the left half of the UV square, back-facing ones in the right half."""
+    low, high = mesh.bounds()
+    uv = (mesh.vertices[:, [0, 2]] - low[[0, 2]]) / (high[[0, 2]] - low[[0, 2]])
+    corners = mesh.vertices[mesh.faces]
+    back = np.cross(corners[:, 1] - corners[:, 0], corners[:, 2] - corners[:, 0])[:, 1] > 0
+    corner_uv = uv[mesh.faces] * [0.49, 0.98] + [0.005, 0.01]
+    corner_uv[back, :, 0] += 0.5
+    return corner_uv
+
+
+class SeamTests(SharedSet):
+    """seams.py: one source per region, objections, leveling, and the conflict report."""
+
+    def plane(self, quality, colours, side=40, spacing=0.002):
+        """A flat square of ``side`` x ``side`` texels that faces the front camera, as regions."""
+        from kumiki_blender.character_build import seams
+        x, z = np.meshgrid(np.arange(side) * spacing, np.arange(side) * spacing)
+        points = np.column_stack([x.ravel(), np.zeros(side * side), z.ravel()])
+        normals = np.tile([0.0, -1.0, 0.0], (side * side, 1))
+        regions = seams.build_regions(points, normals, sigma=3 * spacing, spacing=spacing)
+        regions.add_sources(np.asarray(quality, dtype=np.float32), np.asarray(colours, dtype=np.uint8))
+        return regions, x.ravel() / spacing, z.ravel() / spacing
+
+    @staticmethod
+    def ball():
+        """Dense points on a sphere of radius 10 cm (about 25 per region cell, as texels are)."""
+        from kumiki_blender.character_build.mesh import surface_samples
+        return surface_samples(ellipsoid_mesh(centre=(0, 0, 0), radii=(.1, .1, .1), subdivisions=3), 0.002)[0]
+
+    def test_bumps_do_not_change_the_facing(self):
+        from kumiki_blender.character_build import seams
+        points = self.ball()
+        true = points / np.linalg.norm(points, axis=1)[:, None]
+        rng = np.random.default_rng(0)
+        bumpy = true + rng.normal(0, 0.6, true.shape)   # fur: the normal swings by tens of degrees
+        bumpy /= np.linalg.norm(bumpy, axis=1)[:, None]
+        regions = seams.build_regions(points, bumpy, sigma=0.03, spacing=0.01)
+        raw = np.degrees(np.arccos(np.clip((bumpy * true).sum(axis=1), -1, 1))).mean()
+        nodes = regions.centre / np.linalg.norm(regions.centre, axis=1)[:, None]
+        smooth = np.degrees(np.arccos(np.clip((regions.normal * nodes).sum(axis=1), -1, 1))).mean()
+        self.assertGreater(raw, 30)
+        self.assertLess(smooth, 12)
+
+    def test_a_part_in_the_wrong_place_is_not_painted(self):
+        """Source 0 shows a red patch where the witness shows green and no red anywhere near."""
+        from kumiki_blender.character_build import seams
+        from kumiki_blender.character_build.checks import lab
+        side = 40
+        green, red = (70, 120, 60), (170, 40, 50)
+        col, row = np.meshgrid(np.arange(side), np.arange(side))
+        patch = ((col - 20) ** 2 + (row - 20) ** 2 <= 9).ravel()
+        colours = np.tile(np.array(green, dtype=np.uint8), (2, side * side, 1))
+        colours[0, patch] = red
+        regions, x, z = self.plane([np.full(side * side, 0.9), np.full(side * side, 0.5)], colours)
+        node_col, node_row = np.round(regions.centre[:, 0] / 0.002).astype(int), np.round(regions.centre[:, 2] / 0.002).astype(int)
+
+        def picture(image):
+            weighted = lab(image.reshape(-1, 3)).reshape(side, side, 3)
+            weighted[..., 0] *= seams.LIGHTNESS_WEIGHT
+            return weighted
+
+        seen_by = [seams.Testimony(picture(colours[v].reshape(side, side, 3)), np.ones((side, side), bool),
+                                   node_col, node_row, np.ones(len(regions.texels))) for v in range(2)]
+        here, nearby = seams.slack_match(np.stack([picture(colours[v].reshape(side, side, 3)).reshape(-1, 3)[
+            node_row * side + node_col] for v in range(2)]), seen_by[0], 5)
+        on_patch = ((node_col - 20) ** 2 + (node_row - 20) ** 2 <= 1)
+        self.assertGreater(here[1, on_patch].min(), 20, "green claimed where the witness shows red")
+        self.assertLess(nearby[1, on_patch].max(), 5, "but the witness shows green close by: no objection")
+        chosen = seams.choose_sources(regions, np.array([True, True]), seen_by, slack_cells=5, min_region_nodes=1)
+        self.assertTrue((regions.label[on_patch] == 1).all(), "the witness paints the patch")
+        self.assertTrue(chosen["misplaced"][on_patch].all())
+        far = (node_col - 20) ** 2 + (node_row - 20) ** 2 > 100
+        self.assertTrue((regions.label[far] == 0).all(), "the better source keeps the rest")
+        self.assertFalse(chosen["misplaced"][far].any())
+
+    def test_leveling_makes_two_tones_meet(self):
+        """Left half painted by a source that is 30 units darker: the offsets close the gap at the seam."""
+        from kumiki_blender.character_build import seams
+        side = 40
+        col = np.tile(np.arange(side), side)
+        quality = [np.where(col < 20, 0.9, 0.3), np.where(col < 20, 0.3, 0.9)]
+        colours = np.stack([np.full((side * side, 3), 120), np.full((side * side, 3), 150)])
+        regions, _, _ = self.plane(quality, colours)
+        seams.choose_sources(regions, np.array([True, True]), None, min_region_nodes=1)
+        offset, report = seams.level_seams(regions, reach=0.03)
+        self.assertGreater(report["seam_delta_e_before"], 8)
+        self.assertLess(report["seam_delta_e_after"], 0.3 * report["seam_delta_e_before"])
+        node_col = regions.centre[:, 0] / 0.002
+        self.assertGreater(offset[node_col < 19].mean(), 0)    # the dark side rises, the light side falls
+        self.assertLess(offset[node_col > 21].mean(), 0)
+        self.assertLess(np.abs(offset[(node_col < 3) | (node_col > 36)]).mean(),
+                        0.6 * np.abs(offset[(node_col > 17) & (node_col < 23)]).mean(), "the offset fades from the seam")
+
+    def test_views_that_face_a_patch(self):
+        from kumiki_blender.character_build import seams
+        points = self.ball()
+        regions = seams.build_regions(points, points / np.linalg.norm(points, axis=1)[:, None], sigma=0.03, spacing=0.01)
+        left_side = regions.normal[:, 0] > 0.9     # the character's left is +X: camera azimuth +90
+        found = seams.suggest_views(regions, left_side, min_nodes=3)
+        self.assertEqual(found[0]["camera"], "az90_el0")
+        self.assertEqual(seams.suggest_views(regions, np.zeros(len(left_side), bool)), [])
+
+    def test_bake_reports_conflicts_with_pictures(self):
+        import shutil
+        from kumiki_blender.character_build.texture import conflict_advice
+        mesh = read_mesh(self.handoff / "blockout.obj")
+        corner_uv = two_sided_uv(mesh)
+        with tempfile.TemporaryDirectory() as tmp:
+            darker = Path(tmp) / "handoff"
+            shutil.copytree(self.handoff, darker)
+            for name in ("left", "right", "front_left", "front_right", "back_left", "back_right"):
+                path = darker / "raw" / f"{name}.png"
+                pixels = np.asarray(Image.open(path).convert("RGBA")).copy()
+                pixels[..., :3] = (pixels[..., :3] * 0.8).astype(np.uint8)   # these drawings are darker in tone
+                Image.fromarray(pixels).save(path)
+            plain, off = bake_texture(darker, mesh, corner_uv, size=256, level=False)
+            leveled, report = bake_texture(darker, mesh, corner_uv, size=256, diagnostics=Path(tmp) / "d")
+            self.assertEqual({p.name for p in (Path(tmp) / "d").iterdir()}, {"owners.png", "conflicts.png", "turnaround.png"})
+        self.assertNotIn("seam_delta_e_after", off)
+        self.assertGreater(report["seam_delta_e_before"], 4)
+        self.assertLess(report["seam_delta_e_after"], 0.6 * report["seam_delta_e_before"])
+        self.assertFalse(np.array_equal(plain, leveled))
+        found = report["conflicts"]
+        self.assertEqual(set(found["surface"]), {"misplaced_part", "contested_feature", "tone_seam", "unseen"})
+        self.assertLessEqual(sum(found["surface"].values()), 1.0)
+        self.assertGreater(found["surface"]["tone_seam"], 0.01)
+        self.assertTrue(found["pairs"] and all(pair["overlap"] > 0 for pair in found["pairs"]))
+        advice = conflict_advice(report)
+        self.assertTrue(any("Tone seams" in line for line in advice), advice)
+
+    def test_a_repaint_counts_only_where_its_outline_agrees(self):
+        from kumiki_blender.character_build.repaint import BACKGROUND, alignment
+        render_mask = np.zeros((200, 200), bool)
+        render_mask[40:160, 40:110] = True     # body
+        render_mask[60:120, 110:170] = True    # tail
+        picture = np.full((200, 200, 3), BACKGROUND, np.uint8)
+        picture[40:160, 40:110] = (150, 100, 80)
+        picture[100:160, 110:170] = (150, 100, 80)   # the editor drew the tail 40 px lower
+        iou, trusted = alignment(Image.fromarray(picture), render_mask)
+        self.assertLess(iou, 0.9)
+        self.assertTrue(trusted[60:140, 45:80].all(), "the body far from the tail is kept")
+        self.assertFalse(trusted[60:160, 112:170].any(), "nothing of the tail zone is kept")
+        self.assertFalse((trusted & ~render_mask).any())
+
+
 class FurMaskTests(unittest.TestCase):
     def test_clothing_and_empty_texels_get_no_fur(self):
         texture = np.zeros((40, 40, 3), np.uint8)

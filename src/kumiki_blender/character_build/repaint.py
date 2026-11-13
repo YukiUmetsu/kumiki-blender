@@ -146,11 +146,20 @@ def run_comfy(client, workflow: dict, timeout_s: float = 3600) -> bytes:
     raise TimeoutError(f"ComfyUI did not finish within {timeout_s:.0f} s")
 
 
-def alignment(repainted: Image.Image, render_mask: np.ndarray) -> float:
-    """IoU of the repainted figure with the render silhouette (the repaint must not move the figure)."""
+def alignment(repainted: Image.Image, render_mask: np.ndarray, margin_px: int = 16) -> tuple[float, np.ndarray]:
+    """IoU of the repainted figure with the render silhouette, and the pixels that can be trusted.
+
+    Where the editor moved the outline (it often redraws a tail), the picture near that
+    place shows a different shape, and its colours would land on the wrong surface. The
+    rest of the picture is still good: a face is not worse because the tail behind it
+    changed. Trusted pixels are inside both outlines and at least ``margin_px`` from any
+    place where the outlines differ.
+    """
     figure, _ = figure_mask(repainted.convert("RGB").resize(render_mask.shape[::-1], Image.LANCZOS))
     figure = ndimage.binary_fill_holes(ndimage.binary_opening(figure, iterations=2))
-    return float((figure & render_mask).sum() / max(1, (figure | render_mask).sum()))
+    differ = ndimage.binary_opening(figure ^ render_mask, iterations=3)   # not the 1-2 px jitter of an outline
+    trusted = figure & render_mask & ~ndimage.binary_dilation(differ, iterations=margin_px)
+    return float((figure & render_mask).sum() / max(1, (figure | render_mask).sum())), trusted
 
 
 def match_tone(repainted: np.ndarray, render: np.ndarray, mask: np.ndarray, erode_px: int = 6) -> np.ndarray:
@@ -182,19 +191,20 @@ def _fingerprint(render: Image.Image, style: Image.Image, prompt: str, **setting
 
 def repaint_views(handoff: Path, mesh: Mesh, corner_uv: np.ndarray, texture: np.ndarray, views: list[str],
                   out: Path, client, *, subject: str = "the character", size: int = 768, steps: int = 20,
-                  denoise: float = 1.0, seed: int = 7, min_iou: float = 0.9, weight: float = 0.8,
+                  denoise: float = 1.0, seed: int = 7, min_iou: float = 0.75, min_usable: float = 0.5,
+                  weight: float = 0.8,
                   overwrite: bool = False) -> dict:
     """Repaint each view and write ``out/manifest.json`` for ``texture --extra``.
 
-    A repaint whose silhouette IoU with the render is below ``min_iou`` is rejected:
-    the editor moved or reshaped the figure, so its colours would land on the wrong
-    surface. Accepted repaints score ``weight`` times a drawing in the bake. A finished
-    repaint (``<view>_repainted.png`` with ``<view>_repainted.json`` recording the same
-    render, style image and settings) is reused unless ``overwrite`` is set, so a batch cut
-    short can be rerun into the same folder. With ``texture --power 4`` a drawing keeps the
-    surface it faces and the repaints take the angles in between. On Pip (7 of 8 repaints
-    accepted, weight 0.8) the doubled eye in the 3/4 view is gone; front delta E 3.1 -> 3.4,
-    right 4.5 -> 6.5, mostly the tail, whose tone the side and back drawings disagree on.
+    A repaint counts only where its outline agrees with the render (``alignment``): the
+    part around a redrawn tail is masked out, the face next to it is kept. The whole
+    repaint is rejected only if its IoU with the render is below ``min_iou`` (the editor
+    moved the figure) or less than ``min_usable`` of the figure is left. Accepted
+    repaints score ``weight`` times a drawing in the bake.
+
+    A finished repaint (``<view>_repainted.png`` with ``<view>_repainted.json`` recording
+    the same render, style image and settings) is reused unless ``overwrite`` is set, so
+    a batch cut short can be rerun into the same folder.
     """
     spec = json.loads((handoff / "spec.json").read_text(encoding="utf-8"))
     px = spec["metres_per_aligned_px"]
@@ -229,14 +239,16 @@ def repaint_views(handoff: Path, mesh: Mesh, corner_uv: np.ndarray, texture: np.
             partial.replace(repainted_path)
             inputs_path.write_text(json.dumps(fingerprint, indent=2), encoding="utf-8")
         repainted = Image.open(repainted_path).convert("RGB").resize((size, size), Image.LANCZOS)
-        iou = alignment(repainted, mask)
-        row = {"view": view, "style": style, "iou_with_render": round(iou, 4),
-               "seconds": round(time.time() - started), "reused": reused, "accepted": iou >= min_iou}
+        iou, trusted = alignment(repainted, mask)
+        usable = float(trusted.sum() / max(1, mask.sum()))
+        row = {"view": view, "style": style, "iou_with_render": round(iou, 4), "usable": round(usable, 4),
+               "seconds": round(time.time() - started), "reused": reused,
+               "accepted": iou >= min_iou and usable >= min_usable}
         rows.append(row)
         if row["accepted"]:
-            # The render silhouette marks the figure: the repaint's colours only count where the mesh is.
-            toned = match_tone(np.asarray(repainted), np.asarray(render.convert("RGB")), mask)
-            image = np.dstack([toned, np.where(mask, 255, 0).astype(np.uint8)])
+            # The repaint's colours count only where its figure and the mesh agree (see ``alignment``).
+            toned = match_tone(np.asarray(repainted), np.asarray(render.convert("RGB")), trusted)
+            image = np.dstack([toned, np.where(trusted, 255, 0).astype(np.uint8)])
             painted = out / f"{view}_paint.png"
             Image.fromarray(image).save(painted)
             accepted.append({"name": view, "image": str(painted.resolve()), "map": mapping, "weight": weight})
