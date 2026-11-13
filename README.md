@@ -48,6 +48,16 @@ height are rejected before Blender starts. Numeric camera regressions return
 a failing exit code but keep the editable Blender candidate and detailed
 review evidence.
 
+### Offline before/after texture fidelity gate
+
+[Texture revision audit](docs/CHARACTER_TEXTURE_REVISION_GATE.md)
+
+Run audit-texture-revision on one fixed UV mesh and two texture candidates
+to reject per-camera increases in mean/P90 CIE76 Lab color error and lost
+within-delta-E-10 coverage. The report fingerprints every source file and
+saves four-panel evidence; numerical success **still requires artistic review**.
+Explicit Z-up source OBJ files are handled correctly by the UV-aware reader.
+
 ### Boundary-sensitive source fidelity for thin eye, feather and beak details
 
 Source-camera QA now measures both mask IoU and boundary F1, with independent

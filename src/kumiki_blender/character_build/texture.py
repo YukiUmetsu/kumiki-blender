@@ -42,7 +42,11 @@ def read_obj_uv(path: Path) -> tuple[Mesh, np.ndarray]:
     if not uvs or min(min(c) for c in corner_uv) < 0:
         raise ValueError(f"{path.name} has faces without UVs")
     points = np.array(vertices, dtype=np.float64)
-    points = np.column_stack([points[:, 0], -points[:, 2], points[:, 1]])  # OBJ Y up -> Z up
+    # Exact same source-frame convention as mesh.read_mesh: the explicit
+    # *.source.obj/*-source.obj files are already Blender Z-up, while the
+    # original unqualified OBJ files remain Y-up interchange artifacts.
+    if not path.name.endswith(("-source.obj", ".source.obj")):
+        points = np.column_stack([points[:, 0], -points[:, 2], points[:, 1]])
     return Mesh(points, np.array(faces)), np.array(uvs)[np.array(corner_uv)]
 
 
