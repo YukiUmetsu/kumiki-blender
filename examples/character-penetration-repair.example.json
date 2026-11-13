@@ -9,12 +9,17 @@
       "iterations": 8,
       "smoothing_iterations": 2,
       "max_relative_edge_change": 0.2,
-      "protected_vertices": [
-        0,
-        1,
-        2
-      ],
-      "min_improvement_fraction": 0.05
+      "protected_vertices": [],
+      "min_improvement_fraction": 0.05,
+      "protected_vertex_groups": [
+        "TailRoot"
+      ]
     }
+  ],
+  "guard_pairs": [
+    [
+      "Tail",
+      "Satchel"
+    ]
   ]
 }
