@@ -16,7 +16,6 @@ from pathlib import Path
 from typing import Callable
 
 import numpy as np
-from scipy import sparse
 
 _NAME = re.compile(r"^[A-Za-z0-9_.:-]{1,96}$")
 
@@ -95,13 +94,18 @@ def _edges(faces: np.ndarray) -> np.ndarray:
 
 
 def _adjacency(vertex_count: int, edges: np.ndarray):
+    """Return a NumPy-only neighbor-averaging callback (Blender embeds NumPy, not SciPy)."""
     if not len(edges):
         raise ValueError("Moving mesh has no valid triangle edges")
     both = np.concatenate((edges, edges[:, ::-1]), axis=0)
-    graph = sparse.csr_matrix((np.ones(len(both)), (both[:, 0], both[:, 1])),
-                              shape=(vertex_count, vertex_count))
-    degree = np.asarray(graph.sum(axis=1)).ravel()
-    return sparse.diags(1.0 / np.maximum(degree, 1)) @ graph
+    rows, cols = both[:, 0], both[:, 1]
+    degree = np.bincount(rows, minlength=vertex_count)
+
+    def average(values: np.ndarray) -> np.ndarray:
+        totals = np.zeros_like(values, dtype=float)
+        np.add.at(totals, rows, values[cols])
+        return totals / np.maximum(degree, 1)[:, None]
+    return average
 
 
 def _face_vectors(points: np.ndarray, triangles: np.ndarray) -> np.ndarray:
@@ -178,7 +182,7 @@ def repair_penetration(vertices: np.ndarray, faces: np.ndarray, policy: Collisio
         # Blend, rather than replace, the actual projection with neighborhood
         # displacements; avoid moving protected attachments even one micron.
         for _ in range(policy.smoothing_iterations):
-            desired = 0.75 * desired + 0.25 * (adjacency @ desired)
+            desired = 0.75 * desired + 0.25 * adjacency(desired)
             desired[anchored] = 0
         # Backtracking prevents a large first step from distorting thin geometry.
         was_accepted = False
