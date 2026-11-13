@@ -16,7 +16,7 @@ import bpy
 from mathutils import Vector
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from kumiki_blender.character_build.blender_common import arguments, write_report  # noqa: E402
+from kumiki_blender.character_build.blender_common import arguments, export_interchange_obj, export_registered_obj, write_report  # noqa: E402
 
 
 def mesh_digest(obj) -> str:
@@ -104,8 +104,8 @@ def main() -> None:
     bpy.ops.object.select_all(action="DESELECT")
     obj.select_set(True)
     bpy.context.view_layer.objects.active = obj
-    bpy.ops.wm.obj_export(filepath=str(out / "region.obj"), export_selected_objects=True,
-                          export_materials=False)
+    export_interchange_obj(out / "region.obj")
+    export_registered_obj(out / "region-source.obj")
     write_report(out, {
         "schema_version": 1, "status": "geometric-candidate-art-review-required",
         "source_blend": str(Path(args["source_blend"]).resolve()),
@@ -118,7 +118,7 @@ def main() -> None:
         "total_vertices": len(obj.data.vertices),
         "maximum_displacement_m": round(maximum, 7),
         "flipped_faces": flipped,
-        "files": ["refined.blend", "region.obj"],
+        "files": ["refined.blend", "region.obj", "region-source.obj"],
         "limitations": [
             "This is a bounded positional sculpt adjustment, not semantic anatomy synthesis.",
             "Evaluate full-frame verified source masks and animated deformation before accepting the candidate.",

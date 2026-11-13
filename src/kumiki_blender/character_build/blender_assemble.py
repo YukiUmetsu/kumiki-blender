@@ -18,7 +18,7 @@ from mathutils.bvhtree import BVHTree
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from kumiki_blender.character_build.blender_common import (activate, arguments, clear_startup_scene,  # noqa: E402
-                                                           import_mesh, mesh_stats, write_report)
+                                                           export_interchange_obj, export_registered_obj, import_mesh, mesh_stats, write_report)
 
 
 def seam_metrics(part, body_tree) -> dict:
@@ -69,10 +69,10 @@ def main() -> None:
     bpy.ops.wm.save_as_mainfile(filepath=str(output / "assembled.blend"))
     bpy.ops.export_scene.gltf(filepath=str(output / "assembled.glb"), export_format="GLB")
     activate(body)
-    bpy.ops.wm.obj_export(filepath=str(output / "assembled_body.obj"), export_selected_objects=True,
-                          export_materials=False)
+    export_interchange_obj(output / "assembled_body.obj")
+    export_registered_obj(output / "assembled_body-source.obj")
     write_report(output, {"body": mesh_stats(body), "parts": parts, "union_parts": union_names,
-                          "files": ["assembled.blend", "assembled.glb", "assembled_body.obj"]})
+                          "files": ["assembled.blend", "assembled.glb", "assembled_body.obj", "assembled_body-source.obj"]})
 
 
 main()

@@ -19,7 +19,7 @@ import bpy
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from kumiki_blender.character_build.blender_common import (activate, arguments, clear_startup_scene,  # noqa: E402
-                                                           import_mesh, mesh_stats, remove_debris, write_report)
+                                                           export_interchange_obj, export_registered_obj, import_mesh, mesh_stats, remove_debris, write_report)
 
 
 def voxel_solid(obj, size: float) -> None:
@@ -68,10 +68,11 @@ def main() -> None:
     base.name = "Swapped"
     output.mkdir(parents=True, exist_ok=True)
     activate(base)
-    bpy.ops.wm.obj_export(filepath=str(output / "swapped.obj"), export_selected_objects=True, export_materials=False)
+    export_interchange_obj(output / "swapped.obj")
+    export_registered_obj(output / "swapped-source.obj")
     bpy.ops.wm.save_as_mainfile(filepath=str(output / "swapped.blend"))
     write_report(output, {"input": before, "pieces": pieces, "result": mesh_stats(base), "voxel_m": size,
-                          "box_min": low, "box_max": high, "files": ["swapped.obj", "swapped.blend"]})
+                          "box_min": low, "box_max": high, "files": ["swapped.obj", "swapped-source.obj", "swapped.blend"]})
 
 
 main()

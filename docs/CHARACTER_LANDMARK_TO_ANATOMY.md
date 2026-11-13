@@ -50,7 +50,7 @@ kumiki-character-build build-anatomy \
   --blender /Applications/Blender.app/Contents/MacOS/Blender
 ~~~
 
-The resolver writes a complete geometry spec and a landmark-provenance JSON receipt, including the original source images' hashes and the source 2D reprojections. The Blender builder then produces an independent editable anatomy.blend plus part-specific OBJ files. Use compare-region to check each part against independently registered source masks and review posed collisions.
+The resolver writes a complete geometry spec and a landmark-provenance JSON receipt, including the original source images' hashes and the source 2D reprojections. The Blender builder then produces an independent editable anatomy.blend plus part-specific legacy OBJ files for Blender import plus Z-up source-frame OBJ files. Use the source-frame files with compare-region to check each part against independently registered source masks and review posed collisions.
 
 ## Important limitations
 

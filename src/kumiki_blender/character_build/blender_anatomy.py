@@ -18,7 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from kumiki_blender.character_build.anatomy_geometry import (  # noqa: E402
     contour_loft, ocular_globe, swept_tube,
 )
-from kumiki_blender.character_build.blender_common import arguments, write_report  # noqa: E402
+from kumiki_blender.character_build.blender_common import arguments, export_interchange_obj, export_registered_obj, write_report  # noqa: E402
 
 
 def _baseline_mesh(obj):
@@ -203,9 +203,8 @@ def main():
         for obj in objects:
             obj.select_set(True)
         bpy.context.view_layer.objects.active = objects[0]
-        bpy.ops.wm.obj_export(
-            filepath=str(parts_folder / f"{pid}.obj"),
-            export_selected_objects=True, export_materials=False)
+        export_interchange_obj(parts_folder / f"{pid}.obj")
+        export_registered_obj(parts_folder / f"{pid}.source.obj")
     write_report(folder, {
         "schema_version": 1,
         "status": "anatomy-proposal-artistic-review-required",
@@ -220,7 +219,9 @@ def main():
         "original_meshes_unchanged": True,
         "original_armatures_unchanged": True,
         "components": measurements,
-        "files": ["anatomy.blend"] + [f"parts/{part}.obj" for part in sorted(created)],
+        "files": (["anatomy.blend"]
+                  + [f"parts/{part}.obj" for part in sorted(created)]
+                  + [f"parts/{part}.source.obj" for part in sorted(created)]),
         "limitations": [
             "Anatomy is built from supplied anchors/stations and cannot establish original illustration fidelity by itself.",
             "The registered-verified evidence field is an input assertion, not independently certified by this worker.",

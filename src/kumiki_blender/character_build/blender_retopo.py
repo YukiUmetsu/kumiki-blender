@@ -19,7 +19,7 @@ from mathutils import Matrix
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from kumiki_blender.character_build.blender_common import (activate, arguments, clear_startup_scene,  # noqa: E402
-                                                           import_mesh, mesh_stats, remove_debris, write_report)
+                                                           export_interchange_obj, export_registered_obj, import_mesh, mesh_stats, remove_debris, write_report)
 
 
 def uv_coverage(obj) -> float:
@@ -182,7 +182,7 @@ def main() -> None:
     image.filepath_raw = str(output / "low_normal.png")
     image.file_format = "PNG"
     image.save()
-    files = ["retopo.blend", "low.obj", "low.glb", "low_normal.png"]
+    files = ["retopo.blend", "low.obj", "low-source.obj", "low.glb", "low_normal.png"]
     colour = args.get("colour_from")
     if colour:
         # Bake the generator's own texture (detailed fur painting) onto the low mesh. The source
@@ -217,7 +217,8 @@ def main() -> None:
     activate(low)
     bpy.ops.export_scene.gltf(filepath=str(output / "low.glb"), export_format="GLB", use_selection=True)
     # glTF stores triangles only. The OBJ keeps the quads (and UVs) for rigging and sculpting.
-    bpy.ops.wm.obj_export(filepath=str(output / "low.obj"), export_selected_objects=True, export_materials=False)
+    export_interchange_obj(output / "low.obj")
+    export_registered_obj(output / "low-source.obj")
     write_report(output, {"high": high_stats, "low": mesh_stats(low), "uv_coverage": round(uv_coverage(low), 4),
                           "steps": steps, "warnings": warnings, "files": files})
 

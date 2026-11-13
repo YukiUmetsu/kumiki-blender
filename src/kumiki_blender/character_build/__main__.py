@@ -68,6 +68,17 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="kumiki-character-build", description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
 
+    p = sub.add_parser("plan-landmark-fit", help="source-lock geodesic mesh fit to explicitly triangulated 3D landmarks")
+    p.add_argument("--blend", type=Path, required=True, help="approved unrigged source .blend")
+    p.add_argument("--landmarks", type=Path, required=True, help="registered landmark report")
+    p.add_argument("--spec", type=Path, required=True, help="explicit source-vertex to landmark mapping")
+    p.add_argument("--output", type=Path, required=True, help="immutable source-hashed fit plan")
+
+    p = sub.add_parser("fit-landmark-surface", help="refine one pre-rig mesh locally toward source landmarks along its surface")
+    p.add_argument("--plan", type=Path, required=True, help="validated source-landmark geodesic fit plan")
+    p.add_argument("--output", type=Path, required=True, help="new landmark-fitted.blend + OBJ revision")
+    p.add_argument("--blender")
+
     p = sub.add_parser("triangulate-landmarks", help="recover registered 3D anatomical points from verified 2D views")
     p.add_argument("--spec", type=Path, required=True, help="source-registered 2D landmark observations JSON")
     p.add_argument("--output", type=Path, required=True, help="immutable 3D landmark report directory")
@@ -440,6 +451,22 @@ def main(argv: list[str] | None = None) -> int:
 def _run(args) -> int:
     from .views import ingest
 
+    if args.command == "plan-landmark-fit":
+        from .landmark_fit_plan import save_landmark_fit_plan
+        report = save_landmark_fit_plan(args.blend, args.landmarks, args.spec, args.output)
+        print(json.dumps(report, indent=2))
+        return 0
+    if args.command == "fit-landmark-surface":
+        from .landmark_fit_plan import load_landmark_fit_plan
+        from .blender import run_worker
+        if args.output.exists():
+            raise FileExistsError(f"Output revision already exists: {args.output}")
+        plan = load_landmark_fit_plan(args.plan)
+        report = run_worker("geodesic-fit", {
+            "plan": plan, "output": str(args.output.resolve()),
+        }, blender=args.blender, blend_file=Path(plan["source_blend"]))
+        print(json.dumps(report, indent=2))
+        return 0
     if args.command == "triangulate-landmarks":
         from .landmark_triangulation import triangulate_landmarks
         report = triangulate_landmarks(args.spec, args.output)

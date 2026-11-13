@@ -18,7 +18,7 @@ import bpy
 from mathutils import Vector
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-from kumiki_blender.character_build.blender_common import arguments, write_report  # noqa: E402
+from kumiki_blender.character_build.blender_common import arguments, export_interchange_obj, export_registered_obj, write_report  # noqa: E402
 
 
 def _hash(obj):
@@ -165,8 +165,8 @@ def main():
     bpy.ops.object.select_all(action="DESELECT")
     obj.select_set(True)
     bpy.context.view_layer.objects.active = obj
-    bpy.ops.wm.obj_export(filepath=str(output / "hinge-retopo.obj"),
-                          export_selected_objects=True, export_materials=False)
+    export_interchange_obj(output / "hinge-retopo.obj")
+    export_registered_obj(output / "hinge-retopo-source.obj")
     write_report(output, {
         "schema_version": 1,
         "status": "local-hinge-topology-candidate-review-required",
@@ -179,7 +179,7 @@ def main():
         "original_source_vertices_preserved": True,
         "original_materials_and_uv_names_preserved": True,
         "unrelated_character_meshes_preserved": True,
-        "files": ["hinge-retopo.blend", "hinge-retopo.obj"],
+        "files": ["hinge-retopo.blend", "hinge-retopo.obj", "hinge-retopo-source.obj"],
         "limitations": [
             "Added axial contour loops are a controlled pre-rig density aid, not proven semantic edge-flow.",
             "Existing shape keys, weights and modifiers are intentionally unsupported; regenerate them after topology approval.",

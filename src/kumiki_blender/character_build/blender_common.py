@@ -135,6 +135,35 @@ def mesh_stats(obj) -> dict:
     return stats
 
 
+def export_interchange_obj(filepath: str | Path, *, selected: bool = True,
+                           materials: bool = False) -> None:
+    """Preserve historic character pipeline OBJ format (-Z forward / Y up).
+
+    The existing Blender importer uses the matching default convention. The
+    interchange file is for the retopo→rig and source-mesh→assembly handoffs,
+    NOT raw reference-mask comparisons. Do not silently change that contract.
+    """
+    bpy.ops.wm.obj_export(
+        filepath=str(filepath), export_selected_objects=selected,
+        export_materials=materials, forward_axis="NEGATIVE_Z", up_axis="Y")
+
+
+def export_registered_obj(filepath: str | Path, *, selected: bool = True,
+                          materials: bool = False) -> None:
+    """OBJ in canonical Blender world metres (+Z up, character facing -Y).
+
+    Blender's OBJ operator uses +Y as its *identity forward-axis setting*,
+    even when a character's modeled face points toward -Y. Using NEGATIVE_Y
+    here would mirror the Y direction and invalidate camera registration.
+    This SOURCE format is for CharacterSpec v2 QA and cannot
+    be fed to the default Y-up interchange importer without opting into
+    Z-up import settings. See export_interchange_obj for legacy handoffs.
+    """
+    bpy.ops.wm.obj_export(
+        filepath=str(filepath), export_selected_objects=selected,
+        export_materials=materials, forward_axis="Y", up_axis="Z")
+
+
 def write_report(output: Path, report: dict) -> None:
     output.mkdir(parents=True, exist_ok=True)
     (output / "report.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
