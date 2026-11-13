@@ -145,6 +145,14 @@ drawing paints alone. Pip's left eye was 60 px further round the head in the sid
 drawing. No rule on the drawings removes that. A picture that faces the feature
 does: see the next section.
 
+## Bake with automatic source QA
+
+Use texture-parts with --qa-baseline approved_previous_texture.png to invoke
+the fixed-geometry source registered color gate automatically. Failed candidates
+remain editable and receive a failing exit status and a per-camera QA receipt.
+The old behavior remains unchanged without --qa-baseline. See
+[the texture revision QA guide](CHARACTER_TEXTURE_REVISION_GATE.md).
+
 ## Check every new texture against the original art
 
 After baking or polishing a texture, run

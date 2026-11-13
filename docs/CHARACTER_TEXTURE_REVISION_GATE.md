@@ -2,6 +2,30 @@
 
 The existing appearance report describes how well one UV texture matches original color artwork. It does not say whether a *new* texture makes the same character better or worse. This new command compares **two texture images on one unchanged mesh, UV layout and camera set** and rejects source-view color regressions.
 
+## One-command part baking with automatic QA
+
+The part-specific texture baker now optionally runs the source regression gate
+automatically after writing a new texture candidate:
+
+    kumiki-character-build texture-parts       references/pip/handoff       models/pip-low.source.obj       .review/pip/recognized-parts-r01       --output .review/pip/basecolor-candidate-r02.png       --qa-baseline .review/pip/basecolor-approved-r01.png       --qa-max-mean-increase 1.5       --qa-max-p90-increase 3.0       --qa-max-within-10-drop 0.02
+
+The original part masks are source-fingerprint checked by texture-parts.
+Source camera image presence, baseline image, numeric budgets and output
+collisions are preflight-checked **before the expensive multi-part bake**.
+The program uses the same mesh and UVs for the candidate/previous texture QA,
+with the canonical source-frame filename handling described below.
+
+If the source colors regress, exit code **1** is returned, but the candidate
+PNG, bake metadata, four-panel camera images and QA report are **retained**
+for revision. Numeric success exits 0 but still requires artist review.
+A compact **.source-fidelity.json** receipt beside the candidate is intended
+for automated agents. The default QA output folder ends in -source-qa;
+override with --qa-output.
+
+Without --qa-baseline, texture-parts keeps its previous behavior, including
+its default baking options. A pre-existing output texture, report, reviewed QA
+folder or receipt is never overwritten.
+
 ## Usage
 
     kumiki-character-build audit-texture-revision \
