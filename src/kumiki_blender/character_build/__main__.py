@@ -285,6 +285,12 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--output", type=Path, required=True, help="new folder: report.json, turnaround.png, ...")
     p.add_argument("--size", type=int, default=1024)
 
+    p = sub.add_parser("resolve-conflicts", help="bounded, rollback-safe semantic texture conflict repair")
+    p.add_argument("handoff", type=Path, help="existing character handoff folder")
+    p.add_argument("mesh", type=Path, help="source OBJ with UVs")
+    p.add_argument("--config", type=Path, required=True, help="character-independent repair policy JSON")
+    p.add_argument("--output", type=Path, required=True, help="new directory for best texture and QA report")
+
     p = sub.add_parser("repaint", help="repaint views of the model with a local FLUX.2 [klein] in ComfyUI")
     p.add_argument("handoff", type=Path)
     p.add_argument("mesh", type=Path, help="OBJ with UVs")
@@ -696,6 +702,14 @@ def _run(args) -> int:
                    **{k: v for k, v in report.items() if k.startswith("seam_")}}
         _write_json(out / "report.json", summary)
         print(json.dumps(summary, indent=2))
+        return 0
+    if args.command == "resolve-conflicts":
+        from .conflict_repair import run_conflict_repair
+
+        report = run_conflict_repair(args.handoff, args.mesh, args.config, args.output)
+        print(json.dumps({"status": report["status"], "selected_settings": report["selected_settings"],
+                          "selected_score": report["selected_score"], "attempts": len(report["attempts"]),
+                          "output": str(args.output)}, indent=2))
         return 0
     if args.command == "repaint":
         import numpy as np
