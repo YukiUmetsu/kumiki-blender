@@ -22,7 +22,7 @@ from kumiki_blender.character_build.surface_distance import surface_distances  #
 
 def mesh_digest(obj) -> str:
     """Hash mesh topology, local shape AND world transform; include loose edges."""
-    sha = hashlib.sha256(b"kumiki-character-sculpt-world-mesh-v2\\0")
+    sha = hashlib.sha256(b"kumiki-character-sculpt-world-mesh-v2:")
     sha.update(struct.pack("<3Q", len(obj.data.vertices),
                            len(obj.data.edges), len(obj.data.polygons)))
     for row in obj.matrix_world:
