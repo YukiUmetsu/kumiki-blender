@@ -58,6 +58,28 @@ class PoseSpecTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "180"):
             self.load(case)
 
+    def test_optional_evaluated_pose_and_new_contact_gates(self):
+        case = copy.deepcopy(self.data)
+        case["min_pose_displacement_m"] = .0005
+        case["max_new_collision_pairs"] = 0
+        self.assertEqual(self.load(case)["max_new_collision_pairs"], 0)
+        for key, value in [
+            ("min_pose_displacement_m", 0),
+            ("min_pose_displacement_m", float("inf")),
+            ("min_pose_displacement_m", True),
+            ("max_new_collision_pairs", -1),
+            ("max_new_collision_pairs", True),
+            ("max_new_collision_pairs", 1.5),
+        ]:
+            with self.subTest(key=key, value=value):
+                invalid = copy.deepcopy(case)
+                invalid[key] = value
+                with self.assertRaises(ValueError):
+                    self.load(invalid)
+        case["collision_pairs"] = []
+        with self.assertRaisesRegex(ValueError, "requires explicit"):
+            self.load(case)
+
     def test_pair_requires_two_distinct_meshes(self):
         case = copy.deepcopy(self.data)
         case["collision_pairs"] = [["Body", "Body"]]
