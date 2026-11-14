@@ -282,6 +282,18 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--blender", help="local Blender executable path")
 
 
+    p = sub.add_parser("plan-joint-correctives",
+                       help="SHA-lock artist-sculpted joint corrective targets to a saved rig")
+    p.add_argument("--blend", type=Path, required=True, help="rigged source .blend with hidden sculpt duplicates")
+    p.add_argument("--config", type=Path, required=True, help="reviewed joint-corrective-config.json")
+    p.add_argument("--output", type=Path, required=True, help="immutable joint-corrective-plan.json revision")
+
+    p = sub.add_parser("bind-joint-correctives",
+                       help="attach authored rest-space shape keys and pose-angle drivers in a new .blend")
+    p.add_argument("--plan", type=Path, required=True, help="source-locked joint-corrective-plan.json")
+    p.add_argument("--output", type=Path, required=True, help="new corrected.blend revision")
+    p.add_argument("--blender", help="Blender executable path")
+
     p = sub.add_parser("repair-penetrations", help="bounded BVH collision repair for named Blender object pairs")
     p.add_argument("--blend", type=Path, required=True, help="original editable .blend file")
     p.add_argument("--plan", type=Path, required=True, help="directed collision-pair JSON with protected anchors")
@@ -1001,6 +1013,22 @@ def _run(args) -> int:
         print(json.dumps(report, indent=2))
         return 0
 
+    if args.command == "plan-joint-correctives":
+        from .joint_corrective_plan import save_corrective_plan
+        plan = save_corrective_plan(args.blend, args.config, args.output)
+        print(json.dumps(plan, indent=2))
+        return 0
+    if args.command == "bind-joint-correctives":
+        from .joint_corrective_plan import load_corrective_plan
+        from .blender import run_worker
+        if args.output.exists():
+            raise FileExistsError(f"Output revision already exists: {args.output}")
+        plan = load_corrective_plan(args.plan)
+        report = run_worker("joint-correctives", {
+            "plan": plan, "output": str(args.output.resolve()),
+        }, blender=args.blender, blend_file=Path(plan["source_blend"]))
+        print(json.dumps(report, indent=2))
+        return 0
     if args.command == "ingest":
         used = ingest(args.source, args.mapping, args.destination)
         print(json.dumps(used, indent=2))
