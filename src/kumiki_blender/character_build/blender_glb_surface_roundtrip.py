@@ -102,11 +102,21 @@ def _record_source(plan, frames):
     if any(obj.name.endswith(".001") for obj in objects):
         raise ValueError("Ambiguous duplicate source skinned mesh names")
     recorded = {obj.name: {} for obj in objects}
+    stored_vertices = 0
+    # A local artist workstation must not inadvertently materialize tens of
+    # millions of Python Vector tuples from many rig parts and sample frames.
+    max_stored_vertices = 3_000_000
     for frame in frames:
         bpy.context.scene.frame_set(frame)
         bpy.context.view_layer.update()
         for obj in objects:
-            recorded[obj.name][frame] = _points(obj, plan["max_vertices_per_mesh"])
+            points = _points(obj, plan["max_vertices_per_mesh"])
+            stored_vertices += len(points)
+            if stored_vertices > max_stored_vertices:
+                raise ValueError(
+                    f"Roundtrip surface sample budget exceeded: {stored_vertices} "
+                    f"> {max_stored_vertices}; use fewer frames or a reviewed LOD")
+            recorded[obj.name][frame] = points
     return recorded
 
 
