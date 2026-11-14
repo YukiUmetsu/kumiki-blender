@@ -30,7 +30,7 @@ import uuid
 from pathlib import Path
 
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageDraw
 from scipy import ndimage
 
 from .checks import lab
@@ -273,3 +273,69 @@ def split_views(handoff: Path, out: Path, client, *, part: str, name: str | None
               "folders": {folder: str((out / folder).resolve()), "rest": str((out / "rest").resolve())}}
     (out / "split.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
     return report
+
+
+def region_mask(shape: tuple[int, int], boxes: list[tuple[int, int, int, int]],
+                polygons: list[list[tuple[int, int]]]) -> np.ndarray:
+    """The pixels of a (height, width) picture inside boxes (x0, y0, x1, y1) or polygons of (x, y)."""
+    inside = np.zeros(shape, bool)
+    for x0, y0, x1, y1 in boxes:
+        inside[max(0, y0):max(0, y1), max(0, x0):max(0, x1)] = True
+    for outline in polygons:
+        if len(outline) < 3:
+            raise ValueError(f"A polygon needs three points or more, not {len(outline)}")
+        sheet = Image.new("1", (shape[1], shape[0]), 0)
+        ImageDraw.Draw(sheet).polygon([(int(x), int(y)) for x, y in outline], fill=1)
+        inside |= np.asarray(sheet, bool)
+    return inside
+
+
+def box_part(handoff: Path, out: Path, *, name: str, boxes: dict[str, list[tuple[int, int, int, int]]] | None = None,
+             polygons: dict[str, list[list[tuple[int, int]]]] | None = None) -> dict:
+    """Split off the part of each drawing that lies inside boxes or polygons; no image editor.
+
+    ``boxes`` gives, for each view, one or more (x0, y0, x1, y1) in the pixels of
+    ``handoff/raw/<view>.png``; ``polygons`` gives outlines as lists of (x, y) for a part
+    that no box fits (an arm at an angle). The figure's pixels inside them are the part. Use it where
+    the editor does not do what you ask: asked to remove Pip's hands, it left them in one
+    view and drew new ones in the other. Writes ``out/<name>/`` with the views that have
+    a box, and ``out/rest/`` with a hole where the part was (as ``split_views`` without fill).
+    """
+    spec = json.loads((handoff / "spec.json").read_text(encoding="utf-8"))
+    if not name.replace("-", "").replace("_", "").isalnum() or name in ("rest", "edits"):
+        raise ValueError(f"Not a usable folder name for the part: {name!r}")
+    boxes, polygons = boxes or {}, polygons or {}
+    unknown = sorted((set(boxes) | set(polygons)) - set(spec["views"]))
+    if unknown:
+        raise ValueError(f"The handoff has no drawing for {unknown}")
+    part_images, rest_images, rows = {}, {}, []
+    for view in spec["views"]:
+        path = handoff / "raw" / f"{view}.png"
+        if not path.is_file():
+            continue
+        with Image.open(path) as picture:
+            original = np.asarray(picture.convert("RGBA"))
+        if view not in boxes and view not in polygons:
+            rest_images[view] = original
+            continue
+        inside = region_mask(original.shape[:2], boxes.get(view, []), polygons.get(view, []))
+        region = inside & (original[..., 3] > 200)
+        if not region.any():
+            raise ValueError(f"No part of the figure lies inside the boxes and polygons of the {view} drawing")
+        cut, hole = original.copy(), original.copy()
+        cut[..., 3] = np.where(region, 255, 0)
+        hole[..., 3] = np.where(region, 0, hole[..., 3])
+        part_images[view], rest_images[view] = cut, hole
+        rows.append({"view": view, "part_px": int(region.sum()),
+                     "boxes": [list(map(int, box)) for box in boxes.get(view, [])],
+                     "polygons": [[[int(x), int(y)] for x, y in outline] for outline in polygons.get(view, [])]})
+    if not part_images:
+        raise ValueError("Give at least one box or polygon")
+    write_handoff(out / name, spec, part_images, f"{name}: the figure inside boxes and polygons")
+    write_handoff(out / "rest", spec, rest_images, f"without {name}: a hole where it was")
+    report = {"schema_version": 1, "name": name, "views": rows,
+              "folders": {name: str((out / name).resolve()), "rest": str((out / "rest").resolve())}}
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "box.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
+    return report
+

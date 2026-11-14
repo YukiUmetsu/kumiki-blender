@@ -49,6 +49,11 @@ or newer. The other commands need only NumPy, SciPy, scikit-image and Pillow.
 | Parts | `place-part split/tail tail.glb --output tail.ply` | A part that was modelled alone, placed in the frame of the whole character |
 | Parts | `split-eyes eyes/eyes body.ply --from-part --output balls/` | One textured eyeball for each eye that `split-views` took out, the white included |
 | References | `redraw-view front.png back.png --change "..." --output front2.png` | One drawing changed to the design of another |
+| References | `borrow-view HANDOFF --view front --from back --polygon front:... --output h2/` | A region of one drawing taken from the mirror image of the opposite drawing |
+| Parts | `box-part HANDOFF --name arm --polygon back:... --output arm/` | A part split off by boxes or outlines, without the image editor |
+| Parts | `detail-part arm/arm --part "the hand" --output arm_detail/` | Larger, sharp drawings of a small part, in the same frame |
+| Parts | `cut-part body/low.obj arm/arm --output body_cut.obj` | The body without the faces that a separate part replaces |
+| Parts | `mirror-part arm/low.obj --output arm_R.obj` | The same part on the other side of the character |
 | Parts | `seat-part body.ply bag/low.obj --metres-per-px 0.00032 --output bag.obj` | A part moved out of the body that it hangs on, as one rigid piece |
 | Parts | `join-parts a/low.obj:a.png b/low.obj:b.png --output joined/` | One mesh and one texture from placed, textured parts |
 | Fit | `fit HANDOFF mesh.ply --lattice auto` | Lattice deformation for detailed generator meshes. A finer lattice is kept only if it does no harm |
@@ -335,6 +340,49 @@ Limits:
 - A part with one or two views has unseen sides (23% of the tail, 45% of the bag).
 - Each part costs about 9 minutes for each edited view and 25 minutes for its shape.
 
+### A small part: a hand, a forearm
+
+A hand is 90 pixels in a drawing of the whole character. The generator makes a
+stump from that, and the body's own hand is a ragged end of the arm. Model the
+forearm with its hand alone, from larger drawings:
+
+```bash
+# 1. Cut the part out of the drawings. Give boxes, or outlines for a part at an angle.
+kumiki-character-build box-part eyes2/rest --name arm \
+  --polygon back:222,806,160,858,100,892,92,925,125,952,192,900,262,878 \
+  --polygon front:... --output armL/
+# 2. Enlarge each drawing of the part and have the editor draw it sharp.
+kumiki-character-build detail-part armL/arm --part "the forearm and the hand" \
+  --subject "a cartoon squirrel" --detail "four short round fingers" --output armL_detail/
+# 3. Generate the shape from armL_detail/raw/*.png, then place it. --anchor gives the
+#    position in the direction that no view of the part measures (front and back
+#    views do not measure the depth).
+kumiki-character-build place-part armL_detail arm.glb --anchor body/fitted.ply --output arm.ply
+# 4. fit, retopo and texture with armL_detail, as for each part.
+# 5. The same part on the other side. It uses the same texture.
+kumiki-character-build mirror-part arm/low.obj --mid-x 0.0 --output arm_R/low.obj
+# 6. Remove from the body what the parts replace.
+kumiki-character-build cut-part body/low.obj arms/arm --output body_cut/low.obj
+```
+
+`box-part` uses no image editor: the figure's pixels inside the boxes and polygons
+are the part. Use it where the editor does not do what you ask. Asked to remove
+Pip's hands, it left them in one view and drew new ones in the other. The numbers
+are pixels of `HANDOFF/raw/VIEW.png`.
+
+`detail-part` gives the redrawn part the colours of the drawing (mean and spread in
+Lab). If the outline of the redrawn part is too different (IoU below 0.6), it
+keeps the enlarged drawing for that view. `detail.json` has the IoU of each view.
+
+`cut-part` removes the faces that lie inside the part's masks along each direction
+that the views look. Opposite views (front and back) look along one direction, and
+one of them is sufficient for a face. For step 6, make one handoff with both sides
+(`box-part` with the outlines of both arms). The UVs of the faces that stay do not change, so the body's
+texture stays valid.
+
+Start the part at a line that hides the joint. Pip's forearm starts inside the
+rolled cuff of the sleeve.
+
 ## Eyes as separate eyeballs
 
 Two drawings never put an eye at the same place on the head. A texture from both
@@ -349,7 +397,7 @@ of light fur, so colour cannot find it. The image editor can:
 kumiki-character-build split-views split/rest --name eyes --views front \
   --part "two eyes, each with its iris, its pupil and the white of the eye" \
   --behind "closed eyelids, covered with the same fur as the face" --output eyes/
-# 2. One eyeball for each eye, with its texture, set on the head mesh.
+# 2. One surface for each eye, with its texture, on the head mesh.
 kumiki-character-build split-eyes eyes/eyes body.ply --from-part \
   --source-handoff split/rest --output balls/
 # 3. Take the eye out of each other drawing that shows it. `--within` drops what
@@ -361,16 +409,24 @@ kumiki-character-build split-views eyes/rest --name eyes --views left \
 ```
 
 Bake the head from `eyes2/rest`. Add `balls/eye.L.obj:balls/eye.L.png` and
-`balls/eye.R.obj:balls/eye.R.png` to `join-parts`. On the side of an eyeball that the
-front drawing cannot see, the texture is the white of that eye.
+`balls/eye.R.obj:balls/eye.R.png` to `join-parts`.
+
+Step 2 has two shapes:
+
+- `--shape shell` (default). The eye is the piece of the head surface under the eye
+  in the drawing. It is raised a little and has a low dome (`--bulge`, in eye
+  sizes). Its texture is the drawing's own pixels. A drawn eye is a picture on the face, and the
+  shell keeps it that way from each angle.
+- `--shape ball`. The eye is an ellipsoid that stands out of the head. On the side
+  that the front drawing cannot see, the texture is the white of that eye. On Pip
+  the balls looked like discs with blank white sides.
 
 If the editor paints something bad where the part was, add `--no-fill` to step 3.
 The rest then has a hole there, and the bake fills it from the texture around it.
 For Pip's eye in the side view, the editor painted a dark socket.
 
 On Pip, each eye with its white and its lid line is a separate piece of surface.
-The second eyelid line at 45 degrees is gone. From the side, an eyeball shows
-mostly its white: the iris is on the front of it.
+The second eyelid line at 45 degrees is gone.
 
 **Iris and pupil only, without the editor.** `split-eyes split/rest body.ply --output eyes/`
 finds each pupil (a thick, very dark disc) and the iris around it (the most saturated
@@ -396,6 +452,32 @@ The local image editor changes the drawing by the instruction, with the second
 drawing as the example. The result keeps the drawing's own pixels where the editor
 changed nothing. The editor works at 768 px, and its copy of the face is softer than
 the drawing. Say in `--change` what must stay. Look at the result before you use it.
+
+**A different pose or an old part, without the editor.** A front and a back drawing
+show one outline, mirrored. Where they do not, the shape generator gets two answers
+and makes both. Pip's old front drawing had the arms a hand's width higher than the
+back drawing, the old tail beside the head, and brown feet. The body came out with
+doubled, ragged arms.
+
+```bash
+kumiki-character-build borrow-view split/rest --view front --from back \
+  --polygon front:735,752,800,700,1086,700,1086,1250,805,1250,780,960,722,800 --output rest2/
+kumiki-character-build borrow-view rest2 --view front --from front \
+  --polygon front:350,752,285,700,0,700,0,1250,280,1250,305,960,363,800 --output rest3/
+```
+
+Each pixel of the region takes the pixel of the opposite drawing at the mirrored
+place in the character's frame. Background is taken too, so the outline in the
+region becomes that of the opposite drawing. Fur, cloth and a hand look much the same
+from both sides. A face does not: keep the region off the face.
+
+The second command uses the same drawing as the source. The region then takes the
+other side of the drawing: an arm from the other arm. Use it when the opposite
+drawing has something in the way on one side. On Pip's back, the end of the scarf
+hangs over one arm.
+
+`borrow.json` has `outline_iou_in_region_before`. A value much below 1 says that
+the two drawings did not agree in the region. For Pip's arms it was 0.50.
 
 ## A view that shows a part the others have no room for
 

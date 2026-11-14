@@ -11,7 +11,7 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
-from character_build_fixtures import BAG, HEIGHT_M, SKIN, ellipsoid_mesh, write_views
+from character_build_fixtures import BAG, HEIGHT_M, SKIN, ellipsoid_mesh, signed_volume, write_views
 from kumiki_blender.character_build import split_views
 from kumiki_blender.character_build.handoff import build_handoff, reference_masks
 from kumiki_blender.character_build.mesh import Mesh, rasterize
@@ -294,6 +294,165 @@ class PlaceAndJoinTests(unittest.TestCase):
         np.testing.assert_allclose(uv_again, corner_uv, atol=1e-5)
 
 
+class SmallPartTests(unittest.TestCase):
+    """A hand at the end of an arm: more pixels for it, its place, the body without its own hand, the other side."""
+
+    PX = 0.32 / 1000
+
+    def body_and_hand(self):
+        body = ellipsoid_mesh(centre=(0, 0.01, .16), radii=(.12, .03, .03), subdivisions=4)     # an arm along X, at y = 1 cm
+        hand = ellipsoid_mesh(centre=(.12, 0.01, .16), radii=(.02, .012, .025), subdivisions=3)
+        return body, hand
+
+    def test_a_part_seen_from_front_and_back_takes_its_depth_from_the_body(self):
+        body, hand = self.body_and_hand()
+        masks = {name: rasterize(hand, camera(name), self.PX, 0.25)[0] for name in ("front", "back")}
+        source = Mesh((hand.vertices - [.12, 0.01, .16]) * 4, hand.faces)
+        free, info = place_part(source, masks, self.PX, yaw_deg=0.0)
+        self.assertEqual((info["position_measured"]["y"], info["unmeasured_from_anchor"]), (False, False))
+        self.assertAlmostEqual(float(free.vertices[:, 1].mean()), 0.0, delta=0.002)
+        placed, info = place_part(source, masks, self.PX, yaw_deg=0.0, anchor=body)
+        self.assertTrue(info["unmeasured_from_anchor"])
+        self.assertLess(np.abs(placed.vertices - hand.vertices).max(), 0.004)
+
+    def test_the_body_loses_what_the_part_replaces_and_nothing_else(self):
+        from kumiki_blender.character_build.part_place import cut_under
+        body, hand = self.body_and_hand()
+        masks = {name: rasterize(hand, camera(name), self.PX, 0.25)[0] for name in ("front", "back")}
+        uv = np.zeros((len(body.faces), 3, 2))
+        uv[:, :, 0] = np.arange(len(body.faces))[:, None]           # to follow the faces through the cut
+        cut, cut_uv, removed = cut_under(body, uv, masks, self.PX)
+        self.assertGreater(removed, 20)
+        self.assertEqual(len(cut.faces), len(body.faces) - removed)
+        self.assertEqual(len(cut_uv), len(cut.faces))
+        centres = cut.vertices[cut.faces].mean(axis=1)
+        self.assertLess(centres[:, 0].max(), 0.105, "the end of the arm under the hand is gone")
+        self.assertLess(centres[:, 0].min(), -0.115, "the other end of the arm stays")
+        kept = cut_uv[:, 0, 0].astype(int)
+        np.testing.assert_allclose(cut.vertices[cut.faces], body.vertices[body.faces[kept]])   # faces and UVs stay paired
+        band = masks["front"].copy()                                 # the outline misses the end of the hand
+        columns = np.nonzero(band.any(axis=0))[0]
+        band[:, columns[len(columns) // 4]:] = False                 # x from 0.10 to 0.11; the arm ends at 0.12
+        with_tip = cut_under(body, uv, {"front": band}, self.PX, grow_px=1, loose_faces=0)[0]
+        without = cut_under(body, uv, {"front": band}, self.PX, grow_px=1, loose_faces=400)[0]
+        self.assertGreater(with_tip.vertices[:, 0].max(), 0.115, "the end of the arm is beyond the band")
+        self.assertLess(without.vertices[:, 0].max(), 0.105, "the small piece that the cut separated goes too")
+        self.assertLess(without.vertices[:, 0].min(), -0.115)
+        half = masks["back"].copy()                                  # the back drawing shows less of the hand
+        half[:, :int(np.nonzero(half.any(axis=0))[0].mean())] = False
+        self.assertEqual(cut_under(body, uv, {"front": masks["front"], "back": half}, self.PX)[2], removed,
+                         "opposite views draw one outline: what one of them shows is the part")
+        side = rasterize(hand, camera("left"), self.PX, 0.25)[0]
+        self.assertEqual(cut_under(body, uv, {"front": masks["front"], "left": np.zeros_like(side)}, self.PX)[2], removed,
+                         "a view that does not show the part does not limit the cut")
+        shifted = np.roll(side, 40, axis=1)                          # a side view that puts the hand elsewhere in depth
+        self.assertEqual(cut_under(body, uv, {"front": masks["front"], "left": shifted}, self.PX)[2], 0,
+                         "views along different directions must both show the face")
+        self.assertEqual(cut_under(body, None, {"front": np.zeros_like(masks["front"])}, self.PX)[2], 0,
+                         "no view shows the part: nothing is cut")
+        self.assertEqual(cut_under(body, None, {}, self.PX)[2], 0)
+
+    def test_mirror_keeps_the_outside_out(self):
+        from kumiki_blender.character_build.part_place import mirror_part
+        _, hand = self.body_and_hand()
+        uv = np.random.default_rng(0).random((len(hand.faces), 3, 2))
+        other, other_uv = mirror_part(hand, uv, mid_x=0.01)
+        np.testing.assert_allclose(other.vertices[:, 0].mean(), 0.02 - hand.vertices[:, 0].mean(), atol=1e-9)
+        self.assertGreater(signed_volume(other), 0)
+        self.assertAlmostEqual(signed_volume(other), signed_volume(hand), delta=1e-12)
+        face = 7                                                     # each corner keeps its UV
+        for corner in range(3):
+            original = [0, 2, 1][corner]
+            np.testing.assert_allclose(other_uv[face, corner], uv[face, original])
+            np.testing.assert_allclose(other.vertices[other.faces[face, corner]] * [-1, 1, 1] + [0.02, 0, 0],
+                                       hand.vertices[hand.faces[face, original]])
+
+    def test_detail_views_enlarge_a_part_in_the_same_frame(self):
+        from kumiki_blender.character_build import detail, split_views as S
+        from kumiki_blender.character_build.handoff import reference_masks as masks_of
+        _, hand = self.body_and_hand()
+        spec = {"schema_version": 1, "height_m": 0.32, "metres_per_aligned_px": self.PX, "views": ["front", "back"],
+                "raw": {n: {"left": 0, "top": 0, "scale": 1.0, "x0": 0, "y0": 0, "shift_px": 0} for n in ("front", "back")}}
+        images = {}
+        for name in spec["views"]:
+            mask, _ = rasterize(hand, camera(name), self.PX, 1.0)
+            images[name] = np.dstack([np.where(mask[..., None], (230, 160, 150), 0).astype(np.uint8),
+                                      np.where(mask, 255, 0).astype(np.uint8)])
+        calls = []
+
+        class Client:
+            def upload_image(self, path):
+                return str(path)
+
+        def sharpen(client, workflow):                               # the "editor" returns the picture with a line on it
+            calls.append(1)
+            with Image.open(workflow["4"]["inputs"]["image"]) as picture:
+                pixels = np.asarray(picture.convert("RGB")).copy()
+            figure = np.abs(pixels.astype(int) - (217, 217, 217)).max(axis=2) > 24
+            line = figure & (np.abs(np.arange(pixels.shape[1])[None, :] - pixels.shape[1] // 2) < 3)
+            pixels[line] = (120, 60, 60)
+            data = io.BytesIO()
+            Image.fromarray(pixels).save(data, format="PNG")
+            return data.getvalue()
+
+        original, detail.run_comfy = detail.run_comfy, sharpen
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                small, large = Path(tmp) / "hand", Path(tmp) / "hand_detail"
+                S.write_handoff(small, spec, images, "hand")
+                report = detail.detail_views(small, large, Client(), part="the hand", size=512)
+                again = detail.detail_views(small, large, Client(), part="the hand", size=512)
+                before, after = masks_of(small, 0.5), masks_of(large, 0.5)
+                new_spec = json.loads((large / "spec.json").read_text())
+                with Image.open(large / "raw" / "front.png") as picture:
+                    front = np.asarray(picture)
+        finally:
+            detail.run_comfy = original
+        self.assertEqual((len(calls), [row["reused"] for row in again["views"]]), (2, [True, True]))
+        self.assertTrue(all(row["redrawn"] and row["enlarged"] > 2 for row in report["views"]), report["views"])
+        self.assertEqual(front.shape[:2], (512, 512))
+        self.assertLess(new_spec["raw"]["front"]["scale"], 0.5, "more drawing pixels for each aligned pixel")
+        for name in ("front", "back"):                               # the part is at the same place in the character's frame
+            overlap = (before[name] & after[name]).sum() / (before[name] | after[name]).sum()
+            self.assertGreater(overlap, 0.9, name)
+        figure = front[..., 3] > 127
+        row = front[256, :, :3].astype(int)                           # across the hand: the drawn line is in the middle
+        self.assertGreater(row[230:245].sum(axis=1).max() - row[254:258].sum(axis=1).min(), 60, "the redrawn detail is kept")
+        mean = front[..., :3][figure].astype(float).mean(axis=0)
+        self.assertLess(np.abs(mean - (230, 160, 150)).max(), 14, "with the colours of the drawing")
+
+    def test_boxes_and_polygons_split_a_drawing_without_an_editor(self):
+        from kumiki_blender.character_build import split_views as S
+        spec = {"schema_version": 1, "height_m": 0.32, "metres_per_aligned_px": self.PX, "views": ["front", "back"],
+                "raw": {n: {"left": 0, "top": 0, "scale": 1.0, "x0": 0, "y0": 0, "shift_px": 0} for n in ("front", "back")}}
+        figure = np.zeros((120, 200, 4), np.uint8)
+        figure[20:100, 40:160] = (200, 150, 120, 255)
+        with tempfile.TemporaryDirectory() as tmp:
+            whole = Path(tmp) / "whole"
+            S.write_handoff(whole, spec, {"front": figure, "back": figure}, "whole")
+            report = S.box_part(whole, Path(tmp) / "out", name="hand", boxes={"front": [(0, 0, 60, 120)]},
+                                polygons={"front": [[(160, 20), (160, 100), (120, 100)]]})
+            with Image.open(Path(tmp) / "out" / "hand" / "raw" / "front.png") as picture:
+                part = np.asarray(picture)[..., 3] > 127
+            with Image.open(Path(tmp) / "out" / "rest" / "raw" / "front.png") as picture:
+                rest = np.asarray(picture)[..., 3] > 127
+            self.assertFalse((Path(tmp) / "out" / "hand" / "raw" / "back.png").exists(), "no box: the view has no part")
+            with Image.open(Path(tmp) / "out" / "rest" / "raw" / "back.png") as picture:
+                self.assertEqual(int((np.asarray(picture)[..., 3] > 127).sum()), 80 * 120)
+            with self.assertRaises(ValueError):
+                S.box_part(whole, Path(tmp) / "bad", name="hand", boxes={"front": [(0, 0, 30, 15)]})    # background only
+            with self.assertRaises(ValueError):
+                S.box_part(whole, Path(tmp) / "bad", name="hand", polygons={"front": [[(50, 30), (60, 40)]]})
+            with self.assertRaises(ValueError):
+                S.box_part(whole, Path(tmp) / "bad", name="hand", boxes={"left": [(0, 0, 60, 120)]})
+        self.assertTrue(part[60, 50] and not part[60, 70], "the box takes the figure inside it")
+        self.assertTrue(part[90, 150] and not part[30, 130], "the polygon takes its triangle")
+        self.assertFalse(part[10, 10], "the background is no part")
+        np.testing.assert_array_equal(part | rest, figure[..., 3] > 127)
+        self.assertFalse((part & rest).any())
+        self.assertEqual(report["views"][0]["part_px"], int(part.sum()))
+
+
 class RedrawTests(unittest.TestCase):
     def test_the_change_is_taken_from_the_edit_and_the_rest_from_the_drawing(self):
         from kumiki_blender.character_build import redraw
@@ -343,6 +502,47 @@ class RedrawTests(unittest.TestCase):
         self.assertGreater(report["changed_share_of_figure"], 0.03)
         self.assertLess(report["changed_share_of_figure"], 0.5)
         self.assertIn("the arm wears a sleeve", report["prompt"])
+
+
+    def test_a_region_of_the_front_comes_from_the_mirrored_back(self):
+        from kumiki_blender.character_build import redraw, split_views as S
+        maps = {"front": {"left": 0, "top": 0, "scale": 1.0, "x0": 600, "y0": 100, "shift_px": 0},
+                "back": {"left": 10, "top": 5, "scale": 2.0, "x0": 500, "y0": 100, "shift_px": 0},   # drawn at half the size
+                "left": {"left": 0, "top": 0, "scale": 1.0, "x0": 600, "y0": 100, "shift_px": 0}}
+        spec = {"schema_version": 1, "height_m": 0.32, "metres_per_aligned_px": 0.00032, "views": list(maps), "raw": maps}
+        front = np.zeros((600, 400, 4), np.uint8)
+        front[100:500, 100:300] = (*SKIN, 255)                       # body, in the middle of the character's frame
+        front[150:190, 300:400] = (200, 40, 40, 255)                 # the character's left arm, drawn high
+        back = np.zeros((300, 320, 4), np.uint8)
+        back[55:255, 110:210] = (90, 70, 50, 255)                    # the same body from behind
+        back[155:175, 60:110] = (40, 40, 200, 255)                   # the same arm, drawn lower; it is on the left here
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            S.write_handoff(root / "in", spec, {"front": front, "back": back, "left": front}, "whole")
+            report = redraw.borrow_view(root / "in", root / "one", view="front", source="back",
+                                        boxes=[(300, 100, 400, 400)], feather_px=0)
+            both = redraw.borrow_view(root / "one", root / "two", view="front", source="front",
+                                      polygons=[[(0, 100), (100, 100), (100, 400), (0, 400)]], feather_px=0)
+            with Image.open(root / "two" / "raw" / "front.png") as picture:
+                result = np.asarray(picture)
+            with Image.open(root / "two" / "raw" / "back.png") as picture:
+                np.testing.assert_array_equal(np.asarray(picture), back)
+            self.assertTrue((root / "two" / "masks" / "front.png").is_file())
+            with self.assertRaises(ValueError):
+                redraw.borrow_view(root / "in", root / "bad", view="front", source="left", boxes=[(300, 100, 400, 400)])
+            with self.assertRaises(ValueError):
+                redraw.borrow_view(root / "in", root / "bad", view="left", source="left", boxes=[(300, 100, 400, 400)])
+            with self.assertRaises(ValueError):
+                redraw.borrow_view(root / "in", root / "bad", view="front", source="back")
+        self.assertEqual(report["outline_iou_in_region_before"], 0.0, "the two drawings put the arm at different heights")
+        self.assertEqual(both["view"], "front")
+        self.assertEqual(result[170, 350, 3], 0, "the high arm is gone")
+        np.testing.assert_array_equal(result[320, 350], (40, 40, 200, 255))      # the arm of the back drawing, at its height
+        self.assertEqual((result[296, 350, 3], result[304, 350, 3], result[336, 350, 3], result[344, 350, 3]),
+                         (0, 255, 255, 0), "at the size of the front drawing")
+        np.testing.assert_array_equal(result[320, 50], (40, 40, 200, 255))       # and the other arm from this one
+        self.assertEqual(result[170, 50, 3], 0)
+        np.testing.assert_array_equal(result[100:500, 100:300], front[100:500, 100:300])   # outside the regions: no change
 
 
 class EyeTests(unittest.TestCase):
@@ -432,7 +632,7 @@ class EyeTests(unittest.TestCase):
         spec = json.loads((self.handoff / "spec.json").read_text())
         root = Path(self.tmp.name) / "part"
         S.write_handoff(root, spec, {"front": part}, "eyes")
-        report = self.eyes.eyeballs_from_part(root, self.head, Path(self.tmp.name) / "balls")
+        report = self.eyes.eyeballs_from_part(root, self.head, Path(self.tmp.name) / "balls", shape="ball")
         self.assertTrue(report["white_included"])
         self.assertEqual(sorted(eye["id"] for eye in report["eyes"]), ["eye.L", "eye.R"])
         for eye in report["eyes"]:
@@ -454,6 +654,47 @@ class EyeTests(unittest.TestCase):
         anatomy = json.loads((Path(self.tmp.name) / "balls" / "anatomy.json").read_text())
         self.assertEqual(len(anatomy["parts"]), 2)
         self.assertLess(anatomy["parts"][0]["iris_fraction"], 0.75, "the iris is a part of the eyeball, not all of it")
+
+    def test_an_eye_shell_follows_the_head_and_shows_the_drawing(self):
+        """The default: no ball that stands out, but the patch of the head under the eye, with the drawn pixels."""
+        from kumiki_blender.character_build import split_views as S
+        from kumiki_blender.character_build.mesh import surface_samples
+        from kumiki_blender.character_build.texture import render_textured
+        yy, xx = np.mgrid[:1200, :1600]
+        whole = ((xx - 895) / 70) ** 2 + ((yy - 500) / 60) ** 2 <= 1          # the character's left eye
+        part = self.front.copy()
+        part[..., 3] = np.where(whole, 255, 0)
+        spec = json.loads((self.handoff / "spec.json").read_text())
+        root, out = Path(self.tmp.name) / "part_shell", Path(self.tmp.name) / "shells"
+        S.write_handoff(root, spec, {"front": part}, "eyes")
+        report = self.eyes.eyeballs_from_part(root, self.head, out)
+        self.assertEqual((report["shape"], [eye["id"] for eye in report["eyes"]]), ("shell", ["eye.L"]))
+        mesh, uv = read_obj_uv(out / "eye.L.obj")
+        # On the head: every vertex within the dome height above the ball's surface, none inside it.
+        level = np.sqrt((mesh.vertices[:, 0] / .1) ** 2 + (mesh.vertices[:, 1] / .1) ** 2 + ((mesh.vertices[:, 2] - .16) / .16) ** 2)
+        self.assertGreater(level.min(), 0.995)
+        self.assertLess(level.max(), 1.06, "a low dome, not a ball that stands out")
+        self.assertGreater(level.max(), 1.01)
+        # Seen from the front it covers the drawn eye and nothing else, with the drawn pixels.
+        samples = surface_samples(mesh, self.PX)[0]
+        col, row, _ = camera("front").project(samples, self.PX, 1.0)
+        covered = np.zeros((1200, 1600), bool)
+        covered[row.astype(int), col.astype(int)] = True
+        self.assertGreater((covered & whole).sum() / whole.sum(), 0.97)
+        self.assertLess((covered & ~whole).sum() / whole.sum(), 0.2)
+        with Image.open(out / "eye.L.png") as picture:
+            texture = np.asarray(picture.convert("RGB"))
+        rendered, mask = render_textured(mesh, uv, texture, "front", self.PX, 1.0)
+        inner = whole & mask & (((xx - 895) / 60) ** 2 + ((yy - 500) / 50) ** 2 <= 1)
+        difference = np.abs(rendered[inner] - self.front[..., :3][inner].astype(float)).mean()
+        self.assertLess(difference, 12, "the eye from the front is the drawing")
+        self.assertLess(rendered[500, 895].max(), 60, "the pupil")
+        with_masks = self.eyes.eyeballs_from_part(root, self.head, Path(self.tmp.name) / "shells_masks",
+                                                  source_handoff=self.handoff)
+        self.assertEqual(with_masks["shape"], "shell", "also when it writes the masks for the other drawings")
+        self.assertTrue(any((Path(self.tmp.name) / "shells_masks" / "within").iterdir()))
+        with self.assertRaises(ValueError):
+            self.eyes.eyeballs_from_part(root, self.head, Path(self.tmp.name) / "bad", shape="cube")
 
     def test_only_the_face_drawing_paints_around_the_eyes(self):
         def alpha(folder, name):

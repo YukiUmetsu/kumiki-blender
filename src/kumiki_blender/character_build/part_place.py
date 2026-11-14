@@ -17,7 +17,8 @@ from pathlib import Path
 
 import numpy as np
 from PIL import Image
-from scipy import ndimage
+from scipy import ndimage, sparse
+from scipy.sparse import csgraph
 
 from .mesh import Mesh, surface_samples
 from .views import AXIS_VIEWS, BASELINE, CX, camera
@@ -34,7 +35,8 @@ def _iou(a: np.ndarray, b: np.ndarray) -> float:
 
 def place_part(mesh: Mesh, masks: dict[str, np.ndarray], metres_per_px: float, *, scale: float = 0.25,
                coarse_deg: float = 15.0, fine_deg: float = 3.0, trim: float = 0.5, yaw_deg: float | None = None,
-               refine: bool = True, ignore_thinner_px: float = 0.0, stretch: float = 0.15) -> tuple[Mesh, dict]:
+               refine: bool = True, ignore_thinner_px: float = 0.0, stretch: float = 0.15,
+               anchor: Mesh | None = None) -> tuple[Mesh, dict]:
     """The part where it covers ``masks`` best, and the transform:
     placed = scale * stretch * (Rz(yaw) @ p) + offset, with one stretch factor for each axis.
 
@@ -54,8 +56,9 @@ def place_part(mesh: Mesh, masks: dict[str, np.ndarray], metres_per_px: float, *
     whole strap, the generated bag has a stub of it.
 
     Two axis views that look along different axes fix the part in all three directions.
-    With one view, or two opposite ones, the depth along the view stays at the part's own
-    centre, and the report says so.
+    With one view, or two opposite ones, the depth along the view is not measured. The
+    part then sits where ``anchor`` (the body mesh) is at that place, or, without an
+    anchor, on the plane through the origin. The report says which.
     """
     if ignore_thinner_px > 0:
         # A thin piece that the mesh lacks (the strap of a bag across the chest) would pull the
@@ -165,11 +168,28 @@ def place_part(mesh: Mesh, masks: dict[str, np.ndarray], metres_per_px: float, *
                             offset, mean, per_view, improved = trial, value, views, True
             move_step /= 2
     factor = float(np.median(size))
+    anchored = False
+    if anchor is not None and not measured.all():
+        # A direction that no view measures (a hand drawn from the front and the back only): where
+        # the anchor mesh (the body) is, at the place of the part in the measured directions.
+        placed = (samples @ rotation.T) * size + offset
+        low, high = placed.min(axis=0), placed.max(axis=0)
+        near = np.ones(len(anchor.vertices), bool)
+        for index in range(3):
+            if measured[index] or index == 2:
+                near &= (anchor.vertices[:, index] >= low[index]) & (anchor.vertices[:, index] <= high[index])
+        if near.any():
+            for index in range(2):
+                if not measured[index]:
+                    offset[index] += float(np.median(anchor.vertices[near, index])) - (low[index] + high[index]) / 2
+            anchored = True
+            mean, per_view = overlap(size, rotation, offset)
     info = {"yaw_deg": float(yaw_deg), "scale": factor, "stretch": [round(float(v / factor), 4) for v in size],
             "offset_m": [float(v) for v in offset],
             "mean_iou": round(mean, 4), "mean_iou_from_extents": round(start, 4),
             "views": {k: round(v, 4) for k, v in per_view.items()},
             "position_measured": {"x": bool(measured[0]), "y": bool(measured[1]), "z": True},
+            "unmeasured_from_anchor": anchored,
             "mask_px_m": grid}
     return Mesh(mesh.vertices @ rotation.T * size + offset, mesh.faces, mesh.colours), info
 
@@ -206,6 +226,63 @@ def seat_part(part: Mesh, body: Mesh, metres_per_px: float, *, view: str | None 
     moved = Mesh(part.vertices + move * look.toward, part.faces, part.colours)
     return moved, {"view": view, "moved_m": round(move, 5), "buried_before": round(buried, 4),
                    "buried_after": round(float((burial - move > 0).mean()), 4)}
+
+
+def cut_under(mesh: Mesh, corner_uv: np.ndarray | None, masks: dict[str, np.ndarray], metres_per_px: float, *,
+              scale: float = 0.25, grow_px: float = 6.0, loose_faces: int = 200
+              ) -> tuple[Mesh, np.ndarray | None, int]:
+    """The mesh without the faces that a separate part replaces; its UVs; the number of faces removed.
+
+    The body was modelled with its hands. When the hands become a part of their own, the
+    body's hands stay under them and show through. A face goes if its centre lies inside
+    the part's masks (the camera frame at ``scale``, as ``handoff.reference_masks`` gives
+    it), grown by ``grow_px`` aligned pixels, along every direction that the views look.
+    Opposite views (front and back) look along one direction and draw the same outline, so
+    one of them is enough for a face: drawings do not agree to the pixel, and what lies
+    in only one of the two outlines is still the part. Two views along different
+    directions bound the part in space; with one direction, everything behind the part
+    goes too. The cut leaves an open edge, which the new part covers. A piece of fewer
+    than ``loose_faces`` faces that the cut separated from the mesh (a fingertip outside
+    the outline) goes too.
+    """
+    centre = mesh.vertices[mesh.faces].mean(axis=1)
+    along: dict[tuple[int, ...], np.ndarray] = {}      # line of sight (without its sign) -> faces inside a mask
+    for name, mask in masks.items():
+        if not mask.any():
+            continue
+        view = camera(name)
+        wide = ndimage.binary_dilation(mask, iterations=max(1, round(grow_px * scale)))
+        col, row, _ = view.project(centre, metres_per_px, scale)
+        c, r = np.floor(col).astype(int), np.floor(row).astype(int)
+        inside = (c >= 0) & (c < wide.shape[1]) & (r >= 0) & (r < wide.shape[0])
+        hit = np.zeros(len(centre), bool)
+        hit[inside] = wide[r[inside], c[inside]]
+        toward = np.round(np.asarray(view.toward, float), 3)
+        if tuple(toward) < tuple(-toward):
+            toward = -toward
+        key = tuple(int(v) for v in np.round(toward * 1000))
+        along[key] = along.get(key, np.zeros(len(centre), bool)) | hit
+    gone = np.logical_and.reduce(list(along.values())) if along else np.zeros(len(centre), bool)   # no view: no cut
+    if gone.any() and loose_faces > 0:
+        kept = mesh.faces[~gone]
+        graph = sparse.coo_matrix((np.ones(len(kept) * 2), (np.repeat(kept[:, 0], 2), kept[:, 1:].ravel())),
+                                  shape=(len(mesh.vertices),) * 2)
+        _, piece = csgraph.connected_components(graph, directed=False)
+        faces_in = np.bincount(piece[kept[:, 0]], minlength=piece.max() + 1)
+        at_cut = np.unique(piece[np.unique(mesh.faces[gone])])
+        loose = at_cut[faces_in[at_cut] < loose_faces]
+        gone[~gone] = np.isin(piece[kept[:, 0]], loose)
+    used, inverse = np.unique(mesh.faces[~gone], return_inverse=True)
+    cut = Mesh(mesh.vertices[used], inverse.reshape(-1, 3))
+    return cut, (corner_uv[~gone] if corner_uv is not None else None), int(gone.sum())
+
+
+def mirror_part(mesh: Mesh, corner_uv: np.ndarray | None, mid_x: float = 0.0) -> tuple[Mesh, np.ndarray | None]:
+    """The part on the other side of the character (x -> 2 mid_x - x), with the same texture."""
+    vertices = mesh.vertices.copy()
+    vertices[:, 0] = 2 * mid_x - vertices[:, 0]
+    faces = mesh.faces[:, [0, 2, 1]]                   # keep the outside out
+    return Mesh(vertices, faces, mesh.colours), (corner_uv[:, [0, 2, 1]] if corner_uv is not None else None)
 
 
 def join_parts(parts: list[tuple[Mesh, np.ndarray, np.ndarray]], *, size: int = 4096, min_share: float = 0.15
