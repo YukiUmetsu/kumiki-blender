@@ -17,6 +17,10 @@ from mathutils.bvhtree import BVHTree
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from kumiki_blender.character_build.blender_common import arguments, write_report  # noqa: E402
+from kumiki_blender.character_build.deformation_metrics import (  # noqa: E402
+    collision_delta,
+    pose_motion,
+)
 
 
 def skin_weights(mesh, deform_bones: set[str]) -> dict:
@@ -94,9 +98,12 @@ def world_bvh(obj, depsgraph):
     try:
         vertices = [evaluated.matrix_world @ vertex.co for vertex in mesh.vertices]
         polygons = [tuple(poly.vertices) for poly in mesh.polygons]
-        return BVHTree.FromPolygons(vertices, polygons)
+        # Polygon connectivity is part of the collision identity. BVH overlaps
+        # cannot be compared by triangle index if a modifier retopologized the mesh.
+        return BVHTree.FromPolygons(vertices, polygons), (len(vertices), tuple(polygons))
     finally:
         evaluated.to_mesh_clear()
+
 
 def main() -> None:
     args = arguments()
@@ -150,6 +157,12 @@ def main() -> None:
     bpy.context.view_layer.update()
     depsgraph = bpy.context.evaluated_depsgraph_get()
     rest = {o.name: snapshot(o, depsgraph) for o in bound}
+    collision_baselines = {}
+    for first, second in plan.get("collision_pairs", []):
+        a, topology_a = world_bvh(bpy.data.objects[first], depsgraph)
+        b, topology_b = world_bvh(bpy.data.objects[second], depsgraph)
+        collision_baselines[(first, second)] = (
+            set(a.overlap(b)), (topology_a, topology_b))
     deform_bones = {bone.name for bone in rig.data.bones if bone.use_deform}
     weights = {o.name: skin_weights(o, deform_bones) for o in bound}
     problems: list[str] = []
@@ -168,7 +181,19 @@ def main() -> None:
             bpy.context.view_layer.update()
             entry = {"name": item["name"], "meshes": {}, "collision_candidates": []}
             for obj in bound:
-                metrics = deformation(rest[obj.name], snapshot(obj, depsgraph))
+                current = snapshot(obj, depsgraph)
+                try:
+                    motion = pose_motion(rest[obj.name]["coords"], current["coords"])
+                except ValueError:
+                    motion = {"finite": False, "max_vertex_displacement_m": None,
+                              "p95_vertex_displacement_m": None, "moving_vertices": None}
+                if not motion["finite"]:
+                    metrics = {"status": "fail", "nonfinite_or_changed_vertices": True,
+                               "topology_changed": len(rest[obj.name]["coords"]) != len(current["coords"])}
+                    problems.append(f"{item['name']}/{obj.name}: invalid evaluated vertex coordinates")
+                else:
+                    metrics = deformation(rest[obj.name], current)
+                metrics["motion"] = motion
                 entry["meshes"][obj.name] = metrics
                 if metrics.get("topology_changed"):
                     problems.append(f"{item['name']}/{obj.name}: topology changed during deformation")
@@ -176,15 +201,36 @@ def main() -> None:
                 if limit is not None and metrics.get("p95_relative_edge_stretch") is not None and (
                     metrics["p95_relative_edge_stretch"] > limit):
                     problems.append(f"{item['name']}/{obj.name}: edge stretch exceeded {limit}")
+            entry["max_vertex_displacement_m"] = max(
+                (metrics["motion"]["max_vertex_displacement_m"] or 0)
+                for metrics in entry["meshes"].values())
+            min_motion = plan.get("min_pose_displacement_m")
+            if min_motion is not None and entry["max_vertex_displacement_m"] < min_motion:
+                problems.append(
+                    f"{item['name']}: evaluated meshes moved less than {min_motion} m; "
+                    "check bone influence, constraints and Action overrides")
             for first, second in plan.get("collision_pairs", []):
-                a, b = bpy.data.objects[first], bpy.data.objects[second]
-                tree_a = world_bvh(a, depsgraph)
-                tree_b = world_bvh(b, depsgraph)
-                overlap = len(tree_a.overlap(tree_b))
-                if overlap:
+                a, topology_a = world_bvh(bpy.data.objects[first], depsgraph)
+                b, topology_b = world_bvh(bpy.data.objects[second], depsgraph)
+                baseline, topology = collision_baselines[(first, second)]
+                if (topology_a, topology_b) != topology:
+                    problems.append(
+                        f"{item['name']}/{first}-{second}: collision mesh topology changed; "
+                        "triangle-index contact deltas are invalid")
                     entry["collision_candidates"].append({
-                        "objects": [first, second], "overlapping_triangle_pairs": overlap,
-                        "status": "requires-contact-review"})
+                        "objects": [first, second], "status": "topology-changed"})
+                    continue
+                delta = collision_delta(baseline, a.overlap(b))
+                if delta["posed_overlapping_triangle_pairs"]:
+                    entry["collision_candidates"].append({
+                        "objects": [first, second],
+                        "overlapping_triangle_pairs": delta["posed_overlapping_triangle_pairs"],
+                        **delta})
+                max_new = plan.get("max_new_collision_pairs")
+                if max_new is not None and delta["new_overlapping_triangle_pairs"] > max_new:
+                    problems.append(
+                        f"{item['name']}/{first}-{second}: {delta['new_overlapping_triangle_pairs']} "
+                        f"new triangle overlap pairs exceed {max_new}")
             if plan.get("render"):
                 output.mkdir(parents=True, exist_ok=True)
                 bpy.context.scene.render.engine = "BLENDER_WORKBENCH"
@@ -217,7 +263,10 @@ def main() -> None:
         "poses": poses,
         "problems": problems,
         "limitations": [
-            "Surface triangle intersection counts are advisory, not penetration volumes.",
+            "Neutral-relative triangle contacts are advisory, not penetration volumes; "
+            "only explicitly named pairs are checked.",
+            "Triangle indices are compared only when evaluated polygon topology is unchanged.",
+            "Motion displacement includes root movement and cannot certify local skin weights.",
             "Closed-manifold volume changes are diagnostic, not sufficient to certify deformation.",
             "Edge stretch and area change do not certify aesthetic quality or joint motion.",
             "A neutral pose is reconstructed by zeroing controller pose transforms; verify the intended rest state.",
