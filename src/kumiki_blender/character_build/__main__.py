@@ -612,6 +612,9 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("handoff", type=Path, help="the handoff of the part that replaces them")
     p.add_argument("--output", type=Path, required=True, help=".obj")
     p.add_argument("--grow-px", type=float, default=6.0, help="cut this far around the part's masks (aligned px)")
+    p.add_argument("--join", type=Path, action="append", default=[],
+                   help="the mesh of a new part, in place: the cut edge is smoothed and set on its surface; repeat")
+    p.add_argument("--join-px", type=float, default=14.0, help="with --join: how far an edge vertex may move (aligned px)")
     p.add_argument("--loose-faces", type=int, default=200,
                    help="also remove a piece smaller than this that the cut separates from the mesh (0: keep all)")
 
@@ -1544,10 +1547,12 @@ def _run(args) -> int:
         mesh, corner_uv = read_obj_uv(args.mesh)
         if args.command == "cut-part":
             from .handoff import reference_masks
+            from .mesh import read_mesh
 
             cut, cut_uv, removed = cut_under(mesh, corner_uv, reference_masks(args.handoff, 0.25),
                                              _spec(args.handoff)["metres_per_aligned_px"], grow_px=args.grow_px,
-                                             loose_faces=args.loose_faces)
+                                             loose_faces=args.loose_faces, join_px=args.join_px,
+                                             join=[read_mesh(path) for path in args.join] or None)
             write_obj_uv(cut, cut_uv, args.output, comment=f"{removed} faces cut under a separate part")
             print(json.dumps({"faces_removed": removed, "faces_left": len(cut.faces)}, indent=2))
         else:

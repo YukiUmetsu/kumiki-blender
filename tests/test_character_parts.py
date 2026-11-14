@@ -161,6 +161,33 @@ class PolishTests(unittest.TestCase):
         self.assertLess(split[:, 20, 0].mean(), 106)
         self.assertGreater(split[:, 28, 0].mean(), 154)
 
+    def test_a_filled_gap_gets_the_grain_of_painted_texels_of_its_own_part(self):
+        rng = np.random.default_rng(3)
+        size = 160
+        covered = np.ones((size, size), bool)
+        owner = np.zeros((size, size), np.int64)
+        part = np.zeros((size, size), np.int64)
+        part[:, 120:] = 1                                              # a second part with a coarse, strong pattern
+        image = np.full((size, size, 3), 150.0) + rng.normal(0, 8, (size, size, 1))
+        image[:, 120:] = 60.0 + 60.0 * ((np.arange(size)[:, None, None] // 2) % 2)
+        image[10:14, 60:64] = 255.0                                    # a button above the gap
+        owner[40:120, 30:110] = -1                                     # a gap of 80 x 80 texels in the first part
+        image[40:120, 30:110] = image[40:120, 29:30]                   # the first fill: one colour along each row
+        flat, _ = polish.smooth_fill(image, owner, part, covered, clone=False, detail=0.0)
+        result, report = polish.smooth_fill(image, owner, part, covered)
+        self.assertEqual(report["grain_from_painted_texels"], 80 * 80)
+        inner = (slice(50, 110), slice(40, 100))
+        across = lambda picture: float(np.abs(np.diff(picture[..., 0], axis=1)).mean())   # texel to texel, along a row
+        self.assertLess(across(flat[inner]), 1.0, "the smooth tone alone has no grain")
+        self.assertGreater(across(result[inner]), 0.6 * across(image[:30, :100]), "the gap has the grain of the fur beside it")
+        self.assertLess(across(result[inner]), 1.5 * across(image[:30, :100]))
+        self.assertLess(np.abs(np.diff(result[inner][..., 0], axis=0)).mean(), 20, "not the stripes of the other part")
+        self.assertAlmostEqual(float(result[inner].mean()), 150, delta=4)
+        self.assertLess(result[40:120, 30:110].max(), 190, "the button does not come back in the gap")
+        np.testing.assert_array_equal(result[owner >= 0], image[owner >= 0])
+        grain, found = polish.clone_grain(image, np.full((size, size), -1), part, covered)
+        self.assertFalse(found.any(), "no painted texel: no grain")
+
     def test_a_seam_across_two_uv_islands_is_closed_through_the_stitches(self):
         """One sheet, cut into two islands that lie apart in the layout; the cut is also a seam."""
         size = 48

@@ -260,7 +260,8 @@ def seat_part(part: Mesh, body: Mesh, metres_per_px: float, *, view: str | None 
 
 
 def cut_under(mesh: Mesh, corner_uv: np.ndarray | None, masks: dict[str, np.ndarray], metres_per_px: float, *,
-              scale: float = 0.25, grow_px: float = 6.0, loose_faces: int = 200
+              scale: float = 0.25, grow_px: float = 6.0, loose_faces: int = 200,
+              join: list[Mesh] | None = None, join_px: float = 14.0, smooth: int = 2
               ) -> tuple[Mesh, np.ndarray | None, int]:
     """The mesh without the faces that a separate part replaces; its UVs; the number of faces removed.
 
@@ -275,6 +276,12 @@ def cut_under(mesh: Mesh, corner_uv: np.ndarray | None, masks: dict[str, np.ndar
     goes too. The cut leaves an open edge, which the new part covers. A piece of fewer
     than ``loose_faces`` faces that the cut separated from the mesh (a fingertip outside
     the outline) goes too.
+
+    Whole faces go, so the open edge has teeth of the size of a face, and between it and
+    the new part a gap can show. With ``join`` (the meshes of the new parts, in place),
+    the edge is smoothed ``smooth`` times along itself, and each of its vertices that is
+    within ``join_px`` aligned pixels of a part moves onto the surface of that part. The
+    body then ends on the part: a flap of skin reaches the arm that it hangs from.
     """
     centre = mesh.vertices[mesh.faces].mean(axis=1)
     along: dict[tuple[int, ...], np.ndarray] = {}      # line of sight (without its sign) -> faces inside a mask
@@ -305,7 +312,37 @@ def cut_under(mesh: Mesh, corner_uv: np.ndarray | None, masks: dict[str, np.ndar
         gone[~gone] = np.isin(piece[kept[:, 0]], loose)
     used, inverse = np.unique(mesh.faces[~gone], return_inverse=True)
     cut = Mesh(mesh.vertices[used], inverse.reshape(-1, 3))
+    if join and gone.any():
+        cut = Mesh(_close_cut(cut, np.isin(used, np.unique(mesh.faces[gone])), join, join_px * metres_per_px, smooth),
+                   cut.faces)
     return cut, (corner_uv[~gone] if corner_uv is not None else None), int(gone.sum())
+
+
+def _close_cut(mesh: Mesh, at_cut: np.ndarray, parts: list[Mesh], reach_m: float, smooth: int) -> np.ndarray:
+    """Vertex positions with the cut edge (``at_cut`` vertices on the open border) smoothed and set on ``parts``."""
+    from scipy.spatial import cKDTree
+
+    edges = np.sort(np.concatenate([mesh.faces[:, [0, 1]], mesh.faces[:, [1, 2]], mesh.faces[:, [2, 0]]]), axis=1)
+    edges, count = np.unique(edges, axis=0, return_counts=True)
+    border = edges[count == 1]
+    border = border[at_cut[border].any(axis=1)]
+    moving = np.zeros(len(mesh.vertices), bool)
+    moving[border.ravel()] = True
+    moving &= at_cut
+    vertices = mesh.vertices.copy()
+    for _ in range(max(0, smooth)):
+        total, number = np.zeros_like(vertices), np.zeros(len(vertices))
+        for a, b in ((0, 1), (1, 0)):
+            np.add.at(total, border[:, a], vertices[border[:, b]])
+            np.add.at(number, border[:, a], 1)
+        use = moving & (number >= 2)
+        vertices[use] = 0.5 * vertices[use] + 0.5 * total[use] / number[use, None]
+    surface = np.concatenate([surface_samples(part, reach_m / 8)[0] for part in parts])
+    distance, nearest = cKDTree(surface).query(vertices[moving])
+    near = distance <= reach_m
+    index = np.nonzero(moving)[0][near]
+    vertices[index] = surface[nearest[near]]
+    return vertices
 
 
 def mirror_part(mesh: Mesh, corner_uv: np.ndarray | None, mid_x: float = 0.0) -> tuple[Mesh, np.ndarray | None]:
