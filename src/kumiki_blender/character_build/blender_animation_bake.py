@@ -1,8 +1,9 @@
-"""Blender worker: visually bake native IK/FK controls to portable deform skeleton.
+"""Bake a reviewed character performance to one portable skeletal+morph GLB.
 
-Never updates the source .blend. Produces editable baked.blend plus a skinned
-GLB with one sampled clip. This initial worker bakes skeletal motion only;
-facial shape-key action tracks require a separate explicit clip contract.
+Combines the evaluated FK/IK deform-bone clip with optional authored facial
+viseme Actions and optional bone-driven corrective shape keys. Requires
+explicit opt-in and binary GLB sample parity for every morph channel.
+Source Blender revision is SHA-locked and never overwritten.
 """
 from __future__ import annotations
 
