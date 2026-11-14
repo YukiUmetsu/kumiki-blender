@@ -87,13 +87,16 @@ class RegionSculptSourceGateTest(unittest.TestCase):
         self._run(self.root / "rejected", False)
 
     def test_malformed_source_gate_flags_rejected_before_blender(self):
-        with patch("kumiki_blender.character_build.blender.run_worker") as worker:
-            with self.assertRaisesRegex(ValueError, "both --character and --region"):
-                main([
-                    "refine-region", "--blend", str(self.blend),
-                    "--plan", str(self.plan), "--output", str(self.root / "unused"),
-                    "--region", "eye.L",
-                ])
+        from contextlib import redirect_stderr
+        with (patch("kumiki_blender.character_build.blender.run_worker") as worker,
+              redirect_stderr(StringIO()) as errors):
+            code = main([
+                "refine-region", "--blend", str(self.blend),
+                "--plan", str(self.plan), "--output", str(self.root / "unused"),
+                "--region", "eye.L",
+            ])
+            self.assertEqual(code, 2)
+            self.assertIn("both --character and --region", errors.getvalue())
             worker.assert_not_called()
 
 
