@@ -39,7 +39,7 @@ jobs:
           PYTHONPATH: src:tests
         run: |
           python -m pip install 'scipy>=1.13,<2' 'scikit-image>=0.24,<1'
-          python -m unittest tests.test_character_build tests.test_character_parts -v
+          python -m unittest tests.test_character_build tests.test_character_parts tests.test_character_separate_parts -v
       - name: Test multi-photo OpenSplat staging, training boundary and CLI (no GPU needed)
         env:
           PYTHONPATH: src
