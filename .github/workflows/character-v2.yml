@@ -7,6 +7,7 @@ on:
       - "tests/test_character_spec_v2.py"
       - "tests/test_character_region_sculpt_plan.py"
       - "tests/test_character_surface_distance.py"
+      - "tests/test_character_region_sculpt_source_qa.py"
       - "tests/test_character_pose_spec.py"
       - "tests/test_character_rig_controls.py"
       - "tests/test_character_topology_zones.py"
@@ -70,6 +71,7 @@ jobs:
             tests.test_character_spec_v2 \
             tests.test_character_region_sculpt_plan \
             tests.test_character_surface_distance \
+            tests.test_character_region_sculpt_source_qa \
             tests.test_character_pose_spec \
             tests.test_character_rig_controls \
             tests.test_character_topology_zones \
