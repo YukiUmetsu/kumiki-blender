@@ -267,5 +267,99 @@ class PlaceAndJoinTests(unittest.TestCase):
         np.testing.assert_allclose(uv_again, corner_uv, atol=1e-5)
 
 
+class EyeTests(unittest.TestCase):
+    """A ball head with two drawn eyes: front and left drawings, each with its own idea of where the eye is."""
+
+    PX = 0.32 / 1000
+
+    @classmethod
+    def setUpClass(cls):
+        from PIL import ImageDraw
+        from kumiki_blender.character_build import eyes, split_views as S
+        cls.eyes = eyes
+        cls.head = ellipsoid_mesh(centre=(0, 0, .16), radii=(.1, .1, .16), subdivisions=4)
+        cls.tmp = tempfile.TemporaryDirectory()
+        cls.handoff = Path(cls.tmp.name) / "handoff"
+        images = {}
+        for name in ("front", "left", "back"):
+            mask, _ = rasterize(cls.head, camera(name), cls.PX, 1.0)
+            picture = Image.fromarray(np.where(mask[..., None], (200, 170, 140), 0).astype(np.uint8))
+            pen = ImageDraw.Draw(picture)
+            spots = {"front": [(800 - 95, 500), (800 + 95, 500)], "left": [(800 - 235, 505)], "back": []}[name]   # the true place is 800 - 290
+            for x, y in spots:                      # white of the eye, lid line, iris, pupil, highlight
+                pen.ellipse((x - 70, y - 60, x + 70, y + 60), fill=(240, 232, 220), outline=(30, 20, 15), width=7)
+                pen.ellipse((x - 42, y - 42, x + 42, y + 42), fill=(170, 90, 25), outline=(60, 30, 10), width=4)
+                pen.ellipse((x - 26, y - 26, x + 26, y + 26), fill=(8, 6, 6))
+                pen.ellipse((x + 6, y - 22, x + 18, y - 10), fill=(250, 250, 250))
+            images[name] = np.dstack([np.asarray(picture), np.where(mask, 255, 0).astype(np.uint8)])
+        spec = {"schema_version": 1, "height_m": 0.32, "metres_per_aligned_px": cls.PX, "views": list(images),
+                "raw": {n: {"left": 0, "top": 0, "scale": 1.0, "x0": 0, "y0": 0, "shift_px": 0} for n in images}}
+        S.write_handoff(cls.handoff, spec, images, "test")
+        cls.front = images["front"]
+        cls.out = Path(cls.tmp.name) / "eyes"
+        cls.report = eyes.split_eyes(cls.handoff, cls.head, cls.out)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.tmp.cleanup()
+
+    def test_pupil_and_iris_are_found_and_the_white_is_left_alone(self):
+        found, mask = self.eyes.find_eyes(self.front)
+        self.assertEqual(len(found), 2)
+        for eye, x in zip(found, (705, 895)):
+            self.assertAlmostEqual(eye["centre_px"][0], x, delta=3)
+            self.assertAlmostEqual(eye["centre_px"][1], 500, delta=3)
+            self.assertAlmostEqual(eye["pupil_radius_px"], 26, delta=3)
+            self.assertAlmostEqual(eye["iris_radius_px"], 42, delta=4)
+        self.assertTrue(mask[500, 705] and mask[500, 740])
+        self.assertFalse(mask[500, 765], "the white of the eye is not part of the eyeball")
+        plain = self.front.copy()
+        plain[..., :3] = (200, 170, 140)
+        self.assertEqual(self.eyes.find_eyes(plain)[0], [])
+        bead = self.front.copy()                    # no coloured iris: the pupil counts
+        bead[np.abs(bead[..., :3].astype(int) - (170, 90, 25)).sum(axis=2) < 60, :3] = (240, 232, 220)
+        self.assertAlmostEqual(self.eyes.find_eyes(bead)[0][0]["iris_radius_px"], 26, delta=4)
+
+    def test_eyeballs_sit_on_the_head_at_the_drawn_place(self):
+        ids = [eye["id"] for eye in self.report["eyes"]]
+        self.assertEqual(sorted(ids), ["eye.L", "eye.R"])
+        for eye in self.report["eyes"]:
+            centre, radii = np.array(eye["center_m"]), np.array(eye["radii_m"])
+            self.assertAlmostEqual(abs(centre[0]), 95 * self.PX, delta=2 * self.PX)
+            self.assertEqual(centre[0] > 0, eye["id"] == "eye.L", "the character's left is +X")
+            self.assertAlmostEqual(centre[2], (1100 - 500) * self.PX, delta=2 * self.PX)
+            self.assertAlmostEqual(radii[0], 1.06 * 42 * 1.03 * self.PX, delta=3 * self.PX)
+            self.assertLess(radii[1], radii[0], "a lens, flatter along the view")
+            surface = -0.1 * np.sqrt(1 - (centre[0] / 0.1) ** 2 - ((centre[2] - 0.16) / 0.16) ** 2)   # the head at the eye
+            pole = centre[1] - radii[1]                # the front camera looks along +Y: the pole is at the lowest y
+            self.assertLess(pole, surface, "the eyeball stands out of the head")
+            self.assertGreater(centre[1], surface, "and its centre is inside")
+            mesh, uv = read_obj_uv(self.out / eye["mesh"])
+            np.testing.assert_allclose(mesh.vertices.max(axis=0) - mesh.vertices.min(axis=0), 2 * radii, rtol=0.02)
+            self.assertTrue((uv >= 0).all() and (uv <= 1).all())
+        anatomy = json.loads((self.out / "anatomy.json").read_text())
+        self.assertEqual([part["kind"] for part in anatomy["parts"]], ["ocular_globe", "ocular_globe"])
+        self.assertTrue(all(part["pupil_fraction"] < part["iris_fraction"] for part in anatomy["parts"]))
+
+    def test_only_the_face_drawing_paints_around_the_eyes(self):
+        def alpha(folder, name):
+            with Image.open(self.out / folder / "raw" / f"{name}.png") as picture:
+                return np.asarray(picture)[..., 3] > 127
+
+        self.assertEqual(sorted(p.name for p in (self.out / "eyes" / "raw").iterdir()), ["front.png"])
+        eyes_only = alpha("eyes", "front")
+        self.assertTrue(eyes_only[500, 705] and not eyes_only[500, 800] and not eyes_only[500, 765])
+        front, left, back = alpha("rest", "front"), alpha("rest", "left"), alpha("rest", "back")
+        self.assertFalse(front[500, 705], "the iris disc is off the head texture")
+        self.assertTrue(front[500, 768] and front[445, 705], "the white and the lid stay in the face drawing")
+        self.assertFalse(left[505, 565], "the side drawing loses its own eye, drawn 55 px from the true place")
+        self.assertFalse(left[505, 520] or left[505, 590])
+        self.assertTrue(left[505, 880] and left[800, 800], "and keeps the rest of the head")
+        self.assertTrue(back.all() == alpha("rest", "back").all() and back[500, 800], "the back drawing sees no eye")
+        removed = {row["view"]: row["removed_px"] for row in self.report["removed"]}
+        self.assertEqual(removed["back"], 0)
+        self.assertGreater(removed["left"], removed["front"])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -47,6 +47,8 @@ or newer. The other commands need only NumPy, SciPy, scikit-image and Pillow.
 | References | `trim REFS front --output front.png` | A view without the part that its opposite view has no room for |
 | Parts | `split-views HANDOFF --part tail --output split/` | The drawings split into one part and the rest, each a handoff in the character frame |
 | Parts | `place-part split/tail tail.glb --output tail.ply` | A part that was modelled alone, placed in the frame of the whole character |
+| Parts | `split-eyes split/rest body.ply --output eyes/` | The eyes as separate lenses, and only the front drawing paints around them |
+| References | `redraw-view front.png back.png --change "..." --output front2.png` | One drawing changed to the design of another |
 | Parts | `seat-part body.ply bag/low.obj --metres-per-px 0.00032 --output bag.obj` | A part moved out of the body that it hangs on, as one rigid piece |
 | Parts | `join-parts a/low.obj:a.png b/low.obj:b.png --output joined/` | One mesh and one texture from placed, textured parts |
 | Fit | `fit HANDOFF mesh.ply --lattice auto` | Lattice deformation for detailed generator meshes. A finer lattice is kept only if it does no harm |
@@ -332,6 +334,47 @@ Limits:
 - The body under a removed part is the editor's guess.
 - A part with one or two views has unseen sides (23% of the tail, 45% of the bag).
 - Each part costs about 9 minutes for each edited view and 25 minutes for its shape.
+
+## Eyes as separate eyeballs
+
+Two drawings never put an eye at the same place on the head. A texture from both
+shows two eyelid lines, and no rule on the drawings removes that.
+
+```bash
+kumiki-character-build split-eyes split/rest body.ply --output eyes/
+```
+
+`split-eyes` finds the iris and the pupil of each eye in the front drawing. The pupil
+is a thick, very dark disc. The iris is the most saturated colour around it. It writes:
+
+- `eyes/eyes/<id>.obj`: one lens for each eye, set on the head mesh, with UVs.
+- `eyes/eyes/`: a handoff with the drawing's own iris pixels. Bake each lens from it:
+  `texture eyes/eyes eyes/eyes/eye.L.obj --min-cosine 0.15 --occlusion-px 0 --output eyeL.png`.
+- `eyes/rest/`: the front drawing without the iris discs, and each other drawing
+  without the surroundings of the eyes (`--zone`, in iris radii). Thus only the
+  front drawing paints the white and the lids. Bake the head from this handoff.
+- `eyes.png` to review, and `anatomy.json` with the same eyes for `plan-anatomy`.
+
+Then add the lenses to `join-parts`. An eye is now its own piece of surface with its
+own texture, and it can turn.
+
+The white of the eye stays on the head. It has the colour of light fur, and a lid
+line does not always close it. Closed eyes and eyes without a dark pupil are not found.
+
+## One drawing in an older design
+
+If you replace some views, the views that stay can show an older design. Pip's front
+view had bare arms, and the new side and back views have knit sleeves.
+
+```bash
+kumiki-character-build redraw-view refs/front.png refs/back.png \
+  --change "both arms wear the cream knit sleeves from image 2" --output refs2/front.png
+```
+
+The local image editor changes the drawing by the instruction, with the second
+drawing as the example. The result keeps the drawing's own pixels where the editor
+changed nothing. The editor works at 768 px, and its copy of the face is softer than
+the drawing. Say in `--change` what must stay. Look at the result before you use it.
 
 ## A view that shows a part the others have no room for
 
