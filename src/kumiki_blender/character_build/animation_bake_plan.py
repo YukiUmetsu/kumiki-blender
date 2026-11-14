@@ -19,12 +19,16 @@ def _digest(path: Path) -> str:
 
 
 def validate_bake_plan(data: dict) -> None:
-    if not isinstance(data, dict) or set(data) != {
+    base_fields = {
         "schema_version", "source_blend", "source_sha256", "armature",
         "clip", "start_frame", "end_frame", "step", "fps",
-        "max_position_error_m", "max_rotation_error_deg"
-    }:
+        "max_position_error_m", "max_rotation_error_deg",
+    }
+    if (not isinstance(data, dict) or
+            set(data) not in (base_fields, base_fields | {"bake_correctives"})):
         raise ValueError("Animation bake plan needs explicit source and frame bounds")
+    if type(data.get("bake_correctives", False)) is not bool:
+        raise ValueError("bake_correctives must be boolean")
     if type(data["schema_version"]) is not int or data["schema_version"] != 1:
         raise ValueError("Unsupported animation bake plan version")
     for label in ("armature", "clip"):
@@ -51,7 +55,8 @@ def validate_bake_plan(data: dict) -> None:
 def make_bake_plan(blend: str | Path, clip: str, start: int, end: int, *,
                    armature: str = "CharacterRig", step: int = 1, fps: int = 24,
                    max_position_error_m: float = .002,
-                   max_rotation_error_deg: float = 2.0) -> dict:
+                   max_rotation_error_deg: float = 2.0,
+                   bake_correctives: bool = False) -> dict:
     path = Path(blend).resolve()
     if not path.is_file() or path.suffix.lower() != ".blend":
         raise ValueError("A saved .blend with the animated control rig is required")
@@ -61,6 +66,7 @@ def make_bake_plan(blend: str | Path, clip: str, start: int, end: int, *,
         "clip": clip, "start_frame": start, "end_frame": end, "step": step,
         "fps": fps, "max_position_error_m": max_position_error_m,
         "max_rotation_error_deg": max_rotation_error_deg,
+        "bake_correctives": bake_correctives,
     }
     validate_bake_plan(data)
     return data
