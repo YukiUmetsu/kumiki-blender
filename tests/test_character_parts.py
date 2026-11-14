@@ -300,6 +300,45 @@ class BakeByPartTests(unittest.TestCase):
         self.assertGreater(red[label == self.report["parts"].index(self.bag())].mean(), 0.9)
         self.assertLess(red[label == 0].mean(), 0.01)
 
+    def test_a_given_part_is_its_own_pixels_on_the_mesh_and_in_each_drawing(self):
+        """A belt of the colour of the skin: colour cannot find it, so its pixels are given (as `box-part` writes them)."""
+        from kumiki_blender.character_build import split_views
+        spec = json.loads((self.handoff / "spec.json").read_text())
+        px = spec["metres_per_aligned_px"]
+        boxes = {}
+        for view, m in spec["raw"].items():                          # aligned rows 560 to 640, in the pixels of each drawing
+            y0, y1 = ((v - m["y0"]) / m["scale"] + m["top"] for v in (560, 640))
+            boxes[view] = [(0, int(round(y0)), 4000, int(round(y1)))]
+        root = Path(self.tmp.name) / "given"
+        split_views.box_part(self.handoff, root / "split", name="belt", boxes=boxes)
+        report = parts.find_parts(self.handoff, self.mesh, self.corner_uv, root / "parts", size=256,
+                                  given={"belt": root / "split" / "belt"})
+        belt = report["parts"][-1]
+        self.assertEqual((belt["id"], belt["given"], report["given"][0]["id"]), ("belt", True, "belt"))
+        self.assertNotIn(belt["material"], [part["material"] for part in report["parts"][:-1]], "a material of its own")
+        self.assertGreater(report["given"][0]["texels"], 500)
+        rows, cols, points, _ = texel_samples(self.mesh, self.corner_uv, 256)
+        labels = np.asarray(Image.open(root / "parts" / "uv_labels.png"))[rows, cols]
+        v = 1100 - points[:, 2] / px                                 # the aligned row of each texel
+        inside, outside = (v > 572) & (v < 628), (v < 540) | (v > 660)
+        self.assertGreater((labels[inside] == len(report["parts"])).mean(), 0.95, "the band of the mesh is the belt")
+        self.assertLess((labels[outside] == len(report["parts"])).mean(), 0.01, "and nothing else is")
+        for view in ("front", "left"):
+            with Image.open(root / "split" / "belt" / "raw" / f"{view}.png") as picture:
+                given = np.asarray(picture)[..., 3] > 127
+            with Image.open(root / "parts" / "views" / view / "belt.png") as picture:
+                np.testing.assert_array_equal(np.asarray(picture) > 127, given)   # in a drawing: its pixels, no others
+        image, baked = parts.bake_parts(self.handoff, self.mesh, self.corner_uv, root / "parts", size=256)
+        row = next(row for row in baked["materials"] if row["parts"] == ["belt"])
+        self.assertTrue(row["baked"])
+        self.assertLess(np.abs(image[rows, cols][inside].astype(int).mean(axis=0) - SKIN).max(), 25)
+        with self.assertRaises(ValueError):
+            parts.find_parts(self.handoff, self.mesh, self.corner_uv, root / "bad", size=256,
+                             given={"part-01": root / "split" / "belt"})
+        with self.assertRaises(ValueError):
+            parts.find_parts(self.handoff, self.mesh, self.corner_uv, root / "bad2", size=256,
+                             given={"belt": root / "split" / "belt"}, given_grow_px={"hat": 4})
+
     def test_source_fingerprint_rejects_stale_raw_reference(self):
         self.assertEqual(len(self.report["source_signature_sha256"]), 64)
         with tempfile.TemporaryDirectory() as tmp:

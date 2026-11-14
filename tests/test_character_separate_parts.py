@@ -265,6 +265,15 @@ class PlaceAndJoinTests(unittest.TestCase):
         self.assertLess(info["moved_m"], 0.0005, "a seated part stays")
         outside = Mesh(bag.vertices + [0.1, 0, 0], bag.faces)
         np.testing.assert_array_equal(seat_part(outside, body, self.PX)[0].vertices, outside.vertices)
+        flat, info = seat_part(bag, body, self.PX, flatten_m=0.002)  # nothing deeper than 2 mm under the surface
+        self.assertGreater(info["flattened_vertices"], 0)
+        self.assertLess(flat.vertices[:, 0].min(), seated.vertices[:, 0].max())
+        inside_body = lambda v: (v[:, 0] / .06) ** 2 + (v[:, 1] / .05) ** 2 + ((v[:, 2] - .16) / .16) ** 2
+        self.assertLess(inside_body(seated.vertices).min(), 0.85, "rigid: its back is deep in the body")
+        self.assertGreater(inside_body(flat.vertices).min(), 0.9, "flattened: its back lies just under the surface")
+        np.testing.assert_array_equal(flat.faces, bag.faces)
+        outer = seated.vertices[:, 0] > seated.vertices[:, 0].mean() + 0.005
+        np.testing.assert_allclose(flat.vertices[outer], seated.vertices[outer], atol=1e-12)   # what is outside does not move
         corner = ellipsoid_mesh(centre=(.03, -.025, .12), radii=(.015, .015, .02), subdivisions=2)   # front of the left hip
         seated, info = seat_part(corner, body, self.PX)
         self.assertEqual(info["view"], "front_left", "the shortest way out is between the front and the left")
@@ -376,6 +385,73 @@ class SmallPartTests(unittest.TestCase):
         self.assertEqual(cut_under(body, None, {"front": np.zeros_like(masks["front"])}, self.PX)[2], 0,
                          "no view shows the part: nothing is cut")
         self.assertEqual(cut_under(body, None, {}, self.PX)[2], 0)
+
+    def test_a_part_is_picked_by_its_colour_and_taken_from_another_handoff(self):
+        from kumiki_blender.character_build import split_views as S
+        spec = {"schema_version": 1, "height_m": 0.32, "metres_per_aligned_px": self.PX, "views": ["front", "back"],
+                "raw": {n: {"left": 0, "top": 0, "scale": 1.0, "x0": 0, "y0": 0, "shift_px": 0} for n in ("front", "back")}}
+        figure = np.zeros((160, 200, 4), np.uint8)
+        figure[20:140, 40:160] = (*SKIN, 255)
+        figure[60:80, 40:160, :3] = (150, 40, 50)                    # a red scarf
+        figure[69:71, 40:160, :3] = (60, 15, 20)                     # with a dark line between two strands
+        figure[80:120, 100:102, :3] = (150, 40, 50)                  # and a thin thread that hangs from it
+        figure[30:34, 50:54, :3] = (150, 40, 50)                     # a red speck that is no scarf
+        plain = figure.copy()
+        plain[..., :3] = np.where(figure[..., 3:] > 0, np.array(SKIN, np.uint8), 0)   # the back shows no red
+
+        def alpha(path):
+            with Image.open(path) as picture:
+                return np.asarray(picture)[..., 3] > 127
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            S.write_handoff(root / "whole", spec, {"front": figure, "back": plain}, "whole")
+            report = S.box_part(root / "whole", root / "a", name="scarf", colours=[(150, 40, 50)], delta_e=15)
+            part = alpha(root / "a" / "scarf" / "raw" / "front.png")
+            self.assertEqual([row["view"] for row in report["views"]], ["front"], "the back has no such colour")
+            self.assertFalse((root / "a" / "scarf" / "raw" / "back.png").exists())
+            np.testing.assert_array_equal(alpha(root / "a" / "rest" / "raw" / "back.png"), plain[..., 3] > 0)
+            S.box_part(root / "whole", root / "b", name="scarf", colours=[(150, 40, 50)], delta_e=15, open_px=2)
+            opened = alpha(root / "b" / "scarf" / "raw" / "front.png")
+            # The same part out of another handoff of these drawings (one that a later step changed).
+            changed = figure.copy()
+            changed[..., :3] = np.where(figure[..., 3:] > 0, np.array((90, 90, 90), np.uint8), 0)
+            S.write_handoff(root / "grey", spec, {"front": changed, "back": plain}, "whole")
+            S.box_part(root / "grey", root / "c", name="scarf", like=root / "a" / "scarf")
+            np.testing.assert_array_equal(alpha(root / "c" / "scarf" / "raw" / "front.png"), part)
+            other = {**spec, "raw": {**spec["raw"], "front": {**spec["raw"]["front"], "scale": 2.0}}}
+            S.write_handoff(root / "other", other, {"front": changed, "back": plain}, "whole")
+            with self.assertRaises(ValueError):
+                S.box_part(root / "other", root / "d", name="scarf", like=root / "a" / "scarf")
+            with self.assertRaises(ValueError):
+                S.box_part(root / "whole", root / "e", name="scarf")
+        self.assertTrue(part[60:80, 46:154].all(), "the scarf, with the dark line in it")
+        self.assertTrue(part[60:69, 40:160].all() and part[71:80, 40:160].all())
+        self.assertTrue(part[100, 100], "and its thread")
+        self.assertFalse(part[32, 52], "a small piece of the colour elsewhere is dropped")
+        self.assertFalse(part[50, 100] or part[90, 60])
+        self.assertTrue(opened[62:78, 44:156].all() and not opened[100, 100], "open_px removes what is thin")
+
+    def test_a_crumpled_sheet_is_smoothed_under_the_masks_of_a_part(self):
+        from kumiki_blender.character_build.part_place import smooth_under
+        body, hand = self.body_and_hand()
+        rng = np.random.default_rng(1)
+        normals = body.vertex_normals()
+        rough = Mesh(body.vertices + normals * rng.normal(0, 0.0006, (len(body.vertices), 1)), body.faces)
+        masks = {name: rasterize(hand, camera(name), self.PX, 0.25)[0] for name in ("front", "back")}
+        smooth, report = smooth_under(rough, masks, self.PX, grow_px=20)
+        np.testing.assert_array_equal(smooth.faces, rough.faces)
+        moved = np.linalg.norm(smooth.vertices - rough.vertices, axis=1)
+        self.assertEqual(report["vertices_moved"], int((moved > 1e-9).sum()))
+        self.assertEqual(moved[rough.vertices[:, 0] < 0.05].max(), 0, "outside the masks nothing moves")
+        end = rough.vertices[:, 0] > 0.105                           # well inside the masks
+        off = lambda mesh: np.abs(((mesh.vertices[end] - [0, 0.01, .16]) / [.12, .03, .03]) ** 2 @ np.ones(3) - 1)
+        self.assertLess(off(smooth).mean(), 0.6 * off(rough).mean(), "nearer to the smooth arm than the crumpled one")
+        size = lambda mesh: np.ptp(mesh.vertices[end], axis=0)
+        np.testing.assert_allclose(size(smooth), size(rough), rtol=0.12)    # it keeps its size
+        same, report = smooth_under(rough, {"front": np.zeros_like(masks["front"])}, self.PX)
+        np.testing.assert_array_equal(same.vertices, rough.vertices)
+        self.assertEqual(report["vertices_in_region"], 0)
 
     def test_the_cut_edge_ends_on_the_new_part(self):
         from scipy.spatial import cKDTree

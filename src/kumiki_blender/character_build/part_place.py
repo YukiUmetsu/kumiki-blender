@@ -215,7 +215,7 @@ def place_part(mesh: Mesh, masks: dict[str, np.ndarray], metres_per_px: float, *
 
 
 def seat_part(part: Mesh, body: Mesh, metres_per_px: float, *, view: str | None = None, embed: float = 0.15,
-              scale: float = 0.5) -> tuple[Mesh, dict]:
+              scale: float = 0.5, flatten_m: float | None = None) -> tuple[Mesh, dict]:
     """Move a part out of the body it hangs on, until only ``embed`` of its surface is still inside.
 
     The masks place a bag where the drawings show it. The body was modelled without the
@@ -229,6 +229,12 @@ def seat_part(part: Mesh, body: Mesh, metres_per_px: float, *, view: str | None 
     the shortest move, among those that look at the part from its side of the body. A
     bag at the front of the left hip comes out to the front left: toward the left alone,
     Pip's bag had to move 30 mm, and toward the front left 13 mm.
+
+    The part of the surface that stays inside can come out on the other side of a thin
+    body: Pip's bag came through the back of the skin flap that it hangs in front of.
+    With ``flatten_m``, each vertex that is still deeper than that behind the body's
+    surface, seen from ``view``, moves up to that depth. The back of the part then lies
+    just under the surface that it sits on. The faces and the UVs stay.
     """
     from .mesh import rasterize
 
@@ -254,9 +260,22 @@ def seat_part(part: Mesh, body: Mesh, metres_per_px: float, *, view: str | None 
         moves = {name: measure(name)[0] for name in facing}
         view = min(facing, key=lambda name: (round(moves[name] / 0.0005), facing.index(name)))
     move, burial = measure(view)
-    moved = Mesh(part.vertices + move * camera(view).toward, part.faces, part.colours)
-    return moved, {"view": view, "moved_m": round(move, 5), "buried_before": round(float((burial > 0).mean()), 4),
-                   "buried_after": round(float((burial - move > 0).mean()), 4)}
+    look = camera(view)
+    vertices = part.vertices + move * look.toward
+    info = {"view": view, "moved_m": round(move, 5), "buried_before": round(float((burial > 0).mean()), 4),
+            "buried_after": round(float((burial - move > 0).mean()), 4)}
+    if flatten_m is not None:
+        _, depth = rasterize(body, look, metres_per_px, scale)
+        col, row, reach = look.project(vertices, metres_per_px, scale)
+        c, r = np.floor(col).astype(int), np.floor(row).astype(int)
+        inside = (c >= 0) & (c < depth.shape[1]) & (r >= 0) & (r < depth.shape[0])
+        surface = np.full(len(vertices), -np.inf)
+        surface[inside] = np.nan_to_num(depth[r[inside], c[inside]], nan=-np.inf)
+        lift = np.where(np.isfinite(surface), np.maximum(surface - reach - flatten_m, 0.0), 0.0)
+        vertices = vertices + lift[:, None] * look.toward
+        info["flattened_vertices"] = int((lift > 0).sum())
+        info["flatten_max_m"] = round(float(lift.max()), 5) if len(lift) else 0.0
+    return Mesh(vertices, part.faces, part.colours), info
 
 
 def cut_under(mesh: Mesh, corner_uv: np.ndarray | None, masks: dict[str, np.ndarray], metres_per_px: float, *,
@@ -284,23 +303,7 @@ def cut_under(mesh: Mesh, corner_uv: np.ndarray | None, masks: dict[str, np.ndar
     body then ends on the part: a flap of skin reaches the arm that it hangs from.
     """
     centre = mesh.vertices[mesh.faces].mean(axis=1)
-    along: dict[tuple[int, ...], np.ndarray] = {}      # line of sight (without its sign) -> faces inside a mask
-    for name, mask in masks.items():
-        if not mask.any():
-            continue
-        view = camera(name)
-        wide = ndimage.binary_dilation(mask, iterations=max(1, round(grow_px * scale)))
-        col, row, _ = view.project(centre, metres_per_px, scale)
-        c, r = np.floor(col).astype(int), np.floor(row).astype(int)
-        inside = (c >= 0) & (c < wide.shape[1]) & (r >= 0) & (r < wide.shape[0])
-        hit = np.zeros(len(centre), bool)
-        hit[inside] = wide[r[inside], c[inside]]
-        toward = np.round(np.asarray(view.toward, float), 3)
-        if tuple(toward) < tuple(-toward):
-            toward = -toward
-        key = tuple(int(v) for v in np.round(toward * 1000))
-        along[key] = along.get(key, np.zeros(len(centre), bool)) | hit
-    gone = np.logical_and.reduce(list(along.values())) if along else np.zeros(len(centre), bool)   # no view: no cut
+    gone = _under_masks(centre, masks, metres_per_px, scale, grow_px)      # no view shows the part: no cut
     if gone.any() and loose_faces > 0:
         kept = mesh.faces[~gone]
         graph = sparse.coo_matrix((np.ones(len(kept) * 2), (np.repeat(kept[:, 0], 2), kept[:, 1:].ravel())),
@@ -343,6 +346,69 @@ def _close_cut(mesh: Mesh, at_cut: np.ndarray, parts: list[Mesh], reach_m: float
     index = np.nonzero(moving)[0][near]
     vertices[index] = surface[nearest[near]]
     return vertices
+
+
+def _under_masks(points: np.ndarray, masks: dict[str, np.ndarray], metres_per_px: float, scale: float,
+                 grow_px: float) -> np.ndarray:
+    """The points that lie inside the masks along every line of sight (opposite views are one line)."""
+    along: dict[tuple[int, ...], np.ndarray] = {}
+    for name, mask in masks.items():
+        if not mask.any():
+            continue
+        view = camera(name)
+        wide = ndimage.binary_dilation(mask, iterations=max(1, round(grow_px * scale))) if grow_px > 0 else mask
+        col, row, _ = view.project(points, metres_per_px, scale)
+        c, r = np.floor(col).astype(int), np.floor(row).astype(int)
+        inside = (c >= 0) & (c < wide.shape[1]) & (r >= 0) & (r < wide.shape[0])
+        hit = np.zeros(len(points), bool)
+        hit[inside] = wide[r[inside], c[inside]]
+        toward = np.round(np.asarray(view.toward, float), 3)
+        if tuple(toward) < tuple(-toward):
+            toward = -toward
+        key = tuple(int(v) for v in np.round(toward * 1000))
+        along[key] = along.get(key, np.zeros(len(points), bool)) | hit
+    return np.logical_and.reduce(list(along.values())) if along else np.zeros(len(points), bool)
+
+
+def smooth_under(mesh: Mesh, masks: dict[str, np.ndarray], metres_per_px: float, *, scale: float = 0.25,
+                 grow_px: float = 0.0, rounds: int = 30, strength: float = 0.5, pass_band: float = 0.1,
+                 fade: int = 4) -> tuple[Mesh, dict]:
+    """The mesh with the surface under a part's masks smoothed; the faces, and so the UVs, stay.
+
+    A generator makes a thin sheet (the skin between an arm and a body) with a crumpled
+    surface and a ragged edge. The vertices that lie inside ``masks`` (as for
+    ``cut_under``) are smoothed ``rounds`` times. Each round is one step toward the mean
+    of the neighbours and one step back (Taubin), so that the sheet keeps its size.
+    ``pass_band`` sets what stays: at 0.1 only fine wrinkles go, and at 0.01, with more
+    rounds, waves of several faces go too. The effect fades over ``fade`` rings of vertices at the border of the region, and a vertex
+    on an open edge of the mesh does not move.
+    """
+    count = len(mesh.vertices)
+    edges = np.concatenate([mesh.faces[:, [0, 1]], mesh.faces[:, [1, 2]], mesh.faces[:, [2, 0]]])
+    both = np.sort(edges, axis=1)
+    unique, times = np.unique(both, axis=0, return_counts=True)
+    open_edge = np.zeros(count, bool)
+    open_edge[unique[times == 1].ravel()] = True
+    link = sparse.coo_matrix((np.ones(len(unique) * 2), (np.concatenate([unique[:, 0], unique[:, 1]]),
+                                                         np.concatenate([unique[:, 1], unique[:, 0]]))),
+                             shape=(count, count)).tocsr()
+    degree = np.maximum(np.asarray(link.sum(axis=1)).ravel(), 1)
+    mean = sparse.diags(1.0 / degree) @ link
+    inside = _under_masks(mesh.vertices, masks, metres_per_px, scale, grow_px)
+    weight = inside.astype(np.float64)
+    for _ in range(max(0, fade)):                      # 1 well inside the region, 0 outside it
+        weight = np.minimum(weight, mean @ weight)
+    weight[open_edge] = 0.0
+    vertices = mesh.vertices.copy()
+    shrink, swell = strength, -strength / (1 - pass_band * strength)     # Taubin: 1/shrink + 1/swell = pass_band
+    for _ in range(max(0, rounds)):
+        for step in (shrink, swell):
+            vertices += (step * weight)[:, None] * (mean @ vertices - vertices)
+    moved = np.linalg.norm(vertices - mesh.vertices, axis=1)
+    return Mesh(vertices, mesh.faces, mesh.colours), {
+        "vertices_in_region": int(inside.sum()), "vertices_moved": int((moved > 1e-9).sum()),
+        "mean_move_mm": round(float(moved[inside].mean() * 1000), 3) if inside.any() else 0.0,
+        "max_move_mm": round(float(moved.max() * 1000), 3)}
 
 
 def mirror_part(mesh: Mesh, corner_uv: np.ndarray | None, mid_x: float = 0.0) -> tuple[Mesh, np.ndarray | None]:

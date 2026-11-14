@@ -20,6 +20,11 @@ part is. Here the parts are found first:
    leveling) and then polished (``polish.py``). Between parts nothing is blended, so
    the edge of a scarf stays crisp.
 
+A part that colour and shape cannot find (a sleeve of the colour of the fur beside it),
+or that they find with a ragged border, can be given: ``find_parts(given=...)`` takes
+part handoffs (from ``split_views`` or ``box_part``), in which the pixels of the part
+are marked in each drawing. ``given_part_texels`` puts them on the mesh.
+
 The recognised parts are estimates, not verified labels: review ``turnaround.png``
 before you rely on them. ``semantic.json`` gives the same masks in the format of the
 ``resolve-conflicts`` policy (authored masks), so a reviewed set can be used there.
@@ -39,9 +44,10 @@ from scipy.cluster.vq import kmeans2
 from scipy.sparse import csgraph
 
 from .checks import lab
-from .mesh import Mesh
+from .mesh import Mesh, rasterize
 from .seams import LIGHTNESS_WEIGHT, SEAM_EDGES, build_regions
 from .texture import OWNER_COLOURS, bake_texture, render_textured, texel_samples, turnaround
+from .views import CX, camera
 
 PART_COLOURS = np.array([(66, 135, 245), (240, 90, 60), (70, 190, 110), (245, 200, 50), (170, 90, 210),
                          (40, 200, 210), (250, 140, 40), (140, 140, 140), (130, 80, 40), (250, 140, 200),
@@ -553,12 +559,192 @@ def _owner_index(picture: np.ndarray) -> np.ndarray:
     return index.reshape(picture.shape[:2])
 
 
+MIRROR_PAIRS = (("left", "right"), ("front_left", "front_right"), ("back_left", "back_right"))
+
+
+def given_part_texels(mesh: Mesh, points: np.ndarray, normals: np.ndarray, masks: list[dict[str, np.ndarray]],
+                      views: list[str], metres_per_px: float, *, scale: float = 0.5, mirror_missing: bool = False,
+                      figures: dict[str, np.ndarray] | None = None, grow_px: float | list[float] = 0.0,
+                      min_cosine: float = 0.35,
+                      power: float = 6.0, smooth_px: float = 8.0,
+                      region_px: float = 24.0, depth_tolerance_px: float = 4.0) -> np.ndarray:
+    """For each given part, the texels that it covers: (len(masks), N) bool.
+
+    ``masks[i]`` holds the silhouette of part i in the camera frame at ``scale``, for
+    each view that shows it (``handoff.reference_masks`` of a part handoff). ``views``
+    are the drawings of the whole character, and ``figures`` their silhouettes in the
+    same frame. Each drawing that sees a texel votes: the texel lies inside the part's
+    pixels there, or it does not. A drawing that does not show the part at all votes
+    against it. A drawing with no figure at that place (a hole where another part was
+    taken out) does not vote, and a drawing that sees the surface at a grazing angle
+    (below ``min_cosine``) does not: its pixels there belong to what lies beside it. A vote counts by cosine ** ``power`` between the view and
+    the surface without its bumps (as the bake takes it, over ``region_px``), so the
+    drawing that faces the surface decides, and the border does not follow each fold of
+    a knit. A texel belongs to the part with the largest share of its votes, if that is
+    more than half. ``mirror_missing`` adds the missing side views as mirror images, as
+    the bake does.
+
+    The pixels of a part can count ``grow_px`` aligned pixels wider than they are (one
+    value, or one for each part). Where two parts then claim a texel, the first one has
+    it. Use it for a part that lies on top: a scarf is drawn a little smaller than the
+    mesh has it, and the rim of the mesh's scarf would take the colour of the vest below.
+    Do not use it for a part with an opening that must stay open (the front of a vest).
+
+    Last, the border of each part is smoothed on the surface, over ``smooth_px`` aligned
+    pixels: two drawings never put a border at the same place, and where the surface
+    turns from one drawing to the other, the border would have teeth.
+
+    A texel without a vote (the side of a vest behind an arm) takes the answer of the
+    nearest texel that has one and faces the same way.
+    """
+    from scipy.spatial import cKDTree
+
+    sources = [(name, name, False) for name in views]
+    if mirror_missing:
+        for a, b in MIRROR_PAIRS:
+            for real, missing in ((a, b), (b, a)):
+                if real in views and missing not in views:
+                    sources.append((missing, real, True))
+    count = len(points)
+    grow = list(grow_px) if isinstance(grow_px, (list, tuple)) else [float(grow_px)] * len(masks)
+    if len(grow) != len(masks):
+        raise ValueError("Give one grow_px, or one for each part")
+    masks = [{view: ndimage.binary_dilation(mask, iterations=max(1, round(wider * scale))) if wider > 0 else mask
+              for view, mask in part.items()} for part, wider in zip(masks, grow)]
+    regions = build_regions(points, normals, sigma=region_px * metres_per_px, spacing=region_px * metres_per_px / 3)
+    facing = regions.normal[regions.cell]
+    inside_weight, total = np.zeros((len(masks), count)), np.zeros(count)
+    for name, real, mirrored in sources:
+        look = camera(name)
+        _, depth = rasterize(mesh, look, metres_per_px, scale)
+        col, row, reach = look.project(points, metres_per_px, scale)
+        c, r = np.floor(col).astype(int), np.floor(row).astype(int)
+        on_frame = (c >= 0) & (c < depth.shape[1]) & (r >= 0) & (r < depth.shape[0])
+        front = np.full(count, np.nan)
+        front[on_frame] = depth[r[on_frame], c[on_frame]]
+        cosine = normals @ look.toward
+        slope = np.minimum(np.sqrt(np.maximum(1 - cosine ** 2, 0)) / np.maximum(cosine, 1e-3), 10)
+        smooth = facing @ look.toward
+        visible = on_frame & (cosine > 0) & (smooth >= min_cosine) \
+            & (reach >= front - (depth_tolerance_px + 1.5 * slope) * metres_per_px / scale)
+        if mirrored:                                   # the opposite camera sees the mirror image about the frame centre
+            c = np.floor(2 * CX * scale - col).astype(int)
+        drawn = on_frame.copy()
+        if figures is not None and real in figures:
+            figure = figures[real]
+            ok = on_frame & (c >= 0) & (c < figure.shape[1]) & (r < figure.shape[0])
+            drawn = np.zeros(count, dtype=bool)
+            drawn[ok] = figure[r[ok], c[ok]]
+        visible &= drawn
+        weight = np.where(visible, np.clip(smooth, 0, 1) ** power, 0.0)
+        total += weight
+        for index, part in enumerate(masks):
+            mask = part.get(real)
+            if mask is None:
+                continue
+            ok = on_frame & (c >= 0) & (c < mask.shape[1]) & (r < mask.shape[0])
+            hit = np.zeros(count, dtype=bool)
+            hit[ok] = mask[r[ok], c[ok]]
+            inside_weight[index] += weight * hit
+    seen = total > 0
+    share = inside_weight / np.maximum(total, 1e-12)
+    member = (share > 0.5) & seen
+    member &= np.cumsum(member, axis=0) == 1            # more than one part: the first
+    if seen.any() and not seen.all():
+        # Position and facing together: a texel on the outside of a sleeve does not ask the vest under it.
+        where = np.hstack([points, facing * 20 * metres_per_px])
+        _, nearest = cKDTree(where[seen]).query(where[~seen], workers=-1)
+        member[:, ~seen] = member[:, seen][:, nearest]
+    if smooth_px > 0 and count > 1:
+        # Each texel takes the mean answer of the surface around it, on its side of the surface. The
+        # mean is taken over anchors, one for each cell of a quarter of the radius, so that it does
+        # not depend on how many texels the texture has.
+        radius = smooth_px * metres_per_px
+        keys = np.floor(points / (radius / 4)).astype(np.int64)
+        _, cell, texels = np.unique(keys, axis=0, return_inverse=True, return_counts=True)
+        cell = cell.ravel()
+        anchor = np.stack([np.bincount(cell, weights=points[:, axis]) for axis in range(3)], axis=1) / texels[:, None]
+        towards = np.stack([np.bincount(cell, weights=facing[:, axis]) for axis in range(3)], axis=1)
+        answer = np.stack([np.bincount(cell, weights=row.astype(np.float64)) / texels for row in member])
+        distance, near = cKDTree(anchor).query(points, k=min(32, len(anchor)), distance_upper_bound=radius, workers=-1)
+        if near.ndim == 1:
+            distance, near = distance[:, None], near[:, None]
+        valid = np.isfinite(distance)
+        near = np.where(valid, near, 0)
+        valid &= (towards[near] * facing[:, None, :]).sum(axis=2) > 0        # not through a thin flap
+        number = np.maximum(valid.sum(axis=1), 1)
+        member = np.stack([(row[near] * valid).sum(axis=1) / number for row in answer]) > 0.5
+        member &= np.cumsum(member, axis=0) == 1
+    return member
+
+
+def add_given_parts(label: np.ndarray, parts: list[dict], member: np.ndarray, names: list[str],
+                    pixels: list[np.ndarray], points: np.ndarray, *, dissolve_share: float = 0.5
+                    ) -> tuple[np.ndarray, list[dict], list[dict]]:
+    """The labels and the part list with the given parts added; and a report row for each.
+
+    ``member`` is from ``given_part_texels``, ``pixels[i]`` the colours (K, 3 uint8) of
+    part i in the drawings. Each given part is a material of its own. A recognised part
+    that loses more than ``dissolve_share`` of its texels to given parts was the same
+    thing, found by colour, with a ragged border: it is dissolved. What is left of it
+    (the scarf's colour on the vest, where a drawing put it on a mesh that is wider)
+    takes the recognised part of the nearest other texel. A dissolved part stays in the
+    list with no texels, so that the indices of the others do not change.
+    """
+    from scipy.spatial import cKDTree
+
+    label, parts = label.copy(), [dict(part) for part in parts]
+    recognised = len(parts)
+    taken = member.any(axis=0)
+    before = np.bincount(label[label >= 0], minlength=recognised)
+    lost = np.bincount(label[(label >= 0) & taken], minlength=recognised)
+    dissolved = np.nonzero((before > 0) & (lost > dissolve_share * before))[0]
+    remains = np.isin(label, dissolved) & ~taken
+    kept = (label >= 0) & ~np.isin(label, dissolved) & ~taken
+    if remains.any() and kept.any():
+        _, nearest = cKDTree(points[kept]).query(points[remains], workers=-1)
+        label[remains] = label[kept][nearest]
+    material = max([part.get("material", index) for index, part in enumerate(parts)], default=-1) + 1
+    rows, top = [], max(float(points[:, 2].max()), 1e-9)
+    for index, name in enumerate(names):
+        mine = member[index]
+        label[mine] = recognised + index
+        colours = np.asarray(pixels[index], dtype=np.uint8).reshape(-1, 3)
+        if len(colours) == 0:
+            raise ValueError(f"The given part {name!r} has no pixels in the drawings")
+        shade = weighted_lab(colours[:: max(1, len(colours) // 20000)])
+        distinct = np.unique(shade.round(1), axis=0)
+        if len(distinct) <= 4:                         # a flat colour: its colours are its main colours
+            centres = distinct
+        else:
+            centres, used = kmeans2(shade, 4, seed=0, minit="++")
+            centres = centres[np.unique(used)]
+        height = points[mine][:, 2] if mine.any() else np.zeros(1)
+        parts.append({"id": name, "share": round(float(mine.mean()), 4),
+                      "rgb": [int(round(v)) for v in colours.mean(axis=0)], "material": material + index,
+                      "main": centres.round(2).tolist(), "palette": centres.round(2).tolist(),
+                      "height_pct": [int(round(100 * v / top)) for v in np.percentile(height, [2, 98])], "given": True})
+        rows.append({"id": name, "texels": int(mine.sum()), "share": round(float(mine.mean()), 4)})
+    for index in dissolved:
+        parts[index]["share"], parts[index]["dissolved"] = 0.0, True
+    for row in rows:
+        row["dissolved"] = [parts[index]["id"] for index in dissolved]
+    return label, parts, rows
+
+
 def find_parts(handoff: Path, mesh: Mesh, corner_uv: np.ndarray, out: Path, *, size: int = 1024,
                views: list[str] | None = None, slack_px: float = 60.0, classes: int = 10, contrast: float = 10.0,
                min_share: float = 0.005, max_parts: int = 24, material_delta_e: float = 8.0,
                crease_radius_px: float = 60.0, bleed_share: float = 0.05,
-               mirror_missing: bool = False, extra: list[dict] | None = None, **bake) -> dict:
+               mirror_missing: bool = False, extra: list[dict] | None = None,
+               given: dict[str, Path] | None = None, given_grow_px: dict[str, float] | None = None, **bake) -> dict:
     """Recognise the parts and write them to ``out``; returns the report (also ``out/parts.json``).
+
+    ``given`` names part handoffs of the same drawings (``split_views``, ``box_part``): the
+    pixels that each holds are that part, on the mesh and in each drawing, and the
+    recognition does the rest of the surface (``given_part_texels``, ``add_given_parts``).
+    ``given_grow_px`` widens the pixels of a given part on the mesh, for a part that lies
+    on top of others.
 
     Use the same sources as the bake that follows: ``mirror_missing`` for a symmetric
     character with one side drawn, ``extra`` for repaints of a side that no drawing shows.
@@ -591,6 +777,40 @@ def find_parts(handoff: Path, mesh: Mesh, corner_uv: np.ndarray, out: Path, *, s
                                           classes=classes, contrast=contrast, min_share=min_share,
                                           max_parts=max_parts, shape=shape, bleed_share=bleed_share,
                                           material_delta_e=material_delta_e)
+    names = [n for n in spec["raw"] if (views is None or n in views) and (handoff / "raw" / f"{n}.png").is_file()]
+    given_rows, given_alpha = [], {}                    # part name -> {view: pixels of the part in that drawing}
+    if given:
+        from .handoff import reference_masks
+
+        ids = {part["id"] for part in parts}
+        masks, pixels = [], []
+        for name, folder in given.items():
+            if name in ids or not name.replace("-", "").replace("_", "").isalnum():
+                raise ValueError(f"Not a usable name for a given part: {name!r}")
+            part_spec = json.loads((folder / "spec.json").read_text(encoding="utf-8"))
+            shown, colours = {}, []
+            for view in names:
+                path = folder / "raw" / f"{view}.png"
+                if not path.is_file():
+                    continue
+                if part_spec["raw"].get(view) != spec["raw"][view]:
+                    raise ValueError(f"{folder} has another frame for the {view} drawing than {handoff}")
+                with Image.open(path) as picture:
+                    rgba = np.asarray(picture.convert("RGBA"))
+                shown[view] = rgba[..., 3] > 127
+                colours.append(rgba[..., :3][shown[view]])
+            if not shown:
+                raise ValueError(f"{folder} shows the part {name!r} in none of the drawings {names}")
+            given_alpha[name] = shown
+            masks.append({view: mask for view, mask in reference_masks(folder, 0.5).items() if view in shown})
+            pixels.append(np.concatenate(colours))
+        figures = {view: mask for view, mask in reference_masks(handoff, 0.5).items() if view in names}
+        unknown = sorted(set(given_grow_px or {}) - set(given))
+        if unknown:
+            raise ValueError(f"No given part has the name {unknown}")
+        member = given_part_texels(mesh, points, normals, masks, names, px, mirror_missing=mirror_missing,
+                                   figures=figures, grow_px=[float((given_grow_px or {}).get(name, 0.0)) for name in given])
+        label, parts, given_rows = add_given_parts(label, parts, member, list(given), pixels, points)
     labels_uv = smooth_labels(label_image(size, rows, cols, label))
     shapes_uv = label_image(size, rows, cols, shape)
     Image.fromarray(shapes_uv).save(out / "uv_shapes.png")
@@ -598,12 +818,30 @@ def find_parts(handoff: Path, mesh: Mesh, corner_uv: np.ndarray, out: Path, *, s
     (out / "uv").mkdir(exist_ok=True)
     for index, part in enumerate(parts):
         Image.fromarray(np.where(labels_uv == index + 1, 255, 0).astype(np.uint8)).save(out / "uv" / f"{part['id']}.png")
-    names = [n for n in spec["raw"] if (views is None or n in views) and (handoff / "raw" / f"{n}.png").is_file()]
     agreement, semantic = [], {part["id"]: {} for part in parts}
+    index_of = {part["id"]: index for index, part in enumerate(parts)}
     for name in names:
         rgba = np.asarray(Image.open(handoff / "raw" / f"{name}.png").convert("RGBA"))
         chosen, plain = view_part_labels(mesh, corner_uv, labels_uv, name, spec["raw"][name], rgba, px, parts,
                                          slack_px=slack_px)
+        if given_alpha:
+            # In a drawing, a given part is its own pixels and no others. A pixel that the mesh
+            # puts on it, and that is not one of them, takes the part of the nearest other pixel.
+            given_ids = [index_of[part] for part in given_alpha]
+            marked = np.zeros(chosen.shape, dtype=bool)
+            for part, shown in given_alpha.items():
+                if name in shown and shown[name].shape == chosen.shape:
+                    marked |= shown[name]
+            stray = np.isin(chosen, given_ids) & ~marked
+            usable = (chosen >= 0) & ~np.isin(chosen, given_ids)
+            if stray.any() and usable.any():
+                _, (iy, ix) = ndimage.distance_transform_edt(~usable, return_indices=True)
+                chosen[stray] = chosen[iy[stray], ix[stray]]
+            elif stray.any():
+                chosen[stray] = -1
+            for part, shown in given_alpha.items():
+                if name in shown and shown[name].shape == chosen.shape:
+                    chosen[shown[name] & (rgba[..., 3] > 200)] = index_of[part]
         (out / "views" / name).mkdir(parents=True, exist_ok=True)
         Image.fromarray(np.clip(chosen + 1, 0, 255).astype(np.uint8)).save(out / "views" / f"{name}.png")
         figure = rgba[..., 3] > 200
@@ -632,6 +870,7 @@ def find_parts(handoff: Path, mesh: Mesh, corner_uv: np.ndarray, out: Path, *, s
               "extra": [item["name"] for item in extra or []],
               "parts": [{**part, "colour_in_pictures": [int(c) for c in PART_COLOURS[i % len(PART_COLOURS)]],
                          "views": sorted(semantic[part["id"]])} for i, part in enumerate(parts)],
+              "given": given_rows,
               "shapes": int(shape.max()) + 1, "crease_radius_px": crease_radius_px, "bleed": bleed,
               "agreement": sorted(agreement, key=lambda row: row["iou"]),
               "advice": part_advice(parts, agreement)}

@@ -54,6 +54,7 @@ or newer. The other commands need only NumPy, SciPy, scikit-image and Pillow.
 | Parts | `detail-part arm/arm --part "the hand" --output arm_detail/` | Larger, sharp drawings of a small part, in the same frame |
 | Parts | `cut-part body/low.obj arm/arm --output body_cut.obj` | The body without the faces that a separate part replaces |
 | Parts | `mirror-part arm/low.obj --output arm_R.obj` | The same part on the other side of the character |
+| Parts | `smooth-part body/low.obj flaps/flaps --output body_s.obj` | A crumpled thin sheet smoothed under the masks of a part |
 | Parts | `seat-part body.ply bag/low.obj --metres-per-px 0.00032 --output bag.obj` | A part moved out of the body that it hangs on, as one rigid piece |
 | Parts | `join-parts a/low.obj:a.png b/low.obj:b.png --output joined/` | One mesh and one texture from placed, textured parts |
 | Fit | `fit HANDOFF mesh.ply --lattice auto` | Lattice deformation for detailed generator meshes. A finer lattice is kept only if it does no harm |
@@ -273,6 +274,56 @@ Raise `--material-delta-e` until the fur is one material. For Pip that is
 14, and the default is 8. Look at the `material` of each part in `parts.json`. The vest and the scarf
 must stay materials of their own.
 
+**Give the parts that colour cannot find.** A sleeve has the colour of the fur
+beside it. A scarf that colour does find gets a ragged border, because the bake
+puts its red on the vest below. Mark such parts in the drawings, and give them:
+
+```bash
+# The scarf: the red inside a box around the neck. No outline is necessary.
+kumiki-character-build box-part HANDOFF --name scarf --box front:304,590,780,767 ... \
+  --colour 139,55,60 --colour 100,35,40 --delta-e 20 --min-share 0.1 --output g1/
+# The vest, from what is left. --open-px removes tufts of fur on its edge.
+kumiki-character-build box-part g1/rest --name vest --colour 84,77,49 --open-px 5 --output g2/
+# The sleeves have no colour of their own: outlines.
+kumiki-character-build box-part g2/rest --name sleeves --polygon front:... --output g3/
+kumiki-character-build parts HANDOFF low.obj --given scarf=g1/scarf --given vest=g2/vest \
+  --given sleeves=g3/sleeves --given-grow scarf=6 --material-delta-e 80 --output parts/
+```
+
+- With `--colour`, the part is the pixels near those colours inside the boxes (the
+  whole drawing, if a view has no box). Gaps close (`--close-px`), and a piece
+  smaller than `--min-share` of the largest piece goes: brown fur has some red.
+- `--like PART_HANDOFF` takes the same pixels out of another handoff of the same
+  drawings.
+- On the mesh, each drawing that faces a texel votes: inside the part's pixels, or
+  not. A drawing with a hole there, or at a grazing angle, does not vote. The
+  border is then smoothed on the surface. A texel without a vote takes the answer
+  of the nearest texel that has one.
+- In each drawing, a given part is its own pixels and no others.
+- A recognised part that loses most of its area to given parts is dissolved.
+- `--given-grow scarf=6` counts the scarf 6 pixels wider on the mesh. Use it for
+  a part that lies on top: the mesh has the scarf a little wider than it is drawn.
+  Give that part first. Do not grow a part with an opening that must stay open.
+- `--material-delta-e 80` makes the rest one material. The given parts keep their
+  own. Then no run can tear a side of the head.
+
+On Pip, the vest got a straight hem and the scarf a clean edge on the vest.
+
+**Leave out a drawing that disagrees.** Give `parts` and `texture-parts`
+`--views front,left,back`. Pip's back-left drawing puts the end of the scarf and
+the hem of the vest at other places than the back drawing. With it, the back of
+the vest was torn at each angle. Without it, the median error of the back view
+went from 6.5 to 5.8 delta E. The front and the side did not get worse. The error
+against the drawing that is left out goes up (10.7 to 13.3): that drawing is the
+one that disagrees.
+
+The mirror image of the side drawing still paints the other side.
+
+**Keep what the generator modelled.** The generator made the hanging end of
+Pip's scarf as a thin fin on the shoulder. Without the scarf end in the back
+drawing, the fin took the colour of the sleeve and looked torn. Look at the
+bare shape before you cut something from a drawing.
+
 A drawing can show a limb at another depth than the model has it. Pip's side
 drawing has the arm 50 pixels behind the arm of the model. The drawing then paints
 the vest on the arm of the model, and the arm on the vest. Cut both places from
@@ -334,6 +385,10 @@ and its own pixels to take colour from.
    of eight around the character, that needs the shortest move. Pip's bag at the
    front of the left hip came out to the front left by 13 mm. Toward the left alone
    it had to move 30 mm.
+   The part of the bag that stays inside can come out on the other side of a
+   thin body. Pip's bag came through the back of the skin flap. `--flatten-mm 3`
+   lifts each vertex that is deeper than 3 mm under the body's surface up to
+   that depth. Give the low mesh of the body, as it is in the finished model.
 6. **Join.** `join-parts body/low.obj:body.png tail/low.obj:tail.png --output joined/`
    makes one mesh with one texture. Add `:normal.png` to each part for a joined
    normal map. Each part keeps its own region of the texture
@@ -396,6 +451,13 @@ kumiki-character-build cut-part body/low.obj arms/arm --join arm/low.obj --join 
 are the part. Use it where the editor does not do what you ask. Asked to remove
 Pip's hands, it left them in one view and drew new ones in the other. The numbers
 are pixels of `HANDOFF/raw/VIEW.png`.
+
+`smooth-part body/low.obj flaps/flaps --rounds 200 --pass-band 0.005 --output body_s.obj`
+smooths the surface that lies under the masks of a part. A generator makes a thin
+sheet, such as the skin between Pip's arm and body, with a crumpled surface and
+a ragged edge. Each round is one step toward the mean of the neighbours and one
+step back, so the sheet keeps its size. The faces and the UVs stay. Smooth before
+`cut-part`: a later cut then ends on the new part.
 
 `detail-part` gives the redrawn part the colours of the drawing (mean and spread in
 Lab). If the outline of the redrawn part is too different (IoU below 0.6), it
