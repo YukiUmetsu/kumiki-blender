@@ -78,7 +78,8 @@ def run_worker(source: Path, name: str, args: dict, target: Path):
     if result.returncode or not report.is_file():
         print(result.stdout[-6000:], file=sys.stderr)
         print(result.stderr[-6000:], file=sys.stderr)
-        raise RuntimeError(f"{name} failed (returncode {result.returncode})")
+        raise RuntimeError(f"{name} failed (returncode {result.returncode}): "
+                           f"{(result.stdout + result.stderr)[-2500:]}")
     return json.loads(report.read_text(encoding="utf-8"))
 
 
