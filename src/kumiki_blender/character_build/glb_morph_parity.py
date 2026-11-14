@@ -51,7 +51,7 @@ def _scalar_accessor(doc: dict, binary: bytes, index: int) -> list[float]:
 def _interpolated(times: list[float], values: list[float], t: float,
                   interpolation: str) -> float:
     index = bisect.bisect_right(times, t)
-    if index <= 1:
+    if index == 0:
         return values[0]
     if index >= len(times):
         return values[-1]
