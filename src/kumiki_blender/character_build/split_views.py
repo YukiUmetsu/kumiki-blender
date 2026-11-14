@@ -291,7 +291,9 @@ def region_mask(shape: tuple[int, int], boxes: list[tuple[int, int, int, int]],
 
 
 def box_part(handoff: Path, out: Path, *, name: str, boxes: dict[str, list[tuple[int, int, int, int]]] | None = None,
-             polygons: dict[str, list[list[tuple[int, int]]]] | None = None) -> dict:
+             polygons: dict[str, list[list[tuple[int, int]]]] | None = None,
+             colours: list[tuple[int, int, int]] | None = None, delta_e: float = 25.0, close_px: int = 3,
+             min_share: float = 0.05, open_px: int = 0, like: Path | None = None) -> dict:
     """Split off the part of each drawing that lies inside boxes or polygons; no image editor.
 
     ``boxes`` gives, for each view, one or more (x0, y0, x1, y1) in the pixels of
@@ -300,6 +302,19 @@ def box_part(handoff: Path, out: Path, *, name: str, boxes: dict[str, list[tuple
     the editor does not do what you ask: asked to remove Pip's hands, it left them in one
     view and drew new ones in the other. Writes ``out/<name>/`` with the views that have
     a box, and ``out/rest/`` with a hole where the part was (as ``split_views`` without fill).
+
+    ``colours`` (sRGB) limits the part to the pixels within ``delta_e`` (CIE76) of one of
+    them: a red scarf is the red inside a box around the neck, and no outline has to be
+    drawn. Gaps of up to ``close_px`` pixels (the shadow between two strands of wool) and
+    holes are closed, and a piece smaller than ``min_share`` of the largest piece is
+    dropped (brown fur has some red in it). ``open_px`` removes what is thinner than twice
+    that many pixels: tufts of dark fur that hang on the edge of a green vest. It also
+    removes a fringe, so leave it at 0 for a scarf. With colours and no box for a view,
+    the whole drawing is searched.
+
+    ``like`` is a part handoff of the same drawings (from ``split_views`` or this function).
+    Its pixels are the part: this takes a part out of another handoff of the character,
+    one that an earlier step changed.
     """
     spec = json.loads((handoff / "spec.json").read_text(encoding="utf-8"))
     if not name.replace("-", "").replace("_", "").isalnum() or name in ("rest", "edits"):
@@ -308,6 +323,8 @@ def box_part(handoff: Path, out: Path, *, name: str, boxes: dict[str, list[tuple
     unknown = sorted((set(boxes) | set(polygons)) - set(spec["views"]))
     if unknown:
         raise ValueError(f"The handoff has no drawing for {unknown}")
+    wanted = lab(np.asarray(colours, dtype=np.uint8).reshape(-1, 3)) if colours else None
+    like_spec = json.loads((like / "spec.json").read_text(encoding="utf-8")) if like else None
     part_images, rest_images, rows = {}, {}, []
     for view in spec["views"]:
         path = handoff / "raw" / f"{view}.png"
@@ -315,12 +332,45 @@ def box_part(handoff: Path, out: Path, *, name: str, boxes: dict[str, list[tuple
             continue
         with Image.open(path) as picture:
             original = np.asarray(picture.convert("RGBA"))
-        if view not in boxes and view not in polygons:
+        outlined = view in boxes or view in polygons
+        other = like / "raw" / f"{view}.png" if like else None
+        if not outlined and not (other and other.is_file()) and (wanted is None or boxes or polygons):
             rest_images[view] = original
             continue
-        inside = region_mask(original.shape[:2], boxes.get(view, []), polygons.get(view, []))
+        inside = region_mask(original.shape[:2], boxes.get(view, []), polygons.get(view, [])) if outlined \
+            else np.ones(original.shape[:2], bool)
+        if other and other.is_file():
+            if like_spec["raw"][view] != spec["raw"][view]:
+                raise ValueError(f"{like} has another frame for the {view} drawing than {handoff}")
+            with Image.open(other) as picture:
+                shown = np.asarray(picture.convert("RGBA"))[..., 3] > 127
+            if shown.shape != inside.shape:
+                raise ValueError(f"{other} has another size than the {view} drawing")
+            inside &= shown
+        elif like and not outlined:
+            rest_images[view] = original
+            continue
         region = inside & (original[..., 3] > 200)
+        if wanted is not None and region.any():
+            pixels = lab(original[..., :3][region])
+            near = (np.linalg.norm(pixels[:, None, :] - wanted[None, :, :], axis=2) <= delta_e).any(axis=1)
+            coloured = np.zeros_like(region)
+            coloured[region] = near
+            if close_px > 0:
+                coloured = ndimage.binary_closing(np.pad(coloured, close_px), iterations=close_px)[close_px:-close_px,
+                                                                                                    close_px:-close_px]
+            coloured = ndimage.binary_fill_holes(coloured)
+            if open_px > 0:
+                coloured = ndimage.binary_opening(coloured, iterations=open_px)
+            region &= coloured
+            labels, count = ndimage.label(region)
+            if count > 1 and min_share > 0:
+                sizes = ndimage.sum_labels(region, labels, range(1, count + 1))
+                region = np.isin(labels, 1 + np.nonzero(sizes >= min_share * sizes.max())[0])
         if not region.any():
+            if wanted is not None and not outlined:
+                rest_images[view] = original           # the colour is not in this drawing
+                continue
             raise ValueError(f"No part of the figure lies inside the boxes and polygons of the {view} drawing")
         cut, hole = original.copy(), original.copy()
         cut[..., 3] = np.where(region, 255, 0)
@@ -330,7 +380,7 @@ def box_part(handoff: Path, out: Path, *, name: str, boxes: dict[str, list[tuple
                      "boxes": [list(map(int, box)) for box in boxes.get(view, [])],
                      "polygons": [[[int(x), int(y)] for x, y in outline] for outline in polygons.get(view, [])]})
     if not part_images:
-        raise ValueError("Give at least one box or polygon")
+        raise ValueError("Give at least one box or polygon, colours, or a part handoff")
     write_handoff(out / name, spec, part_images, f"{name}: the figure inside boxes and polygons")
     write_handoff(out / "rest", spec, rest_images, f"without {name}: a hole where it was")
     report = {"schema_version": 1, "name": name, "views": rows,

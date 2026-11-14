@@ -64,7 +64,7 @@ def _write_json(path: Path, data: dict) -> None:
     path.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
 
-def _boxes_and_polygons(box_items: list[str], polygon_items: list[str]) -> tuple[dict, dict]:
+def _boxes_and_polygons(box_items: list[str], polygon_items: list[str], required: bool = True) -> tuple[dict, dict]:
     """``VIEW:X0,Y0,X1,Y1`` and ``VIEW:X,Y,X,Y,X,Y...`` options as {view: [boxes]} and {view: [polygons]}."""
     def numbers_of(item: str) -> tuple[str, list[int]]:
         view, _, numbers = item.partition(":")
@@ -85,7 +85,7 @@ def _boxes_and_polygons(box_items: list[str], polygon_items: list[str]) -> tuple
         if len(values) < 6 or len(values) % 2:
             raise SystemExit(f"error: give each polygon as VIEW:X,Y,X,Y,X,Y... (three points or more), not {item!r}")
         polygons.setdefault(view, []).append(list(zip(values[::2], values[1::2])))
-    if not boxes and not polygons:
+    if required and not boxes and not polygons:
         raise SystemExit("error: give --box or --polygon")
     return boxes, polygons
 
@@ -584,6 +584,9 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--metres-per-px", type=float, required=True, help="metres_per_aligned_px of the handoff spec")
     p.add_argument("--view", help="the side from which the part sits on the body, e.g. left (default: found)")
     p.add_argument("--embed", type=float, default=0.15, help="share of the part's surface that may stay inside")
+    p.add_argument("--flatten-mm", type=float,
+                   help="after the move, lift each vertex that is deeper than this behind the body's surface up to "
+                        "that depth, so that the part does not come out on the other side of a thin body")
     p.add_argument("--move-m", type=float,
                    help="move by this distance toward --view and measure nothing (to move a second mesh of the part alike)")
 
@@ -595,6 +598,16 @@ def main(argv: list[str] | None = None) -> int:
                    help="a box in the pixels of handoff/raw/VIEW.png; repeat for more boxes and views")
     p.add_argument("--polygon", action="append", default=[], metavar="VIEW:X,Y,X,Y,X,Y...",
                    help="an outline of three points or more, for a part that no box fits; repeat as --box")
+    p.add_argument("--colour", action="append", default=[], metavar="R,G,B",
+                   help="keep only the pixels near this colour (a red scarf inside a box around the neck); repeat")
+    p.add_argument("--delta-e", type=float, default=25.0, help="with --colour: how near (CIE76)")
+    p.add_argument("--close-px", type=int, default=3, help="with --colour: close gaps up to this size")
+    p.add_argument("--min-share", type=float, default=0.05,
+                   help="with --colour: drop a piece smaller than this share of the largest piece")
+    p.add_argument("--open-px", type=int, default=0,
+                   help="with --colour: remove what is thinner than twice this (tufts on an edge; also a fringe)")
+    p.add_argument("--like", type=Path,
+                   help="a part handoff of the same drawings: its pixels are the part (to take it out of another handoff)")
     p.add_argument("--output", type=Path, required=True, help="folder for <name>/, rest/ and box.json")
 
     p = sub.add_parser("detail-part", help="enlarge and redraw the drawings of a small part (a hand), for shape and texture")
@@ -617,6 +630,16 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--join-px", type=float, default=14.0, help="with --join: how far an edge vertex may move (aligned px)")
     p.add_argument("--loose-faces", type=int, default=200,
                    help="also remove a piece smaller than this that the cut separates from the mesh (0: keep all)")
+
+    p = sub.add_parser("smooth-part", help="smooth the surface of a mesh under the masks of a part (a crumpled thin sheet)")
+    p.add_argument("mesh", type=Path, help="the mesh, e.g. the body's low.obj (faces and UVs are kept)")
+    p.add_argument("handoff", type=Path, help="a part handoff that marks the place, from `box-part` or `split-views`")
+    p.add_argument("--output", type=Path, required=True, help=".obj")
+    p.add_argument("--rounds", type=int, default=30)
+    p.add_argument("--strength", type=float, default=0.5, help="step of each round, 0 to 1")
+    p.add_argument("--pass-band", type=float, default=0.1,
+                   help="what stays: 0.1 removes fine wrinkles only; 0.01, with more rounds, also waves of several faces")
+    p.add_argument("--grow-px", type=float, default=0.0, help="smooth this far around the part's masks (aligned px)")
 
     p = sub.add_parser("mirror-part", help="the same part on the other side of the character")
     p.add_argument("mesh", type=Path, help="the placed part (.obj with UVs)")
@@ -642,6 +665,12 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--bleed-share", type=float, default=0.05,
                    help="a material on less than this share of a shape, with most of it on other shapes, is taken "
                         "for a part that the bake put on the wrong shape (0: off)")
+    p.add_argument("--given", action="append", default=[], metavar="NAME=FOLDER",
+                   help="a part handoff from `split-views` or `box-part`: its pixels are the part NAME, on the mesh "
+                        "and in each drawing; repeat for more parts")
+    p.add_argument("--given-grow", action="append", default=[], metavar="NAME=PX",
+                   help="count the pixels of the given part NAME this much wider on the mesh (aligned px); for a part "
+                        "that lies on top of others, e.g. a scarf")
     p.add_argument("--material-delta-e", type=float, default=8.0,
                    help="parts whose mean colours differ by less than this are one material and are baked together")
     p.add_argument("--min-share", type=float, default=0.005,
@@ -1517,7 +1546,8 @@ def _run(args) -> int:
             info = {"view": args.view, "moved_m": args.move_m}
         else:
             body = read_obj_uv(args.body)[0] if args.body.suffix.lower() == ".obj" else read_mesh(args.body)
-            moved, info = seat_part(part, body, args.metres_per_px, view=args.view, embed=args.embed)
+            moved, info = seat_part(part, body, args.metres_per_px, view=args.view, embed=args.embed,
+                                    flatten_m=args.flatten_mm / 1000 if args.flatten_mm is not None else None)
         if corner_uv is not None:
             write_obj_uv(moved, corner_uv, args.output, comment=f"seated: moved {info['moved_m']} m toward {info['view']}")
         else:
@@ -1527,9 +1557,20 @@ def _run(args) -> int:
     if args.command == "box-part":
         from .split_views import box_part
 
-        boxes, polygons = _boxes_and_polygons(args.box, args.polygon)
-        print(json.dumps(box_part(args.handoff, _new_dir(args.output), name=args.name, boxes=boxes,
-                                  polygons=polygons), indent=2))
+        colours = []
+        for item in args.colour:
+            try:
+                values = tuple(int(v) for v in item.split(","))
+            except ValueError:
+                values = ()
+            if len(values) != 3 or not all(0 <= v <= 255 for v in values):
+                raise SystemExit(f"error: give each colour as R,G,B from 0 to 255, not {item!r}")
+            colours.append(values)
+        boxes, polygons = _boxes_and_polygons(args.box, args.polygon, required=not (colours or args.like))
+        print(json.dumps(box_part(args.handoff, _new_dir(args.output), name=args.name, boxes=boxes, polygons=polygons,
+                                  colours=colours or None, delta_e=args.delta_e, close_px=args.close_px,
+                                  min_share=args.min_share, open_px=args.open_px,
+                                  like=args.like), indent=2))
         return 0
     if args.command == "detail-part":
         from ..reconstruction.completion_image_generation import _LocalComfyClient
@@ -1539,12 +1580,23 @@ def _run(args) -> int:
                               subject=args.subject, detail=args.detail, size=args.size, steps=args.steps)
         print(json.dumps(report, indent=2))
         return 0
-    if args.command in ("cut-part", "mirror-part"):
-        from .part_place import cut_under, mirror_part, write_obj_uv
+    if args.command in ("cut-part", "mirror-part", "smooth-part"):
+        from .part_place import cut_under, mirror_part, smooth_under, write_obj_uv
         from .texture import read_obj_uv
 
         _new_file(args.output)
         mesh, corner_uv = read_obj_uv(args.mesh)
+        if args.command == "smooth-part":
+            from .handoff import reference_masks
+
+            if not 0 < args.strength <= 1:
+                raise SystemExit("error: --strength must be above 0 and at most 1")
+            smooth, report = smooth_under(mesh, reference_masks(args.handoff, 0.25), _spec(args.handoff)["metres_per_aligned_px"],
+                                          rounds=args.rounds, strength=args.strength, grow_px=args.grow_px,
+                                          pass_band=args.pass_band)
+            write_obj_uv(smooth, corner_uv, args.output, comment="smoothed under the masks of a part")
+            print(json.dumps(report, indent=2))
+            return 0
         if args.command == "cut-part":
             from .handoff import reference_masks
             from .mesh import read_mesh
@@ -1600,11 +1652,25 @@ def _run(args) -> int:
         out = _new_dir(args.output)
         mesh, corner_uv = read_obj_uv(args.mesh)
         extra = json.loads(args.extra.read_text(encoding="utf-8"))["extra"] if args.extra else None
+        given = {}
+        for item in args.given:
+            name, _, folder = item.partition("=")
+            if not name or not folder or name in given:
+                raise SystemExit(f"error: give each part once, as NAME=FOLDER, not {item!r}")
+            given[name] = Path(folder)
+        grow = {}
+        for item in args.given_grow:
+            name, _, value = item.partition("=")
+            try:
+                grow[name] = float(value)
+            except ValueError:
+                raise SystemExit(f"error: give --given-grow as NAME=PX, not {item!r}") from None
         report = find_parts(args.handoff, mesh, corner_uv, out, size=args.size, classes=args.classes,
                             contrast=args.contrast, min_share=args.min_share, max_parts=args.max_parts,
                             material_delta_e=args.material_delta_e, crease_radius_px=args.crease_radius_px,
-                            bleed_share=args.bleed_share, extra=extra, **_bake_settings(args))
-        print(json.dumps({k: report[k] for k in ("source_confidence", "review", "shapes", "bleed", "parts",
+                            bleed_share=args.bleed_share, extra=extra, given=given or None,
+                            given_grow_px=grow or None, **_bake_settings(args))
+        print(json.dumps({k: report[k] for k in ("source_confidence", "review", "shapes", "bleed", "given", "parts",
                                                  "agreement", "advice")},
                          indent=2))
         return 0
