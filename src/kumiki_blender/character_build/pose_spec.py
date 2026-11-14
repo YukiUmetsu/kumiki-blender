@@ -18,7 +18,7 @@ def load_pose_plan(path: str | Path) -> dict:
     if not isinstance(raw, dict) or set(raw) - {
         "schema_version", "armature", "poses", "collision_pairs",
         "max_p95_edge_stretch", "min_pose_displacement_m",
-        "max_new_collision_pairs", "render"
+        "max_new_collision_pairs", "weight_zones", "render"
     }:
         raise ValueError("Pose QA plan has unknown properties")
     if type(raw.get("schema_version")) is not int or raw["schema_version"] != 1:
@@ -77,6 +77,35 @@ def load_pose_plan(path: str | Path) -> dict:
             raise ValueError("max_new_collision_pairs must be an integer in [0, 100000]")
         if not pairs:
             raise ValueError("max_new_collision_pairs requires explicit collision_pairs")
+    zones = raw.get("weight_zones", [])
+    if not isinstance(zones, list) or len(zones) > 64:
+        raise ValueError("weight_zones must be at most 64 explicit semantic regions")
+    region_keys = set()
+    for zone in zones:
+        if not isinstance(zone, dict) or set(zone) != {
+                "mesh", "region_group", "allowed_bones",
+                "max_outside_weight", "min_vertices"}:
+            raise ValueError("weight_zones entries need mesh, region_group, "
+                             "allowed_bones, max_outside_weight and min_vertices")
+        for key in ("mesh", "region_group"):
+            if not isinstance(zone[key], str) or not _SAFE.fullmatch(zone[key]):
+                raise ValueError(f"weight_zones.{key} must be a safe named Blender object/group")
+        identity = (zone["mesh"], zone["region_group"])
+        if identity in region_keys:
+            raise ValueError(f"Duplicate weight zone {identity}")
+        region_keys.add(identity)
+        bones = zone["allowed_bones"]
+        if (not isinstance(bones, list) or not 1 <= len(bones) <= 32 or
+                any(not isinstance(v, str) or not _SAFE.fullmatch(v) for v in bones) or
+                len(set(bones)) != len(bones)):
+            raise ValueError("weight_zones.allowed_bones must contain 1-32 unique bone names")
+        outside = zone["max_outside_weight"]
+        if (type(outside) not in (float, int) or not math.isfinite(outside)
+                or not 0 <= outside <= 1):
+            raise ValueError("weight_zones.max_outside_weight must be a finite fraction in [0,1]")
+        minimum = zone["min_vertices"]
+        if type(minimum) is not int or not 1 <= minimum <= 10_000_000:
+            raise ValueError("weight_zones.min_vertices must be a positive integer")
     if type(raw.get("render", False)) is not bool:
         raise ValueError("render must be boolean")
     return raw

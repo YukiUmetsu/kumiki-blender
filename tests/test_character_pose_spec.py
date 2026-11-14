@@ -80,6 +80,31 @@ class PoseSpecTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "requires explicit"):
             self.load(case)
 
+    def test_explicit_semantic_skin_weight_zones(self):
+        base = copy.deepcopy(self.data)
+        base["weight_zones"] = [{
+            "mesh": "Wing.L",
+            "region_group": "REGION_WingLeft",
+            "allowed_bones": ["upper_wing.L", "fore_wing.L"],
+            "max_outside_weight": 0.02,
+            "min_vertices": 5,
+        }]
+        self.assertEqual(self.load(base)["weight_zones"][0]["min_vertices"], 5)
+        variants = [
+            ("duplicate zone", base["weight_zones"] * 2, "Duplicate"),
+            ("empty allowed", [{**base["weight_zones"][0], "allowed_bones": []}], "allowed_bones"),
+            ("unknown extra", [{**base["weight_zones"][0], "typo": True}], "weight_zones entries"),
+            ("negative foreign", [{**base["weight_zones"][0], "max_outside_weight": -.1}], "max_outside_weight"),
+            ("NaN foreign", [{**base["weight_zones"][0], "max_outside_weight": float("nan")}], "max_outside_weight"),
+            ("invalid count", [{**base["weight_zones"][0], "min_vertices": True}], "min_vertices"),
+            ("unsafe group", [{**base["weight_zones"][0], "region_group": "../unsafe"}], "region_group"),
+        ]
+        for label, values, error in variants:
+            with self.subTest(label=label), self.assertRaisesRegex(ValueError, error):
+                bad = copy.deepcopy(base)
+                bad["weight_zones"] = values
+                self.load(bad)
+
     def test_pair_requires_two_distinct_meshes(self):
         case = copy.deepcopy(self.data)
         case["collision_pairs"] = [["Body", "Body"]]

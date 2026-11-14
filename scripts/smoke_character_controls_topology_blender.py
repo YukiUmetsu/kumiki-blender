@@ -61,6 +61,9 @@ def fixture_scene(data: dict):
         mesh_obj.name = name
         weights = mesh_obj.vertex_groups.new(name=group)
         weights.add(list(range(len(mesh_obj.data.vertices))), 1.0, "REPLACE")
+        if name == "Wing.L":
+            zone = mesh_obj.vertex_groups.new(name="REGION_WingLeft")
+            zone.add(list(range(len(mesh_obj.data.vertices))), 1.0, "REPLACE")
         skin = mesh_obj.modifiers.new("Skin", "ARMATURE")
         skin.object = rig
     bpy.context.view_layer.update()
@@ -259,6 +262,44 @@ def main():
         }, idle_out)
         assert idle["status"] == "structural-fail"
         assert any("moved less than" in message for message in idle["problems"])
+
+        zone_plan = {
+            "schema_version": 1, "armature": "CharacterRig",
+            "poses": [{"name": "wing-pose",
+                       "bones": {"upper_wing.L": {"axis": "Z", "degrees": 25}}}],
+            "collision_pairs": [], "render": False,
+            "weight_zones": [{
+                "mesh": "Wing.L", "region_group": "REGION_WingLeft",
+                "allowed_bones": ["upper_wing.L", "fore_wing.L"],
+                "max_outside_weight": .02, "min_vertices": 20,
+            }],
+        }
+        approved_out = folder / "approved-skin-zone"
+        approved = run_worker(source, "blender_pose_qa.py", {
+            "source_blend": str(source), "output": str(approved_out),
+            "plan": zone_plan,
+        }, approved_out)
+        assert approved["status"] == "deformation-review-required", approved["problems"]
+        assert approved["rest_weight_zones"][0]["violating_vertices"] == 0
+        assert approved["rest_weight_zones"][0]["selected_vertices"] >= 20
+
+        # Introduce a normalized but anatomically wrong spine influence.
+        # The generic sum-to-one skin audit must still pass; semantic QA fails.
+        bpy.ops.wm.open_mainfile(filepath=str(source))
+        wing_obj = bpy.data.objects["Wing.L"]
+        wing_obj.vertex_groups["upper_wing.L"].add([0], .9, "REPLACE")
+        wing_obj.vertex_groups.new(name="spine").add([0], .1, "REPLACE")
+        leaking = folder / "wing-weights-bleed.blend"
+        bpy.ops.wm.save_as_mainfile(filepath=str(leaking))
+        leaking_out = folder / "rejected-weight-bleed"
+        bad = run_worker(leaking, "blender_pose_qa.py", {
+            "source_blend": str(leaking), "output": str(leaking_out),
+            "plan": zone_plan,
+        }, leaking_out)
+        assert bad["status"] == "structural-fail"
+        assert bad["rest_weight_zones"][0]["violating_vertices"] == 1
+        assert bad["rest_weight_zones"][0]["worst_examples"][0]["outside_bones"] == ["spine"]
+        assert any("outside-weight limit" in problem for problem in bad["problems"])
 
         print(json.dumps({
             "status": "native-workers-executed",

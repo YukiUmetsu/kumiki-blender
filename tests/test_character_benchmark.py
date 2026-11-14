@@ -176,6 +176,46 @@ class CharacterBenchmarkTest(unittest.TestCase):
         with self.assertRaises(FileExistsError):
             character_benchmark(self.file, self.root/"result")
 
+    def test_semantic_weight_zone_failure_blocks_numerical_character_readiness(self):
+        path = self.root / "pose/report.json"
+        report = json.loads(path.read_text(encoding="utf-8"))
+        report["rest_weight_zones"] = [{
+            "mesh": "Wing.L",
+            "region_group": "REGION_WingLeft",
+            "selected_vertices": 100,
+            "minimum_required_vertices": 25,
+            "violating_vertices": 1,
+            "max_outside_weight_observed": .1,
+            "status": "fail",
+        }]
+        # An external receipt that misleadingly says "review required"
+        # must never hide a real semantic skin-weight failure.
+        report["status"] = "deformation-review-required"
+        path.write_text(json.dumps(report), encoding="utf-8")
+        result = character_benchmark(self.file, self.root / "bad-zone")
+        self.assertFalse(result["numeric_gates_pass"])
+        self.assertEqual(result["checks"]["pose"]["items"][0]["weight_zone_count"], 1)
+        self.assertEqual(result["checks"]["pose"]["items"][0]["failed_weight_zones"],
+                         ["Wing.L/REGION_WingLeft"])
+        self.assertIn("pose:structural-or-skinning", result["numeric_failures"])
+
+    def test_healthy_semantic_weight_zone_is_included_in_evidence(self):
+        path = self.root / "pose/report.json"
+        report = json.loads(path.read_text(encoding="utf-8"))
+        report["rest_weight_zones"] = [{
+            "mesh": "Wing.L",
+            "region_group": "REGION_WingLeft",
+            "selected_vertices": 100,
+            "minimum_required_vertices": 25,
+            "violating_vertices": 0,
+            "status": "pass",
+        }]
+        path.write_text(json.dumps(report), encoding="utf-8")
+        result = character_benchmark(self.file, self.root / "valid-zone")
+        self.assertTrue(result["numeric_gates_pass"])
+        self.assertEqual(result["checks"]["pose"]["items"][0]["weight_zone_count"], 1)
+        self.assertEqual(result["checks"]["pose"]["items"][0]["failed_weight_zones"], [])
+
     def test_missing_report_does_not_fake_release_readiness(self):
         self.manifest["region_reports"] = []
         self.manifest["texture_reports"] = []
