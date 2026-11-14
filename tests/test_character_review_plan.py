@@ -61,6 +61,19 @@ class ReviewPlanTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "changed"):
             confirm_review_sources(plan)
 
+    def test_manifest_relative_image_paths_support_portable_refkits(self):
+        self.info["views"] = {"front": "approved-front.png"}
+        self.info["regions"][0]["views"] = {"right": "approved-right.png"}
+        self.manifest.write_text(json.dumps(self.info), encoding="utf-8")
+        plan = self.plan()
+        self.assertEqual(
+            plan["reference_views"]["front"]["path"],
+            str(self.front.resolve()))
+        self.assertEqual(
+            plan["regions"][0]["references"]["right"]["path"],
+            str(self.right.resolve()))
+        confirm_review_sources(plan)
+
     def test_requires_approved_front_and_safe_exact_region_names(self):
         cases = [
             {"views": {"right": str(self.right)}},
