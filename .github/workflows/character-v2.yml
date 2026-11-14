@@ -32,6 +32,7 @@ on:
       - "tests/test_character_source_contours.py"
       - "tests/test_character_texture_revision_gate.py"
       - "tests/test_character_texture_bake_qa.py"
+      - "tests/test_character_benchmark.py"
       - ".github/workflows/character-v2.yml"
   workflow_dispatch:
 
@@ -81,7 +82,8 @@ jobs:
             tests.test_character_fit_source_qa \
             tests.test_character_source_contours \
             tests.test_character_texture_revision_gate \
-            tests.test_character_texture_bake_qa
+            tests.test_character_texture_bake_qa \
+            tests.test_character_benchmark
 
 
       - name: Test opt-in semantic conflict repair and regression safety

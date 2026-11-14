@@ -6,6 +6,7 @@ Contact checks are advisory surface intersections, not a physics simulation.
 """
 from __future__ import annotations
 
+import hashlib
 import math
 import sys
 from pathlib import Path
@@ -100,6 +101,20 @@ def world_bvh(obj, depsgraph):
 def main() -> None:
     args = arguments()
     output = Path(args["output"]).resolve()
+    # A pose report without the exact saved source .blend SHA cannot be
+    # trusted by downstream M0 benchmarks after the rig has been edited.
+    if not bpy.data.filepath:
+        raise ValueError("Pose QA requires an existing, saved source .blend")
+    source_blend = Path(bpy.data.filepath).resolve()
+    if not source_blend.is_file() or source_blend.suffix.lower() != ".blend":
+        raise ValueError("Pose QA source .blend is missing or unsaved")
+    def original_hash():
+        digest = hashlib.sha256()
+        with source_blend.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
+    source_sha = original_hash()
     if output.exists():
         raise FileExistsError(f"Revision exists: {output}")
     plan = args["plan"]
@@ -193,6 +208,8 @@ def main() -> None:
 
     result = {
         "schema_version": 1,
+        "source_blend": str(source_blend),
+        "source_blend_sha256": source_sha,
         "status": "structural-fail" if problems else "deformation-review-required",
         "armature": rig.name,
         "bound_meshes": sorted(o.name for o in bound),
@@ -207,6 +224,8 @@ def main() -> None:
             "No source .blend is written or overwritten.",
         ],
     }
+    if original_hash() != source_sha:
+        raise ValueError("Source Blender rig changed while running the pose battery")
     write_report(output, result)
 
 
