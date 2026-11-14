@@ -20,7 +20,7 @@ def audit_weight_zone(
 ) -> dict:
     """Summarize incorrect deform weights on selected vertices, bounded examples.
 
-    `samples` yields (source vertex index, semantic region membership,
+    `samples` yields ascending (source vertex index, semantic region membership,
     deform-bone weight mapping). The mapping must contain deform bones only.
     If a vertex belongs to a semantic region, every outside influence counts,
     even when each individual outside bone has a tiny weight.
@@ -37,11 +37,11 @@ def audit_weight_zone(
         raise ValueError("membership_threshold must be a finite fraction in (0, 1]")
 
     included, violating, max_foreign, examples = 0, 0, 0.0, []
-    seen: set[int] = set()
+    previous_index = -1
     for index, member_weight, weights in samples:
-        if type(index) is not int or index < 0 or index in seen:
-            raise ValueError("Duplicate or invalid source vertex in semantic weight zone")
-        seen.add(index)
+        if type(index) is not int or index <= previous_index:
+            raise ValueError("Source vertices must be unique and sorted by ascending index")
+        previous_index = index
         if (type(member_weight) not in (float, int) or
                 not math.isfinite(member_weight) or not 0 <= member_weight <= 1):
             raise ValueError("Semantic group membership must be a finite weight in [0,1]")
