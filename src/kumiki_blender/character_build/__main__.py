@@ -569,6 +569,9 @@ def main(argv: list[str] | None = None) -> int:
                    help="how far the scale of one direction may differ from the common scale (0: one scale)")
     p.add_argument("--anchor", type=Path,
                    help="the body mesh: where the part sits in a direction that no view of it measures")
+    p.add_argument("--tilt-range-deg", type=float, default=0.0,
+                   help="also turn the part about the line of sight of its first axis view, at most this far "
+                        "(a limb that the generator stood at another angle)")
     p.add_argument("--ignore-thinner-px", type=float, default=0.0,
                    help="drop pieces of the masks thinner than this (aligned px), e.g. a strap that the mesh lacks")
     p.add_argument("--voxel-mm", type=float, default=0.0,
@@ -1478,7 +1481,8 @@ def _run(args) -> int:
         mesh, flipped = orient_faces(weld(read_mesh(args.mesh)))
         placed, info = place_part(mesh, reference_masks(args.handoff, 0.25), spec["metres_per_aligned_px"],
                                   yaw_deg=args.yaw_deg, ignore_thinner_px=args.ignore_thinner_px,
-                                  stretch=args.stretch, anchor=read_mesh(args.anchor) if args.anchor else None)
+                                  stretch=args.stretch, anchor=read_mesh(args.anchor) if args.anchor else None,
+                                  tilt_range_deg=args.tilt_range_deg)
         if args.voxel_mm > 0:
             from .hull import solidify
 

@@ -21,7 +21,7 @@ from scipy import ndimage, sparse
 from scipy.sparse import csgraph
 
 from .mesh import Mesh, surface_samples
-from .views import AXIS_VIEWS, BASELINE, CX, camera
+from .views import AXIS_VIEWS, AZIMUTH, BASELINE, CX, camera
 
 
 def _extent(values: np.ndarray, trim: float) -> tuple[float, float]:
@@ -36,9 +36,9 @@ def _iou(a: np.ndarray, b: np.ndarray) -> float:
 def place_part(mesh: Mesh, masks: dict[str, np.ndarray], metres_per_px: float, *, scale: float = 0.25,
                coarse_deg: float = 15.0, fine_deg: float = 3.0, trim: float = 0.5, yaw_deg: float | None = None,
                refine: bool = True, ignore_thinner_px: float = 0.0, stretch: float = 0.15,
-               anchor: Mesh | None = None) -> tuple[Mesh, dict]:
+               anchor: Mesh | None = None, tilt_range_deg: float = 0.0) -> tuple[Mesh, dict]:
     """The part where it covers ``masks`` best, and the transform:
-    placed = scale * stretch * (Rz(yaw) @ p) + offset, with one stretch factor for each axis.
+    placed = scale * stretch * (tilt @ Rz(yaw) @ p) + offset, with one stretch factor for each axis.
 
     ``masks`` are the part's silhouettes in the camera frame of the character at ``scale``
     of the aligned frame (``handoff.reference_masks`` of a part handoff). For each turn
@@ -54,6 +54,11 @@ def place_part(mesh: Mesh, masks: dict[str, np.ndarray], metres_per_px: float, *
     ``refine`` moves the part in small steps while the mean IoU rises. ``ignore_thinner_px``
     (aligned pixels) drops the thin pieces of the masks first: Pip's bag masks hold the
     whole strap, the generated bag has a stub of it.
+
+    With ``tilt_range_deg`` above 0, the part can also turn about the line of sight of the
+    first axis view, at most that far (every ``fine_deg``). A generator stands a part as it
+    likes: Pip's forearm, drawn at 40 degrees below level, came back at 25. The turn about
+    Z cannot give that.
 
     Two axis views that look along different axes fix the part in all three directions.
     With one view, or two opposite ones, the depth along the view is not measured. The
@@ -82,9 +87,14 @@ def place_part(mesh: Mesh, masks: dict[str, np.ndarray], metres_per_px: float, *
         targets[name] = (_extent(u, trim), _extent(z, trim))
     looks = {name: camera(name) for name in masks}
 
-    def solve(yaw: float) -> tuple[float, np.ndarray, np.ndarray]:
-        a = np.radians(yaw)
+    sight = np.asarray(looks[axis[0]].toward, dtype=np.float64)
+    cross = np.array([[0, -sight[2], sight[1]], [sight[2], 0, -sight[0]], [-sight[1], sight[0], 0]])
+
+    def solve(yaw: float, tilt: float = 0.0, own_scales: bool = True) -> tuple[float, np.ndarray, np.ndarray]:
+        a, t = np.radians(yaw), np.radians(tilt)
         rotation = np.array([[np.cos(a), -np.sin(a), 0], [np.sin(a), np.cos(a), 0], [0, 0, 1]])
+        if tilt:
+            rotation = (np.eye(3) + np.sin(t) * cross + (1 - np.cos(t)) * cross @ cross) @ rotation
         turned = samples @ rotation.T
         rows, values = [], []
         for name in axis:
@@ -114,7 +124,7 @@ def place_part(mesh: Mesh, masks: dict[str, np.ndarray], metres_per_px: float, *
                 offset[index] = -centre[index] * factor
                 continue
             model, sign, target = matrix[use, 0], matrix[use, 1 + index], wanted[use]
-            if stretch > 0 and np.ptp(model) > 1e-12:
+            if own_scales and stretch > 0 and np.ptp(model) > 1e-12:
                 own = float(np.linalg.lstsq(np.column_stack([model, sign]), target, rcond=None)[0][0])
                 size[index] = float(np.clip(own, factor * (1 - stretch), factor * (1 + stretch)))
             offset[index] = float((sign * (target - size[index] * model)).mean())
@@ -145,7 +155,16 @@ def place_part(mesh: Mesh, masks: dict[str, np.ndarray], metres_per_px: float, *
         start = max(coarse, key=coarse.get)
         fine = {yaw % 360: score(yaw)[0] for yaw in np.arange(start - coarse_deg, start + coarse_deg + 1e-6, fine_deg)}
         yaw_deg = float(max(fine, key=fine.get))
-    size, rotation, offset = solve(yaw_deg)
+    tilt_deg = 0.0
+    if tilt_range_deg > 0:
+        # With one scale for all directions: a scale for each direction can make up for a wrong
+        # tilt (a level ellipse, squashed, is much like a tilted one).
+        tilts = {float(tilt): overlap(*solve(yaw_deg, float(tilt), own_scales=False))[0]
+                 for tilt in np.arange(-tilt_range_deg, tilt_range_deg + 1e-6, fine_deg)}
+        tilts.setdefault(0.0, overlap(*solve(yaw_deg, own_scales=False))[0])
+        best = max(tilts, key=tilts.get)
+        tilt_deg = best if tilts[best] > tilts[0.0] + 1e-4 else 0.0      # no gain: no tilt
+    size, rotation, offset = solve(yaw_deg, tilt_deg)
     mean, per_view = overlap(size, rotation, offset)
     start = mean
     measured = np.abs(np.array([looks[name].right for name in axis])).max(axis=0) > 0.5
@@ -184,7 +203,8 @@ def place_part(mesh: Mesh, masks: dict[str, np.ndarray], metres_per_px: float, *
                     offset[index] += float(np.median(anchor.vertices[near, index])) - (low[index] + high[index]) / 2
             anchored = True
             mean, per_view = overlap(size, rotation, offset)
-    info = {"yaw_deg": float(yaw_deg), "scale": factor, "stretch": [round(float(v / factor), 4) for v in size],
+    info = {"yaw_deg": float(yaw_deg), "tilt_deg": float(tilt_deg), "tilt_about_sight_of": axis[0],
+            "scale": factor, "stretch": [round(float(v / factor), 4) for v in size],
             "offset_m": [float(v) for v in offset],
             "mean_iou": round(mean, 4), "mean_iou_from_extents": round(start, 4),
             "views": {k: round(v, 4) for k, v in per_view.items()},
@@ -201,30 +221,41 @@ def seat_part(part: Mesh, body: Mesh, metres_per_px: float, *, view: str | None 
     The masks place a bag where the drawings show it. The body was modelled without the
     bag, and its surface there can lie further out than the bag, which then shows only a
     corner. ``view`` names the side from which the part sits on the body (``left`` for a
-    bag on the left hip); the default is the axis view that looks most directly at the
-    part from outside. The part moves toward that camera, as one rigid piece, by the
+    bag on the left hip). The part moves toward that camera, as one rigid piece, by the
     depth at which ``embed`` of its surface points are still behind the body's surface.
     It never moves inward.
+
+    Without ``view``, it is the level view, of the eight around the character, that needs
+    the shortest move, among those that look at the part from its side of the body. A
+    bag at the front of the left hip comes out to the front left: toward the left alone,
+    Pip's bag had to move 30 mm, and toward the front left 13 mm.
     """
     from .mesh import rasterize
+
+    samples = surface_samples(part, np.ptp(part.vertices, axis=0).max() / 200)[0]
+
+    def measure(name: str) -> tuple[float, np.ndarray]:
+        look = camera(name)
+        _, depth = rasterize(body, look, metres_per_px, scale)
+        col, row, reach = look.project(samples, metres_per_px, scale)
+        c, r = np.floor(col).astype(int), np.floor(row).astype(int)
+        inside = (c >= 0) & (c < depth.shape[1]) & (r >= 0) & (r < depth.shape[0])
+        surface = np.full(len(samples), -np.inf)
+        surface[inside] = np.nan_to_num(depth[r[inside], c[inside]], nan=-np.inf)
+        burial = surface - reach                      # positive: behind the body's surface, seen from the camera
+        finite = np.isfinite(burial)
+        return (max(0.0, float(np.percentile(burial[finite], 100 * (1 - embed)))) if finite.any() else 0.0), burial
 
     if view is None:
         outward = part.vertices.mean(axis=0) - body.vertices.mean(axis=0)
         outward[2] = 0.0
-        view = max(AXIS_VIEWS, key=lambda name: float(camera(name).toward @ outward))
-    look = camera(view)
-    _, depth = rasterize(body, look, metres_per_px, scale)
-    samples = surface_samples(part, np.ptp(part.vertices, axis=0).max() / 200)[0]
-    col, row, reach = look.project(samples, metres_per_px, scale)
-    c, r = np.floor(col).astype(int), np.floor(row).astype(int)
-    inside = (c >= 0) & (c < depth.shape[1]) & (r >= 0) & (r < depth.shape[0])
-    surface = np.full(len(samples), -np.inf)
-    surface[inside] = np.nan_to_num(depth[r[inside], c[inside]], nan=-np.inf)
-    burial = surface - reach                          # positive: behind the body's surface, seen from the camera
-    buried = float((burial > 0).mean())
-    move = max(0.0, float(np.percentile(burial[np.isfinite(burial)], 100 * (1 - embed)))) if np.isfinite(burial).any() else 0.0
-    moved = Mesh(part.vertices + move * look.toward, part.faces, part.colours)
-    return moved, {"view": view, "moved_m": round(move, 5), "buried_before": round(buried, 4),
+        facing = sorted(AZIMUTH, key=lambda name: -float(camera(name).toward @ outward))   # the most direct first
+        facing = [name for name in facing if float(camera(name).toward @ outward) > 0] or facing[:1]
+        moves = {name: measure(name)[0] for name in facing}
+        view = min(facing, key=lambda name: (round(moves[name] / 0.0005), facing.index(name)))
+    move, burial = measure(view)
+    moved = Mesh(part.vertices + move * camera(view).toward, part.faces, part.colours)
+    return moved, {"view": view, "moved_m": round(move, 5), "buried_before": round(float((burial > 0).mean()), 4),
                    "buried_after": round(float((burial - move > 0).mean()), 4)}
 
 

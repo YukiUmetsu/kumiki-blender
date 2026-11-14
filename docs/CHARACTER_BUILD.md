@@ -308,7 +308,10 @@ and its own pixels to take colour from.
    its surface can lie further out than the bag. `seat-part body.ply bag/low.obj
    --metres-per-px 0.00032 --output bag_seated.obj` moves the bag out of the body
    as one rigid piece, until 15% of its surface is still inside. The UVs stay, so
-   the texture stays valid.
+   the texture stays valid. Without `--view`, the bag moves in the level direction,
+   of eight around the character, that needs the shortest move. Pip's bag at the
+   front of the left hip came out to the front left by 13 mm. Toward the left alone
+   it had to move 30 mm.
 6. **Join.** `join-parts body/low.obj:body.png tail/low.obj:tail.png --output joined/`
    makes one mesh with one texture. Add `:normal.png` to each part for a joined
    normal map. Each part keeps its own region of the texture
@@ -357,7 +360,8 @@ kumiki-character-build detail-part armL/arm --part "the forearm and the hand" \
 # 3. Generate the shape from armL_detail/raw/*.png, then place it. --anchor gives the
 #    position in the direction that no view of the part measures (front and back
 #    views do not measure the depth).
-kumiki-character-build place-part armL_detail arm.glb --anchor body/fitted.ply --output arm.ply
+kumiki-character-build place-part armL_detail arm.glb --anchor body/fitted.ply \
+  --tilt-range-deg 40 --output arm.ply
 # 4. fit, retopo and texture with armL_detail, as for each part.
 # 5. The same part on the other side. It uses the same texture.
 kumiki-character-build mirror-part arm/low.obj --mid-x 0.0 --output arm_R/low.obj
@@ -379,6 +383,18 @@ that the views look. Opposite views (front and back) look along one direction, a
 one of them is sufficient for a face. For step 6, make one handoff with both sides
 (`box-part` with the outlines of both arms). The UVs of the faces that stay do not change, so the body's
 texture stays valid.
+
+`--tilt-range-deg` lets the part turn about the line of sight of its first view. The
+generator stands a part as it likes. Pip's forearm, drawn 40 degrees below level,
+came back less steep. With the tilt, its overlap with the drawing rose from 0.66
+to 0.80.
+
+If the body and the part show a gap, cut a little less than the part. Give
+`cut-part` a handoff from outlines that stop short of the joint. The part then
+goes into what stays of the body.
+
+Fit the body only to drawings that agree: `fit ... --views front left back`. One
+3/4 drawing that disagreed made Pip's body 6% short.
 
 Start the part at a line that hides the joint. Pip's forearm starts inside the
 rolled cuff of the sleeve.

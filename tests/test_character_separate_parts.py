@@ -265,6 +265,12 @@ class PlaceAndJoinTests(unittest.TestCase):
         self.assertLess(info["moved_m"], 0.0005, "a seated part stays")
         outside = Mesh(bag.vertices + [0.1, 0, 0], bag.faces)
         np.testing.assert_array_equal(seat_part(outside, body, self.PX)[0].vertices, outside.vertices)
+        corner = ellipsoid_mesh(centre=(.03, -.025, .12), radii=(.015, .015, .02), subdivisions=2)   # front of the left hip
+        seated, info = seat_part(corner, body, self.PX)
+        self.assertEqual(info["view"], "front_left", "the shortest way out is between the front and the left")
+        self.assertLess(info["moved_m"], min(seat_part(corner, body, self.PX, view=name)[1]["moved_m"]
+                                             for name in ("front", "left")))
+        self.assertAlmostEqual(info["buried_after"], 0.15, delta=0.05)
 
     def test_joined_parts_keep_their_own_region_of_the_texture(self):
         big = ellipsoid_mesh(centre=(0, 0, .2), radii=(.1, .1, .2), subdivisions=2)
@@ -314,6 +320,25 @@ class SmallPartTests(unittest.TestCase):
         placed, info = place_part(source, masks, self.PX, yaw_deg=0.0, anchor=body)
         self.assertTrue(info["unmeasured_from_anchor"])
         self.assertLess(np.abs(placed.vertices - hand.vertices).max(), 0.004)
+
+    def test_a_part_that_the_generator_stood_at_another_angle_is_tilted_back(self):
+        arm = ellipsoid_mesh(centre=(0, 0, 0), radii=(.03, .01, .012), subdivisions=3)
+        a = np.radians(-35)                                          # drawn pointing down, about the line of sight
+        about_y = np.array([[np.cos(a), 0, np.sin(a)], [0, 1, 0], [-np.sin(a), 0, np.cos(a)]])
+        drawn = Mesh(arm.vertices @ about_y.T + [.11, 0, .15], arm.faces)
+        masks = {name: rasterize(drawn, camera(name), self.PX, 0.25)[0] for name in ("front", "back")}
+        source = Mesh(arm.vertices * 5, arm.faces)                   # the generator made it level
+        level, info = place_part(source, masks, self.PX, yaw_deg=0.0)
+        self.assertEqual(info["tilt_deg"], 0.0)
+        self.assertLess(info["mean_iou"], 0.6)
+        placed, info = place_part(source, masks, self.PX, yaw_deg=0.0, tilt_range_deg=45)
+        self.assertGreater(info["mean_iou"], 0.9)
+        self.assertAlmostEqual(abs(info["tilt_deg"]), 35, delta=4)
+        self.assertEqual(info["tilt_about_sight_of"], "front")
+        cells = lambda mesh: rasterize(mesh, camera("front"), self.PX, 0.25)[0]
+        self.assertGreater((cells(placed) & masks["front"]).sum() / (cells(placed) | masks["front"]).sum(), 0.9)
+        same, info = place_part(Mesh(drawn.vertices * 3, drawn.faces), masks, self.PX, yaw_deg=0.0, tilt_range_deg=45)
+        self.assertEqual(info["tilt_deg"], 0.0, "a part that stands right is not tilted")
 
     def test_the_body_loses_what_the_part_replaces_and_nothing_else(self):
         from kumiki_blender.character_build.part_place import cut_under
