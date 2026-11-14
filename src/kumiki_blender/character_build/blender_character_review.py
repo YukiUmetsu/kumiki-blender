@@ -189,10 +189,19 @@ def main():
     rig = bpy.data.objects.get(plan["armature"])
     if rig is None or rig.type != "ARMATURE":
         raise ValueError(f"Named source armature is missing: {plan['armature']}")
+    def belongs_to_character(obj):
+        if any(mod.type == "ARMATURE" and mod.object == rig for mod in obj.modifiers):
+            return True
+        parent = obj.parent
+        while parent is not None:
+            if parent == rig:
+                return True
+            parent = parent.parent
+        return False
+
     parts = sorted([
         obj for obj in bpy.data.objects
-        if obj.type == "MESH" and not obj.hide_render and
-        any(mod.type == "ARMATURE" and mod.object == rig for mod in obj.modifiers)
+        if obj.type == "MESH" and not obj.hide_render and belongs_to_character(obj)
     ], key=lambda obj: obj.name)
     if not 1 <= len(parts) <= 64:
         raise ValueError("Expected 1-64 visible mesh parts skinned to the review rig")
@@ -202,6 +211,12 @@ def main():
                 f"Focus region {region['id']} targets unknown/hidden skinned part: "
                 f"{region['object']}")
     bound = _review_bounds(plan, parts)
+    # Preserve source scene bytes, but exclude unrelated visible scenery from
+    # the temporary unsaved Blender clay capture. Parent-to-bone accessories
+    # (bags, glasses, clothing) remain included in the character's silhouette.
+    for item in bpy.data.objects:
+        if item.type == "MESH" and item not in parts:
+            item.hide_render = True
     scene = _configure_clay(plan)
     camera = bpy.data.cameras.new("KumikiReviewCamera")
     camera_obj = bpy.data.objects.new("KumikiReviewCamera", camera)
@@ -253,6 +268,7 @@ def main():
             "Reference artwork is NOT camera/pose registered; pixel IoU and silhouette matching are deliberately omitted.",
             "Workbench clay ignores final character PBR, UV textures and color fidelity.",
             "Camera target and ortho scale are locked across animation frames for each review scope.",
+            "Scene scenery is temporarily hidden; only skinned or rig-parented mesh parts are in the review.",
             "Region focus uses exact existing object or vertex group, not inferred anatomy.",
             "Passing screenshot generation is NOT approval of source fidelity; compare by eye with validated front/side/back art.",
             "Character source .blend and reference PNG/JPEG/WEBP files are SHA-locked and unchanged.",
