@@ -21,13 +21,24 @@ from kumiki_blender.character_build.surface_distance import surface_distances  #
 
 
 def mesh_digest(obj) -> str:
-    sha = hashlib.sha256()
-    for v in obj.data.vertices:
-        sha.update(struct.pack("<3d", *v.co))
+    """Hash mesh topology, local shape AND world transform; include loose edges."""
+    sha = hashlib.sha256(b"kumiki-character-sculpt-world-mesh-v2\\0")
+    sha.update(struct.pack("<3Q", len(obj.data.vertices),
+                           len(obj.data.edges), len(obj.data.polygons)))
+    for row in obj.matrix_world:
+        if any(not math.isfinite(v) for v in row):
+            raise ValueError(f"{obj.name}: nonfinite object transform")
+        sha.update(struct.pack("<4d", *row))
+    for vertex in obj.data.vertices:
+        if any(not math.isfinite(v) for v in vertex.co):
+            raise ValueError(f"{obj.name}: nonfinite vertex coordinates")
+        sha.update(struct.pack("<3d", *vertex.co))
+    for edge in obj.data.edges:
+        sha.update(struct.pack("<2I", *edge.vertices))
     for polygon in obj.data.polygons:
         sha.update(struct.pack("<I", len(polygon.vertices)))
-        for vertex_index in polygon.vertices:
-            sha.update(struct.pack("<I", vertex_index))
+        for index in polygon.vertices:
+            sha.update(struct.pack("<I", index))
     return sha.hexdigest()
 
 
@@ -65,7 +76,7 @@ def _inspect(args: dict, out: Path) -> None:
         "status": "source-probe-only",
         "limitations": [
             "Nearest vertex candidates require visual confirmation of the correct surface.",
-            "Mesh checksum covers vertex coordinates and polygon indices, not materials or UVs.",
+            "Mesh checksum covers shape, edges, polygons and world transform, not materials or UVs.",
             "Source .blend is not modified.",
         ],
     })
