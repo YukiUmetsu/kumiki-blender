@@ -45,6 +45,60 @@ class SculptPlanTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "budget"):
             self.load(case)
 
+    def test_source_locked_geodesic_plan_with_protected_vertices(self):
+        case = copy.deepcopy(self.data)
+        case.update({
+            "expected_mesh_sha256": "a" * 64,
+            "protected_vertex_indices": [5, 6],
+        })
+        case["operations"][0].update({
+            "distance_mode": "geodesic", "seed_vertex": 12,
+            "max_seed_distance_m": .003,
+        })
+        validated = self.load(case)
+        self.assertEqual(validated["operations"][0]["seed_vertex"], 12)
+        self.assertEqual(validated["protected_vertex_indices"], [5, 6])
+
+    def test_geodesic_requires_stable_source_geometry_and_seed(self):
+        case = copy.deepcopy(self.data)
+        case["operations"][0].update({
+            "distance_mode": "geodesic", "seed_vertex": 12,
+            "max_seed_distance_m": .003,
+        })
+        with self.assertRaisesRegex(ValueError, "expected_mesh_sha256"):
+            self.load(case)
+        case["expected_mesh_sha256"] = "b" * 64
+        for changes, expected in [
+            ({"seed_vertex": True}, "seed_vertex"),
+            ({"seed_vertex": -1}, "seed_vertex"),
+            ({"seed_vertex": 100}, "seed_vertex"),
+            ({"max_seed_distance_m": .04}, "max_seed_distance_m"),
+            ({"max_seed_distance_m": float("nan")}, "max_seed_distance_m"),
+            ({"distance_mode": "invalid"}, "distance_mode"),
+        ]:
+            with self.subTest(changes=changes):
+                invalid = copy.deepcopy(case)
+                invalid["operations"][0].update(changes)
+                with self.assertRaisesRegex(ValueError, expected):
+                    self.load(invalid)
+        invalid = copy.deepcopy(case)
+        invalid["protected_vertex_indices"] = [12]
+        with self.assertRaisesRegex(ValueError, "protected"):
+            self.load(invalid)
+        invalid = copy.deepcopy(case)
+        invalid["expected_mesh_sha256"] = "untrusted"
+        with self.assertRaisesRegex(ValueError, "SHA-256"):
+            self.load(invalid)
+
+    def test_legacy_euclidean_plan_remains_compatible(self):
+        self.assertEqual(self.load(), self.data)
+        case = copy.deepcopy(self.data)
+        case["operations"][0]["distance_mode"] = "euclidean"
+        self.assertEqual(self.load(case)["operations"][0]["distance_mode"], "euclidean")
+        case["operations"][0]["seed_vertex"] = 12
+        with self.assertRaisesRegex(ValueError, "require distance_mode"):
+            self.load(case)
+
     def test_reject_bad_falloff_and_radius(self):
         for field, value in [("falloff", "arbitrary-python"), ("radius_m", -1),
                              ("move_m", [float("nan"), 0, 0])]:
