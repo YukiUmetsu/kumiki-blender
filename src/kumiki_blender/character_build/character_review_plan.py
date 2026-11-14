@@ -20,14 +20,18 @@ def digest(path: str | Path) -> str:
     return result.hexdigest()
 
 
-def _check_images(value: dict, *, allowed_views: tuple[str, ...]) -> dict:
+def _check_images(value: dict, *, allowed_views: tuple[str, ...],
+                  manifest_dir: Path) -> dict:
     if not isinstance(value, dict) or not set(value) <= set(allowed_views):
         raise ValueError("Reference view names must match approved orthographic review views")
     resolved = {}
     for view, filename in value.items():
         if not isinstance(filename, str) or not filename:
             raise ValueError(f"{view}: reference path must be a nonempty string")
-        path = Path(filename).expanduser().resolve()
+        path = Path(filename).expanduser()
+        if not path.is_absolute():
+            path = manifest_dir / path
+        path = path.resolve()
         if not path.is_file() or path.suffix.lower() not in {".png", ".jpg", ".jpeg", ".webp"}:
             raise ValueError(f"{view}: reference must be a local PNG/JPEG/WEBP image")
         if path.stat().st_size > 32 * 1024 * 1024:
@@ -71,7 +75,8 @@ def make_character_review_plan(
         if (not isinstance(raw, dict) or set(raw) != {"schema_version", "views", "regions"}
                 or type(raw["schema_version"]) is not int or raw["schema_version"] != 1):
             raise ValueError("Reference manifest requires version 1, views and regions only")
-        source_views = _check_images(raw["views"], allowed_views=tuple(views))
+        source_views = _check_images(raw["views"], allowed_views=tuple(views),
+                                     manifest_dir=manifest.parent)
         if source_views and "front" not in source_views:
             raise ValueError("Approved front reference must anchor any supplied full-body references")
         entries = raw["regions"]
@@ -93,7 +98,8 @@ def make_character_review_plan(
             if group is not None and (
                 not isinstance(group, str) or not _SAFE_NAME.fullmatch(group)):
                 raise ValueError("Region vertex_group must be a safe name or null")
-            refs = _check_images(item["views"], allowed_views=tuple(views))
+            refs = _check_images(item["views"], allowed_views=tuple(views),
+                                  manifest_dir=manifest.parent)
             regions.append({
                 "id": identity, "object": object_name,
                 "vertex_group": group, "references": refs,
