@@ -57,7 +57,7 @@ The output is an independent corrected.blend with a report.json containing chang
 - Run validate-rig on corrected.blend using a pose battery that includes relevant joint angles. Use silhouette and source-reference comparisons rather than relying only on edge-stretch metrics.
 - Retain old revised source assets as checkpoints; a geometry corrector never earns automatic artistic acceptance.
 
-**Export limitation:** Blender driver expressions do **not** travel with glTF/GLB. The current bake-animation worker targets skeleton channels and is not a full driver-to-morph bake. **Do not assume the joint correctives survive a ContentGen/GLB export.** A subsequent feature must sample driver values per frame and bake verified morph-weight animation channels alongside the skeletal clip, including endpoint parity. Until then, use the .blend for Blender-native animation and review.
+**Export limitation:** Blender driver expressions do **not** travel with glTF/GLB. The current bake-animation worker targets skeleton channels and is not a full driver-to-morph bake. **It explicitly refuses to export when shape-key drivers are present**, rather than silently dropping corrections. A raw GLB export outside this checked pipeline is not considered production-ready. A subsequent feature must sample driver values per frame and bake verified morph-weight animation channels alongside the skeletal clip, including endpoint parity. Until then, use the .blend for Blender-native animation and review.
 
 ## Verification
 
