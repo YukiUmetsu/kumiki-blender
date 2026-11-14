@@ -30,8 +30,9 @@ class SurfaceDistanceTest(unittest.TestCase):
         positions = [(0, 0, 0), (0, .01, 0), (.01, .01, 0), (.01, 0, 0)]
         edges = [(0, 1), (1, 2), (2, 3)]
         result = surface_distances(positions, edges, 0, .025)
-        self.assertAlmostEqual(result[3], .03) if 3 in result else self.assertNotIn(3, result)
         self.assertEqual(set(result), {0, 1, 2})
+        self.assertAlmostEqual(result[2], .02)
+        self.assertNotIn(3, result)
 
     def test_reject_bad_sources(self):
         pts = [(0, 0, 0), (.01, 0, 0)]
