@@ -1,5 +1,18 @@
 # Kumiki Blender
 
+## M1 safe incremental region build planning
+
+[Source-locked region batch planning and deterministic resume](docs/CHARACTER_REGION_BATCH.md)
+
+After changing one eye or wing, use plan-region-batch to schedule just that part
+and its dependent eyelids, feathers and attachments, keeping unrelated regions
+on their existing revisions. A default single-worker 24 GiB budget preserves
+local Mac memory; optional independent regions can be planned together only
+when a larger explicit RAM budget permits it. Resume checks actual preserved
+part and completed output SHA-256 receipts before unblocking a downstream task.
+No Blender jobs are executed by the planner: only externally verified work is
+recorded, and every output remains subject to real source/pose QA.
+
 ## M0 reproducible character benchmark and release evidence
 
 [Character benchmark guide](docs/CHARACTER_M0_BENCHMARK.md)
