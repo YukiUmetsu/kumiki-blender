@@ -54,7 +54,9 @@ Example reference manifest JSON:
       ]
     }
 
-All referenced paths must be local image files. Each PNG/JPEG/WEBP and the
+All referenced paths must be local image files. Portable relative paths such
+as "front.png" are resolved **relative to the manifest file's folder**,
+not the shell's current working directory. Each PNG/JPEG/WEBP and the
 saved Blender source are locked by SHA-256 before Blender launches and
 rechecked after capture. The art files are never committed or changed.
 
