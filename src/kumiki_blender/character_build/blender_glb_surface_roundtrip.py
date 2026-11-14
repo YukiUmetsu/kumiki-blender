@@ -110,6 +110,62 @@ def _record_source(plan, frames):
     return recorded
 
 
+def _resolve_glb_mesh_nodes(document, imported, expected_names):
+    """Map exported *node* names to imported mesh objects by glTF mesh datablock.
+
+    Blender's glTF importer can choose a mesh datablock name (e.g. Sphere.003)
+    instead of the source object node name (e.g. Mouth), especially for
+    skinned/morphed objects. Never use vertex-index or nearest-shape guesses
+    for identity: the GLB node->mesh edge is authoritative.
+    """
+    nodes = document.get("nodes", [])
+    meshes = document.get("meshes", [])
+    mapping = {}
+    problems = []
+    used = set()
+    metadata = []
+    for expected in sorted(expected_names):
+        found = [(i, node) for i, node in enumerate(nodes)
+                 if node.get("name") == expected and "mesh" in node]
+        if len(found) != 1:
+            problems.append(
+                f"{expected}: GLB must contain exactly one named mesh node, got {len(found)}")
+            continue
+        node_index, node = found[0]
+        mesh_index = node["mesh"]
+        if type(mesh_index) is not int or not 0 <= mesh_index < len(meshes):
+            problems.append(f"{expected}: GLB mesh index {mesh_index} invalid")
+            continue
+        gltf_mesh = meshes[mesh_index]
+        data_name = gltf_mesh.get("name", "")
+        direct = imported.get(expected)
+        candidates = [direct] if direct is not None else [
+            obj for obj in imported.values()
+            if data_name and (obj.name == data_name or obj.data.name == data_name)
+        ]
+        if len(candidates) != 1:
+            problems.append(
+                f"{expected}: unable to uniquely match GLB mesh data {data_name!r} "
+                f"to imported objects {sorted(imported)}")
+            continue
+        obj = candidates[0]
+        if obj.name in used:
+            problems.append(
+                f"{expected}: imported mesh {obj.name} already assigned to another source node")
+            continue
+        used.add(obj.name)
+        mapping[expected] = obj
+        metadata.append({
+            "source_object": expected, "glb_node_index": node_index,
+            "glb_mesh_index": mesh_index, "glb_mesh_name": data_name,
+            "imported_object": obj.name, "imported_mesh_data": obj.data.name,
+        })
+    extras = sorted(set(imported) - used)
+    if extras:
+        problems.append(f"Unexpected imported GLB mesh nodes: {extras}")
+    return mapping, problems, metadata
+
+
 def main():
     args = arguments()
     plan = args["plan"]
@@ -139,17 +195,14 @@ def main():
     if "FINISHED" not in bpy.ops.import_scene.gltf(filepath=str(glb)):
         raise RuntimeError("Blender did not import the exported binary GLB")
     imported = {obj.name: obj for obj in bpy.data.objects if obj.type == "MESH"}
-    missing = sorted(set(original) - set(imported))
-    extras = sorted(set(imported) - set(original))
-    problems = []
-    if missing or extras:
-        problems.append(f"Reimported GLB mesh identities differ: missing={missing}, extra={extras}")
+    resolved, problems, identity_mapping = _resolve_glb_mesh_nodes(
+        document, imported, set(original))
     results = []
     for frame in frames:
         bpy.context.scene.frame_set(frame)
         bpy.context.view_layer.update()
         for name, poses in sorted(original.items()):
-            obj = imported.get(name)
+            obj = resolved.get(name)
             if obj is None:
                 continue
             try:
@@ -189,6 +242,8 @@ def main():
         "fps": plan["fps"],
         "sampled_frames": frames,
         "source_meshes": sorted(original),
+        "glb_imported_meshes": sorted(imported),
+        "node_mesh_identity_mapping": identity_mapping,
         "checked_mesh_frames": len(results),
         "max_p95_error_m": plan["max_p95_error_m"],
         "max_max_error_m": plan["max_max_error_m"],
