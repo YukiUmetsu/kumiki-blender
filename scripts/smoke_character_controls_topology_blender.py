@@ -267,7 +267,8 @@ def main():
                 "plan": wrong_plan, "output": str(wrong_out),
             }, wrong_out)
         assert wrong_receipt["status"] == "structural-fail"
-        assert any("missing=" in p for p in wrong_receipt["problems"])
+        assert any("Mouth: GLB must contain exactly one named mesh node" in p
+                   for p in wrong_receipt["problems"]), wrong_receipt["problems"]
 
         # Fail closed when either modality is not explicitly approved.
         no_face_plan = save_bake_plan(
