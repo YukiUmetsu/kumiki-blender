@@ -31,7 +31,7 @@ Options:
 
 - --armature exact source rig object name; default CharacterRig
 - --samples 3–11 equally distributed distinct integer frames (default 5)
-- --max-vertices memory guard, default 150,000 evaluated vertices per mesh
+- --max-vertices memory guard, default 150,000 evaluated vertices per mesh (additional 3,000,000 total stored source vertex-frames cap)
 - --max-p95-error-m allowed 95th-percentile symmetric vertex-nearest-neighbor drift (default 2 mm)
 - --max-max-error-m allowed maximum vertex and bounding-box drift (default 10 mm)
 - --blender optional explicit local Blender executable path
