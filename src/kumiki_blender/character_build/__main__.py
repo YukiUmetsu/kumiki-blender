@@ -275,6 +275,15 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--output", type=Path, required=True, help="new revision directory")
     p.add_argument("--blender", help="local Blender binary")
 
+    p = sub.add_parser("inspect-region-sculpt-source",
+                       help="read-only Blender mesh SHA and candidate surface seed vertices")
+    p.add_argument("--blend", type=Path, required=True)
+    p.add_argument("--object", required=True, help="exact Blender mesh object name")
+    p.add_argument("--anchor", nargs=3, type=float, action="append",
+                   metavar=("X", "Y", "Z"), help="candidate world-space seed anchor, repeatable")
+    p.add_argument("--output", type=Path, required=True)
+    p.add_argument("--blender")
+
     p = sub.add_parser("refine-region", help="bounded local sculpt edit; preserve all other .blend objects")
     p.add_argument("--blend", type=Path, required=True, help="editable source Blender file")
     p.add_argument("--plan", type=Path, required=True, help="region sculpt correction JSON")
@@ -703,6 +712,19 @@ def _run(args) -> int:
         }, blender=args.blender, blend_file=args.blend.resolve())
         print(json.dumps(report, indent=2))
         # A no-op collision check is a valid, non-destructive result.
+        return 0
+    if args.command == "inspect-region-sculpt-source":
+        from .blender import run_worker
+        if not args.blend.is_file() or args.blend.suffix.lower() != ".blend":
+            raise ValueError("--blend must be a saved Blender .blend")
+        if args.output.exists():
+            raise FileExistsError(f"Output revision exists: {args.output}")
+        report = run_worker("region-sculpt", {
+            "inspect_only": True, "object": args.object, "anchors": args.anchor or [],
+            "source_blend": str(args.blend.resolve()),
+            "output": str(args.output.resolve()),
+        }, blender=args.blender, blend_file=args.blend.resolve())
+        print(json.dumps(report, indent=2))
         return 0
     if args.command == "refine-region":
         from .region_sculpt_plan import load_region_sculpt_plan
