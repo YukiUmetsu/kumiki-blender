@@ -4,6 +4,11 @@ When some views are replaced, the views that stay can show an older design: Pip'
 view had bare arms, and the new side and back views have knit sleeves. A model from such
 a set has one design on its front and the other on its back.
 
+``borrow_view`` needs no editor. A front and a back drawing show one outline, mirrored. Where
+they do not (Pip's arms were a hand's width higher in the front drawing), a region of one
+drawing is taken from the mirror image of the other. Fur, cloth and a hand look much the
+same from both sides.
+
 ``redraw_view`` has a local image editor (FLUX.2 [klein] in ComfyUI, loopback only) change
 the drawing by an instruction, with a second drawing as the example of the design. The
 result keeps the drawing's own pixels wherever the editor changed nothing: the editor
@@ -21,8 +26,8 @@ from PIL import Image
 from scipy import ndimage
 
 from .repaint import klein_workflow, run_comfy
-from .split_views import from_square, removed_region, to_square
-from .views import figure_mask
+from .split_views import from_square, region_mask, removed_region, to_square, write_handoff
+from .views import CANVAS_W, camera, figure_mask
 
 
 def redraw_prompt(change: str, subject: str) -> str:
@@ -88,3 +93,61 @@ def redraw_view(drawing: Path, example: Path, out: Path, client, *, change: str,
             "changed_share_of_figure": round(float((wide & figure).sum() / max(1, figure.sum())), 4),
             "outline_iou": round(float((alpha & figure).sum() / max(1, (alpha | figure).sum())), 4),
             "output": str(out), "review": "required"}
+
+
+def borrow_view(handoff: Path, out: Path, *, view: str, source: str,
+                boxes: list[tuple[int, int, int, int]] | None = None,
+                polygons: list[list[tuple[int, int]]] | None = None, feather_px: float = 3.0) -> dict:
+    """Write ``out`` as the handoff with a region of drawing ``view`` taken from the opposite drawing ``source``.
+
+    ``boxes`` and ``polygons`` give the region in the pixels of ``handoff/raw/<view>.png``
+    (as for ``split_views.box_part``). Each of its pixels takes the pixel of ``source``
+    at the mirrored place in the character's frame, background included, with an edge
+    that is ``feather_px`` soft. The two views must look along one line from opposite
+    sides. With ``source`` the same as ``view`` (front or back), the region takes the
+    other side of the same drawing: an arm from the other arm. The report has the overlap of the two outlines in the region before the change:
+    a low value says that the drawings did not agree there.
+    """
+    spec = json.loads((handoff / "spec.json").read_text(encoding="utf-8"))
+    for name in (view, source):
+        if name not in spec["views"]:
+            raise ValueError(f"The handoff has no drawing for {name!r}")
+    if source != view and not np.allclose(camera(view).toward, -camera(source).toward, atol=1e-6):
+        raise ValueError(f"{source} is not the view opposite to {view}")
+    if source == view and view not in ("front", "back"):
+        raise ValueError("Only a front or a back drawing has two sides that mirror each other")
+    images = {}
+    for name in spec["views"]:
+        with Image.open(handoff / "raw" / f"{name}.png") as picture:
+            images[name] = np.asarray(picture.convert("RGBA"))
+    target, other = images[view], images[source].astype(np.float64)
+    region = region_mask(target.shape[:2], boxes or [], polygons or [])
+    if not region.any():
+        raise ValueError("Give at least one box or polygon inside the drawing")
+    here, there = spec["raw"][view], spec["raw"][source]
+    rows, cols = np.mgrid[:target.shape[0], :target.shape[1]].astype(np.float64)
+    u = (cols + 0.5 - here["left"]) * here["scale"] + here["x0"] - here.get("shift_px", 0)     # the character's frame
+    v = (rows + 0.5 - here["top"]) * here["scale"] + here["y0"]
+    x = (CANVAS_W - u + there.get("shift_px", 0) - there["x0"]) / there["scale"] + there["left"] - 0.5
+    y = (v - there["y0"]) / there["scale"] + there["top"] - 0.5
+    weight = other[..., 3:] / 255.0
+    layers = np.dstack([other[..., :3] * weight, weight])                 # premultiplied, so the outline has no dark rim
+    sampled = np.dstack([ndimage.map_coordinates(layers[..., c], [y, x], order=1, mode="constant", cval=0.0)
+                         for c in range(4)])
+    blend = np.clip(ndimage.gaussian_filter(region.astype(np.float64), feather_px), 0, 1)[..., None] if feather_px > 0 \
+        else region[..., None].astype(np.float64)
+    own = target[..., 3:].astype(np.float64) / 255.0
+    mixed = np.dstack([target[..., :3] * own, own]) * (1 - blend) + sampled * blend
+    figure = mixed[..., 3] > 0.5
+    colour = np.where(figure[..., None], mixed[..., :3] / np.maximum(mixed[..., 3:], 1e-6), target[..., :3])
+    result = np.dstack([np.clip(np.round(colour), 0, 255).astype(np.uint8), np.where(figure, 255, 0).astype(np.uint8)])
+    before, mirrored = target[..., 3] > 127, sampled[..., 3] > 0.5
+    agreed = float((before & mirrored & region).sum() / max(1, ((before | mirrored) & region).sum()))
+    images[view] = result
+    write_handoff(out, spec, images, spec.get("split", "the whole character") + f"; part of {view} from {source}")
+    report = {"schema_version": 1, "view": view, "source": source, "region_px": int(region.sum()),
+              "outline_iou_in_region_before": round(agreed, 4),
+              "figure_px_before": int((before & region).sum()), "figure_px_after": int((figure & region).sum()),
+              "output": str(out), "review": "required"}
+    (out / "borrow.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
+    return report

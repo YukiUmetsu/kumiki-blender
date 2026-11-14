@@ -64,6 +64,32 @@ def _write_json(path: Path, data: dict) -> None:
     path.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
 
+def _boxes_and_polygons(box_items: list[str], polygon_items: list[str]) -> tuple[dict, dict]:
+    """``VIEW:X0,Y0,X1,Y1`` and ``VIEW:X,Y,X,Y,X,Y...`` options as {view: [boxes]} and {view: [polygons]}."""
+    def numbers_of(item: str) -> tuple[str, list[int]]:
+        view, _, numbers = item.partition(":")
+        try:
+            return view, [int(v) for v in numbers.split(",")] if numbers else []
+        except ValueError:
+            raise SystemExit(f"error: give whole numbers of pixels after VIEW:, not {item!r}") from None
+
+    boxes: dict[str, list[tuple[int, int, int, int]]] = {}
+    polygons: dict[str, list[list[tuple[int, int]]]] = {}
+    for item in box_items:
+        view, values = numbers_of(item)
+        if len(values) != 4 or values[2] <= values[0] or values[3] <= values[1]:
+            raise SystemExit(f"error: give each box as VIEW:X0,Y0,X1,Y1 with X1 > X0 and Y1 > Y0, not {item!r}")
+        boxes.setdefault(view, []).append(tuple(values))
+    for item in polygon_items:
+        view, values = numbers_of(item)
+        if len(values) < 6 or len(values) % 2:
+            raise SystemExit(f"error: give each polygon as VIEW:X,Y,X,Y,X,Y... (three points or more), not {item!r}")
+        polygons.setdefault(view, []).append(list(zip(values[::2], values[1::2])))
+    if not boxes and not polygons:
+        raise SystemExit("error: give --box or --polygon")
+    return boxes, polygons
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="kumiki-character-build", description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -486,6 +512,9 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--from-part", action="store_true",
                    help="HANDOFF is the eyes part from `split-views` (the white included): make one eyeball for each "
                         "piece of it, and write no rest/ (use the rest/ of `split-views`)")
+    p.add_argument("--shape", choices=("shell", "ball"), default="shell",
+                   help="with --from-part: a thin shell on the head (default), or an ellipsoid that stands out of it")
+    p.add_argument("--bulge", type=float, default=0.10, help="with --shape shell: height of the dome, in eye sizes")
     p.add_argument("--source-handoff", type=Path,
                    help="with --from-part: the handoff that the eyes were split from; writes within/<view>.png "
                         "for `split-views --within`")
@@ -500,6 +529,17 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--size", type=int, default=768)
     p.add_argument("--steps", type=int, default=20)
     p.add_argument("--seed", type=int, default=7)
+
+    p = sub.add_parser("borrow-view", help="take a region of one drawing from the mirror image of the opposite drawing")
+    p.add_argument("handoff", type=Path)
+    p.add_argument("--view", required=True, help="the drawing to change, e.g. front")
+    p.add_argument("--from", dest="source", required=True, help="the opposite drawing, e.g. back")
+    p.add_argument("--box", action="append", default=[], metavar="VIEW:X0,Y0,X1,Y1",
+                   help="a box in the pixels of handoff/raw/VIEW.png, with VIEW as --view; repeat for more")
+    p.add_argument("--polygon", action="append", default=[], metavar="VIEW:X,Y,X,Y,X,Y...",
+                   help="an outline of three points or more; repeat for more")
+    p.add_argument("--feather-px", type=float, default=3.0, help="softness of the edge of the region")
+    p.add_argument("--output", type=Path, required=True, help="folder for the new handoff")
 
     p = sub.add_parser("split-views", help="split the drawings into one part and the rest, to model each alone")
     p.add_argument("handoff", type=Path)
@@ -527,6 +567,11 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--yaw-deg", type=float, help="the turn about Z, if it is known (default: search)")
     p.add_argument("--stretch", type=float, default=0.15,
                    help="how far the scale of one direction may differ from the common scale (0: one scale)")
+    p.add_argument("--anchor", type=Path,
+                   help="the body mesh: where the part sits in a direction that no view of it measures")
+    p.add_argument("--tilt-range-deg", type=float, default=0.0,
+                   help="also turn the part about the line of sight of its first axis view, at most this far "
+                        "(a limb that the generator stood at another angle)")
     p.add_argument("--ignore-thinner-px", type=float, default=0.0,
                    help="drop pieces of the masks thinner than this (aligned px), e.g. a strap that the mesh lacks")
     p.add_argument("--voxel-mm", type=float, default=0.0,
@@ -541,6 +586,39 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--embed", type=float, default=0.15, help="share of the part's surface that may stay inside")
     p.add_argument("--move-m", type=float,
                    help="move by this distance toward --view and measure nothing (to move a second mesh of the part alike)")
+
+    p = sub.add_parser("box-part",
+                       help="split off the part of each drawing that lies inside boxes or polygons (no image editor)")
+    p.add_argument("handoff", type=Path)
+    p.add_argument("--name", required=True, help="folder name of the part")
+    p.add_argument("--box", action="append", default=[], metavar="VIEW:X0,Y0,X1,Y1",
+                   help="a box in the pixels of handoff/raw/VIEW.png; repeat for more boxes and views")
+    p.add_argument("--polygon", action="append", default=[], metavar="VIEW:X,Y,X,Y,X,Y...",
+                   help="an outline of three points or more, for a part that no box fits; repeat as --box")
+    p.add_argument("--output", type=Path, required=True, help="folder for <name>/, rest/ and box.json")
+
+    p = sub.add_parser("detail-part", help="enlarge and redraw the drawings of a small part (a hand), for shape and texture")
+    p.add_argument("handoff", type=Path, help="the part's handoff from `split-views`, one piece in each drawing")
+    p.add_argument("--part", required=True, help='the part in plain words, e.g. "the left hand"')
+    p.add_argument("--output", type=Path, required=True, help="folder for the new part handoff")
+    p.add_argument("--subject", default="the character")
+    p.add_argument("--detail", default="", help='what to show, e.g. "four separate fingers with small claws"')
+    p.add_argument("--server", default="http://127.0.0.1:8188", help="local ComfyUI (loopback only)")
+    p.add_argument("--size", type=int, default=768)
+    p.add_argument("--steps", type=int, default=20)
+
+    p = sub.add_parser("cut-part", help="remove from a mesh the faces that a separate part replaces")
+    p.add_argument("mesh", type=Path, help="the mesh to cut, e.g. the body's low.obj (UVs are kept)")
+    p.add_argument("handoff", type=Path, help="the handoff of the part that replaces them")
+    p.add_argument("--output", type=Path, required=True, help=".obj")
+    p.add_argument("--grow-px", type=float, default=6.0, help="cut this far around the part's masks (aligned px)")
+    p.add_argument("--loose-faces", type=int, default=200,
+                   help="also remove a piece smaller than this that the cut separates from the mesh (0: keep all)")
+
+    p = sub.add_parser("mirror-part", help="the same part on the other side of the character")
+    p.add_argument("mesh", type=Path, help="the placed part (.obj with UVs)")
+    p.add_argument("--output", type=Path, required=True, help=".obj; it uses the same texture")
+    p.add_argument("--mid-x", type=float, default=0.0, help="x of the mirror plane, metres")
 
     p = sub.add_parser("join-parts", help="one mesh and one texture from placed, textured parts")
     p.add_argument("parts", nargs="+", help="each part as low.obj:basecolor.png or low.obj:basecolor.png:normal.png")
@@ -1356,7 +1434,8 @@ def _run(args) -> int:
         if args.from_part:
             from .eyes import eyeballs_from_part
 
-            report = eyeballs_from_part(args.handoff, head, out, view=args.view, source_handoff=args.source_handoff)
+            report = eyeballs_from_part(args.handoff, head, out, view=args.view, source_handoff=args.source_handoff,
+                                        shape=args.shape, bulge=args.bulge)
         else:
             report = split_eyes(args.handoff, head, out, view=args.view, zone=args.zone, protrude=args.protrude)
         print(json.dumps(report, indent=2))
@@ -1369,6 +1448,16 @@ def _run(args) -> int:
             raise FileExistsError(f"{args.output} exists. Each output is a new revision.")
         report = redraw_view(args.drawing, args.example, args.output, _LocalComfyClient(args.server),
                              change=args.change, subject=args.subject, size=args.size, steps=args.steps, seed=args.seed)
+        print(json.dumps(report, indent=2))
+        return 0
+    if args.command == "borrow-view":
+        from .redraw import borrow_view
+
+        boxes, polygons = _boxes_and_polygons(args.box, args.polygon)
+        if set(boxes) | set(polygons) != {args.view}:
+            raise SystemExit(f"error: each --box and --polygon must be of the drawing to change, {args.view}:...")
+        report = borrow_view(args.handoff, _new_dir(args.output), view=args.view, source=args.source,
+                             boxes=boxes.get(args.view), polygons=polygons.get(args.view), feather_px=args.feather_px)
         print(json.dumps(report, indent=2))
         return 0
     if args.command == "split-views":
@@ -1392,7 +1481,8 @@ def _run(args) -> int:
         mesh, flipped = orient_faces(weld(read_mesh(args.mesh)))
         placed, info = place_part(mesh, reference_masks(args.handoff, 0.25), spec["metres_per_aligned_px"],
                                   yaw_deg=args.yaw_deg, ignore_thinner_px=args.ignore_thinner_px,
-                                  stretch=args.stretch)
+                                  stretch=args.stretch, anchor=read_mesh(args.anchor) if args.anchor else None,
+                                  tilt_range_deg=args.tilt_range_deg)
         if args.voxel_mm > 0:
             from .hull import solidify
 
@@ -1430,6 +1520,40 @@ def _run(args) -> int:
         else:
             write_mesh(moved, args.output)
         print(json.dumps(info, indent=2))
+        return 0
+    if args.command == "box-part":
+        from .split_views import box_part
+
+        boxes, polygons = _boxes_and_polygons(args.box, args.polygon)
+        print(json.dumps(box_part(args.handoff, _new_dir(args.output), name=args.name, boxes=boxes,
+                                  polygons=polygons), indent=2))
+        return 0
+    if args.command == "detail-part":
+        from ..reconstruction.completion_image_generation import _LocalComfyClient
+        from .detail import detail_views
+
+        report = detail_views(args.handoff, args.output, _LocalComfyClient(args.server), part=args.part,
+                              subject=args.subject, detail=args.detail, size=args.size, steps=args.steps)
+        print(json.dumps(report, indent=2))
+        return 0
+    if args.command in ("cut-part", "mirror-part"):
+        from .part_place import cut_under, mirror_part, write_obj_uv
+        from .texture import read_obj_uv
+
+        _new_file(args.output)
+        mesh, corner_uv = read_obj_uv(args.mesh)
+        if args.command == "cut-part":
+            from .handoff import reference_masks
+
+            cut, cut_uv, removed = cut_under(mesh, corner_uv, reference_masks(args.handoff, 0.25),
+                                             _spec(args.handoff)["metres_per_aligned_px"], grow_px=args.grow_px,
+                                             loose_faces=args.loose_faces)
+            write_obj_uv(cut, cut_uv, args.output, comment=f"{removed} faces cut under a separate part")
+            print(json.dumps({"faces_removed": removed, "faces_left": len(cut.faces)}, indent=2))
+        else:
+            other, other_uv = mirror_part(mesh, corner_uv, args.mid_x)
+            write_obj_uv(other, other_uv, args.output, comment=f"mirrored about x = {args.mid_x}")
+            print(json.dumps({"mid_x": args.mid_x, "faces": len(other.faces)}, indent=2))
         return 0
     if args.command == "join-parts":
         import numpy as np

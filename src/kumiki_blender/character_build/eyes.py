@@ -225,6 +225,78 @@ def _write_eyeballs(globes: list[dict], out: Path, folder: str, view: str, note:
     (out / "anatomy.json").write_text(json.dumps(anatomy, indent=2), encoding="utf-8")
 
 
+def eye_shell(piece: np.ndarray, rgba: np.ndarray, raw_map: dict, head: Mesh, metres_per_px: float, *,
+              view: str = "front", offset_m: float = 0.0004, bulge: float = 0.10, subdivisions: int = 3,
+              grow_px: int = 3, pad_px: int = 6, upscale: int = 2) -> tuple[Mesh, np.ndarray, np.ndarray]:
+    """One eye as a thin shell on the head: the mesh, its UVs for each face corner, and its texture.
+
+    An eyeball that stands out of the head shows a blank side from every other angle, and
+    the head has no socket for it to sit in. The head mesh already has the shape of the
+    eye (the generator saw it). So the eye is the patch of the head under the eye's pixels
+    (``piece``, a mask in the frame of the drawing ``rgba``), cut out as its own surface:
+
+    - the faces of ``head`` that ``view`` sees inside the piece, split ``subdivisions``
+      times so that the border follows the drawn outline;
+    - raised by ``offset_m``, plus a dome of ``bulge`` times the eye's size at its
+      middle, falling to nothing at the rim;
+    - with the drawing's own pixels as texture, seen from ``view`` (no bake: the eye from
+      the front is the drawing).
+    """
+    from .project import subdivide
+
+    look = camera(view)
+    _, depth = rasterize(head, look, metres_per_px, 1.0)
+
+    def to_raw(points: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        col, row, reach = look.project(points, metres_per_px, 1.0)
+        return ((col + raw_map.get("shift_px", 0) - raw_map["x0"]) / raw_map["scale"] + raw_map["left"],
+                (row - raw_map["y0"]) / raw_map["scale"] + raw_map["top"], reach)
+
+    ys, xs = np.nonzero(piece)
+    margin = 12 + grow_px
+    x0, x1, y0, y1 = xs.min() - margin, xs.max() + margin, ys.min() - margin, ys.max() + margin
+    centroid = head.vertices[head.faces].mean(axis=1)
+    cx, cy, reach = to_raw(centroid)
+    col, row, _ = look.project(centroid, metres_per_px, 1.0)
+    c, r = np.clip(col.astype(int), 0, depth.shape[1] - 1), np.clip(row.astype(int), 0, depth.shape[0] - 1)
+    front = reach >= np.nan_to_num(depth[r, c], nan=np.inf) - 8 * metres_per_px
+    near = front & (cx >= x0) & (cx <= x1) & (cy >= y0) & (cy <= y1)
+    if not near.any():
+        raise ValueError("The head mesh does not show under an eye of the drawing")
+    used, inverse = np.unique(head.faces[near], return_inverse=True)
+    patch = Mesh(head.vertices[used], inverse.reshape(-1, 3))
+    for _ in range(subdivisions):
+        patch = subdivide(patch)
+    wide = ndimage.binary_dilation(piece, iterations=grow_px)
+    fx, fy, _ = to_raw(patch.vertices[patch.faces].mean(axis=1))
+    inside = np.zeros(len(patch.faces), bool)
+    ok = (fx >= 0) & (fx < piece.shape[1]) & (fy >= 0) & (fy < piece.shape[0])
+    inside[ok] = wide[fy[ok].astype(int), fx[ok].astype(int)]
+    normals, _ = patch.face_normals()
+    inside &= normals @ look.toward > 0.05
+    used, inverse = np.unique(patch.faces[inside], return_inverse=True)
+    shell = Mesh(patch.vertices[used], inverse.reshape(-1, 3))
+    vx, vy, _ = to_raw(shell.vertices)
+    # The dome: highest where the eye is widest, nothing at its rim.
+    deep = ndimage.distance_transform_edt(piece)
+    at = deep[np.clip(vy.astype(int), 0, piece.shape[0] - 1), np.clip(vx.astype(int), 0, piece.shape[1] - 1)]
+    size_m = np.sqrt(piece.sum() / np.pi) * raw_map["scale"] * metres_per_px
+    rise = offset_m + bulge * size_m * np.sqrt(np.clip(at / max(deep.max(), 1e-9), 0, 1))
+    out_normal = shell.vertex_normals()
+    out_normal = 0.5 * out_normal + 0.5 * look.toward          # toward the viewer too: the rim does not flare
+    out_normal /= np.maximum(np.linalg.norm(out_normal, axis=1), 1e-12)[:, None]
+    shell = Mesh(shell.vertices + rise[:, None] * out_normal, shell.faces)
+    # The texture: the drawing over the eye's box; outside the eye, the nearest eye pixel.
+    bx0, bx1, by0, by1 = xs.min() - pad_px, xs.max() + pad_px + 1, ys.min() - pad_px, ys.max() + pad_px + 1
+    _, (iy, ix) = ndimage.distance_transform_edt(~piece, return_indices=True)
+    filled = rgba[..., :3][iy, ix]
+    crop = filled[max(by0, 0):by1, max(bx0, 0):bx1]
+    side = max(crop.shape[:2]) * upscale                       # square: UVs are fractions of the box
+    texture = np.asarray(Image.fromarray(crop).resize((side, side), Image.LANCZOS))
+    uv = np.column_stack([(vx - max(bx0, 0)) / crop.shape[1], 1 - (vy - max(by0, 0)) / crop.shape[0]])
+    return shell, np.clip(uv, 0, 1)[shell.faces], texture
+
+
 def bake_eyeball(part_handoff: Path, mesh: Mesh, corner_uv: np.ndarray, *, view: str = "front", size: int = 1024,
                  white_percentile: float = 80.0) -> tuple[np.ndarray, dict]:
     """The texture of one eyeball from the eye pixels of ``view``; what the view cannot see is eye-white.
@@ -256,15 +328,19 @@ def bake_eyeball(part_handoff: Path, mesh: Mesh, corner_uv: np.ndarray, *, view:
 
 def eyeballs_from_part(part_handoff: Path, head: Mesh, out: Path, *, view: str = "front", min_share: float = 0.2,
                        depth_ratio: float = 0.7, protrude: float = 0.45, grow: float = 1.02,
-                       source_handoff: Path | None = None, zone: float = 1.25) -> dict:
+                       source_handoff: Path | None = None, zone: float = 1.25, shape: str = "shell",
+                       bulge: float = 0.10) -> dict:
     """Eyeballs for the eyes that ``split-views`` took out of the drawings, the white of the eye included.
 
     ``find_eyes`` cannot find the white: it has the colour of light fur. ``split-views``
     with ``--part "two eyes, each with its iris, its pupil and the white"`` can: the
     image editor removes the eyes, and the part is where the drawing changed. Each piece
     of that part in ``view`` (at least ``min_share`` of the largest piece) becomes one
-    ellipsoid on the head, as wide and as high as the piece, with its texture
-    (``bake_eyeball``). Writes ``out/<id>.obj``, ``out/<id>.png``, ``out/anatomy.json``,
+    eye. With ``shape`` "shell" it is a thin shell on the head with the drawing's pixels
+    (``eye_shell``; ``bulge`` sets its dome). With "ball" it is an ellipsoid as wide and
+    as high as the piece (``bake_eyeball``): that can turn, but it stands out of a head
+    that has no socket, and looked like a disc on Pip. Writes ``out/<id>.obj``,
+    ``out/<id>.png``, ``out/anatomy.json`` (the ellipsoids, for ``plan-anatomy``),
     ``out/eyes.json`` and ``out/eyes.png``.
 
     With ``source_handoff`` (the handoff that the eyes were split from), it also writes
@@ -280,10 +356,13 @@ def eyeballs_from_part(part_handoff: Path, head: Mesh, out: Path, *, view: str =
     if not count:
         raise ValueError(f"The part handoff shows nothing in the {view} view")
     sizes = ndimage.sum_labels(labels > 0, labels, range(1, count + 1))
-    eyes = []
+    if shape not in ("shell", "ball"):
+        raise ValueError("shape must be shell or ball")
+    eyes, pieces = [], []
     for index, box in enumerate(ndimage.find_objects(labels), start=1):
         if sizes[index - 1] < min_share * sizes.max():
             continue
+        pieces.append(labels == index)
         alone = rgba.copy()
         alone[..., 3] = np.where(labels == index, 255, 0)
         inner, _ = find_eyes(alone, head_share=1.0, max_eyes=1, min_pupil_share=0.01)
@@ -294,16 +373,23 @@ def eyeballs_from_part(part_handoff: Path, head: Mesh, out: Path, *, view: str =
                      "iris_radius_px": float(inner[0]["iris_radius_px"] if inner else 1.5 * pupil),
                      "pupil_px": inner[0]["pupil_px"] if inner else [(box[1].start + box[1].stop) / 2, (box[0].start + box[0].stop) / 2],
                      "iris_lab": inner[0]["iris_lab"] if inner else [0.0, 0.0, 0.0]})
-    eyes.sort(key=lambda eye: eye["centre_px"][0])
+    order = np.argsort([eye["centre_px"][0] for eye in eyes])
+    eyes, pieces = [eyes[i] for i in order], [pieces[i] for i in order]
     globes = eye_globes(eyes, spec["raw"][view], head, spec["metres_per_aligned_px"], view=view,
                         depth_ratio=depth_ratio, protrude=protrude, grow=grow)
     out.mkdir(parents=True, exist_ok=True)
     _write_eyeballs(globes, out, ".", view, "The eye region is from split-views (an image edit); placed on the mesh by split-eyes")
     from .texture import read_obj_uv
 
-    for globe in globes:
-        mesh, corner_uv = read_obj_uv(out / globe["mesh"])
-        texture, baked = bake_eyeball(part_handoff, mesh, corner_uv, view=view)
+    for globe, piece in zip(globes, pieces):
+        if shape == "shell":
+            mesh, corner_uv, texture = eye_shell(piece, rgba, spec["raw"][view], head, spec["metres_per_aligned_px"],
+                                                 view=view, bulge=bulge)
+            write_obj_uv(mesh, corner_uv, out / globe["mesh"], comment=f"eye shell {globe['id']}")
+            baked = {"seen_fraction": 1.0, "white_rgb": None, "faces": int(len(mesh.faces))}
+        else:
+            mesh, corner_uv = read_obj_uv(out / globe["mesh"])
+            texture, baked = bake_eyeball(part_handoff, mesh, corner_uv, view=view)
         Image.fromarray(texture).save(out / f"{globe['id']}.png")
         globe.update(texture=f"{globe['id']}.png", **baked)
     shown = rgba[..., :3].copy()
@@ -321,12 +407,12 @@ def eyeballs_from_part(part_handoff: Path, head: Mesh, out: Path, *, view: str =
             if name == view or not path.is_file():
                 continue
             with Image.open(path) as picture:
-                shape = (picture.height, picture.width)
+                frame = (picture.height, picture.width)
             # A wide margin: this mask only has to leave out changes far from the eyes, and another
             # drawing can put the eye a whole eye-width from its place on the mesh.
-            allowed = eye_zone_in_view(shape, source["raw"][name], name, zones, head, px, face_view=view, margin=1.5)
+            allowed = eye_zone_in_view(frame, source["raw"][name], name, zones, head, px, face_view=view, margin=1.5)
             Image.fromarray(np.where(allowed, 255, 0).astype(np.uint8)).save(out / "within" / f"{name}.png")
-    report = {"schema_version": 1, "view": view, "white_included": True,
+    report = {"schema_version": 1, "view": view, "white_included": True, "shape": shape,
               "eyes": [{**eye, **{k: globe[k] for k in ("id", "center_m", "radii_m", "mesh", "texture", "seen_fraction",
                                                         "white_rgb")}} for eye, globe in zip(eyes, globes)],
               "source_confidence": "estimated", "review": "required"}

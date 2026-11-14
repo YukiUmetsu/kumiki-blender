@@ -769,6 +769,9 @@ class JointsAndAssemblyTests(SharedSet):
         broken["bones"][1]["parent"] = "nothing"
         with self.assertRaises(ValueError):
             validate_joints(broken)
+        short = Mesh(mesh.vertices * [1, 1, 0.93], mesh.faces)        # 7% shorter than the drawing: below the drawn crown
+        validate_joints(estimate_joints(short, HEIGHT_M))
+        self.assertLessEqual(estimate_joints(short, HEIGHT_M)["joints"]["head_top"][2], 0.93 * HEIGHT_M + 1e-9)
 
     def test_assembly_fits_anchors_and_rejects_bad_plans(self):
         with tempfile.TemporaryDirectory() as tmp:

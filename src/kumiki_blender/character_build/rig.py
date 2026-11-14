@@ -42,6 +42,10 @@ def estimate_joints(mesh: Mesh, height_m: float, landmarks_z: dict | None = None
     if not z["knee"] < z["hip"] < z["shoulder"] <= z["face_bottom"] < z["crown"]:
         raise ValueError(f"Landmark heights must rise knee < hip < shoulder <= face_bottom < crown: {z}")
     half = 0.02 * height_m
+    top = float(points[:, 2].max())
+    if "crown" in estimated and z["face_bottom"] + half < top < z["crown"]:
+        # A model that came out shorter than the drawing has no surface at the drawn crown.
+        z["crown"] = top - half / 2
 
     # The handoff frame centres each view's bounding box, so a one-sided accessory moves x = 0
     # off the body. The midline is the median cross-section centre between knee and crown.
