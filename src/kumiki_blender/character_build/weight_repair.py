@@ -60,13 +60,13 @@ def propose_weight_repair(
     outside = math.fsum(forbidden.values())
     if outside <= tolerance + 1e-9:
         return None
-    if outside > maximum + 1e-9:
-        raise ValueError(f"Disallowed influence {outside:.6f} exceeds maximum repair {maximum:.6f}")
     allowed = {bone: float(weight) for bone, weight in weights.items()
                if bone in allowed_bones and weight > 0}
     kept_sum = math.fsum(allowed.values())
     if kept_sum <= 1e-8:
         raise ValueError("No existing allowed bone influence; cannot infer anatomy")
+    if outside > maximum + 1e-9:
+        raise ValueError(f"Disallowed influence {outside:.6f} exceeds maximum repair {maximum:.6f}")
     new_weights = {bone: weight / kept_sum for bone, weight in sorted(allowed.items())}
     if len(new_weights) > 4:
         raise ValueError("Repair would retain more than four deform influences")
