@@ -57,7 +57,56 @@ The output is an independent corrected.blend with a report.json containing chang
 - Run validate-rig on corrected.blend using a pose battery that includes relevant joint angles. Use silhouette and source-reference comparisons rather than relying only on edge-stretch metrics.
 - Retain old revised source assets as checkpoints; a geometry corrector never earns automatic artistic acceptance.
 
-**Export limitation:** Blender driver expressions do **not** travel with glTF/GLB. The current bake-animation worker targets skeleton channels and is not a full driver-to-morph bake. **It explicitly refuses to export when shape-key drivers are present**, rather than silently dropping corrections. A raw GLB export outside this checked pipeline is not considered production-ready. A subsequent feature must sample driver values per frame and bake verified morph-weight animation channels alongside the skeletal clip, including endpoint parity. Until then, use the .blend for Blender-native animation and review.
+## Portable GLB animation: rig controls + joint correctives
+
+Blender driver expressions themselves cannot be exported to glTF. To make
+their **evaluated deformation** portable, the animation worker now supports
+explicit framewise sampling and verifies the resulting GLB binary. First animate
+the approved controlled rig, with the same skinned mesh/shape keys from the
+corrected Blender revision (both the controller Action and the CORR_ shape keys
+must be in one saved .blend). Use an original controlled rig with no NLA
+tracks or existing facial shape-key Action:
+
+    kumiki-character-build plan-animation-bake \
+      --blend /project/characters/quill/animated-corrected.blend \
+      --clip wing_fold \
+      --start 1 --end 96 --step 1 --fps 24 \
+      --bake-correctives \
+      --output /project/review/quill/wing-fold-bake-plan-r01
+
+    kumiki-character-build bake-character-animation \
+      --plan /project/review/quill/wing-fold-bake-plan-r01/bake-plan.json \
+      --output /project/review/quill/wing-fold-glb-r01
+
+The worker:
+
+1. Validates the source .blend SHA-256, one selected skeletal Action, and each
+   reviewed CORR_ driver bound to a local deform-bone rotation channel.
+2. Samples source driver values at **every integer frame** before IK/FK baking.
+3. Bakes the rig visually, removes controllers, and checks both deform-bone
+   motion and corrective weight parity against the source.
+4. Removes Blender-only drivers in the **new revision**, inserts regular
+   shape-key Action keyframes, and exports a single glTF animation with
+   skeletal joint channels and morph-weight channels.
+5. Reads the exported GLB's binary float32 accessors to verify each named
+   shape target's actual sampled weights (maximum difference 0.025).
+   It rejects wrong target ordering, missing channels, invalid timestamps,
+   duplicate mesh nodes, and mismatched weights rather than claiming success.
+
+Output: baked.blend, animated.glb and report.json. Check
+report.json -> morph_parity for each object and corrective. Running the worker
+without --bake-correctives on a driven shape still fails **closed**, as before.
+This path is intentionally opt-in and requires --step 1 to avoid dropping
+subframe joint-corrective changes.
+
+**Remaining limitations:** shape-key facial Actions and multiple NLA tracks are
+not yet combined into this exporter. There is no automatic source-faithful
+sculpting or visually certified silhouette in this change. Use source-view
+render comparisons, gesture range checks, and the ContentGen renderer for final
+artistic approval.
+
+**Export limitation:** Do not use raw GLB export to preserve Blender drivers.
+Use the checked --bake-correctives workflow above.
 
 ## Verification
 
