@@ -340,7 +340,7 @@ def box_part(handoff: Path, out: Path, *, name: str, boxes: dict[str, list[tuple
         inside = region_mask(original.shape[:2], boxes.get(view, []), polygons.get(view, [])) if outlined \
             else np.ones(original.shape[:2], bool)
         if other and other.is_file():
-            if like_spec["raw"][view] != spec["raw"][view]:
+            if like_spec["raw"].get(view) != spec["raw"][view]:
                 raise ValueError(f"{like} has another frame for the {view} drawing than {handoff}")
             with Image.open(other) as picture:
                 shown = np.asarray(picture.convert("RGBA"))[..., 3] > 127
@@ -353,7 +353,9 @@ def box_part(handoff: Path, out: Path, *, name: str, boxes: dict[str, list[tuple
         region = inside & (original[..., 3] > 200)
         if wanted is not None and region.any():
             pixels = lab(original[..., :3][region])
-            near = (np.linalg.norm(pixels[:, None, :] - wanted[None, :, :], axis=2) <= delta_e).any(axis=1)
+            near = np.zeros(len(pixels), dtype=bool)
+            for colour in wanted:
+                near |= np.linalg.norm(pixels - colour, axis=1) <= delta_e
             coloured = np.zeros_like(region)
             coloured[region] = near
             if close_px > 0:
@@ -384,6 +386,8 @@ def box_part(handoff: Path, out: Path, *, name: str, boxes: dict[str, list[tuple
     write_handoff(out / name, spec, part_images, f"{name}: the figure inside boxes and polygons")
     write_handoff(out / "rest", spec, rest_images, f"without {name}: a hole where it was")
     report = {"schema_version": 1, "name": name, "views": rows,
+              "colours": [[int(v) for v in colour] for colour in colours or []], "delta_e": delta_e if colours else None,
+              "like": str(like) if like else None,
               "folders": {name: str((out / name).resolve()), "rest": str((out / "rest").resolve())}}
     out.mkdir(parents=True, exist_ok=True)
     (out / "box.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
