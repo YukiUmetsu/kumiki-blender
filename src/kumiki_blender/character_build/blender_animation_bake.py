@@ -6,6 +6,7 @@ facial shape-key action tracks require a separate explicit clip contract.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 import struct
@@ -17,6 +18,10 @@ import bpy
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from kumiki_blender.character_build.blender_common import arguments, write_report  # noqa: E402
 from kumiki_blender.character_build.glb_animation import rewrite_single_animation_name  # noqa: E402
+from kumiki_blender.character_build.glb_morph_parity import verify_glb_morph_samples  # noqa: E402
+from kumiki_blender.character_build.blender_corrective_bake import (  # noqa: E402
+    collect_corrective_drivers, sample_correctives, compare_samples, keyframe_correctives,
+)
 
 
 def _sample(rig, bones, frames):
@@ -76,6 +81,12 @@ def main():
         raise FileExistsError(f"Animation revision exists: {output}")
     if not bpy.data.filepath or Path(bpy.data.filepath).resolve() != source:
         raise ValueError("Open the exact source controlled.blend named in the bake plan")
+    digest = hashlib.sha256()
+    with source.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    if digest.hexdigest() != plan["source_sha256"]:
+        raise ValueError("Animated rig source changed since source-locked bake plan")
     rig = bpy.data.objects.get(plan["armature"])
     if rig is None or rig.type != "ARMATURE":
         raise ValueError(f"Armature not found: {plan['armature']}")
@@ -94,15 +105,7 @@ def main():
         mod.type == "ARMATURE" and mod.object == rig for mod in obj.modifiers)]
     if not bound:
         raise ValueError("No skinned meshes available for GLB export")
-    # A driver is Blender-only logic. Exporting a skeleton-only GLB would
-    # silently discard these authored fold/crease corrections. Refuse rather
-    # than return a technically valid but visibly different character clip.
-    for obj in bound:
-        keys = obj.data.shape_keys
-        if keys is not None and keys.animation_data and keys.animation_data.drivers:
-            raise ValueError(
-                f"{obj.name}: pose-driven shape-key correctives require explicit "
-                "sampled morph animation. Skeleton-only bake would lose geometry.")
+    bake_correctives = bool(plan.get("bake_correctives", False))
     if any(ob.library or ob.data.library for ob in [rig] + bound):
         raise ValueError("Linked armatures/meshes cannot be baked in this workflow")
     scene = bpy.context.scene
@@ -110,9 +113,13 @@ def main():
     frames = list(range(start, end + 1, step))
     if frames[-1] != end:
         frames.append(end)
+    if bake_correctives and step != 1:
+        raise ValueError("Corrective morph baking requires step=1")
+    tracked = collect_corrective_drivers(bound, rig, bake_correctives)
     scene.render.fps = plan["fps"]
     scene.frame_start, scene.frame_end = start, end
     original_action = rig.animation_data.action
+    before_morph = sample_correctives(tracked, frames) if tracked else {}
     before = _sample(rig, deform, frames)
 
     bpy.ops.object.mode_set(mode="OBJECT") if bpy.context.object and bpy.context.object.mode != "OBJECT" else None
@@ -163,6 +170,13 @@ def main():
     if (post_removal["max_position_error_m"] > plan["max_position_error_m"]
             or post_removal["max_rotation_error_deg"] > plan["max_rotation_error_deg"]):
         raise ValueError(f"Removing controllers changed baked deformation: {post_removal}")
+    morph_pose_drift = None
+    if tracked:
+        morph_pose_drift = compare_samples(
+            before_morph, sample_correctives(tracked, frames))
+        keyframe_correctives(tracked, before_morph, frames, plan["clip"])
+        compare_samples(
+            before_morph, sample_correctives(tracked, frames), tolerance=.005)
 
     output.parent.mkdir(parents=True, exist_ok=True)
     output.mkdir()
@@ -186,6 +200,11 @@ def main():
         if "ACTIVE_ACTIONS" not in modes:
             raise ValueError(f"glTF exporter lacks ACTIVE_ACTIONS mode: {sorted(modes)}")
         export["export_animation_mode"] = "ACTIVE_ACTIONS"
+    if tracked:
+        for option in ("export_morph", "export_morph_animation", "export_force_sampling"):
+            if option not in params:
+                raise ValueError(f"glTF exporter missing corrective animation feature {option}")
+            export[option] = True
     result = bpy.ops.export_scene.gltf(**export)
     if "FINISHED" not in result:
         raise RuntimeError(f"Blender failed to export animated GLB: {result}")
@@ -207,6 +226,11 @@ def main():
                      if n.get("name", "").startswith("CTRL_")]
     if control_nodes:
         raise ValueError(f"Control bones leaked into portable GLB: {control_nodes}")
+    morph_receipt = (verify_glb_morph_samples(
+        output / "animated.glb", before_morph, fps=plan["fps"])
+        if tracked else None)
+    if hashlib.sha256(source.read_bytes()).hexdigest() != plan["source_sha256"]:
+        raise ValueError("Original animated rig .blend changed during GLB export")
     write_report(output, {
         "schema_version": 1,
         "status": "exported-visual-parity-review-required",
@@ -218,6 +242,9 @@ def main():
         "removed_control_bones": controls,
         "pose_parity": drift,
         "pose_parity_after_controller_removal": post_removal,
+        "morph_correctives_requested": bake_correctives,
+        "morph_driver_to_baked_pose_max_error": morph_pose_drift,
+        "morph_parity": morph_receipt,
         "clip_rename_receipt": clip_receipt,
         "glb": {
             "skins": len(gltf["skins"]),
@@ -229,8 +256,8 @@ def main():
         },
         "files": ["baked.blend", "animated.glb"],
         "limitations": [
-            "Only a single active skeletal Action is visually baked; NLA and facial shape-key tracks are out of scope.",
-            "glTF exporter encodes sampled deform-bone motion, not Blender-only control rigs.",
+            "Single skeletal clip and opt-in joint corrective morphs only; NLA and facial shape-key Action tracks remain unsupported.",
+            "Corrective drivers are sampled per frame and serialized as GLB morph-weight channels alongside the skeleton.",
             "Inspect Blender/WebGL pose, silhouette and skin fidelity before production approval.",
         ],
     })
