@@ -368,8 +368,8 @@ If the editor paints something bad where the part was, add `--no-fill` to step 3
 The rest then has a hole there, and the bake fills it from the texture around it.
 For Pip's eye in the side view, the editor painted a dark socket.
 
-On Pip, the eyes with their whites and lid lines are two separate pieces of surface,
-and the second eyelid line at 45 degrees is gone. From the side, an eyeball shows
+On Pip, each eye with its white and its lid line is a separate piece of surface.
+The second eyelid line at 45 degrees is gone. From the side, an eyeball shows
 mostly its white: the iris is on the front of it.
 
 **Iris and pupil only, without the editor.** `split-eyes split/rest body.ply --output eyes/`
