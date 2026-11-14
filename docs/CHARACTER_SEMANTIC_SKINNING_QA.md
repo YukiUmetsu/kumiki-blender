@@ -39,7 +39,7 @@ kumiki-character-build validate-rig \
   --blender /Applications/Blender.app/Contents/MacOS/Blender
 ```
 
-New output in `report.json`: `rest_weight_zones` for each zone, with selected vertex count, required minimum, violation count, maximum disallowed fraction, and up to 12 indexed offending vertices/bones. Any violation marks the report `structural-fail`, which the existing source-locked character benchmark treats as a failed pose gate. The source `.blend` remains unchanged.
+New output in `report.json`: `rest_weight_zones` for each zone, with selected vertex count, required minimum, violation count, maximum disallowed fraction, and up to 12 indexed offending vertices/bones. Any violation marks the report `structural-fail`, which the existing source-locked character benchmark treats as a failed pose gate. The benchmark also exposes `weight_zone_count` and `failed_weight_zones`, and independently refuses a malformed receipt that claims success while its zone data reports a violation. The source `.blend` remains unchanged.
 
 ## Acceptance and limitations
 
