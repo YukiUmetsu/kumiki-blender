@@ -109,16 +109,68 @@ def seam_contrast(image: np.ndarray, owner: np.ndarray, part: np.ndarray, covere
             "ratio": round(across / max(grain, 1e-6), 3)}
 
 
+def clone_grain(image: np.ndarray, owner: np.ndarray, part: np.ndarray, covered: np.ndarray, *,
+                detail_px: float = 6.0, block: int = 24, reach: int = 10, directions: int = 16
+                ) -> tuple[np.ndarray, np.ndarray]:
+    """Grain for the texels that no source painted, copied from painted texels of the same part.
+
+    Returns (grain, found): for each unpainted texel, in the order of ``np.nonzero``, a
+    colour offset, and whether a painted texel gave it. The grain of a painted texel is
+    its difference to the blur of the painted texels around it (radius ``detail_px``).
+    Each block of ``block`` x ``block`` texels of a gap takes the grain that lies one
+    shift away: the shift, of ``directions`` directions and up to ``reach`` blocks, under
+    which most of its texels land on painted texels of their own part. Real fur, moved,
+    is still fur. The first fill has no grain to give: it repeats one colour along a line.
+    The grain is kept within the range of 94% of the painted texels, so that a button or
+    a whisker beside the gap does not come back in it as a ghost.
+    """
+    gap = covered & (owner < 0)
+    painted = covered & (owner >= 0)
+    rows, cols = np.nonzero(gap)
+    grain, found = np.zeros((len(rows), 3)), np.zeros(len(rows), bool)
+    if not len(rows) or not painted.any():
+        return grain, found
+    picture = np.asarray(image, dtype=np.float64)
+    weight = ndimage.gaussian_filter(painted.astype(np.float64), detail_px)
+    high = np.dstack([picture[..., channel] - ndimage.gaussian_filter(picture[..., channel] * painted, detail_px)
+                      / np.maximum(weight, 1e-6) for channel in range(3)])
+    low, top = np.percentile(high[painted], [3, 97], axis=0)
+    high = np.clip(high, low, top)
+    height, width = owner.shape
+    angles = np.arange(directions) * 2 * np.pi / directions
+    shifts = np.array([(round(np.sin(a) * d * block), round(np.cos(a) * d * block))
+                       for d in range(1, reach + 1) for a in angles])             # nearest first
+    cell = (rows // block) * (width // block + 1) + cols // block
+    cells, cell_of = np.unique(cell, return_inverse=True)
+    lands = np.zeros((len(shifts), len(rows)), bool)
+    for index, (dy, dx) in enumerate(shifts):
+        r, c = rows + dy, cols + dx
+        inside = (r >= 0) & (r < height) & (c >= 0) & (c < width)
+        r, c = r[inside], c[inside]
+        lands[index, inside] = painted[r, c] & (part[r, c] == part[rows[inside], cols[inside]])
+    share = np.stack([np.bincount(cell_of, weights=row, minlength=len(cells)) for row in lands])
+    share = share - 1e-3 * np.arange(len(shifts))[:, None]                         # equal: the nearer shift
+    choice = np.argmax(share, axis=0)[cell_of]
+    miss = ~lands[choice, np.arange(len(rows))]
+    choice[miss] = np.argmax(lands[:, miss], axis=0)                                # a texel alone: its first shift that lands
+    found = lands[choice, np.arange(len(rows))]
+    source = shifts[choice]
+    grain[found] = high[rows[found] + source[found, 0], cols[found] + source[found, 1]]
+    return grain, found
+
+
 def smooth_fill(image: np.ndarray, owner: np.ndarray, part: np.ndarray, covered: np.ndarray, *,
-                detail: float = 0.7, detail_px: float = 6.0, stitches: Stitches | None = None
-                ) -> tuple[np.ndarray, dict]:
+                detail: float = 0.7, detail_px: float = 6.0, stitches: Stitches | None = None,
+                clone: bool = True) -> tuple[np.ndarray, dict]:
     """Texels that no source painted, filled again so that their tone runs smoothly between the painted texels.
 
     The bake fills such a texel with the colour of the nearest painted one. Over a wide
     gap that gives flat patches with hard borders. Here the tone of the gap is the smooth
     surface that meets the painted texels around it (the Laplace equation, inside one
-    part; ``stitches`` carries it across UV island borders). The grain comes from the first fill: its difference to its
-    own blur (radius ``detail_px`` texels), scaled by ``detail``. A gap with no painted
+    part; ``stitches`` carries it across UV island borders). The grain is that of painted
+    texels of the same part (``clone_grain``; ``clone`` off: none). Where no painted texel
+    is in reach, it comes from the first fill: its difference to its own blur (radius
+    ``detail_px`` texels), scaled by ``detail``. A gap with no painted
     texel around it in the layout keeps the first fill.
     """
     result = np.asarray(image, dtype=np.float64).copy()
@@ -157,9 +209,14 @@ def smooth_fill(image: np.ndarray, owner: np.ndarray, part: np.ndarray, covered:
                          for channel in range(3)], axis=1)
     weight = ndimage.gaussian_filter(covered.astype(np.float64), detail_px)
     blurred = np.dstack([ndimage.gaussian_filter(result[..., channel] * covered, detail_px) for channel in range(3)])
-    grain = (result - blurred / np.maximum(weight, 1e-6)[..., None]).reshape(-1, 3)[ids]
-    flat[ids] = np.clip(tone + detail * grain, 0, 255)
-    return result, {"filled_texels": int(len(ids))}
+    grain = detail * (result - blurred / np.maximum(weight, 1e-6)[..., None]).reshape(-1, 3)[ids]
+    cloned = 0
+    if clone:
+        real, found = clone_grain(result, owner, part, covered, detail_px=detail_px)
+        grain[found] = real[found]
+        cloned = int(found.sum())
+    flat[ids] = np.clip(tone + grain, 0, 255)
+    return result, {"filled_texels": int(len(ids)), "grain_from_painted_texels": cloned}
 
 
 def polish_seams(image: np.ndarray, owner: np.ndarray, part: np.ndarray, covered: np.ndarray, *, reach: int = 12,

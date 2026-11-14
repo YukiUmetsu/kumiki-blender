@@ -239,7 +239,9 @@ How `texture-parts` works:
   its own material.
 - **Smooth fill.** The tone of an unseen area runs smoothly between the painted
   areas around it. The plain bake copies the nearest colour, which gives flat
-  patches with hard borders.
+  patches with hard borders. The grain of the area is copied from painted texels
+  of the same part, one shift away. Real fur, moved, is still fur. The top of a
+  head and the far side of a tail then look like the fur beside them.
 - **Polish.** Each texel near a seam gets a small colour offset. The offsets close
   the colour step across the seam and fade over `--polish-reach-px` (default 12).
   The grain of the texture stays. No offset crosses from one material to another,
@@ -257,6 +259,26 @@ step between texels beside it. At 1.0 a seam is no stronger than the grain.
 
 Median error against the drawings stays about the same (Pip front 4.5 to 4.7 delta
 E, Quill front 2.6 to 3.2).
+
+Use this bake for each part of a character that was modelled in parts too. On
+Pip, the plain bake left flat patches on the far side of the tail (24% unseen)
+and on the top of the head.
+
+One coat of fur can have two colours. `parts` can make the brown fur and the cream
+fur two materials. A side of the head can then lose its pixels. On Pip, one run
+made the right side of the head a material of its own, and that side came out
+torn.
+
+Raise `--material-delta-e` until the fur is one material. For Pip that is
+14, and the default is 8. Look at the `material` of each part in `parts.json`. The vest and the scarf
+must stay materials of their own.
+
+A drawing can show a limb at another depth than the model has it. Pip's side
+drawing has the arm 50 pixels behind the arm of the model. The drawing then paints
+the vest on the arm of the model, and the arm on the vest. Cut both places from
+that drawing: the drawn limb, and the place where the limb of the model is
+(`box-part HANDOFF --name limb --box left:...`, then bake from `rest/`). The other
+drawings and the fill paint them.
 
 Limits:
 
@@ -366,7 +388,8 @@ kumiki-character-build place-part armL_detail arm.glb --anchor body/fitted.ply \
 # 5. The same part on the other side. It uses the same texture.
 kumiki-character-build mirror-part arm/low.obj --mid-x 0.0 --output arm_R/low.obj
 # 6. Remove from the body what the parts replace.
-kumiki-character-build cut-part body/low.obj arms/arm --output body_cut/low.obj
+kumiki-character-build cut-part body/low.obj arms/arm --join arm/low.obj --join arm_R/low.obj \
+  --output body_cut/low.obj
 ```
 
 `box-part` uses no image editor: the figure's pixels inside the boxes and polygons
@@ -377,6 +400,12 @@ are pixels of `HANDOFF/raw/VIEW.png`.
 `detail-part` gives the redrawn part the colours of the drawing (mean and spread in
 Lab). If the outline of the redrawn part is too different (IoU below 0.6), it
 keeps the enlarged drawing for that view. `detail.json` has the IoU of each view.
+
+Give `cut-part` the new parts with `--join arm/low.obj` (repeat for each part).
+Whole faces go, so the open edge has teeth of the size of a face. A gap can
+show between the edge and the part. With `--join`, the edge is smoothed, and each
+of its vertices within `--join-px` (default 14) of a part moves onto that part.
+On Pip, the flap of skin then reaches the forearm that it hangs from.
 
 `cut-part` removes the faces that lie inside the part's masks along each direction
 that the views look. Opposite views (front and back) look along one direction, and

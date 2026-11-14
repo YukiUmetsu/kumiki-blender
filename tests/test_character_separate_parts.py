@@ -377,6 +377,34 @@ class SmallPartTests(unittest.TestCase):
                          "no view shows the part: nothing is cut")
         self.assertEqual(cut_under(body, None, {}, self.PX)[2], 0)
 
+    def test_the_cut_edge_ends_on_the_new_part(self):
+        from scipy.spatial import cKDTree
+        from kumiki_blender.character_build.mesh import surface_samples
+        from kumiki_blender.character_build.part_place import cut_under
+        body, hand = self.body_and_hand()
+        small = Mesh((hand.vertices - [.12, 0.01, .16]) * 0.8 + [.12, 0.01, .16], hand.faces)   # thinner than its outline
+        masks = {name: rasterize(hand, camera(name), self.PX, 0.25)[0] for name in ("front", "back")}
+        surface = cKDTree(surface_samples(small, self.PX)[0])
+
+        def edge_gap(mesh):
+            edges = np.sort(np.concatenate([mesh.faces[:, [0, 1]], mesh.faces[:, [1, 2]], mesh.faces[:, [2, 0]]]), axis=1)
+            edges, count = np.unique(edges, axis=0, return_counts=True)
+            return surface.query(mesh.vertices[np.unique(edges[count == 1])])[0]
+
+        open_cut, _, removed = cut_under(body, None, masks, self.PX)
+        joined, _, same = cut_under(body, None, masks, self.PX, join=[small], join_px=60)
+        self.assertEqual(removed, same)
+        np.testing.assert_array_equal(joined.faces, open_cut.faces)
+        self.assertGreater(np.median(edge_gap(open_cut)), 4 * self.PX, "the cut alone leaves a gap to the smaller part")
+        self.assertLess(edge_gap(joined).max(), 2.5 * self.PX, "with join, the open edge lies on the part")
+        moved = np.linalg.norm(joined.vertices - open_cut.vertices, axis=1)
+        self.assertLess((moved > 0).mean(), 0.1, "only the edge moves")
+        self.assertLess(moved.max(), 60 * self.PX + 0.004)                    # the reach, and the smoothing before it
+        near, _, _ = cut_under(body, None, masks, self.PX, join=[small], join_px=3, smooth=0)
+        np.testing.assert_array_equal(near.vertices, open_cut.vertices)      # no edge vertex within 3 px: none moves
+        far, _, _ = cut_under(body, None, masks, self.PX, join=[Mesh(small.vertices + [0, 0.2, 0], small.faces)], smooth=0)
+        np.testing.assert_array_equal(far.vertices, open_cut.vertices)       # a part out of reach moves nothing
+
     def test_mirror_keeps_the_outside_out(self):
         from kumiki_blender.character_build.part_place import mirror_part
         _, hand = self.body_and_hand()
