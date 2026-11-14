@@ -22,6 +22,10 @@ from kumiki_blender.character_build.glb_morph_parity import verify_glb_morph_sam
 from kumiki_blender.character_build.blender_corrective_bake import (  # noqa: E402
     collect_corrective_drivers, sample_correctives, compare_samples, keyframe_correctives,
 )
+from kumiki_blender.character_build.blender_viseme_bake import (  # noqa: E402
+    collect_viseme_actions, merge_morph_tracks, verify_facial_samples,
+    guard_untracked_shape_weights,
+)
 
 
 def _sample(rig, bones, frames):
@@ -106,6 +110,7 @@ def main():
     if not bound:
         raise ValueError("No skinned meshes available for GLB export")
     bake_correctives = bool(plan.get("bake_correctives", False))
+    bake_visemes = bool(plan.get("bake_visemes", False))
     if any(ob.library or ob.data.library for ob in [rig] + bound):
         raise ValueError("Linked armatures/meshes cannot be baked in this workflow")
     scene = bpy.context.scene
@@ -113,13 +118,19 @@ def main():
     frames = list(range(start, end + 1, step))
     if frames[-1] != end:
         frames.append(end)
-    if bake_correctives and step != 1:
-        raise ValueError("Corrective morph baking requires step=1")
-    tracked = collect_corrective_drivers(bound, rig, bake_correctives)
+    if (bake_correctives or bake_visemes) and step != 1:
+        raise ValueError("Unified morph animation baking requires step=1")
+    correctives = collect_corrective_drivers(
+        bound, rig, bake_correctives, allow_facial_actions=bake_visemes)
+    faces = collect_viseme_actions(bound, bake_visemes)
+    tracked = merge_morph_tracks(correctives, faces)
+    guard_untracked_shape_weights(bound, tracked, frames)
     scene.render.fps = plan["fps"]
     scene.frame_start, scene.frame_end = start, end
     original_action = rig.animation_data.action
     before_morph = sample_correctives(tracked, frames) if tracked else {}
+    if faces:
+        verify_facial_samples(before_morph, faces)
     before = _sample(rig, deform, frames)
 
     bpy.ops.object.mode_set(mode="OBJECT") if bpy.context.object and bpy.context.object.mode != "OBJECT" else None
@@ -174,7 +185,8 @@ def main():
     if tracked:
         morph_pose_drift = compare_samples(
             before_morph, sample_correctives(tracked, frames))
-        keyframe_correctives(tracked, before_morph, frames, plan["clip"])
+        if correctives:
+            keyframe_correctives(correctives, before_morph, frames, plan["clip"])
         compare_samples(
             before_morph, sample_correctives(tracked, frames), tolerance=.005)
 
@@ -243,6 +255,8 @@ def main():
         "pose_parity": drift,
         "pose_parity_after_controller_removal": post_removal,
         "morph_correctives_requested": bake_correctives,
+        "morph_visemes_requested": bake_visemes,
+        "morph_viseme_objects": sorted(faces),
         "morph_driver_to_baked_pose_max_error": morph_pose_drift,
         "morph_parity": morph_receipt,
         "clip_rename_receipt": clip_receipt,
@@ -256,8 +270,8 @@ def main():
         },
         "files": ["baked.blend", "animated.glb"],
         "limitations": [
-            "Single skeletal clip and opt-in joint corrective morphs only; NLA and facial shape-key Action tracks remain unsupported.",
-            "Corrective drivers are sampled per frame and serialized as GLB morph-weight channels alongside the skeleton.",
+            "One skeletal clip with opt-in authored facial Actions and joint corrective morphs; NLA tracks and multiple animation clips are unsupported.",
+            "Face and joint morph weights are sampled per frame and compared with exported GLB binary animation alongside the skeleton.",
             "Inspect Blender/WebGL pose, silhouette and skin fidelity before production approval.",
         ],
     })
