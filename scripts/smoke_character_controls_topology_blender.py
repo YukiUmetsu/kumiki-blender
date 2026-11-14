@@ -174,10 +174,7 @@ def main():
         assert probe["anchor_candidates"][0]["distance_m"] < .004
         pinned = (seed + 1) % probe["expected_vertex_count"]
         geo_out = folder / "geodesic-sculpt-output"
-        geodesic = run_worker(source, "blender_region_sculpt.py", {
-            "source_blend": str(source),
-            "output": str(geo_out),
-            "plan": {
+        geodesic_plan = {
                 "schema_version": 1, "object": "Eye.L",
                 "expected_vertex_count": probe["expected_vertex_count"],
                 "expected_mesh_sha256": probe["expected_mesh_sha256"],
@@ -189,7 +186,10 @@ def main():
                     "distance_mode": "geodesic", "seed_vertex": seed,
                     "max_seed_distance_m": .004,
                 }]
-            },
+        }
+        geodesic = run_worker(source, "blender_region_sculpt.py", {
+            "source_blend": str(source),
+            "output": str(geo_out), "plan": geodesic_plan,
         }, geo_out)
         assert geodesic["expected_mesh_sha256_verified"]
         assert geodesic["protected_vertex_count"] == 1
@@ -197,6 +197,24 @@ def main():
         assert geodesic["operations"][0]["edited_vertices"] > 0
         assert geodesic["flipped_faces"] == 0
         assert (geo_out / "refined.blend").is_file()
+
+        # Identical vertex counts are insufficient: a moved object transform
+        # must invalidate the saved-mesh plan before any derived edit is written.
+        bpy.ops.wm.open_mainfile(filepath=str(source))
+        bpy.data.objects["Eye.L"].location.x += .001
+        altered = folder / "repositioned-source.blend"
+        bpy.ops.wm.save_as_mainfile(filepath=str(altered))
+        stale = folder / "must-reject-stale-region"
+        try:
+            run_worker(altered, "blender_region_sculpt.py", {
+                "source_blend": str(altered),
+                "output": str(stale), "plan": geodesic_plan,
+            }, stale)
+        except RuntimeError as exc:
+            assert "Source mesh has changed" in str(exc)
+            assert not stale.exists()
+        else:
+            raise AssertionError("Geodesic sculpt accepted stale object transform")
 
         poses_out = folder / "poses-output"
         poses = run_worker(output_controls / "controlled.blend", "blender_pose_qa.py", {
