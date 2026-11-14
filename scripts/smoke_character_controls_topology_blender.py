@@ -24,6 +24,7 @@ sys.path.insert(0, str(ROOT / "src"))
 from tests.test_character_rig_controls import rig_fixture  # noqa: E402
 from kumiki_blender.character_build.rig_control_plan import save_control_plan  # noqa: E402
 from kumiki_blender.character_build.animation_bake_plan import save_bake_plan  # noqa: E402
+from kumiki_blender.character_build.roundtrip_plan import make_roundtrip_plan  # noqa: E402
 from kumiki_blender.character_build.topology_zones import save_topology_plan  # noqa: E402
 
 WORKER_DIR = ROOT / "src/kumiki_blender/character_build"
@@ -175,6 +176,129 @@ def main():
         assert corrected_receipt["morph_driver_to_baked_pose_max_error"] <= .02
         assert (corrected_out / "animated.glb").is_file()
         assert (corrected_out / "baked.blend").is_file()
+        # M9: authored mouth viseme Action + pose-driven wing correction +
+        # FK control rig must land in ONE GLB animation, preserving actual
+        # per-frame mouth and wing weights, not merely morph target names.
+        bpy.ops.mesh.primitive_uv_sphere_add(
+            segments=20, ring_count=12, radius=.03, location=(0, -.05, .21))
+        mouth = bpy.context.object
+        mouth.name = "Mouth"
+        mouth_weights = mouth.vertex_groups.new(name="root")
+        mouth_weights.add(list(range(len(mouth.data.vertices))), 1.0, "REPLACE")
+        mouth_skin = mouth.modifiers.new("MouthSkin", "ARMATURE")
+        mouth_skin.object = rig_morph
+        mouth.shape_key_add(name="Basis", from_mix=False)
+        speech_a = mouth.shape_key_add(name="viseme_A", from_mix=False)
+        speech_c = mouth.shape_key_add(name="viseme_C", from_mix=False)
+        for i, vertex in enumerate(mouth.data.vertices):
+            if vertex.co.z > 0:
+                speech_a.data[i].co.z += .008
+            if vertex.co.x > 0:
+                speech_c.data[i].co.x += .008
+        for frame, a_value, c_value in [
+            (1, 0, 0), (6, 1, 0), (12, 0, 1)]:
+            bpy.context.scene.frame_set(frame)
+            for block, value in ((speech_a, a_value), (speech_c, c_value)):
+                block.value = value
+                assert block.keyframe_insert(
+                    data_path="value", frame=frame, group="KumikiVisemes")
+        assert mouth.data.shape_keys.animation_data.action is not None
+        mouth.data.shape_keys.animation_data.action.name = "authored_speech"
+        bpy.context.scene.frame_set(1)
+        unified_source = folder / "animated-with-corrective-and-visemes.blend"
+        bpy.ops.wm.save_as_mainfile(filepath=str(unified_source))
+        unified_sha = hashlib.sha256(unified_source.read_bytes()).hexdigest()
+        unified_plan = save_bake_plan(
+            unified_source, "wing_speech", 1, 12, folder / "unified-bake-plan",
+            bake_correctives=True, bake_visemes=True)
+        unified_out = folder / "unified-glb-clip"
+        unified = run_worker(unified_source, "blender_animation_bake.py", {
+            "plan": unified_plan, "output": str(unified_out),
+        }, unified_out)
+        assert unified["glb"]["animations"] == 1
+        assert unified["glb"]["clip_names"] == ["wing_speech"]
+        assert unified["glb"]["deform_joint_channels"] > 0
+        assert unified["morph_visemes_requested"]
+        assert unified["morph_correctives_requested"]
+        assert unified["morph_viseme_objects"] == ["Mouth"]
+        assert unified["morph_parity"]["checked_correctives"] == 3
+        assert unified["morph_parity"]["target_meshes"] == 2
+        assert {row["object"] for row in unified["morph_parity"]["meshes"]} == {"Mouth", "Wing.L"}
+        assert unified["morph_parity"]["max_weight_error"] <= .025
+        assert (unified_out / "animated.glb").is_file()
+        assert (unified_out / "baked.blend").is_file()
+        assert hashlib.sha256(unified_source.read_bytes()).hexdigest() == unified_sha
+
+        # Independently re-import the actual combined GLB into a brand-new
+        # Blender scene. Comparing only exported channel names cannot prove
+        # that the facial and wing deformations survived transport.
+        portable = unified_out / "animated.glb"
+        baked_source = unified_out / "baked.blend"
+        portable_sha = hashlib.sha256(portable.read_bytes()).hexdigest()
+        baked_sha = hashlib.sha256(baked_source.read_bytes()).hexdigest()
+        roundtrip = make_roundtrip_plan(
+            baked_source, portable, first_frame=1, last_frame=12, fps=24,
+            samples=5, max_p95_error_m=.002, max_max_error_m=.01)
+        roundtrip_out = folder / "roundtrip-surface-qa"
+        roundtrip_report = run_worker(
+            baked_source, "blender_glb_surface_roundtrip.py", {
+                "plan": roundtrip, "output": str(roundtrip_out),
+            }, roundtrip_out)
+        assert roundtrip_report["status"] == "evaluated-glb-roundtrip-review-required", roundtrip_report["problems"]
+        assert roundtrip_report["source_meshes"] == [
+            "Eye.L", "Mouth", "Skin", "Wing.L",
+        ], roundtrip_report["source_meshes"]
+        assert roundtrip_report["sampled_frames"] == [1, 3, 6, 9, 12]
+        assert roundtrip_report["checked_mesh_frames"] == 5 * len(roundtrip_report["source_meshes"])
+        assert roundtrip_report["global_max_nearest_error_m"] <= .01
+        assert roundtrip_report["global_p95_worst_frame_m"] <= .002
+        assert hashlib.sha256(portable.read_bytes()).hexdigest() == portable_sha
+        assert hashlib.sha256(baked_source.read_bytes()).hexdigest() == baked_sha
+
+        # A structurally valid *different* GLB (without the added animated
+        # Mouth) must fail even though both assets have a skin and one clip.
+        wrong_export = bake_out / "animated.glb"
+        wrong_plan = make_roundtrip_plan(
+            baked_source, wrong_export, first_frame=1, last_frame=12,
+            fps=24, samples=3)
+        wrong_out = folder / "must-reject-incomplete-glb"
+        wrong_receipt = run_worker(
+            baked_source, "blender_glb_surface_roundtrip.py", {
+                "plan": wrong_plan, "output": str(wrong_out),
+            }, wrong_out)
+        assert wrong_receipt["status"] == "structural-fail"
+        assert any("Mouth: GLB must contain exactly one named mesh node" in p
+                   for p in wrong_receipt["problems"]), wrong_receipt["problems"]
+
+        # Fail closed when either modality is not explicitly approved.
+        no_face_plan = save_bake_plan(
+            unified_source, "must_reject_face_drop", 1, 12,
+            folder / "missing-face-opt-in", bake_correctives=True)
+        no_face_out = folder / "must-refuse-face-drop"
+        try:
+            run_worker(unified_source, "blender_animation_bake.py", {
+                "plan": no_face_plan, "output": str(no_face_out),
+            }, no_face_out)
+        except RuntimeError as exc:
+            assert "requires --bake-visemes" in str(exc), str(exc)
+            assert not no_face_out.exists()
+        else:
+            raise AssertionError("Exporter silently discarded authored mouth animation")
+
+        no_corr_plan = save_bake_plan(
+            unified_source, "must_reject_corrective_drop", 1, 12,
+            folder / "missing-corrective-opt-in", bake_visemes=True)
+        no_corr_out = folder / "must-refuse-corrective-drop"
+        try:
+            run_worker(unified_source, "blender_animation_bake.py", {
+                "plan": no_corr_plan, "output": str(no_corr_out),
+            }, no_corr_out)
+        except RuntimeError as exc:
+            assert "require --bake-correctives" in str(exc), str(exc)
+            assert not no_corr_out.exists()
+        else:
+            raise AssertionError("Exporter silently discarded sculpted wing correction")
+
         # Explicit opt-in contract: a skeletal-only export must still reject
         # a driven corrective rather than silently render an incorrect wing.
         old_plan = save_bake_plan(
