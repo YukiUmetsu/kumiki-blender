@@ -94,6 +94,15 @@ def main():
         mod.type == "ARMATURE" and mod.object == rig for mod in obj.modifiers)]
     if not bound:
         raise ValueError("No skinned meshes available for GLB export")
+    # A driver is Blender-only logic. Exporting a skeleton-only GLB would
+    # silently discard these authored fold/crease corrections. Refuse rather
+    # than return a technically valid but visibly different character clip.
+    for obj in bound:
+        keys = obj.data.shape_keys
+        if keys is not None and keys.animation_data and keys.animation_data.drivers:
+            raise ValueError(
+                f"{obj.name}: pose-driven shape-key correctives require explicit "
+                "sampled morph animation. Skeleton-only bake would lose geometry.")
     if any(ob.library or ob.data.library for ob in [rig] + bound):
         raise ValueError("Linked armatures/meshes cannot be baked in this workflow")
     scene = bpy.context.scene
