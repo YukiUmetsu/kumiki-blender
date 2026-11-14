@@ -218,6 +218,20 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--output", type=Path, required=True, help="new baked.blend / animated.glb revision")
     p.add_argument("--blender")
 
+    p = sub.add_parser("render-character-review",
+                       help="capture orthographic clay turnarounds and anatomy close-ups for source-art review")
+    p.add_argument("--blend", type=Path, required=True, help="saved, skinned Blender character revision")
+    p.add_argument("--armature", default="CharacterRig", help="exact skinned rig object")
+    p.add_argument("--frames", default="1", help="1-5 ascending, comma-delimited integer pose frames")
+    p.add_argument("--views", default="front,right,back,left",
+                   help="1-6 orthographic camera directions")
+    p.add_argument("--references", type=Path,
+                   help="optional source-art manifest with region focus and per-view images")
+    p.add_argument("--resolution", type=int, default=720, help="square clay frame resolution")
+    p.add_argument("--margin", type=float, default=1.18, help="fixed orthographic framing margin")
+    p.add_argument("--output", type=Path, required=True, help="new visual review revision directory")
+    p.add_argument("--blender")
+
     p = sub.add_parser("audit-animated-glb",
                        help="reimport exported GLB and compare evaluated skinned surfaces with baked.blend")
     p.add_argument("--blend", type=Path, required=True, help="exact saved baked.blend")
@@ -960,6 +974,26 @@ def _run(args) -> int:
         report = run_worker("animation-bake", {
             "plan": plan, "output": str(args.output.resolve()),
         }, blender=args.blender, blend_file=Path(plan["source_blend"]))
+        print(json.dumps(report, indent=2))
+        return 0
+    if args.command == "render-character-review":
+        from .character_review_plan import make_character_review_plan
+        from .character_review_sheet import make_character_review_sheets
+        from .blender import run_worker
+        if args.output.exists() or args.output.is_symlink():
+            raise FileExistsError(f"Character review revision already exists: {args.output}")
+        try:
+            frames = [int(value) for value in args.frames.split(",")]
+        except (ValueError, AttributeError) as exc:
+            raise ValueError("--frames requires a comma-separated integer list") from exc
+        views = args.views.split(",")
+        plan = make_character_review_plan(
+            args.blend, frames=frames, views=views, references=args.references,
+            armature=args.armature, resolution=args.resolution, margin=args.margin)
+        run_worker("character-review", {
+            "plan": plan, "output": str(args.output.resolve()),
+        }, blender=args.blender, blend_file=args.blend.resolve())
+        report = make_character_review_sheets(args.output, plan)
         print(json.dumps(report, indent=2))
         return 0
     if args.command == "audit-animated-glb":
