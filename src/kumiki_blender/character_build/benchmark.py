@@ -332,6 +332,21 @@ def character_benchmark(manifest: str | Path, output: str | Path) -> dict:
                        for k in ("unweighted", "over_four_influences", "non_normalized"))
                    for weights in rest.values()
                ))
+        weight_zones = _list(evidence.get("rest_weight_zones", []),
+                             "pose rest_weight_zones", max_count=64)
+        failed_weight_zones = []
+        for zone in weight_zones:
+            if (not isinstance(zone, dict)
+                    or not isinstance(zone.get("mesh"), str)
+                    or not isinstance(zone.get("region_group"), str)
+                    or type(zone.get("selected_vertices")) is not int
+                    or type(zone.get("violating_vertices")) is not int
+                    or zone.get("status") not in {"pass", "fail"}):
+                raise ValueError("Pose report has malformed semantic weight-zone evidence")
+            if (zone["status"] != "pass" or zone["violating_vertices"] > 0
+                    or zone["selected_vertices"] < zone.get("minimum_required_vertices", 1)):
+                bad = True
+                failed_weight_zones.append(f"{zone['mesh']}/{zone['region_group']}")
         known_pose_names = [row.get("name") for row in poses if isinstance(row, dict)]
         if len(known_pose_names) != len(set(known_pose_names)):
             raise ValueError("Pose names are missing or duplicated")
@@ -349,7 +364,10 @@ def character_benchmark(manifest: str | Path, output: str | Path) -> dict:
         checks["pose"]["items"] = [{
             "report_sha256": _sha(path), "blend_sha256": _sha(blend),
             "pose_names": known_pose_names, "screenshot_count": render_count,
-            "skinned_meshes": sorted(rest), "collision_candidates": sum(
+            "skinned_meshes": sorted(rest),
+            "weight_zone_count": len(weight_zones),
+            "failed_weight_zones": failed_weight_zones,
+            "collision_candidates": sum(
                 len(row.get("collision_candidates", [])) for row in poses),
             "independent_artistic_review_required": True,
         }]
