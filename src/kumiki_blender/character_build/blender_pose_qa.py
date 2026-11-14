@@ -21,6 +21,7 @@ from kumiki_blender.character_build.deformation_metrics import (  # noqa: E402
     collision_delta,
     pose_motion,
 )
+from kumiki_blender.character_build.weight_zone_metrics import audit_weight_zone  # noqa: E402
 
 
 def skin_weights(mesh, deform_bones: set[str]) -> dict:
@@ -34,6 +35,36 @@ def skin_weights(mesh, deform_bones: set[str]) -> dict:
         bad_sum += bool(influences and abs(sum(influences) - 1.0) > .02)
     return {"vertices": count, "unweighted": missing,
             "over_four_influences": excessive, "non_normalized": bad_sum}
+
+
+def skin_weight_zone(mesh, zone: dict, deform_bones: set[str]) -> dict:
+    """Audit explicit semantic part regions before playing the pose battery."""
+    group = mesh.vertex_groups.get(zone["region_group"])
+    if group is None:
+        raise ValueError(f"{mesh.name}: missing semantic vertex group {zone['region_group']}")
+    allowed = set(zone["allowed_bones"])
+    if not allowed <= deform_bones:
+        raise ValueError(f"{mesh.name}/{zone['region_group']}: allowed_bones contain "
+                         f"missing or non-deforming bones: {sorted(allowed - deform_bones)}")
+    if zone["region_group"] in deform_bones:
+        raise ValueError("Semantic zone must use a separate non-deforming vertex group")
+
+    def samples():
+        for vertex in mesh.data.vertices:
+            member = 0.0
+            influences = {}
+            for entry in vertex.groups:
+                bone_name = mesh.vertex_groups[entry.group].name
+                if bone_name == zone["region_group"]:
+                    member = entry.weight
+                if bone_name in deform_bones and entry.weight > 0:
+                    influences[bone_name] = entry.weight
+            yield vertex.index, member, influences
+
+    return audit_weight_zone(
+        samples(), allowed,
+        max_outside_weight=zone["max_outside_weight"],
+        min_vertices=zone["min_vertices"])
 
 
 def snapshot(obj, depsgraph) -> dict:
@@ -169,6 +200,23 @@ def main() -> None:
     for name, result in weights.items():
         if any(result[key] for key in ("unweighted", "over_four_influences", "non_normalized")):
             problems.append(f"{name}: incomplete/invalid deform weights")
+    named_meshes = {obj.name: obj for obj in bound}
+    weight_zones = []
+    for zone in plan.get("weight_zones", []):
+        mesh = named_meshes.get(zone["mesh"])
+        if mesh is None:
+            raise ValueError(f"Weight zone mesh {zone['mesh']} is not bound to the armature")
+        result = skin_weight_zone(mesh, zone, deform_bones)
+        weight_zones.append({
+            "mesh": mesh.name, "region_group": zone["region_group"],
+            "allowed_bones": zone["allowed_bones"], **result,
+        })
+        if result["status"] != "pass":
+            problems.append(
+                f"{mesh.name}/{zone['region_group']}: {result['violating_vertices']} "
+                f"vertices exceed outside-weight limit and "
+                f"{result['selected_vertices']} belong to the marked region "
+                f"(minimum {result['minimum_required_vertices']})")
     poses = []
     try:
         for item in plan["poses"]:
@@ -264,6 +312,7 @@ def main() -> None:
         "armature": rig.name,
         "bound_meshes": sorted(o.name for o in bound),
         "rest_skin_weights": weights,
+        "rest_weight_zones": weight_zones,
         "poses": poses,
         "problems": problems,
         "limitations": [
@@ -271,6 +320,9 @@ def main() -> None:
             "only explicitly named pairs are checked.",
             "Triangle indices are compared only when evaluated polygon topology is unchanged.",
             "Motion displacement includes root movement and cannot certify local skin weights.",
+            "Weight-zone checks cover only explicitly marked non-deforming semantic groups; "
+            "unmarked anatomy is not certified.",
+            "Weight-zone violations are conservative bone-influence checks, not deformation quality scores.",
             "Closed-manifold volume changes are diagnostic, not sufficient to certify deformation.",
             "Edge stretch and area change do not certify aesthetic quality or joint motion.",
             "A neutral pose is reconstructed by zeroing controller pose transforms; verify the intended rest state.",
