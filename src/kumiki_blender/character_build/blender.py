@@ -15,7 +15,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 WORKERS = {"setup": "blender_setup.py", "assemble": "blender_assemble.py", "retopo": "blender_retopo.py",
-           "rig": "blender_rig.py", "pose-qa": "blender_pose_qa.py", "weight-repair": "blender_weight_repair.py", "joint-correctives": "blender_joint_correctives.py", "penetration-repair": "blender_penetration_repair.py", "region-sculpt": "blender_region_sculpt.py", "geodesic-fit": "blender_landmark_fit.py", "rig-controls": "blender_rig_controls.py", "topology-qa": "blender_topology_qa.py", "joint-refine": "blender_joint_refine.py", "surface-refine": "blender_surface_fairing.py", "animation-bake": "blender_animation_bake.py", "glb-surface-qa": "blender_glb_surface_roundtrip.py", "visemes": "blender_visemes.py", "anatomy": "blender_anatomy.py", "performance": "blender_performance.py", "swap": "blender_swap.py", "fur": "blender_fur.py"}
+           "rig": "blender_rig.py", "pose-qa": "blender_pose_qa.py", "weight-repair": "blender_weight_repair.py", "joint-correctives": "blender_joint_correctives.py", "penetration-repair": "blender_penetration_repair.py", "region-sculpt": "blender_region_sculpt.py", "geodesic-fit": "blender_landmark_fit.py", "rig-controls": "blender_rig_controls.py", "topology-qa": "blender_topology_qa.py", "joint-refine": "blender_joint_refine.py", "surface-refine": "blender_surface_fairing.py", "animation-bake": "blender_animation_bake.py", "glb-surface-qa": "blender_glb_surface_roundtrip.py", "character-review": "blender_character_review.py", "visemes": "blender_visemes.py", "anatomy": "blender_anatomy.py", "performance": "blender_performance.py", "swap": "blender_swap.py", "fur": "blender_fur.py"}
 
 
 def find_blender(explicit: str | None = None) -> str:
