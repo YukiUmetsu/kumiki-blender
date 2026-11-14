@@ -30,7 +30,9 @@
       }
     }
   ],
-  "collision_pairs": [],
+  "collision_pairs": [["Tail", "Body"]],
+  "min_pose_displacement_m": 0.0005,
+  "max_new_collision_pairs": 0,
   "max_p95_edge_stretch": 0.5,
   "render": false
 }
