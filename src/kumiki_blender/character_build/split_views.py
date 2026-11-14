@@ -172,8 +172,18 @@ def split_views(handoff: Path, out: Path, client, *, part: str, name: str | None
                 subject: str = "the character", behind: str = "the body and the clothes", keep: str = "",
                 views: list[str] | None = None, size: int = 768, steps: int = 20, seed: int = 7,
                 change_delta_e: float = 7.0, feather_px: float = 4.0, band_px: int = 14,
-                min_share: float = 0.01) -> dict:
+                min_share: float = 0.01, within: Path | None = None, fill: bool = True) -> dict:
     """Write ``out/<name>/`` and ``out/rest/`` (see the module text); returns the report (``out/split.json``).
+
+    ``within`` is a folder with ``<view>.png`` masks in the pixel frame of the drawings
+    (white: where the part can be). The editor sometimes changes something else too: asked
+    to remove Pip's eyes, it also repainted the inside of an ear in the side view. A change
+    outside the mask is dropped, and the drawing stays as it is there. A view without a
+    mask file is not limited.
+
+    With ``fill`` off, ``rest`` gets a hole where the part was, not the editor's picture of
+    what is behind it. Use that where the guess is bad: for Pip's eye in the side view the
+    editor painted a dark socket. The bake then fills the hole from the texture around it.
 
     ``part`` says what to take out, in plain words for the editor ("brown leather bag and
     its strap"), ``behind`` what it hides, and ``keep`` what must stay. ``name`` is the
@@ -220,10 +230,18 @@ def split_views(handoff: Path, out: Path, client, *, part: str, name: str | None
         with Image.open(edit_path) as picture:
             edited = np.asarray(from_square(picture, back, rgba.size))
         region, edited_figure = removed_region(original, edited, change_delta_e=change_delta_e, min_share=min_share)
+        limited = False
+        if within is not None and (within / f"{view}.png").is_file():
+            with Image.open(within / f"{view}.png") as picture:
+                allowed = np.asarray(picture.convert("L")) >= 128
+            if allowed.shape != region.shape:
+                raise ValueError(f"{within / (view + '.png')} must have the size of the {view} drawing")
+            limited = bool((region & ~allowed).any())
+            region &= allowed
         figure = original[..., 3] > 200
         share = float(region.sum() / max(1, figure.sum()))
         rows.append({"view": view, "reused": reused, "part_share_of_figure": round(share, 4),
-                     "part_found": bool(region.any())})
+                     "part_found": bool(region.any()), "changes_outside_dropped": limited})
         if not region.any():           # the editor changed nothing here: the drawing does not show the part
             rest_images[view] = original
             continue
@@ -234,6 +252,11 @@ def split_views(handoff: Path, out: Path, client, *, part: str, name: str | None
         # The found region ends a little inside the part (its fringe is thin and soft), and a ring
         # of the part's own pixels around the edit shows as a ragged outline on the model.
         wide = ndimage.binary_dilation(region, iterations=band_px)
+        if not fill:
+            hole = original.copy()
+            hole[..., 3] = np.where(wide, 0, hole[..., 3])
+            rest_images[view] = hole
+            continue
         blend = np.clip(ndimage.gaussian_filter(wide.astype(np.float64), feather_px) * 1.5, 0, 1)[..., None]
         colour = original[..., :3] * (1 - blend) + edited * blend
         near = ndimage.binary_dilation(wide, iterations=int(2 * feather_px) + 2)

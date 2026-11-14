@@ -461,6 +461,32 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--resume", action="store_true",
                    help="reuse finished repaints in --output whose render and settings match; repaint the rest")
 
+    p = sub.add_parser("split-eyes", help="make the eyes separate eyeballs and let one drawing paint around them")
+    p.add_argument("handoff", type=Path, help="the handoff of the head or body (e.g. split/rest)")
+    p.add_argument("mesh", type=Path, help="the placed head or body mesh, to set the eyeballs on")
+    p.add_argument("--output", type=Path, required=True, help="new folder: eyes/, rest/, eyes.json, anatomy.json")
+    p.add_argument("--view", default="front", help="the drawing that looks at the face")
+    p.add_argument("--zone", type=float, default=1.9,
+                   help="the surroundings of an eye, in iris radii: only --view paints there")
+    p.add_argument("--protrude", type=float, default=0.5, help="share of the eyeball's depth that stands out of the head")
+    p.add_argument("--from-part", action="store_true",
+                   help="HANDOFF is the eyes part from `split-views` (the white included): make one eyeball for each "
+                        "piece of it, and write no rest/ (use the rest/ of `split-views`)")
+    p.add_argument("--source-handoff", type=Path,
+                   help="with --from-part: the handoff that the eyes were split from; writes within/<view>.png "
+                        "for `split-views --within`")
+
+    p = sub.add_parser("redraw-view", help="change one drawing so that it agrees with the design of another")
+    p.add_argument("drawing", type=Path, help="the drawing to change (RGBA cut-out, or on a flat background)")
+    p.add_argument("example", type=Path, help="a drawing that shows the wanted design")
+    p.add_argument("--change", required=True, help='what to change, e.g. "the arms wear cream knit sleeves"')
+    p.add_argument("--output", type=Path, required=True, help="new .png (RGBA)")
+    p.add_argument("--subject", default="the character")
+    p.add_argument("--server", default="http://127.0.0.1:8188", help="local ComfyUI (loopback only)")
+    p.add_argument("--size", type=int, default=768)
+    p.add_argument("--steps", type=int, default=20)
+    p.add_argument("--seed", type=int, default=7)
+
     p = sub.add_parser("split-views", help="split the drawings into one part and the rest, to model each alone")
     p.add_argument("handoff", type=Path)
     p.add_argument("--part", required=True, help='the part to take out, in plain words for the editor, e.g. "tail"')
@@ -470,6 +496,10 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--subject", default="the character", help='e.g. "the cartoon squirrel"')
     p.add_argument("--behind", default="the body and the clothes", help="what the part hides, for the editor")
     p.add_argument("--keep", default="", help="what the editor must not take away with the part")
+    p.add_argument("--no-fill", action="store_true",
+                   help="leave a hole in rest/ where the part was (the bake fills it), not the editor's guess")
+    p.add_argument("--within", type=Path,
+                   help="folder with <view>.png masks (white: where the part can be); a change outside is dropped")
     p.add_argument("--server", default="http://127.0.0.1:8188", help="local ComfyUI (loopback only)")
     p.add_argument("--size", type=int, default=768)
     p.add_argument("--steps", type=int, default=20)
@@ -1282,12 +1312,38 @@ def _run(args) -> int:
                                  min_iou=args.min_iou, min_usable=args.min_usable, weight=args.weight, owners=owners)
         print(json.dumps(manifest["views"], indent=2))
         return 0
+    if args.command == "split-eyes":
+        from .eyes import split_eyes
+        from .mesh import read_mesh
+        from .texture import read_obj_uv
+
+        out = _new_dir(args.output)
+        head = read_obj_uv(args.mesh)[0] if args.mesh.suffix.lower() == ".obj" else read_mesh(args.mesh)
+        if args.from_part:
+            from .eyes import eyeballs_from_part
+
+            report = eyeballs_from_part(args.handoff, head, out, view=args.view, source_handoff=args.source_handoff)
+        else:
+            report = split_eyes(args.handoff, head, out, view=args.view, zone=args.zone, protrude=args.protrude)
+        print(json.dumps(report, indent=2))
+        return 0
+    if args.command == "redraw-view":
+        from ..reconstruction.completion_image_generation import _LocalComfyClient
+        from .redraw import redraw_view
+
+        if args.output.exists():
+            raise FileExistsError(f"{args.output} exists. Each output is a new revision.")
+        report = redraw_view(args.drawing, args.example, args.output, _LocalComfyClient(args.server),
+                             change=args.change, subject=args.subject, size=args.size, steps=args.steps, seed=args.seed)
+        print(json.dumps(report, indent=2))
+        return 0
     if args.command == "split-views":
         from ..reconstruction.completion_image_generation import _LocalComfyClient
         from .split_views import split_views
 
         report = split_views(args.handoff, args.output, _LocalComfyClient(args.server), part=args.part,
                              name=args.name, subject=args.subject, behind=args.behind, keep=args.keep,
+                             within=args.within, fill=not args.no_fill,
                              views=args.views.split(",") if args.views else None, size=args.size, steps=args.steps,
                              change_delta_e=args.change_delta_e)
         print(json.dumps(report, indent=2))
