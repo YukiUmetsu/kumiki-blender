@@ -68,6 +68,22 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="kumiki-character-build", description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
 
+    p = sub.add_parser("plan-region-batch", help="plan deterministic source-locked rebuild tasks with safe Blender worker concurrency")
+    p.add_argument("--character", type=Path, required=True, help="frozen CharacterSpec v2 plan directory")
+    p.add_argument("--changed", action="append", required=True, help="changed region ID; repeat for multiple roots")
+    p.add_argument("--max-workers", type=int, default=1, help="simultaneous heavyweight Blender task ceiling")
+    p.add_argument("--memory-gib", type=int, default=24, help="local host memory budget, default M4 24 GiB")
+    p.add_argument("--output", type=Path, required=True, help="new immutable batch plan revision")
+
+    p = sub.add_parser("resume-region-batch", help="audit source-bound receipts and list unblocked next Blender part tasks")
+    p.add_argument("--plan", type=Path, required=True, help="previous region-batch-plan.json")
+    p.add_argument("--receipts", type=Path, help="optional preserved and completed part SHA receipts")
+    p.add_argument("--output", type=Path, required=True, help="new immutable batch progress snapshot")
+
+    p = sub.add_parser("character-benchmark", help="collect source-locked region, color, rig and GLB evidence into one review")
+    p.add_argument("--manifest", type=Path, required=True, help="frozen CharacterSpec and existing stage report paths")
+    p.add_argument("--output", type=Path, required=True, help="new immutable benchmark report + SUMMARY.md")
+
     p = sub.add_parser("plan-landmark-fit", help="source-lock geodesic mesh fit to explicitly triangulated 3D landmarks")
     p.add_argument("--blend", type=Path, required=True, help="approved unrigged source .blend")
     p.add_argument("--landmarks", type=Path, required=True, help="registered landmark report")
@@ -220,6 +236,12 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--axial-alignment-min", type=float, default=.6)
     p.add_argument("--output", type=Path, required=True)
 
+    p = sub.add_parser("refine-surface", help="feature-preserving pre-rig surface fairing with optional source QA")
+    p.add_argument("--blend", type=Path, required=True, help="approved editable source .blend")
+    p.add_argument("--config", type=Path, required=True, help="validated smoothing and protection policy JSON")
+    p.add_argument("--output", type=Path, required=True, help="new immutable candidate/QA revision")
+    p.add_argument("--blender", help="Blender executable")
+
     p = sub.add_parser("refine-joint-topology", help="add bounded Blender BMesh hinge loops on an unskinned quad cage")
     p.add_argument("--plan", type=Path, required=True, help="joint-refine-plan.json")
     p.add_argument("--output", type=Path, required=True, help="new hinge-retopo.blend and OBJ revision")
@@ -246,6 +268,19 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--plan", type=Path, required=True, help="bounded pose battery JSON")
     p.add_argument("--output", type=Path, required=True, help="new immutable report directory")
     p.add_argument("--blender", help="local Blender executable path")
+    p = sub.add_parser("repair-rig-weights",
+                       help="bounded semantic skin-weight correction without changing source mesh or .blend")
+    p.add_argument("--blend", type=Path, required=True, help="original saved rig .blend")
+    p.add_argument("--pose-plan", type=Path, required=True,
+                   help="validated pose QA JSON with explicit weight_zones")
+    p.add_argument("--output", type=Path, required=True, help="new immutable repaired .blend or preview report")
+    p.add_argument("--max-removed-weight", type=float, default=.15,
+                   help="maximum total foreign influence removed from one vertex; default .15, max .5")
+    p.add_argument("--max-changed-vertices", type=int, default=2000,
+                   help="maximum repaired vertices across all marked regions; default 2000")
+    p.add_argument("--dry-run", action="store_true", help="preview affected vertices without editing a .blend")
+    p.add_argument("--blender", help="local Blender executable path")
+
 
     p = sub.add_parser("repair-penetrations", help="bounded BVH collision repair for named Blender object pairs")
     p.add_argument("--blend", type=Path, required=True, help="original editable .blend file")
@@ -253,11 +288,26 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--output", type=Path, required=True, help="new revision directory")
     p.add_argument("--blender", help="local Blender binary")
 
+    p = sub.add_parser("inspect-region-sculpt-source",
+                       help="read-only Blender mesh SHA and candidate surface seed vertices")
+    p.add_argument("--blend", type=Path, required=True)
+    p.add_argument("--object", required=True, help="exact Blender mesh object name")
+    p.add_argument("--anchor", nargs=3, type=float, action="append",
+                   metavar=("X", "Y", "Z"), help="candidate world-space seed anchor, repeatable")
+    p.add_argument("--output", type=Path, required=True)
+    p.add_argument("--blender")
+
     p = sub.add_parser("refine-region", help="bounded local sculpt edit; preserve all other .blend objects")
     p.add_argument("--blend", type=Path, required=True, help="editable source Blender file")
     p.add_argument("--plan", type=Path, required=True, help="region sculpt correction JSON")
     p.add_argument("--output", type=Path, required=True, help="new revision containing refined.blend and region.obj")
     p.add_argument("--blender")
+    p.add_argument("--character", type=Path, help="frozen CharacterSpec v2 plan for automatic original-art QA")
+    p.add_argument("--region", help="region ID to source-audit; requires --character")
+    p.add_argument("--qa-before", type=Path, help="previous Z-up source-frame part for source QA")
+    p.add_argument("--max-regression", type=float, default=.01)
+    p.add_argument("--max-contour-regression", type=float, default=.03)
+    p.add_argument("--min-iou", type=float)
 
 
 
@@ -561,6 +611,23 @@ def main(argv: list[str] | None = None) -> int:
 def _run(args) -> int:
     from .views import ingest
 
+    if args.command == "plan-region-batch":
+        from .region_batch import save_region_batch
+        report = save_region_batch(
+            args.character, args.changed, args.output,
+            max_workers=args.max_workers, memory_gib=args.memory_gib)
+        print(json.dumps(report, indent=2))
+        return 0
+    if args.command == "resume-region-batch":
+        from .region_batch import resume_region_batch
+        report = resume_region_batch(args.plan, args.receipts, args.output)
+        print(json.dumps(report, indent=2))
+        return 0 if report["status"] == "complete-awaiting-source-and-animation-qa" else 1
+    if args.command == "character-benchmark":
+        from .benchmark import character_benchmark
+        report = character_benchmark(args.manifest, args.output)
+        print(json.dumps(report, indent=2))
+        return 0 if report["numeric_gates_pass"] else 1
     if args.command == "plan-landmark-fit":
         from .landmark_fit_plan import save_landmark_fit_plan
         report = save_landmark_fit_plan(args.blend, args.landmarks, args.spec, args.output)
@@ -708,6 +775,19 @@ def _run(args) -> int:
         print(json.dumps(report, indent=2))
         # A no-op collision check is a valid, non-destructive result.
         return 0
+    if args.command == "inspect-region-sculpt-source":
+        from .blender import run_worker
+        if not args.blend.is_file() or args.blend.suffix.lower() != ".blend":
+            raise ValueError("--blend must be a saved Blender .blend")
+        if args.output.exists():
+            raise FileExistsError(f"Output revision exists: {args.output}")
+        report = run_worker("region-sculpt", {
+            "inspect_only": True, "object": args.object, "anchors": args.anchor or [],
+            "source_blend": str(args.blend.resolve()),
+            "output": str(args.output.resolve()),
+        }, blender=args.blender, blend_file=args.blend.resolve())
+        print(json.dumps(report, indent=2))
+        return 0
     if args.command == "refine-region":
         from .region_sculpt_plan import load_region_sculpt_plan
         from .blender import run_worker
@@ -715,13 +795,63 @@ def _run(args) -> int:
             raise ValueError("--blend must be an existing Blender .blend file")
         if args.output.exists():
             raise FileExistsError(f"Output revision already exists: {args.output}")
+        if (args.character is None) != (args.region is None):
+            raise ValueError("Automatic source QA requires both --character and --region")
+        if args.qa_before is not None and args.character is None:
+            raise ValueError("--qa-before requires --character and --region")
         plan = load_region_sculpt_plan(args.plan)
+        source_gate_before = None
+        if args.character is not None:
+            from .character_spec_v2 import open_plan
+            from .region_revision_gate import _canonical_mesh, _number
+            _number(args.max_regression, "max_regression", 0, 1)
+            _number(args.max_contour_regression, "max_contour_regression", 0, 1)
+            if args.min_iou is not None:
+                _number(args.min_iou, "min_iou", 0, 1)
+            source_plan, character_spec = open_plan(args.character)
+            region = next((r for r in character_spec["regions"]
+                           if r["id"] == args.region), None)
+            if region is None or not region.get("verified_views"):
+                raise ValueError("Original-art QA requires an existing region with verified views")
+            if args.qa_before is None and "source_mesh" not in region:
+                raise ValueError("Region has no original mesh; supply --qa-before")
+            source_gate_before = _canonical_mesh(
+                args.qa_before if args.qa_before is not None
+                else Path(source_plan["source_spec"]).parent / region["source_mesh"],
+                "baseline")
         report = run_worker("region-sculpt", {
             "plan": plan, "output": str(args.output.resolve()),
             "source_blend": str(args.blend.resolve())},
             blender=args.blender, blend_file=args.blend.resolve())
-        print(json.dumps(report, indent=2))
-        return 0
+        if args.character is None:
+            print(json.dumps(report, indent=2))
+            return 0
+        from .region_revision_gate import gate_region_revision
+        qa = gate_region_revision(
+            args.character, args.region, args.output / "region-source.obj",
+            args.output / "source-fidelity", before=source_gate_before,
+            max_regression=args.max_regression,
+            max_contour_regression=args.max_contour_regression,
+            min_iou=args.min_iou)
+        receipt = {
+            "schema_version": 1,
+            "status": ("source-regression-rejected" if not qa["numeric_gate_pass"]
+                       else "source-numeric-gate-artistic-review-required"),
+            "modeling_report": "report.json",
+            "modeling_blend": "refined.blend",
+            "modeling_source_frame_obj": "region-source.obj",
+            "source_qa_report": "source-fidelity/report.json",
+            "source_sha256": qa["source_spec_sha256"],
+            "character_id": character_spec["character_id"],
+            "region_id": args.region,
+            "failed_views": qa["failed_views"],
+            "numeric_gate_pass": qa["numeric_gate_pass"],
+            "artistic_review_required": True,
+        }
+        (args.output / "source-fidelity-receipt.json").write_text(
+            json.dumps(receipt, indent=2) + "\n", encoding="utf-8")
+        print(json.dumps(receipt, indent=2))
+        return 0 if qa["numeric_gate_pass"] else 1
     if args.command == "plan-talking-performance":
         from .talking_plan import save_talking_plan
         report = save_talking_plan(args.blend, args.cues, args.clip, args.start,
@@ -826,6 +956,11 @@ def _run(args) -> int:
                                         axial_alignment_min=args.axial_alignment_min)
         print(json.dumps(report, indent=2))
         return 0
+    if args.command == "refine-surface":
+        from .surface_refinement_runner import run_surface_refinement
+        report = run_surface_refinement(args.blend, args.config, args.output, blender=args.blender)
+        print(json.dumps(report, indent=2))
+        return 1 if report["status"] == "reference-regression-rejected" else 0
     if args.command == "refine-joint-topology":
         from .joint_refine_plan import load_joint_refine_plan
         from .topology_zones import load_topology_plan
@@ -872,6 +1007,43 @@ def _run(args) -> int:
                             blender=args.blender, blend_file=args.blend.resolve())
         print(json.dumps(report, indent=2))
         return 1 if report["status"] == "structural-fail" else 0
+    if args.command == "repair-rig-weights":
+        import hashlib
+        import math
+        from .pose_spec import load_pose_plan
+        from .blender import run_worker
+        if not args.blend.is_file() or args.blend.suffix.lower() != ".blend":
+            raise ValueError("--blend must be an existing saved Blender .blend")
+        if args.output.exists():
+            raise FileExistsError(f"Output revision already exists: {args.output}")
+        if (not math.isfinite(args.max_removed_weight) or
+                not 0 < args.max_removed_weight <= .5):
+            raise ValueError("--max-removed-weight must be finite in (0, 0.5]")
+        if not 1 <= args.max_changed_vertices <= 10000:
+            raise ValueError("--max-changed-vertices must be within 1 to 10000")
+        plan = load_pose_plan(args.pose_plan)
+        zones = plan.get("weight_zones", [])
+        if not zones:
+            raise ValueError("Pose plan needs nonempty weight_zones with explicit allowed bones")
+        if any(zone["max_outside_weight"] >= args.max_removed_weight for zone in zones):
+            raise ValueError("Each weight-zone outside tolerance must be below the maximum repair weight")
+        digest = hashlib.sha256()
+        with args.blend.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+        report = run_worker("weight-repair", {
+            "source_blend": str(args.blend.resolve()),
+            "source_blend_sha256": digest.hexdigest(),
+            "armature": plan["armature"],
+            "weight_zones": zones,
+            "max_removed_weight": args.max_removed_weight,
+            "max_changed_vertices": args.max_changed_vertices,
+            "dry_run": args.dry_run,
+            "output": str(args.output.resolve()),
+        }, blender=args.blender, blend_file=args.blend.resolve())
+        print(json.dumps(report, indent=2))
+        return 0
+
     if args.command == "ingest":
         used = ingest(args.source, args.mapping, args.destination)
         print(json.dumps(used, indent=2))

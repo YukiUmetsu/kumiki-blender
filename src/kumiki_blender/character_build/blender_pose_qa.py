@@ -6,6 +6,7 @@ Contact checks are advisory surface intersections, not a physics simulation.
 """
 from __future__ import annotations
 
+import hashlib
 import math
 import sys
 from pathlib import Path
@@ -16,6 +17,11 @@ from mathutils.bvhtree import BVHTree
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from kumiki_blender.character_build.blender_common import arguments, write_report  # noqa: E402
+from kumiki_blender.character_build.deformation_metrics import (  # noqa: E402
+    collision_delta,
+    pose_motion,
+)
+from kumiki_blender.character_build.weight_zone_metrics import audit_weight_zone  # noqa: E402
 
 
 def skin_weights(mesh, deform_bones: set[str]) -> dict:
@@ -29,6 +35,36 @@ def skin_weights(mesh, deform_bones: set[str]) -> dict:
         bad_sum += bool(influences and abs(sum(influences) - 1.0) > .02)
     return {"vertices": count, "unweighted": missing,
             "over_four_influences": excessive, "non_normalized": bad_sum}
+
+
+def skin_weight_zone(mesh, zone: dict, deform_bones: set[str]) -> dict:
+    """Audit explicit semantic part regions before playing the pose battery."""
+    group = mesh.vertex_groups.get(zone["region_group"])
+    if group is None:
+        raise ValueError(f"{mesh.name}: missing semantic vertex group {zone['region_group']}")
+    allowed = set(zone["allowed_bones"])
+    if not allowed <= deform_bones:
+        raise ValueError(f"{mesh.name}/{zone['region_group']}: allowed_bones contain "
+                         f"missing or non-deforming bones: {sorted(allowed - deform_bones)}")
+    if zone["region_group"] in deform_bones:
+        raise ValueError("Semantic zone must use a separate non-deforming vertex group")
+
+    def samples():
+        for vertex in mesh.data.vertices:
+            member = 0.0
+            influences = {}
+            for entry in vertex.groups:
+                bone_name = mesh.vertex_groups[entry.group].name
+                if bone_name == zone["region_group"]:
+                    member = entry.weight
+                if bone_name in deform_bones and entry.weight > 0:
+                    influences[bone_name] = entry.weight
+            yield vertex.index, member, influences
+
+    return audit_weight_zone(
+        samples(), allowed,
+        max_outside_weight=zone["max_outside_weight"],
+        min_vertices=zone["min_vertices"])
 
 
 def snapshot(obj, depsgraph) -> dict:
@@ -93,13 +129,30 @@ def world_bvh(obj, depsgraph):
     try:
         vertices = [evaluated.matrix_world @ vertex.co for vertex in mesh.vertices]
         polygons = [tuple(poly.vertices) for poly in mesh.polygons]
-        return BVHTree.FromPolygons(vertices, polygons)
+        # Polygon connectivity is part of the collision identity. BVH overlaps
+        # cannot be compared by triangle index if a modifier retopologized the mesh.
+        return BVHTree.FromPolygons(vertices, polygons), (len(vertices), tuple(polygons))
     finally:
         evaluated.to_mesh_clear()
+
 
 def main() -> None:
     args = arguments()
     output = Path(args["output"]).resolve()
+    # A pose report without the exact saved source .blend SHA cannot be
+    # trusted by downstream M0 benchmarks after the rig has been edited.
+    if not bpy.data.filepath:
+        raise ValueError("Pose QA requires an existing, saved source .blend")
+    source_blend = Path(bpy.data.filepath).resolve()
+    if not source_blend.is_file() or source_blend.suffix.lower() != ".blend":
+        raise ValueError("Pose QA source .blend is missing or unsaved")
+    def original_hash():
+        digest = hashlib.sha256()
+        with source_blend.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
+    source_sha = original_hash()
     if output.exists():
         raise FileExistsError(f"Revision exists: {output}")
     plan = args["plan"]
@@ -135,12 +188,35 @@ def main() -> None:
     bpy.context.view_layer.update()
     depsgraph = bpy.context.evaluated_depsgraph_get()
     rest = {o.name: snapshot(o, depsgraph) for o in bound}
+    collision_baselines = {}
+    for first, second in plan.get("collision_pairs", []):
+        a, topology_a = world_bvh(bpy.data.objects[first], depsgraph)
+        b, topology_b = world_bvh(bpy.data.objects[second], depsgraph)
+        collision_baselines[(first, second)] = (
+            set(a.overlap(b)), (topology_a, topology_b))
     deform_bones = {bone.name for bone in rig.data.bones if bone.use_deform}
     weights = {o.name: skin_weights(o, deform_bones) for o in bound}
     problems: list[str] = []
     for name, result in weights.items():
         if any(result[key] for key in ("unweighted", "over_four_influences", "non_normalized")):
             problems.append(f"{name}: incomplete/invalid deform weights")
+    named_meshes = {obj.name: obj for obj in bound}
+    weight_zones = []
+    for zone in plan.get("weight_zones", []):
+        mesh = named_meshes.get(zone["mesh"])
+        if mesh is None:
+            raise ValueError(f"Weight zone mesh {zone['mesh']} is not bound to the armature")
+        result = skin_weight_zone(mesh, zone, deform_bones)
+        weight_zones.append({
+            "mesh": mesh.name, "region_group": zone["region_group"],
+            "allowed_bones": zone["allowed_bones"], **result,
+        })
+        if result["status"] != "pass":
+            problems.append(
+                f"{mesh.name}/{zone['region_group']}: {result['violating_vertices']} "
+                f"vertices exceed outside-weight limit and "
+                f"{result['selected_vertices']} belong to the marked region "
+                f"(minimum {result['minimum_required_vertices']})")
     poses = []
     try:
         for item in plan["poses"]:
@@ -151,9 +227,22 @@ def main() -> None:
                 vector["XYZ".index(rotation["axis"])] = math.radians(rotation["degrees"])
                 rig.pose.bones[bone_name].rotation_euler = vector
             bpy.context.view_layer.update()
-            entry = {"name": item["name"], "meshes": {}, "collision_candidates": []}
+            entry = {"name": item["name"], "meshes": {},
+                     "collision_candidates": [], "contact_deltas": []}
             for obj in bound:
-                metrics = deformation(rest[obj.name], snapshot(obj, depsgraph))
+                current = snapshot(obj, depsgraph)
+                try:
+                    motion = pose_motion(rest[obj.name]["coords"], current["coords"])
+                except ValueError:
+                    motion = {"finite": False, "max_vertex_displacement_m": None,
+                              "p95_vertex_displacement_m": None, "moving_vertices": None}
+                if not motion["finite"]:
+                    metrics = {"status": "fail", "nonfinite_or_changed_vertices": True,
+                               "topology_changed": len(rest[obj.name]["coords"]) != len(current["coords"])}
+                    problems.append(f"{item['name']}/{obj.name}: invalid evaluated vertex coordinates")
+                else:
+                    metrics = deformation(rest[obj.name], current)
+                metrics["motion"] = motion
                 entry["meshes"][obj.name] = metrics
                 if metrics.get("topology_changed"):
                     problems.append(f"{item['name']}/{obj.name}: topology changed during deformation")
@@ -161,15 +250,39 @@ def main() -> None:
                 if limit is not None and metrics.get("p95_relative_edge_stretch") is not None and (
                     metrics["p95_relative_edge_stretch"] > limit):
                     problems.append(f"{item['name']}/{obj.name}: edge stretch exceeded {limit}")
+            entry["max_vertex_displacement_m"] = max(
+                (metrics["motion"]["max_vertex_displacement_m"] or 0)
+                for metrics in entry["meshes"].values())
+            min_motion = plan.get("min_pose_displacement_m")
+            if min_motion is not None and entry["max_vertex_displacement_m"] < min_motion:
+                problems.append(
+                    f"{item['name']}: evaluated meshes moved less than {min_motion} m; "
+                    "check bone influence, constraints and Action overrides")
             for first, second in plan.get("collision_pairs", []):
-                a, b = bpy.data.objects[first], bpy.data.objects[second]
-                tree_a = world_bvh(a, depsgraph)
-                tree_b = world_bvh(b, depsgraph)
-                overlap = len(tree_a.overlap(tree_b))
-                if overlap:
+                a, topology_a = world_bvh(bpy.data.objects[first], depsgraph)
+                b, topology_b = world_bvh(bpy.data.objects[second], depsgraph)
+                baseline, topology = collision_baselines[(first, second)]
+                if (topology_a, topology_b) != topology:
+                    problems.append(
+                        f"{item['name']}/{first}-{second}: collision mesh topology changed; "
+                        "triangle-index contact deltas are invalid")
+                    entry["contact_deltas"].append({
+                        "objects": [first, second], "status": "topology-changed"})
                     entry["collision_candidates"].append({
-                        "objects": [first, second], "overlapping_triangle_pairs": overlap,
-                        "status": "requires-contact-review"})
+                        "objects": [first, second], "status": "topology-changed"})
+                    continue
+                delta = collision_delta(baseline, a.overlap(b))
+                entry["contact_deltas"].append({"objects": [first, second], **delta})
+                if delta["posed_overlapping_triangle_pairs"]:
+                    entry["collision_candidates"].append({
+                        "objects": [first, second],
+                        "overlapping_triangle_pairs": delta["posed_overlapping_triangle_pairs"],
+                        **delta})
+                max_new = plan.get("max_new_collision_pairs")
+                if max_new is not None and delta["new_overlapping_triangle_pairs"] > max_new:
+                    problems.append(
+                        f"{item['name']}/{first}-{second}: {delta['new_overlapping_triangle_pairs']} "
+                        f"new triangle overlap pairs exceed {max_new}")
             if plan.get("render"):
                 output.mkdir(parents=True, exist_ok=True)
                 bpy.context.scene.render.engine = "BLENDER_WORKBENCH"
@@ -193,20 +306,31 @@ def main() -> None:
 
     result = {
         "schema_version": 1,
+        "source_blend": str(source_blend),
+        "source_blend_sha256": source_sha,
         "status": "structural-fail" if problems else "deformation-review-required",
         "armature": rig.name,
         "bound_meshes": sorted(o.name for o in bound),
         "rest_skin_weights": weights,
+        "rest_weight_zones": weight_zones,
         "poses": poses,
         "problems": problems,
         "limitations": [
-            "Surface triangle intersection counts are advisory, not penetration volumes.",
+            "Neutral-relative triangle contacts are advisory, not penetration volumes; "
+            "only explicitly named pairs are checked.",
+            "Triangle indices are compared only when evaluated polygon topology is unchanged.",
+            "Motion displacement includes root movement and cannot certify local skin weights.",
+            "Weight-zone checks cover only explicitly marked non-deforming semantic groups; "
+            "unmarked anatomy is not certified.",
+            "Weight-zone violations are conservative bone-influence checks, not deformation quality scores.",
             "Closed-manifold volume changes are diagnostic, not sufficient to certify deformation.",
             "Edge stretch and area change do not certify aesthetic quality or joint motion.",
             "A neutral pose is reconstructed by zeroing controller pose transforms; verify the intended rest state.",
             "No source .blend is written or overwritten.",
         ],
     }
+    if original_hash() != source_sha:
+        raise ValueError("Source Blender rig changed while running the pose battery")
     write_report(output, result)
 
 

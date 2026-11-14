@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "character_plan": "qa/character-plan-r01",
+  "required_checks": ["regions", "textures", "pose", "glb"],
+  "required_regions": ["eye.L", "eye.R", "wing.L", "wing.R"],
+  "required_poses": ["head_turn", "wing_fold_L", "wing_fold_R"],
+  "required_clips": ["idle", "talk", "wing_fold"],
+  "region_reports": [
+    {"region": "eye.L", "report": "qa/eye-L-r02/report.json"},
+    {"region": "eye.R", "report": "qa/eye-R-r02/report.json"}
+  ],
+  "texture_reports": [
+    {
+      "id": "basecolor",
+      "report": "qa/texture-r02/report.json",
+      "inputs": {
+        "handoff_spec": "handoff/spec.json",
+        "mesh_obj": "models/character.source.obj",
+        "baseline_texture": "textures/basecolor-r01.png",
+        "candidate_texture": "textures/basecolor-r02.png",
+        "aligned_front": "handoff/aligned/front.png"
+      }
+    }
+  ],
+  "pose_report": {"report": "qa/rig-poses-r02/report.json", "blend": "models/character-rig-r02.blend"},
+  "glb": "export/character-r02.glb",
+  "runtime_observations": []
+}

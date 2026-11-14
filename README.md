@@ -1,605 +1,127 @@
 # Kumiki Blender
 
-## Character build: reference images to a fitted, rigged model
+Local-first tools for **Blender asset creation, reference-guided character modeling, photographic 3D reconstruction, and animation export**. The repository combines Python geometry/validation code with native Blender workers, reusable asset recipes, and source-aware quality checks.
 
-**[Character build pipeline](docs/CHARACTER_BUILD.md)**: check orthographic character views against each other and in 3D, then make a blockout, fit any mesh (for example an image-to-3D result) to every view, project colours, scatter feather or fur cards, retopologize, estimate joints and rig. Each stage reports IoU against the approved images.
+This is a **toolkit, not a one-click photorealistic model generator**. Automated steps produce inspectable candidates; source likeness, anatomical accuracy, materials, and animation still need visual review.
+
+## Get started
+
+Run commands from the repository root. The core Python package requires **Python 3.11+**. Use **Blender 4.5 LTS** for the most consistently tested native workers; individual workflows may support other versions.
+
+### Validate a procedural asset without Blender
+
+```bash
+python -m pip install -e .
+python -m kumiki_blender validate --recipe examples/lattice-observation-tower.json
+```
+
+Validation checks the recipe and reports its structural data. It does not render or create a 3D model.
+
+### Build an editable 3D asset
+
+```bash
+blender --background --factory-startup --python-exit-code 1 --python scripts/blender_entry.py -- build --recipe examples/lattice-observation-tower.json --output .review/lattice-observation-tower/r01
+```
+
+This procedural example generates a Blender scene, GLB, previews, and a revision manifest. Choose an **unused output directory** for each run. For fast inspection renders, prefix the command with `KUMIKI_RENDER_PROFILE=smoke`; smoke previews are not production-quality evidence.
+
+### Start from character reference images
 
 ```bash
 python -m pip install -e '.[character-build]'
-kumiki-character-build check refs/ && kumiki-character-build handoff refs/ --height-m 0.35
+kumiki-character-build check /path/to/character-references
+kumiki-character-build handoff /path/to/character-references --height-m 0.35
 ```
 
-## Reusable character conflict repair
+The reference directory must contain the expected named views. The handoff prepares registered images, masks, and an initial blockout; it **does not** by itself produce a finished, rigged character. Follow the [character build guide](docs/CHARACTER_BUILD.md) for view naming, mesh fitting, textures, retopology, and rigging.
 
-[Repair guide](docs/CHARACTER_CONFLICT_REPAIR.md) · [texture repair policy](examples/character-conflict-repair.example.json) · [geometry repair policy](examples/character-penetration-repair.example.json)
+## Command-line interfaces
 
-Use `resolve-conflicts` to improve multiview texture ownership and projection seams with per-view regression gates. Use `repair-penetrations` to generate bounded, non-destructive Blender geometry candidates for explicitly declared object pairs. Semantic UV masks, named attachment vertex groups, guarded object contacts, and automatic rollback are configurable per character. The geometry worker does not certify silhouette fidelity, rig deformation, or artistic likeness; review candidates before use.
+| Entry point | Use |
+| --- | --- |
+| `kumiki-blender` | Procedural assets, catalog, GLB audits, photography-based reconstruction, physics, and export |
+| `kumiki-character-build` | Character-reference preparation, geometry, textures, anatomy, rigging, and source regression checks |
+| `kumiki-character-qa` | Independent character-part, silhouette, appearance, and depth review |
+| `scripts/blender_entry.py` | Run `kumiki-blender` subcommands inside Blender's Python environment |
 
-## Orthographic source landmark recovery
+Each interface exposes its currently supported arguments through `--help` (and `<command> --help` for a subcommand). The root CLI and the character CLI are different tools; their subcommands are not interchangeable.
 
-[Registered multiview landmark guide](docs/CHARACTER_LANDMARK_TRIANGULATION.md)
+## Character modeling and animation
 
-The additive triangulate-landmarks command reconstructs candidate 3D eye, muzzle, beak, wing and other landmark positions from at least two **independently registered 1600x1200** drawings. It preserves original cameras and rejects unobservable baselines, inconsistent annotated positions, modified source images and unverified image dimensions. Results can guide the explicit 3D anatomy part authoring workflow. Source alignment and real likeness still require artistic review.
+Character work is organized around **registered source images and separately editable parts**. The following capabilities are implemented; none implies automatic approval of a finished sculpt.
 
-## Source-anchored high-detail anatomy
+| Stage | Available commands | Documentation |
+| --- | --- | --- |
+| Reference preparation and silhouette fitting | `check`, `handoff`, `compare`, `fit` | [Character build](docs/CHARACTER_BUILD.md) |
+| CharacterSpec and isolated part revisions | `plan-character`, `plan-region`, `compare-region`, `audit-region-revision` | [Production v2](docs/CHARACTER_PRODUCTION_V2.md), [source revision gate](docs/CHARACTER_REGION_REVISION_GATE.md) |
+| Registered landmarks and editable anatomical parts | `triangulate-landmarks`, `resolve-anatomy-landmarks`, `plan-anatomy`, `build-anatomy`, `fit-landmark-surface` | [Anatomy authoring](docs/CHARACTER_ANATOMY_AUTHORING.md), [geodesic landmark fitting](docs/CHARACTER_GEODESIC_LANDMARK_FIT.md) |
+| Surface and joint corrections | `refine-region`, `refine-surface`, `refine-joint-topology`, `repair-penetrations` | [Surface refinement](docs/CHARACTER_SURFACE_REFINEMENT.md), [hinge topology](docs/CHARACTER_HINGE_TOPOLOGY.md), [conflict repair](docs/CHARACTER_CONFLICT_REPAIR.md) |
+| UV textures and part-aware baking | `texture`, `parts`, `texture-parts`, `resolve-conflicts`, `audit-texture-revision` | [Character build](docs/CHARACTER_BUILD.md), [texture revision gate](docs/CHARACTER_TEXTURE_REVISION_GATE.md) |
+| Rig and deformation validation | `plan-rig-controls`, `apply-rig-controls`, `validate-rig`, `audit-topology` | [Production v2](docs/CHARACTER_PRODUCTION_V2.md), [animation baking](docs/CHARACTER_ANIMATION_BAKE.md) |
+| Facial animation and performance export | `plan-visemes`, `animate-visemes`, `plan-performance`, `export-performance`, `export-talking-performance` | [Visemes](docs/CHARACTER_VISEME_ANIMATION.md), [performance export](docs/CHARACTER_PERFORMANCE_EXPORT.md) |
 
-[Anatomy authoring guide](docs/CHARACTER_ANATOMY_AUTHORING.md) · [explicit 3D part recipe example](examples/character-anatomy.example.json)
+Anatomical features are authored as actual Blender geometry, not merely simulated with smooth shading. Feature-preserving surface fairing operates on eligible **pre-rig, closed meshes** and can reject excess deformation or source-silhouette regressions. It is not adaptive remeshing or a replacement for artist-directed topology.
 
-Commands plan-anatomy / build-anatomy create **separate, fully editable real 3D anatomy** for source-placed eyes (sclera/iris/pupil), curved eyelids and brow/lip rims, and contour-lofted beaks/muzzles without voxel-remeshing finished parts or silently mirroring anatomy. Blender 4.5 produces an immutable anatomy.blend, independent part OBJ files and provenance/topology reports. Coordinates and colors must be reviewed against the character references; this is a procedural modeling tool, **not automatic original-image reconstruction or artistic approval**.
+For independent review of a character sheet against an existing Blender model, install `.[character-qa]` and consult [Character Fidelity Review](docs/CHARACTER_FIDELITY_REVIEW.md). Optional local SAM 2.1 and MoGe checkpoints can assist mask and depth analysis; their model weights are **not** included in the core package.
 
-### Registered 2D landmarks to native 3D parts
+### Incremental region planning and release evidence
 
-[Automatic landmark substitution guide](docs/CHARACTER_LANDMARK_TO_ANATOMY.md)
+When a single part changes, `plan-region-batch` records the affected region dependencies and a bounded execution schedule; `resume-region-batch` checks SHA-256 receipts before reporting which tasks are eligible to run. **These commands plan and audit work; they do not launch Blender workers or certify completed parts.** See [incremental region planning](docs/CHARACTER_REGION_BATCH.md).
 
-Use resolve-anatomy-landmarks to fill explicitly named eyeball, eyelid, beak and muzzle control-point placeholders from triangulate-landmarks 3D results. The resolver validates source-image provenance, rejects unsolved landmarks and leaves the existing Blender source unchanged. Run independent reference alignment and deformation QA on each modeled part.
+The `character-benchmark` command collects existing source-registered region comparisons, texture checks, saved Blender rig/pose reports, and an animated GLB into one provenance-checked release-evidence report. Missing evidence or failed numeric checks remain visible; a numeric pass still requires artistic and animation review. See [character benchmark](docs/CHARACTER_M0_BENCHMARK.md) and the [manifest example](examples/character-benchmark.example.json).
 
-### Registered landmark fitting of existing detailed meshes
+## Photographs to 3D
 
-[Surface-geodesic fitting guide](docs/CHARACTER_GEODESIC_LANDMARK_FIT.md)
+There are two distinct reconstruction outputs:
 
-Commands plan-landmark-fit and fit-landmark-surface move explicitly mapped, pre-rig mesh vertices toward triangulated original-art landmarks using surface-connected (geodesic) influence rather than a spatial brush. Protected vertices, UVs, materials, neighboring components and original Blender sources are guarded. This is a controlled geometric revision, not inferred anatomy or artistic approval.
+| Workflow | Output and limitation | Guide |
+| --- | --- | --- |
+| `plan-photo-model` / `build-photo-model`, or the more guided `build-statue-glb` | Camera-registered **polygon mesh** candidates and Blender/GLB exports when sparse registration and dense meshing succeed; dependent on suitable overlapping images and local external tools | [Photo to GLB](docs/PHOTO_TO_GLB.md), [dense reconstruction](docs/DENSE_STATUE_RECONSTRUCTION.md) |
+| `plan-splats` / `build-splats` | A view-dependent **Gaussian splat**, useful for visual reconstruction but **not** an editable, riggable polygon mesh | [Gaussian splats](docs/GAUSSIAN_SPLATS.md) |
 
-### Unattended source-fidelity checks during geodesic fitting
+For source selection, image masks, camera coverage, and non-destructive scan finishing, see [reference reconstruction](docs/REFERENCE_RECONSTRUCTION.md). Optional [evidence-guided completion](docs/EVIDENCE_GUIDED_COMPLETION.md) produces inferred candidates separately from verified reconstruction. Neither approach guarantees a faithful likeness from incomplete photos.
 
-Use fit-landmark-surface with --character and --region to automatically audit
-every verified reference camera after a new detailed mesh fit, before accepting
-the part. Bad source registration, character identity or incompatible figure
-height are rejected before Blender starts. Numeric camera regressions return
-a failing exit code but keep the editable Blender candidate and detailed
-review evidence.
+Photogrammetry uses optional Python dependencies (for example `.[photogrammetry]`) and may require locally installed **COLMAP, OpenMVS, OpenSplat, Blender, or AI checkpoints**, depending on the path selected. Consult the relevant workflow guide rather than assuming an optional extra installs all native executables.
 
-### Automatic source verification during part-specific texture baking
+## Procedural assets, catalog, and motion
 
-texture-parts can now take --qa-baseline to automatically check the new
-candidate against the original reference views before accepting it. A failed
-candidate is preserved with color difference panels, a structured receipt and
-exit code 1; a source/evidence preflight error prevents baking entirely.
-This is an optional mode, preserving previous texture-parts behavior.
+| Area | Capabilities | Guide |
+| --- | --- | --- |
+| Reusable asset families | Search, validate, and build catalog entries with `kumiki-blender catalog` | [Asset catalog](docs/ASSET_CATALOG.md) |
+| Declarative assemblies | Validate/compile AssetSpec v2, then build editable Blender assemblies | [AssetSpec v2](docs/ASSET_SPEC_V2.md) |
+| Architecture and monuments | Parametric building details, facades, porticos, terrain studies, Egyptian monument studies | [Architecture details](docs/ARCHITECTURE_DETAILS.md), [Egyptian monuments](docs/EGYPTIAN_MONUMENTS.md), [Egypt relief map](docs/EGYPT_RELIEF_MAP.md) |
+| Blender animation bridges | Export baked rigid-body motion and topology-stable deformations for downstream viewers | [Motion bridge](docs/KUMIKI_MOTION_BRIDGE.md), [deformation bridge](docs/KUMIKI_DEFORMATION_BRIDGE.md) |
+| Imported models and materials | Inspect GLBs, record source/provenance, apply explicit material overrides, and produce reviewable revisions | [Material packs](docs/MATERIAL_PACKS.md), [asset integrity](docs/ARCHITECTURE.md) |
 
-### Offline before/after texture fidelity gate
-
-For constrained local machines, the texture gate now preflights the estimated
-mesh UV projection sample count and rejects over-budget meshes before allocating
-large point arrays. The default ceiling is two million samples per source view.
-
-
-[Texture revision audit](docs/CHARACTER_TEXTURE_REVISION_GATE.md)
-
-Run audit-texture-revision on one fixed UV mesh and two texture candidates
-to reject per-camera increases in mean/P90 CIE76 Lab color error and lost
-within-delta-E-10 coverage. The report fingerprints every source file and
-saves four-panel evidence; numerical success **still requires artistic review**.
-Explicit Z-up source OBJ files are handled correctly by the UV-aware reader.
-
-### Boundary-sensitive source fidelity for thin eye, feather and beak details
-
-Source-camera QA now measures both mask IoU and boundary F1, with independent
-per-view rejection thresholds. It also decodes the distinct source-frame
-OBJ filename convention without incorrectly rotating Blender Z-up geometry.
-The reader and auditor share the same explicit coordinate contract; synthetic
-regression tests cover matching native/legacy imports, thin-detail deletions,
-and contour-only failures that area IoU misses.
-
-### Reject source-fidelity regressions before accepting 3D edits
-
-[Per-region source-fidelity release gate](docs/CHARACTER_REGION_REVISION_GATE.md)
-
-The new audit-region-revision CLI compares original and edited character parts against the same registered orthographic reference masks. It rejects a source silhouette drop in **any** verified view, produces immutable before/after overlays and camera-specific failure reasons, and accepts only explicitly Z-up source-frame OBJ candidates (or already aligned PLY/GLB). Its results are numeric quality checks, **never automatic likeness or animation approval**.
-
-## Character Production v2: isolated parts and Blender-native rig audits
-
-[Implementation guide](docs/CHARACTER_PRODUCTION_V2.md) · [example CharacterSpec](examples/character-v2.example.json) · [region sculpt plan](examples/character-region-sculpt.example.json) · [rig pose QA plan](examples/character-rig-pose-qa.example.json)
-
-The additive `kumiki-character-build` commands `plan-character`, `plan-region`,
-`compare-region`, `refine-region` and `validate-rig` support immutable, source-hashed
-part tasks, verified source-mask comparisons, bounded local edits to named Blender
-mesh objects, and reproducible pose-based geometry/skin audits. No mandatory
-cloud inference or extra model downloads. **This is an initial production
-foundation, not yet a complete face/wing animation or automatic sculpting
-solution**; full source and animation quality still require visual review.
-
-Native Blender IK/FK controls, per-joint topology review and source-locked skeletal Action-to-GLB baking are also implemented. See the [character animation export guide](docs/CHARACTER_ANIMATION_BAKE.md); final animation and source likeness still require visual review.
-
-## Character-sheet fidelity QA (Blender vs original artwork)
-
-**[Start here: Character Fidelity Review](docs/CHARACTER_FIDELITY_REVIEW.md)** — reusable anatomy, costume and accessory comparison. Inspect shape and position independently, compare unlit colors and actual mesh depth/normals, propose masks with optional local SAM 2.1 and relative depth with optional local MoGe 2. New `review-masks` and `propose-registration` commands expose uncertain part ownership and camera alignment instead of silently approving them. No Hugging Face approval or mandatory model download.
+Browse available assets:
 
 ```bash
-python -m pip install -e '.[character-qa]'
-kumiki-character-qa --help
+kumiki-blender catalog list
+kumiki-blender catalog validate
 ```
 
-[Detailed QA architecture](docs/CHARACTER_FIDELITY_QA.md) · [Part mapping example](examples/character-fidelity.example.json) · [Mask review rules](examples/character-mask-review.example.json) · [Landmark anchors](examples/character-registration-anchors.example.json)
+## Outputs and quality gates
 
+A standard procedural build commonly produces `source.blend`, `model.glb`, `preview.png`, additional views, and `manifest.json`. Other workflows use their own documented names and candidate/report layouts.
 
-**New: historical or cinematic 3D completion:**
-[`suggest-completion`, `generate-completion-image`, `generate-completion-part`,
-`plan-completion`, and `build-completion`](docs/EVIDENCE_GUIDED_COMPLETION.md)
-suggest photo-coverage gaps, create local AI image/GLB candidates (ComfyUI or
-ungated TripoSR with Apple MPS acceleration), and assemble evidence-pinned
-parts with measured 3D landmarks. Historical mode excludes inferred geometry;
-cinematic mode includes it with provenance. Seam welding, automatic candidate
-placement, and photographic likeness certification still require artist review.
+- **Revisions:** Most build and QA commands require a new output path rather than overwriting approved inputs. The default `.review/` location is intended for local, gitignored revisions; use durable storage for assets you must retain.
+- **Integrity:** Run `kumiki-blender audit --model /path/to/model.glb` for structural GLB checks, and `kumiki-blender audit-revision --root /path/to/revision` for supported revision packages.
+- **Reference fidelity:** Registered camera masks, source hashes, contour/texture metrics, and part-level overlays can reveal regressions. A passing numeric gate **does not establish likeness, physical correctness, or animation readiness**.
+- **Licensing:** Source photographs, model weights, imported meshes, and texture packs retain their own rights and provenance. An asset's presence in a revision does not authorize redistribution.
 
-**New: Blender physics → Kumiki motion:** [export baked GLB rigid-body clips to portable PM2 actions](docs/KUMIKI_MOTION_BRIDGE.md) with `kumiki-blender export-motion --model model.glb --output baked-actions.json`. No extra Python dependencies, manual coordinate conversion or per-model browser animation code.
-
-**Deforming meshes → Kumiki:** [bake Blender Cloth/Soft Body or topology-stable modifier motion into a native animated glTF morph GLB](docs/KUMIKI_DEFORMATION_BRIDGE.md) using `plan-deformation` and `build-deformation`. One JSON plan; no custom browser vertex-cache player or runtime solver.
-
-For fully automated rigid-body shots, use `kumiki-blender plan-physics --spec examples/desk-lamp-physics-shot.json`, then `build-physics` under Blender with a saved `.blend` loaded. A declarative plan generates a new editable physics scene, GLB, and PM2 animation sidecar; it never overwrites source geometry.
-
-The same plan now supports native `hinge`, `slider` and `fixed` joints (see `examples/mechanical-constraints-physics-shot.json`) and conservative, measured ground-impact cues for SFX. Every constraint/impact is backed by a real Blender simulation; no per-model animation code is required.
-
-For a real **body-on-body collision**, add explicit `contact_pairs` as in [`examples/pair-impact-physics-shot.json`](examples/pair-impact-physics-shot.json). The worker cross-checks Bullet trajectories against mesh-surface proximity and post-impact slowdown before emitting semantic SFX cues; these are conservative geometric estimates, not native Bullet impulses.
-
-To check whether a real Blender shot projects onto the same pixels in Kumiki Storybook, use the [offline Blender ↔ WebGL silhouette parity workflow](docs/BRIDGE_SILHOUETTE_PARITY.md). Its paired SHA-verified frame receipts, IoU overlays and report test camera/pose/geometry agreement only; browser capture stays outside CI.
-
-**New to Blender, 3D modeling, and this repository?** Start with the
-[beginner's step-by-step Wiki](https://github.com/YukiUmetsu/kumiki-blender/wiki): install the tools, generate your
-first tower, open it in Blender, change its color and dimensions, and learn how
-the catalog and export files work.
-
-## New: start statue faces from existing anatomical head meshes
-
-The [anatomical head-base fitting workflow](docs/ANATOMICAL_HEAD_BASES.md)
-accepts a reviewed static human-head GLB, checks source rights, fits a proper
-3D transform against manually verified statue landmarks, and optionally adds
-a non-destructive local sculpt shape key. Run `plan-head-base --manifest ...`
-without Blender, then `build-head-base --manifest ... --output ...` to export an
-editable `.blend`, an aligned GLB and QA views. This is **not** automatic
-photo-fidelity reconstruction; front/profile artistic review remains required.
-
-## New: multi-view Gaussian splat reconstruction
-
-For photo-based scene reconstruction, the **Gaussian splat pipeline** now
-accepts a folder of multiple photos from different angles, a source-attributed
-reference manifest, or a registered COLMAP revision. It reconstructs cameras
-with PyCOLMAP (Mac-friendly, CPU) and trains with an external OpenSplat binary
-compiled for **Apple Metal/MPS or NVIDIA CUDA**. Example:
+## Development and testing
 
 ```bash
-kumiki-blender plan-splats --photos /path/to/object-angles --asset-id my-statue \
-  --output .review/my-statue/splats-r01
-kumiki-blender build-splats --photos /path/to/object-angles --asset-id my-statue \
-  --output .review/my-statue/splats-r01 --engine pycolmap \
-  --opensplat /path/to/OpenSplat/build/opensplat
-kumiki-blender render-splat-video --splat .review/my-statue/splats-r01 \
-  --output .review/my-statue/video-r01 --viewer
+python -m compileall -q src scripts
+PYTHONPATH=src python -m unittest discover -s tests -v
 ```
 
-See [Gaussian splat setup, input modes, output and limitations](docs/GAUSSIAN_SPLATS.md).
-Splats are not editable mesh GLBs, do not imply faithful geometry, and are not
-riggable assets. Optional GPU SplatTransform rendering produces a private
-camera-tour MP4 and HTML viewer; both still require visual and license review.
+Install the optional dependencies needed by the test modules you run. The complete suite includes Blender-specific and optional-tool tests; Python-only results cannot substitute for headless Blender or visual inspection.
 
-## New: reference-driven statue reconstruction evidence
+GitHub Actions runs **focused pull-request checks** and native Blender smoke tests. The broader historical regression is available through the `Python foundation` workflow's manual `workflow_dispatch` run. CI smoke previews are diagnostic artifacts, not artistic acceptance renders.
 
-**One photo folder → editable 3D mesh:** The `plan-photo-model` and
-`build-photo-model` commands join real multi-photo camera registration, dense
-surface meshing, Blender export and photo-matched preview rendering in one
-private revision. They accept 8–256 source photos, including 30-angle statue
-sets, and produce `model.glb` plus a `.blend` **only if the photos actually
-register and yield a dense mesh**. There is no procedural fallback or invented
-Sphinx geometry. On Apple Silicon use PyCOLMAP + CPU OpenMVS + Blender; NVIDIA
-systems can select COLMAP CUDA dense meshing. Example:
+For internal design and module organization, see [Architecture](docs/ARCHITECTURE.md). The repo's build/export outputs can be consumed by [Kumiki-UI](https://github.com/YukiUmetsu/kumiki-ui) and [ContentGen](https://github.com/YukiUmetsu/ai-content-generation); those projects are not runtime dependencies of this Python package.
 
-```bash
-kumiki-blender plan-photo-model --photos /path/to/statue-photos \
-  --asset-id great-sphinx --output .review/great-sphinx/mesh-r01
-kumiki-blender build-photo-model --photos /path/to/statue-photos \
-  --asset-id great-sphinx --output .review/great-sphinx/mesh-r01
-```
+## License
 
-See [one-command photo-to-mesh setup and failure reporting](docs/PHOTO_TO_GLB.md).
-
-For the Sphinx, Statue of Liberty, Christ the Redeemer, and future monuments,
-the optional [reference reconstruction foundation](docs/REFERENCE_RECONSTRUCTION.md)
-validates source-attributed local photographs, detects repeated evidence,
-reports missing camera viewpoints/anatomical regions, and can hand a curated
-set to a locally installed **COLMAP** sparse reconstruction worker. Run:
-
-```bash
-pip install -e '.[photogrammetry]'
-kumiki-blender reference-audit --manifest /path/to/references.json
-kumiki-blender reconstruct-photos --manifest /path/to/references.json \
-  --output .review/your-monument/reconstruction-r01 \
-  --engine pycolmap --undistort
-
-# With overlapping registered views, make a private dense mesh via OpenMVS:
-kumiki-blender build-dense-photos \
-  --reconstruction .review/your-monument/reconstruction-r01 \
-  --output .review/your-monument/dense-r01
-kumiki-blender render-dense-blender-review \
-  --dense-revision .review/your-monument/dense-r01 \
-  --output .review/your-monument/dense-blender-review-r01
-```
-
-Then use `prepare-camera-plan` with manually matched 3D landmark coordinates,
-`render-reference-scene` for an editable Blender scene with the registered
-photo cameras, `silhouette-qa` to compare neutral-clay renders against
-manually checked statue masks, and `landmark-qa` for face/hair/drapery
-pixel-reprojection measurements. See the [full camera and mask workflow](docs/REFERENCE_RECONSTRUCTION.md).
-The optional [dense photo-to-mesh workflow](docs/DENSE_STATUE_RECONSTRUCTION.md)
-includes independently sourced and hash-pinned **real statue photo benchmarks**
-(Pix4D eagle, EPFL standing figure and sculpted face), with photo rights kept
-separate and no restricted images or derived models in Git. An additional
-CC BY 4.0 Cycladic figurine photo set can serve as a reusable attributed QA
-benchmark. It runs OpenMVS CPU
-or COLMAP GPU reconstruction after successful sparse
-registration. It generates private candidate meshes, not guaranteed facial
-likeness or redistributable assets. It cannot reconstruct a statue from
-arbitrary unrelated web photos. For outdoor background contamination, use
-`prepare-dense-masks` (optional `[masks]` extra) to generate rectified GrabCut
-silhouettes, or `[mask-ai]` for optional local semantic background inference,
-and inspect the red overlays before dense MVS. Use `refine-dense-masks` to
-remove tiny mask artifacts and hand-correct individual rectified views with
-normalized include/exclude polygons or a cautious contour inset in a new
-private revision. An optional `--color-band-pixels` GrabCut pass reclassifies
-only a narrow mask boundary while holding interior labels fixed; use
-`--color-trim-only` to forbid new foreground. Verify against the original:
-real multi-view statue tests show color cleanup can worsen mask agreement.
-`audit-dense-masks` checks whether the same COLMAP 3D
-feature is inconsistently included across rectified views and writes private
-direction-coded correction overlays, full-resolution detail crops and review
-coordinates. `compare-dense-masks` reports source-pinned before/after mask
-disagreement changes without automatically approving either revision.
-OpenMVS seam-leveling can be toggled when a specific build
-produces dark texture patches. For projected
-texture darkness, broad color cast or exposure mismatch between atlas pages,
-`finish-dense-textures --balance-atlases` creates a separately SHA-pinned
-exposure/gamma/white-balance atlas revision; import it
-with `render-dense-blender-review --textured --texture-finish`. Both remain
-manual-review candidates, not autonomous texture restoration.
-
-For relightable scans, `finish-dense-textures --surface-recipe` adds opt-in
-mask-guided linear-light de-lighting, material-specific roughness priors,
-camera-artifact cleanup and measured 16-bit height/Blender displacement maps.
-`package-finished-udim` exports a separate UV-remapped 1001+ tile package.
-These private artist-review candidates cannot guarantee measured reflectance
-or recover lost surface geometry; see [dense statue reconstruction](docs/DENSE_STATUE_RECONSTRUCTION.md#advanced-photographic-material-finishing).
-Very dark atlases can optionally use bounded `--auto-exposure-luma 115`.
-Add `--uv-aware-stats` to measure brightness and missing dark texels only on
-real textured OBJ faces, with a private red-marked UV coverage preview.
-No technical score certifies facial likeness. Historical survey geometry,
-source-specific artistic sculpting and production GLB baking remain separate work.
-
-## New: Agent-authored AssetSpec v2 composer
-
-The optional [AssetSpec v2 composer](docs/ASSET_SPEC_V2.md) adds one generic
-validated plan/build path for assemblies of reusable geometry. Start with
-`pip install -e '.[composer,qa]'`, then run
-`kumiki-blender plan-asset --spec examples/desk-lamp-assembly-v2.json` or
-`kumiki-blender asset-schema` to inspect the machine-readable recipe contract.
-`build-asset` produces the usual editable Blender scene, GLB, inspection views
-and immutable manifest. Existing generator commands and the dependency-free
-kernel remain unchanged.
-
-`visual-qa --revision .review/desk-lamp/r01 --output .review/desk-lamp/r01-inspection`
-generates a labeled multi-view contact sheet and exposure metrics. Adding
-`--baseline` compares revisions and highlights pixel-level regressions; artistic
-quality still requires a human review. See [the visual QA guide](docs/ASSET_SPEC_V2.md#multi-view-visual-qa-pillow--optional-openimageio).
-
-The composer includes true rounded-edge solids, four-part mitered panel trim,
-oriented fastener rows and a one-declaration **service-panel assembly** with
-actual sealing rails, hollow metal washers and two captive fastener rows. The
-[precision-control-enclosure recipe](examples/precision-control-enclosure-v2.json)
-demonstrates 80 real hard-surface parts from eleven short declarations, without
-writing any per-model Python or Blender code.
-
-For scanned or reviewed PBR materials, the generic `build-asset` command now
-accepts `--texture-packs path/to/pack.json`. This applies hash-checked,
-rights-declared color/roughness/normal maps to named AssetSpec material roles,
-embeds them in GLB and `.blend`, and preserves their provenance in the manifest.
-
-A standalone, code-first Blender toolkit for reusable, cinematic 3D authoring. Its first milestone is a **generic lattice observation tower**: a deterministic architectural scaffold, **not** a photorealistic or dimensionally verified replica of Tokyo Tower or another real landmark.
-
-The library separates testable Python geometry planning from Blender's `bpy` modeling and rendering. It includes a tapered lattice observation tower, a **modular architectural portico** built from closed arch stones and lathed columns, a **reusable stone building facade** with detailed windows/doors/roof, a **parametric Egyptian monument study** with pyramid casing blocks and a sculpted lion-bodied Sphinx figure, and a **rigged red vintage biplane** modeled from user-provided multiview artwork. All use a shared revision exporter for editable `.blend`, portable `.glb`, inspection views and a JSON manifest for Kumiki-UI and ContentGen consumers.
-
-## Find models in the categorized asset catalog
-
-Every model family has one manifest in `src/kumiki_blender/assets/<category>/<subcategory>/<asset-id>/asset.json`. Existing geometry modules and CLI entry points remain compatible; discover assets by name, category, tags, or alternate names without knowing which Python module implements them:
-
-```bash
-PYTHONPATH=src python3 -m kumiki_blender catalog categories
-PYTHONPATH=src python3 -m kumiki_blender catalog list --category landmarks
-PYTHONPATH=src python3 -m kumiki_blender catalog search old red airplane
-PYTHONPATH=src python3 -m kumiki_blender catalog list --rigged
-PYTHONPATH=src python3 -m kumiki_blender catalog show red-vintage-biplane
-PYTHONPATH=src python3 -m kumiki_blender catalog validate
-```
-
-Create a categorized revision directly (inside Blender):
-
-```bash
-KUMIKI_RENDER_PROFILE=smoke blender --background --factory-startup \
-  --python-exit-code 1 --python scripts/blender_entry.py -- \
-  catalog build red-vintage-biplane --revision r01
-```
-
-The result is `.review/vehicles/aircraft/red-vintage-biplane/r01/` containing the usual `.blend`, GLB, previews and manifest. Pass `--root /your/permanent/asset-library` for a durable asset store outside the gitignored QA directory. [Catalog design, categories and conventions](docs/ASSET_CATALOG.md).
-
-The **Egypt cinematic relief atlas** adds a fifth illustration generator: a sculpted geographic table map with deliberately heightened Sinai/Eastern Desert relief, Mediterranean and Red Seas, Nile valley/delta and waterways, Qattara Depression, Lake Nasser, **physical irrigated parcels**, and handcrafted Giza/Luxor/Cairo/Alexandria/Aswan miniature landmarks. Distinct city districts have tiny buildings, roofs and windows; twelve inspection cameras include city-level and terrain macro views. It recreates the layout of a supplied visual reference procedurally rather than placing the image on a plane. Preview it with `PYTHONPATH=src python3 -m kumiki_blender plan-egypt-map` or build with `blender --background --factory-startup --python-exit-code 1 --python scripts/blender_entry.py -- build-egypt-map --output .review/egypt-map/r01`. [See the detailed Egypt atlas guide](docs/EGYPT_RELIEF_MAP.md). The geographic representation is illustrative, not surveyed.
-
-The Egypt generator is now organized under `src/kumiki_blender/geography/egypt/` (terrain, geometry, Blender support, landmarks and scene), with a categorized manifest at `assets/geography/maps/egypt-relief-atlas/asset.json`. Discover or build it with `catalog show egypt-relief-atlas` and `catalog build egypt-relief-atlas --revision r01`. The original Python import paths remain valid.
-
-## Requirements
-
-- Python 3.11+ for recipe validation and unit tests (no runtime pip dependencies)
-- Blender 4.2+ for geometry creation, `.blend` / GLB export and Cycles preview rendering
-- Blender 4.5 LTS is exercised headlessly on Linux in GitHub Actions; macOS commands below are examples, not yet independently verified
-
-## Validate a recipe without Blender
-
-```bash
-PYTHONPATH=src python3 -m kumiki_blender validate --recipe examples/lattice-observation-tower.json
-```
-
-This produces deterministic machine-readable JSON: asset ID, number of structural parts, world-space bounds and recipe SHA-256.
-
-## Build a new revision with Blender
-
-On macOS with Blender at the standard Applications location:
-
-```bash
-/Applications/Blender.app/Contents/MacOS/Blender \
-  --background --factory-startup --python-exit-code 1 \
-  --python scripts/blender_entry.py -- \
-  build --recipe examples/lattice-observation-tower.json \
-  --output .review/lattice-observation-tower/r01
-```
-
-The `--output` directory **must not already exist**; choose `r02` for the next revision. Existing files are never intentionally removed or overwritten. A failed build may leave a partial revision for inspection; do not mistake its existence for a successful build.
-
-On Linux or a configured Mac shell, replace the full executable path with `blender`.
-
-| Artifact | Purpose |
-|---|---|
-| `source.blend` | Editable native source with a separate model collection and studio scene |
-| `model.glb` | Selected named model parts, no studio floor or lights |
-| `preview.png` | Cycles hero preview |
-| `previews/front.png`, `previews/side.png`, `previews/detail.png` | Additional silhouette and close-up QA views |
-| `manifest.json` | Dimensions, provenance, asset audit, file sizes and verification status |
-
-The current prototype uses tapered legs, structural X bracing, **64 physical gusset plates and 256 bolt-head meshes**, horizontal rings, two observation decks, railings and an antenna. It is deliberately illustrative. **Real landmark reproduction requires measured references, additional detail, better materials and actual multiview human acceptance.**
-
-## Reusable architecture geometry and portico study
-
-`architecture_geometry.py` is a Blender-independent mesh kernel for **concave profile extrusion** (with triangulated caps), **lathed columns and balusters**, **semicircular and pointed Gothic arches**, and **individual arch voussoir stones with real mortar gaps**. It validates self-intersecting profiles, computes watertightness and signed volume, and supports shared mesh instances with right-handed placement frames and linear repetition.
-
-The `portico.py` demonstration composes these primitives into an original, three-bay limestone arcade: **4 physically fluted shafts with entasis, 16 spiral Ionic-style volute ridges mounted on 16 shaped stone cushions, carved base and capital profiles, 33 individual arch stones, projecting keystones, pedestals and a molding cornice**. Flutes are recessed in the actual shaft mesh rather than floating thin rods. This is an architectural craft study—not a measured real landmark.
-
-For other architectural styles, `classical_column()` generates **Tuscan-inspired smooth**, **Doric-inspired 20-flute**, and **Ionic-inspired 24-flute and scroll-capital** assemblies with named, editable parts. `pointed_arch_voussoirs()` builds two-arc Gothic masonry with a real pointed apex; `balustrade_assembly()` repeats individually turned stone spindles between coping rails and end piers. These can be reused in new building recipes without authoring Blender mesh code. Preview exact geometry and component names without Blender:
-
-```bash
-PYTHONPATH=src python3 -m kumiki_blender plan-classical-column \
-  --order ionic --height 4.55 --radius 0.36
-PYTHONPATH=src python3 -m kumiki_blender plan-portico \
-  --bays 2 --order doric
-PYTHONPATH=src python3 -m kumiki_blender plan-portico \
-  --bays 2 --order tuscan --arch-style pointed --balustrade
-```
-
-Preview its structural plan without Blender:
-
-```bash
-PYTHONPATH=src python3 -m kumiki_blender plan-portico --bays 3
-```
-
-On a Mac with Blender installed, render and export a new revision:
-
-```bash
-/Applications/Blender.app/Contents/MacOS/Blender \
-  --background --factory-startup --python-exit-code 1 \
-  --python scripts/blender_entry.py -- \
-  build-portico --bays 3 --output .review/portico/r01
-```
-
-This writes editable geometry, GLB, a hero preview and front/detail views through the **same export and audit pipeline** as the lattice tower. Headless Blender 4.5 has rendered both models successfully; smoke-quality previews still require artistic review before a claim of cinematic realism.
-
-The Gothic-and-balustrade variant uses the same exporter and can be rendered with `build-portico --bays 2 --order tuscan --arch-style pointed --balustrade --output .review/gothic/r01`. The options are independent: pointed arches need not have railings, and railings also work with round arches.
-
-## Reusable architectural-detail system
-
-The Blender-independent `architecture_details.py` provides composable, **manifold 3D solids** rather than texture-only facades:
-
-| API | Reusable building detail |
-|---|---|
-| `coursed_wall()` | Staggered stone courses, physical mortar gaps, and real rectangular voids for doors/windows; adjustable block and course sizes |
-| `window_assembly()` | Framed, recessed glazing with independent panes, stiles, mullions, transoms, sill, lintel and stone jambs |
-| `door_assembly()` | Raised timber panels, panel moldings, jambs, stone lintel, threshold and lathed metal knob |
-| `cornice_extrusion()` / `dentil_row()` | Projecting cross-section moldings and repeated stone teeth, in real dimensions |
-| `gable_roof()` | Closed front/back pitched roof slabs, solid gable ends, a ridge cap and individually sloped/staggered tiles |
-| `gutter_channel()` / `rainwater_system()` | Real open half-round gutters, connected downspouts, and fastening collars along the eaves |
-| `rosette_relief()` | Parametric carved floral medallions with separate leaves, raised veins and central boss |
-| `pointed_arch_voussoirs()` | Two-circle Gothic intrados/extrados, genuinely sharp apex and mortar-separated masonry blocks |
-| `turned_stone_baluster()` / `balustrade_assembly()` | Curved lathed spindles, continuous base/coping rails, end posts and post caps; checked spacing |
-| `box_mesh()` | Cached, closed mesh primitive for any rectangular architectural detail |
-
-Every piece returns a named `MeshInstance` with editable material role, transform and physical geometry. You can mix these functions in **new landmark recipes** without rewriting Blender object placement. `facade.py` demonstrates composition into a fully enclosed, 3/5/7-bay stone townhouse study with consistently named `masonry`, `window`, `door`, `roof`, `dentil` and `cornice` categories.
-
-Inspect the object plan without Blender:
-
-```bash
-PYTHONPATH=src python3 -m kumiki_blender plan-facade --bays 3
-```
-
-Build a multi-view editable revision (use a new output directory per build):
-
-```bash
-blender --background --factory-startup --python-exit-code 1 \
-  --python scripts/blender_entry.py -- \
-  build-facade --bays 3 --output .review/facade/r01
-```
-
-The detail kit also includes a **tileable weathered-stone PBR preset** with adjustable `weathering_strength` from 0–1, subtle directional runoff/mineral deposits and deterministic per-block shade variation. Its Blender studio uses **glass-only light-linked rectangular reflection softboxes** to reveal glazing response without brightening the stonework; those lights are excluded from the GLB. A Three.js scene needs its own reflection environment for similar results.
-
-The demonstration is **an original architectural detail study**, not a measured replica of an existing building. Future landmark work should substitute location-specific measured proportions, ornaments, roofs, glazing, weathering and material scans, with visual QA at production resolution. For component authoring conventions and examples, see [Architectural detail kit guide](docs/ARCHITECTURE_DETAILS.md).
-
-## Egyptian pyramids and Sphinx geometry
-
-`egyptian_monuments.py` adds a reusable kit for pyramid and statue modeling:
-
-- `pyramid_frustum()` and `pyramid_casing_stone()` create **closed tapered volumes**, with a recessed limestone core, real staggered vertical/horizontal mortar joints, individually selectable casing stones and a capstone. `pyramid_assembly()` exposes dimensions, course count, stone width, casing fraction and gaps.
-- `loft_elliptical_sections()` sculpts organic solids along X/Y/Z using independently adjustable radii, offsets and cubic interpolation; it is reusable for statuary, carved rock, animal anatomy and terrain features.
-- `sphinx_assembly()` composes an anatomically shaped, differentially eroded lion torso, chest, four digits per forepaw, haunches, curled tail, carved face and nemes-style headdress into named editable components. An **optional** `restored_nose=True` allows an interpretive reconstruction variant.
-
-Preview the miniature combined study without Blender:
-
-```bash
-PYTHONPATH=src python3 -m kumiki_blender plan-monument --kind giza-study
-```
-
-Build an editable `.blend`, a self-contained `.glb`, hero/site previews, and dedicated masonry/Sphinx closeups:
-
-```bash
-blender --background --factory-startup --python-exit-code 1 \
-  --python scripts/blender_entry.py -- \
-  build-monument --kind giza-study --output .review/egyptian/r01
-```
-
-`--kind pyramid` and `--kind sphinx` build each model independently. For a **historically scaled Great Pyramid course study**, the `khufu-petrie` preset uses 201 measured course elevations rather than the miniature's evenly spaced courses. It leaves the apex missing and batches thousands of stone blocks into 805 Blender objects:
-
-```bash
-PYTHONPATH=src python3 -m kumiki_blender plan-monument --kind pyramid --pyramid-preset khufu-petrie
-```
-
-This is **measured course-height geometry, not a fully surveyed pyramid surface**: stone layouts, damage and repairs are procedural. The Sphinx remains an **illustrative sculpture** unless replaced by a separately licensed monument scan. Imported Sphinx models now receive a non-authoritative proportion review against published monument bounds; a human still needs to verify facial and paw fidelity. See the [Egyptian monument kit guide](docs/EGYPTIAN_MONUMENTS.md) for source licensing, evaluated candidate meshes and archaeological accuracy limits.
-
-## Rigged vintage red biplane
-
-The `red-vintage-biplane` generator recreates a user-supplied five-view illustration as a coherent, original 3D biplane with actual shaped fabric airfoils and rib tapes, complete upper/lower wings, wooden interplane struts and crossed flying wires, tapered fuselage, open cockpit, glazed windscreen, engine grille, sculpted wooden two-blade propeller, and separately hinged control surfaces. The Blender source exposes nine animation controls for the propeller, four ailerons, elevators, rudder and wheels. GLB exports the animation clips alongside all named geometry; six views make reference comparison possible.
-
-```bash
-PYTHONPATH=src python3 -m kumiki_blender plan-biplane
-KUMIKI_RENDER_PROFILE=smoke blender --background --factory-startup --python-exit-code 1 \
-  --python scripts/blender_entry.py -- build-biplane --output .review/biplane/r01
-```
-
-The dimensions are reference-derived estimates, not measurements of any known aircraft. See the [aircraft authoring and rig guide](docs/VINTAGE_BIPLANE.md) for design choices, surface specifications, controls and export verification.
-
-## Reusable PBR surfaces
-
-The pure Python material catalog defines physically distinct presets for painted structural steel, galvanized metal, concrete, stone, timber and optical glass. Recipes may override sRGB color and roughness without mutating shared presets. A plain, untextured `studio-matte` surface is available for presentation floors, keeping floor noise separate from the modeled object.
-
-The toolkit now **generates deterministic, seamless PBR maps locally**, with no asset-site downloads or runtime Python dependencies. For stone, weathered stone, concrete, timber and metal it creates color grain, roughness variation and a tangent-space normal map, projects metric tile UVs onto generated mesh faces, and packs the PNGs into both the editable `.blend` and the GLB. Weathered stone adds vertically oriented runoff stains and irregular mineral deposits; the map remains tileable. The normal/roughness/color images use glTF-supported Principled BSDF links—not Blender-only shader nodes that would disappear on export.
-
-CI runs `audit --require-pbr-textures` and the official Khronos validator on each example, including a re-imported model, so missing UVs or dropped material maps fail the build. These are **generic procedural surfaces**, not yet the measured, weathered, historically specific textures required for a photorealistic landmark replica.
-
-For more believable landmark stone, metal and wood, **supply your own reviewed PBR scan maps** from any licensed provider. The optional `--texture-packs /path/to/material-packs.json` works with both `build-facade` (exact material roles) and `import-asset` (exact source material names). It loads local base-color/roughness/OpenGL-normal PNG/JPEG images, records their SHA-256 hashes and licensing declarations, preserves UVs or creates metric UVs, packs images into `.blend`, and embeds them in GLB. No particular marketplace is required. [Material-pack recipe and usage](docs/MATERIAL_PACKS.md).
-
-## Import a reviewed asset from any source
-
-The first source-independent intake path accepts a **local, static, self-contained `.glb`**. It can come from a licensed Sketchfab/Fab/CGTrader download, a scan, or your own work. It **does not search marketplaces, download assets, accept rigs or animations, or assume a model's source license permits redistribution**.
-
-First, examine the GLB **and its exact material names** without Blender:
-
-```bash
-PYTHONPATH=src python3 -m kumiki_blender inspect-asset --input /path/to/model.glb
-```
-
-Create a small provenance record like [first-party-import.json](examples/first-party-import.json) with the creator, original HTTPS permalink, license, attribution and a truthful `redistribution_allowed: true`. Optionally include `expected_sha256` to pin the exact input model. This consent field is an **explicit declaration by the operator**, not automatic legal verification. **Do not use this source-export command for licensed models that prohibit distributing their raw files**; such assets require a separate render-only workflow.
-
-Then import, preserve existing PBR materials/textures, render inspection shots and re-export a new versioned asset package:
-
-```bash
-KUMIKI_RENDER_PROFILE=smoke /Applications/Blender.app/Contents/MacOS/Blender \
-  --background --factory-startup --python-exit-code 1 \
-  --python scripts/blender_entry.py -- \
-  import-asset --input /path/to/model.glb \
-  --provenance /path/to/source.json \
-  --output .review/my-import/r01
-```
-
-To improve or recolor a specific imported material without editing Python, make a JSON mapping like [restyle-portico.json](examples/restyle-portico.json). Pass its path with `--material-overrides /path/to/overrides.json` to the same `import-asset` command. Each entry names an **exact material** reported by `inspect-asset`, a Kumiki preset (`natural-stone`, `weathered-stone`, `cast-concrete`, `timber`, `painted-steel`, etc.), and optional hex `color`/`roughness` (plus `weathering_strength` for weathered stone). Unrecognized, duplicate or ambiguous material names **fail before Blender creates a revision**; no heuristic keyword-based replacement is performed.
-
-The replacement material gets the same packed glTF-compatible albedo, roughness and normal maps used by the generated architecture. Existing UVs are respected; missing UVs receive metric planar projection. The revision manifest lists all substitutions. Leave the overrides flag out to preserve all original materials. This is **visual restyling**, not an authenticity claim or permission to redistribute an asset.
-
-The importer uses Blender's built-in glTF reader with image packing and semantic-node extras enabled. It checks imported mesh bounds/materials, rejects missing semantic part metadata, saves editable source, and uses the same Cycles multi-view/GLB/revision audits as the procedural models. The pull-request CI round-trips our own MIT-licensed portico both unchanged and with one explicit material override; no third-party artwork is copied into the repository.
-
-## Inspect a GLB without Blender
-
-```bash
-PYTHONPATH=src python3 -m kumiki_blender audit --model .review/lattice-observation-tower/r01/model.glb
-```
-
-The lightweight auditor checks the GLB 2.0 envelope, declared file length, mesh list, number of named semantic nodes and absence of external texture/buffer dependencies. It does **not** replace a full glTF validator, mesh manifold analysis or visual QA. Actual builds also check `.blend` and PNG signatures before writing their manifest.
-
-Pass `--require-pbr-textures` to additionally require UV0 and embedded albedo, roughness and normal texture hookups. This is intentionally optional for older untextured GLBs and third-party source models.
-
-After building, cross-check **every file against the manifest** before importing it into another repository:
-
-```bash
-PYTHONPATH=src python3 -m kumiki_blender audit-revision --root .review/lattice-observation-tower/r01
-```
-
-This detects missing or path-escaping files, signature errors, mismatched file sizes, stale GLB audits and missing semantic node tags. ContentGen and Kumiki-UI should treat a passing revision audit as an asset-integrity prerequisite, not a substitute for visual approval.
-
-## Test
-
-```bash
-PYTHONPATH=src python3 -m unittest discover -s tests -v
-python3 -m compileall -q src scripts
-```
-
-The Blender end-to-end test automatically runs when a `blender` executable is on `PATH`; otherwise it reports a skip. It may take several minutes to render. Tests that run only in Python cannot certify a visual result.
-
-### Focused PR checks and manual full regression
-
-Normal pushes and pull requests run focused **Python 3.11** regressions for
-both Khufu's measured masonry and Sphinx source-mesh handling. Pull requests
-add a Blender 4.5 LTS job that verifies the archive's official SHA-256
-checksum, builds the Khufu pyramid and imports a first-party **Sphinx test
-proxy**, then checks their GLBs, source provenance, geometry-readiness
-reports and dedicated masonry/anatomical previews. Editable `.blend`,
-GLB, manifests and PNG previews remain available in the **Blender QA artifact**.
-This keeps the review feedback loop centered on code still changing.
-
-**No tests have been deleted.** The complete Python test suite now runs on
-**one Python version (3.11)** when invoked manually. Legacy
-architectural builds/import variations, broader glTF-Transform specification
-validation and revision checks are part of an **opt-in full regression**:
-open GitHub Actions `Python foundation` and select **Run workflow**
-(`workflow_dispatch`), or run the Python suite locally using the command
-above. Python 3.12 and 3.13 CI matrices have been removed.
-
-The CI job uses `KUMIKI_RENDER_PROFILE=smoke`, capping previews at 640 × 360 and 8 Cycles samples. It keeps the full geometry and material settings for meaningful export validation. The normal CLI uses `production` mode, preserving the sample and resolution settings in each asset recipe. A smoke preview is **not** a photorealistic acceptance render.
-
-The manually triggered full regression also runs the official Khronos glTF
-specification validator through version-pinned
-[glTF-Transform CLI](https://github.com/donmccurdy/glTF-Transform),
-alongside semantic-node and revision-integrity checks. It remains a
-development dependency, not a runtime dependency.
-
-To run a faster local validation before a full production render:
-
-```bash
-KUMIKI_RENDER_PROFILE=smoke /Applications/Blender.app/Contents/MacOS/Blender \
-  --background --factory-startup --python-exit-code 1 \
-  --python scripts/blender_entry.py -- \
-  build-portico --bays 3 --output .review/portico/smoke-r01
-```
-
-Use a new output revision for each attempt; revisions cannot overwrite old files.
-
-## Architecture
-
-See [Architecture](docs/ARCHITECTURE.md), the [design spec](docs/superpowers/specs/2026-10-31-blender-foundation-design.md), and the [implementation plan](docs/superpowers/plans/2026-10-31-blender-foundation.md).
-
-For photo-derived 2.5D parallax, see the [Depth Anything V2 integration decision](docs/IMAGE_TO_2_5D.md). It is an optional future pipeline, distinct from creating reference-accurate 3D landmark meshes.
-
-For third-party materials, Geometry Nodes, rigging, BIM and export-validation candidates, see the [GitHub Blender ecosystem research](docs/BLENDER_ECOSYSTEM.md), including commercial-use licenses and integration priorities.
-
-## Project direction
-
-`kumiki-blender` owns high-fidelity creation, modeling recipes, baking, source files and exports. [Kumiki-UI](https://github.com/YukiUmetsu/kumiki-ui) owns interactive Three.js scene templates, motion and cameras. [ContentGen](https://github.com/YukiUmetsu/ai-content-generation) orchestrates media production. The repositories communicate through versioned assets and explicit manifests; no runtime Python dependency is imposed on Three.js.
-
-### Next milestones
-
-1. Conduct human review of higher-sample Blender renders and imported GLB from several angles; correct photographic and architectural defects.
-2. Apply the new source-independent PBR scan importer to measured, rights-cleared landmark-specific materials; add a height/displacement workflow and physically scaled weathering for production shots.
-3. Extend the roof/window/masonry/cornice kit with diverse roof types, historic facade styles, carved ornament, measured architectural references, and a separate render-only mode for licensed reference assets that cannot be redistributed as GLB.
-4. Model a reference-verified landmark (proposed: Tokyo Tower), separately from the generic demonstration, and require human close-up review.
-5. Add Geometry Nodes asset-library tools, LOD generation, scene-template previews, and optional asset catalog integration.
-
-## License and assets
-
-Code is MIT-licensed. The demonstration geometry is originally generated and has no external model dependencies. Future imported assets must preserve their own license, source, and permission to redistribute raw model files; commercial use of a render does not imply raw-model redistribution rights.
+The **code** is MIT-licensed (see [LICENSE](LICENSE)). Third-party models, images, pretrained weights, and other content are subject to their respective licenses. Verify source rights and attribution before exporting or distributing derived assets.

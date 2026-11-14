@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "mesh": "Body",
+  "iterations": 6,
+  "lambda_step": 0.42,
+  "mu_step": -0.36,
+  "feature_angle_deg": 48,
+  "curvature_stop": 1,
+  "max_displacement_m": 0.004,
+  "max_edge_strain": 0.16,
+  "max_volume_change": 0.015,
+  "min_roughness_improvement": 0.005,
+  "protected_vertex_groups": [],
+  "editable_vertex_group": null
+}

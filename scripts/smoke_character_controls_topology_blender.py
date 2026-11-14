@@ -9,6 +9,7 @@ factory-started in isolated processes with explicit .blend source revisions.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import subprocess
 import sys
@@ -61,6 +62,9 @@ def fixture_scene(data: dict):
         mesh_obj.name = name
         weights = mesh_obj.vertex_groups.new(name=group)
         weights.add(list(range(len(mesh_obj.data.vertices))), 1.0, "REPLACE")
+        if name == "Wing.L":
+            zone = mesh_obj.vertex_groups.new(name="REGION_WingLeft")
+            zone.add(list(range(len(mesh_obj.data.vertices))), 1.0, "REPLACE")
         skin = mesh_obj.modifiers.new("Skin", "ARMATURE")
         skin.object = rig
     bpy.context.view_layer.update()
@@ -78,7 +82,8 @@ def run_worker(source: Path, name: str, args: dict, target: Path):
     if result.returncode or not report.is_file():
         print(result.stdout[-6000:], file=sys.stderr)
         print(result.stderr[-6000:], file=sys.stderr)
-        raise RuntimeError(f"{name} failed (returncode {result.returncode})")
+        raise RuntimeError(f"{name} failed (returncode {result.returncode}): "
+                           f"{(result.stdout + result.stderr)[-2500:]}")
     return json.loads(report.read_text(encoding="utf-8"))
 
 
@@ -160,6 +165,62 @@ def main():
         assert (sculpt_out / "region.obj").is_file()
         assert sculpt["flipped_faces"] == 0
 
+        # Inspect source revision without altering its .blend: obtain stable
+        # vertex-order SHA plus a candidate anchor index for surface editing.
+        probe_out = folder / "region-source-probe"
+        probe = run_worker(source, "blender_region_sculpt.py", {
+            "source_blend": str(source),
+            "output": str(probe_out),
+            "inspect_only": True, "object": "Eye.L",
+            "anchors": [[.035, -.053, .275]],
+        }, probe_out)
+        assert probe["status"] == "source-probe-only"
+        seed = probe["anchor_candidates"][0]["nearest_vertex"]
+        assert probe["anchor_candidates"][0]["distance_m"] < .004
+        pinned = (seed + 1) % probe["expected_vertex_count"]
+        geo_out = folder / "geodesic-sculpt-output"
+        geodesic_plan = {
+                "schema_version": 1, "object": "Eye.L",
+                "expected_vertex_count": probe["expected_vertex_count"],
+                "expected_mesh_sha256": probe["expected_mesh_sha256"],
+                "protected_vertex_indices": [pinned],
+                "max_displacement_m": .002,
+                "operations": [{
+                    "center_m": [.035, -.053, .275], "radius_m": .014,
+                    "move_m": [0, -.001, 0], "falloff": "smoothstep",
+                    "distance_mode": "geodesic", "seed_vertex": seed,
+                    "max_seed_distance_m": .004,
+                }]
+        }
+        geodesic = run_worker(source, "blender_region_sculpt.py", {
+            "source_blend": str(source),
+            "output": str(geo_out), "plan": geodesic_plan,
+        }, geo_out)
+        assert geodesic["expected_mesh_sha256_verified"]
+        assert geodesic["protected_vertex_count"] == 1
+        assert geodesic["operations"][0]["distance_mode"] == "geodesic"
+        assert geodesic["operations"][0]["edited_vertices"] > 0
+        assert geodesic["flipped_faces"] == 0
+        assert (geo_out / "refined.blend").is_file()
+
+        # Identical vertex counts are insufficient: a moved object transform
+        # must invalidate the saved-mesh plan before any derived edit is written.
+        bpy.ops.wm.open_mainfile(filepath=str(source))
+        bpy.data.objects["Eye.L"].location.x += .001
+        altered = folder / "repositioned-source.blend"
+        bpy.ops.wm.save_as_mainfile(filepath=str(altered))
+        stale = folder / "must-reject-stale-region"
+        try:
+            run_worker(altered, "blender_region_sculpt.py", {
+                "source_blend": str(altered),
+                "output": str(stale), "plan": geodesic_plan,
+            }, stale)
+        except RuntimeError as exc:
+            assert "Source mesh has changed" in str(exc)
+            assert not stale.exists()
+        else:
+            raise AssertionError("Geodesic sculpt accepted stale object transform")
+
         poses_out = folder / "poses-output"
         poses = run_worker(output_controls / "controlled.blend", "blender_pose_qa.py", {
             "source_blend": str(output_controls / "controlled.blend"),
@@ -173,6 +234,112 @@ def main():
         }, poses_out)
         assert len(poses["poses"]) == 1
         assert poses["status"] in ("deformation-review-required", "structural-fail")
+        # New M6 reliability gate: a real deform bone moves evaluated vertices,
+        # while a no-op pose is explicitly rejected instead of marked reviewed.
+        real_out = folder / "verified-moving-pose"
+        real = run_worker(source, "blender_pose_qa.py", {
+            "source_blend": str(source), "output": str(real_out),
+            "plan": {
+                "schema_version": 1, "armature": "CharacterRig",
+                "poses": [{"name": "wing-moves",
+                           "bones": {"upper_wing.L": {"axis": "Z", "degrees": 45}}}],
+                "min_pose_displacement_m": .0005,
+                "collision_pairs": [], "render": False,
+            },
+        }, real_out)
+        assert real["status"] == "deformation-review-required", real["problems"]
+        assert real["poses"][0]["max_vertex_displacement_m"] > .0005
+
+        idle_out = folder / "rejected-noop-pose"
+        idle = run_worker(source, "blender_pose_qa.py", {
+            "source_blend": str(source), "output": str(idle_out),
+            "plan": {
+                "schema_version": 1, "armature": "CharacterRig",
+                "poses": [{"name": "no-op",
+                           "bones": {"root": {"axis": "Z", "degrees": 0}}}],
+                "min_pose_displacement_m": .0005,
+                "collision_pairs": [], "render": False,
+            },
+        }, idle_out)
+        assert idle["status"] == "structural-fail"
+        assert any("moved less than" in message for message in idle["problems"])
+
+        zone_plan = {
+            "schema_version": 1, "armature": "CharacterRig",
+            "poses": [{"name": "wing-pose",
+                       "bones": {"upper_wing.L": {"axis": "Z", "degrees": 25}}}],
+            "collision_pairs": [], "render": False,
+            "weight_zones": [{
+                "mesh": "Wing.L", "region_group": "REGION_WingLeft",
+                "allowed_bones": ["upper_wing.L", "fore_wing.L"],
+                "max_outside_weight": .02, "min_vertices": 20,
+            }],
+        }
+        approved_out = folder / "approved-skin-zone"
+        approved = run_worker(source, "blender_pose_qa.py", {
+            "source_blend": str(source), "output": str(approved_out),
+            "plan": zone_plan,
+        }, approved_out)
+        assert approved["status"] == "deformation-review-required", approved["problems"]
+        assert approved["rest_weight_zones"][0]["violating_vertices"] == 0
+        assert approved["rest_weight_zones"][0]["selected_vertices"] >= 20
+
+        # Introduce a normalized but anatomically wrong spine influence.
+        # The generic sum-to-one skin audit must still pass; semantic QA fails.
+        bpy.ops.wm.open_mainfile(filepath=str(source))
+        wing_obj = bpy.data.objects["Wing.L"]
+        wing_obj.vertex_groups["upper_wing.L"].add([0], .9, "REPLACE")
+        wing_obj.vertex_groups.new(name="spine").add([0], .1, "REPLACE")
+        leaking = folder / "wing-weights-bleed.blend"
+        bpy.ops.wm.save_as_mainfile(filepath=str(leaking))
+        leaking_out = folder / "rejected-weight-bleed"
+        bad = run_worker(leaking, "blender_pose_qa.py", {
+            "source_blend": str(leaking), "output": str(leaking_out),
+            "plan": zone_plan,
+        }, leaking_out)
+        assert bad["status"] == "structural-fail"
+        assert bad["rest_weight_zones"][0]["violating_vertices"] == 1
+        assert bad["rest_weight_zones"][0]["worst_examples"][0]["outside_bones"] == ["spine"]
+        assert any("outside-weight limit" in problem for problem in bad["problems"])
+
+        # M7: fix the actual deform weights without introducing new bone
+        # influences, editing the source asset or altering the mesh shape.
+        source_sha_before = hashlib.sha256(leaking.read_bytes()).hexdigest()
+        repair_args = {
+            "source_blend": str(leaking),
+            "source_blend_sha256": source_sha_before,
+            "armature": "CharacterRig",
+            "weight_zones": zone_plan["weight_zones"],
+            "max_removed_weight": .15, "max_changed_vertices": 20,
+        }
+        preview_out = folder / "weight-repair-preview"
+        preview = run_worker(leaking, "blender_weight_repair.py", {
+            **repair_args, "output": str(preview_out), "dry_run": True,
+        }, preview_out)
+        assert preview["status"] == "weight-repair-proposal-only"
+        assert preview["changed_vertices"] == 1
+        assert preview["zones"][0]["before"]["violating_vertices"] == 1
+        assert not (preview_out / "repaired.blend").exists()
+
+        repair_out = folder / "repaired-wing-weights"
+        repaired = run_worker(leaking, "blender_weight_repair.py", {
+            **repair_args, "output": str(repair_out), "dry_run": False,
+        }, repair_out)
+        assert repaired["status"] == "weight-repaired-animation-review-required"
+        assert repaired["changed_vertices"] == 1
+        assert repaired["zones"][0]["after"]["violating_vertices"] == 0
+        assert (repair_out / "repaired.blend").is_file()
+        assert hashlib.sha256(leaking.read_bytes()).hexdigest() == source_sha_before
+
+        repaired_qa_out = folder / "repaired-wing-pose-qa"
+        validated = run_worker(repair_out / "repaired.blend", "blender_pose_qa.py", {
+            "source_blend": str(repair_out / "repaired.blend"),
+            "output": str(repaired_qa_out), "plan": zone_plan,
+        }, repaired_qa_out)
+        assert validated["status"] == "deformation-review-required", validated["problems"]
+        assert validated["rest_weight_zones"][0]["violating_vertices"] == 0
+        assert validated["rest_skin_weights"]["Wing.L"]["non_normalized"] == 0
+
         print(json.dumps({
             "status": "native-workers-executed",
             "blender_version": bpy.app.version_string,
