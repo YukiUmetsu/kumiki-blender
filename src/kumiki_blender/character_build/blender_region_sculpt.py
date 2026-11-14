@@ -31,9 +31,49 @@ def mesh_digest(obj) -> str:
     return sha.hexdigest()
 
 
+def _inspect(args: dict, out: Path) -> None:
+    """Read-only source mesh metadata for safely authoring an indexed sculpt."""
+    obj = bpy.data.objects.get(args["object"])
+    if obj is None or obj.type != "MESH":
+        raise ValueError("Inspect source requires a named mesh object")
+    anchors = []
+    for raw in args.get("anchors", []):
+        if len(raw) != 3 or any(not math.isfinite(float(x)) for x in raw):
+            raise ValueError("Anchor query must have three finite coordinates")
+        center = Vector(raw)
+        index, distance = min(
+            ((vertex.index, (obj.matrix_world @ vertex.co - center).length)
+             for vertex in obj.data.vertices),
+            key=lambda row: row[1],
+            default=(None, None),
+        )
+        if index is None:
+            raise ValueError("Cannot find a seed on an empty mesh")
+        anchors.append({
+            "requested_center_m": list(raw),
+            "nearest_vertex": index,
+            "distance_m": round(distance, 9),
+            "status": "candidate-seed-review-required",
+        })
+    write_report(out, {
+        "schema_version": 1,
+        "source_blend": str(Path(bpy.data.filepath).resolve()),
+        "object": obj.name,
+        "expected_vertex_count": len(obj.data.vertices),
+        "expected_mesh_sha256": mesh_digest(obj),
+        "anchor_candidates": anchors,
+        "status": "source-probe-only",
+        "limitations": [
+            "Nearest vertex candidates require visual confirmation of the correct surface.",
+            "Mesh checksum covers vertex coordinates and polygon indices, not materials or UVs.",
+            "Source .blend is not modified.",
+        ],
+    })
+
+
 def main() -> None:
     args = arguments()
-    plan, out = args["plan"], Path(args["output"]).resolve()
+    out = Path(args["output"]).resolve()
     if out.exists():
         raise FileExistsError(f"Output revision already exists: {out}")
     if not bpy.data.filepath:
@@ -42,6 +82,10 @@ def main() -> None:
         raise ValueError("Loaded Blender file differs from requested source .blend")
     if Path(bpy.data.filepath).resolve().is_relative_to(out):
         raise ValueError("Source .blend cannot be inside the output revision")
+    if args.get("inspect_only", False):
+        _inspect(args, out)
+        return
+    plan = args["plan"]
     obj = bpy.data.objects.get(plan["object"])
     if obj is None or obj.type != "MESH":
         raise ValueError(f"Expected named Blender mesh object: {plan['object']}")
