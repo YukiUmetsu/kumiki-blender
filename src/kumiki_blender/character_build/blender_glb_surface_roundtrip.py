@@ -160,10 +160,19 @@ def _resolve_glb_mesh_nodes(document, imported, expected_names):
             "glb_mesh_index": mesh_index, "glb_mesh_name": data_name,
             "imported_object": obj.name, "imported_mesh_data": obj.data.name,
         })
-    extras = sorted(set(imported) - used)
-    if extras:
-        problems.append(f"Unexpected imported GLB mesh nodes: {extras}")
-    return mapping, problems, metadata
+    # Blender can create implementation-specific helper meshes during a glTF
+    # import. The actual portable asset's visible geometry is represented by
+    # mesh-bearing glTF nodes, not by every temporary Blender object.
+    exported_extra_nodes = [
+        node.get("name", f"unnamed-node-{i}")
+        for i, node in enumerate(nodes)
+        if "mesh" in node and node.get("name") not in expected_names
+    ]
+    if exported_extra_nodes:
+        problems.append(
+            f"Unexpected exported GLB mesh nodes: {sorted(exported_extra_nodes)}")
+    importer_helpers = sorted(set(imported) - used)
+    return mapping, problems, metadata, importer_helpers, exported_extra_nodes
 
 
 def main():
@@ -195,7 +204,7 @@ def main():
     if "FINISHED" not in bpy.ops.import_scene.gltf(filepath=str(glb)):
         raise RuntimeError("Blender did not import the exported binary GLB")
     imported = {obj.name: obj for obj in bpy.data.objects if obj.type == "MESH"}
-    resolved, problems, identity_mapping = _resolve_glb_mesh_nodes(
+    resolved, problems, identity_mapping, importer_helpers, exported_extras = _resolve_glb_mesh_nodes(
         document, imported, set(original))
     results = []
     for frame in frames:
@@ -244,6 +253,8 @@ def main():
         "source_meshes": sorted(original),
         "glb_imported_meshes": sorted(imported),
         "node_mesh_identity_mapping": identity_mapping,
+        "unassigned_imported_objects": importer_helpers,
+        "unexpected_exported_glb_nodes": exported_extras,
         "checked_mesh_frames": len(results),
         "max_p95_error_m": plan["max_p95_error_m"],
         "max_max_error_m": plan["max_max_error_m"],
