@@ -66,10 +66,13 @@ def edit_workflow(image_name: str, prompt: str, *, size: int, steps: int, seed: 
     }
 
 
-def removal_prompt(part: str, subject: str, behind: str) -> str:
-    return (f"Remove the {part} of {subject} completely. Where the {part} was, show what is behind it: {behind}, "
-            "or the plain background. Keep everything else exactly the same: the same pose, size, position, "
-            "colours, materials and camera angle. Plain flat light grey background.")
+def removal_prompt(part: str, subject: str, behind: str, keep: str = "") -> str:
+    """The instruction for the editor. ``keep`` names what it must not take away with the part: asked
+    to remove Pip's bag, it also removed the fringe of the scarf and the skin flaps under the arms."""
+    kept = f" Do not remove or change {keep}." if keep else ""
+    return (f"Remove only the {part} of {subject}. Where the {part} was, show what is behind it: {behind}, "
+            f"or the plain background.{kept} Keep everything else exactly the same: the same pose, size, "
+            "position, colours, materials and camera angle. Plain flat light grey background.")
 
 
 def to_square(rgba: Image.Image, size: int) -> tuple[Image.Image, dict]:
@@ -166,14 +169,15 @@ def write_handoff(root: Path, spec: dict, images: dict[str, np.ndarray], note: s
 
 
 def split_views(handoff: Path, out: Path, client, *, part: str, name: str | None = None,
-                subject: str = "the character", behind: str = "the body and the clothes",
+                subject: str = "the character", behind: str = "the body and the clothes", keep: str = "",
                 views: list[str] | None = None, size: int = 768, steps: int = 20, seed: int = 7,
                 change_delta_e: float = 7.0, feather_px: float = 4.0, band_px: int = 14,
                 min_share: float = 0.01) -> dict:
     """Write ``out/<name>/`` and ``out/rest/`` (see the module text); returns the report (``out/split.json``).
 
     ``part`` says what to take out, in plain words for the editor ("brown leather bag and
-    its strap"). ``name`` is the folder of the part (default: ``part`` with dashes).
+    its strap"), ``behind`` what it hides, and ``keep`` what must stay. ``name`` is the
+    folder of the part (default: ``part`` with dashes).
 
     ``views`` are the drawings that show the part; the other drawings go to ``rest``
     unchanged. A finished edit (``out/edits/<view>.png`` with the same drawing, prompt
@@ -190,7 +194,7 @@ def split_views(handoff: Path, out: Path, client, *, part: str, name: str | None
         raise ValueError(f"Not a usable folder name for the part: {name!r}")
     folder = name
     (out / "edits").mkdir(parents=True, exist_ok=True)
-    prompt = removal_prompt(part, subject, behind)
+    prompt = removal_prompt(part, subject, behind, keep)
     part_images, rest_images, rows = {}, {}, []
     for view in names:
         with Image.open(handoff / "raw" / f"{view}.png") as picture:

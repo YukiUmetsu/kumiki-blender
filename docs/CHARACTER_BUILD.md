@@ -45,6 +45,10 @@ or newer. The other commands need only NumPy, SciPy, scikit-image and Pillow.
 | Texture | `texture-parts HANDOFF retopo/low.obj parts/ --output base.png` | Each part baked from its own pixels, with smooth fill and polished seams |
 | Texture | `repaint HANDOFF retopo/low.obj base.png --output rp/` | Pictures of the angles between the drawings, repainted from renders by a local image model |
 | References | `trim REFS front --output front.png` | A view without the part that its opposite view has no room for |
+| Parts | `split-views HANDOFF --part tail --output split/` | The drawings split into one part and the rest, each a handoff in the character frame |
+| Parts | `place-part split/tail tail.glb --output tail.ply` | A part that was modelled alone, placed in the frame of the whole character |
+| Parts | `seat-part body.ply bag/low.obj --metres-per-px 0.00032 --output bag.obj` | A part moved out of the body that it hangs on, as one rigid piece |
+| Parts | `join-parts a/low.obj:a.png b/low.obj:b.png --output joined/` | One mesh and one texture from placed, textured parts |
 | Fit | `fit HANDOFF mesh.ply --lattice auto` | Lattice deformation for detailed generator meshes. A finer lattice is kept only if it does no harm |
 | Texture | `retopo fitted.ply --colour-from ranked/x.placement.json` | The generator's own texture baked as `low_basecolor.png` |
 | Fur | `fur-weights coloured.ply --clothing-top-m 0.2 --eye-band-m 0.21,0.27` | Per-vertex fur weight from the drawings' colours (no fur on clothing or eyes) |
@@ -256,6 +260,78 @@ Limits:
 - A part that the mesh shapes differently from the drawings is only kept clean. To
   remove the cause, correct the shape. On Pip, a sliver of vest stays on the left
   edge of the tail in the back view. The border of the tail shape lies beside it.
+
+## Model the parts alone
+
+A model made in one piece fuses its parts. The tail, the scarf and the body are one
+skin. The tail has the width that the generator guessed, and the colour of one part
+lands on the other. If each part is modelled alone, it has its own outline to fit
+and its own pixels to take colour from.
+
+1. **Split the drawings.**
+
+   ```bash
+   kumiki-character-build split-views HANDOFF --part tail --views left,back,back_left \
+     --subject "the cartoon squirrel" --behind "the back, the vest and the scarf" \
+     --keep "the scarf with its fringe" --output split/
+   ```
+
+   A local image editor (FLUX.2 [klein] in ComfyUI) removes the part from each
+   drawing that shows it and paints what was behind it. One view takes about 9
+   minutes. The part is where the drawing and the edit differ. No segmentation model
+   is necessary. `--keep` names what the editor must not remove with the part. Without
+   it, the editor also removed the fringe of Pip's scarf when it removed the bag.
+
+   `split/tail/` holds the drawing's own pixels of the part. `split/rest/` holds the
+   drawing, with the edit only where the part was. Both folders are handoffs in the
+   frame of the whole character. Their `masks/` are full-frame region masks for a
+   CharacterSpec v2. To take out one more part, run `split-views` on `split/rest/`.
+2. **Generate each part.** Give the generator `split/tail/raw/*.png` and
+   `split/rest/raw/*.png` as separate runs (`scripts/hunyuan_mv_shape.py`). For a
+   part, use the view that shows it best as `--front`. For Pip's tail that is the
+   back view. The left view is then `--right`.
+3. **Place each part.** `place-part split/tail tail.glb --voxel-mm 1 --output tail.ply`
+   finds the turn about the vertical axis, the scale and the position at which the
+   part covers its masks. Two views along different axes fix all three directions.
+   Each direction can have its own scale, at most 15% from the common scale
+   (`--stretch`). A part that is generated alone has its own proportions.
+4. **Fit, retopology and texture** for each part with its own handoff:
+   `fit split/tail tail.ply --no-normalise --lattice auto`, `retopo`, `texture split/tail low.obj`.
+5. **Seat a part that hangs on the body.** The body was modelled without the bag, so
+   its surface can lie further out than the bag. `seat-part body.ply bag/low.obj
+   --metres-per-px 0.00032 --output bag_seated.obj` moves the bag out of the body
+   as one rigid piece, until 15% of its surface is still inside. The UVs stay, so
+   the texture stays valid.
+6. **Join.** `join-parts body/low.obj:body.png tail/low.obj:tail.png --output joined/`
+   makes one mesh with one texture. Add `:normal.png` to each part for a joined
+   normal map. Each part keeps its own region of the texture
+   and stays a separate piece of surface. `compare`, `appearance` and `rig` take
+   `joined/joined.obj`.
+
+What the editor paints behind a part is a guess. In the finished model the part
+hides most of it. Look at `split/rest/raw/` before you generate.
+
+Result on Pip (second set), body, tail and bag modelled alone, against the model in
+one piece:
+
+| | One piece | Three parts |
+| --- | --- | --- |
+| Vest and scarf colours on the tail | yes | no |
+| Tail colours on the back and the head | yes | no |
+| Silhouette IoU: front, left, back, back-left | 0.89, 0.89, 0.87, 0.82 | 0.88, 0.89, 0.88, 0.83 |
+| Median colour error: front, left | 4.6, 5.6 | 4.3, 5.2 |
+| Median colour error: back, back-left | 5.2, 6.4 | 6.6, 9.9 |
+
+The colour error of the back views is higher. The tail was generated from three
+views, and its outline in the back-left view fits less well (IoU 0.51 for the tail
+alone). The colour of a wrong outline lands beside the drawing's.
+
+Limits:
+
+- The generator makes a thin piece badly. Pip's shoulder strap came out as a stub.
+- The body under a removed part is the editor's guess.
+- A part with one or two views has unseen sides (23% of the tail, 45% of the bag).
+- Each part costs about 9 minutes for each edited view and 25 minutes for its shape.
 
 ## A view that shows a part the others have no room for
 

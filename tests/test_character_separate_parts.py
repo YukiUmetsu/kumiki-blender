@@ -185,7 +185,31 @@ class PlaceAndJoinTests(unittest.TestCase):
         self.assertGreater(info["mean_iou"], 0.95)
         self.assertEqual(info["position_measured"], {"x": True, "y": True, "z": True})
         self.assertAlmostEqual(info["scale"], 1 / 3.7, delta=0.01)
+        np.testing.assert_allclose(info["stretch"], [1, 1, 1], atol=0.03)
         self.assertLess(min(abs(info["yaw_deg"] - 160), abs(info["yaw_deg"] - 160 - 360)), 4)
+
+    def test_the_placed_part_has_the_height_of_its_mask(self):
+        """A flat base holds many surface points and few pixels: the size must come from the silhouette."""
+        from kumiki_blender.character_build.mesh import surface_samples
+        ball = ellipsoid_mesh(centre=(0, 0, 0), radii=(.05, .05, .15), subdivisions=4)
+        v = ball.vertices.copy()
+        v[:, 2] = np.maximum(v[:, 2], -0.05)           # cut flat at the bottom, like soles
+        truth = Mesh(v + [0, 0, 0.05], ball.faces)
+        self.assertGreater((surface_samples(truth, 0.002)[0][:, 2] < 0.001).mean(), 0.02)
+        masks = {name: rasterize(truth, camera(name), self.PX, 0.25)[0] for name in ("front", "left")}
+        placed, info = place_part(Mesh(v * 5, ball.faces), masks, self.PX, yaw_deg=0.0, refine=False)
+        self.assertAlmostEqual(float(np.ptp(placed.vertices[:, 2])), 0.2, delta=0.004)
+        self.assertGreater(info["mean_iou"], 0.97)
+        np.testing.assert_allclose(info["stretch"], [1, 1, 1], atol=0.02)
+        # A generator made the part 10% too squat: each direction gets its own scale, within the limit.
+        squat = Mesh(v * [5, 5, 4.5], ball.faces)
+        placed, info = place_part(squat, masks, self.PX, yaw_deg=0.0)
+        self.assertAlmostEqual(float(np.ptp(placed.vertices[:, 2])), 0.2, delta=0.004)
+        self.assertAlmostEqual(float(np.ptp(placed.vertices[:, 0])), 0.1, delta=0.004)
+        self.assertGreater(info["stretch"][2] / info["stretch"][0], 1.07)
+        rigid, info = place_part(squat, masks, self.PX, yaw_deg=0.0, stretch=0.0)
+        self.assertEqual(info["stretch"], [1.0, 1.0, 1.0])
+        self.assertLess(float(np.ptp(rigid.vertices[:, 2])), 0.198, "one scale cannot give both the height and the width")
 
     def test_one_view_leaves_the_depth_unmeasured(self):
         base, bent = self.tail()
@@ -197,6 +221,23 @@ class PlaceAndJoinTests(unittest.TestCase):
         self.assertAlmostEqual(float(placed.vertices[:, 0].min() + placed.vertices[:, 0].max()), 0.0, delta=1e-6)
         with self.assertRaises(ValueError):
             place_part(truth, {"back_left": masks["left"]}, self.PX)
+
+    def test_a_part_inside_the_body_is_seated_on_its_surface(self):
+        from kumiki_blender.character_build.part_place import seat_part
+        body = ellipsoid_mesh(centre=(0, 0, .16), radii=(.06, .05, .16), subdivisions=3)
+        bag = ellipsoid_mesh(centre=(.045, 0, .12), radii=(.015, .02, .02), subdivisions=2)   # on the left hip, mostly inside
+        seated, info = seat_part(bag, body, self.PX)
+        self.assertEqual(info["view"], "left")
+        self.assertGreater(info["buried_before"], 0.5)
+        self.assertAlmostEqual(info["buried_after"], 0.15, delta=0.05)
+        moved = seated.vertices - bag.vertices
+        self.assertGreater(moved[0, 0], 0.005)                      # out, along +X
+        np.testing.assert_allclose(moved, np.tile(moved[0], (len(moved), 1)), atol=1e-12)   # as one rigid piece
+        np.testing.assert_allclose(moved[:, 1:], 0, atol=1e-12)
+        again, info = seat_part(seated, body, self.PX, view="left")
+        self.assertLess(info["moved_m"], 0.0005, "a seated part stays")
+        outside = Mesh(bag.vertices + [0.1, 0, 0], bag.faces)
+        np.testing.assert_array_equal(seat_part(outside, body, self.PX)[0].vertices, outside.vertices)
 
     def test_joined_parts_keep_their_own_region_of_the_texture(self):
         big = ellipsoid_mesh(centre=(0, 0, .2), radii=(.1, .1, .2), subdivisions=2)
