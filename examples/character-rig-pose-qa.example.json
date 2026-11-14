@@ -31,6 +31,7 @@
     }
   ],
   "collision_pairs": [],
+  "min_pose_displacement_m": 0.0005,
   "max_p95_edge_stretch": 0.5,
   "render": false
 }

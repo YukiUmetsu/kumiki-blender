@@ -17,7 +17,8 @@ def load_pose_plan(path: str | Path) -> dict:
     raw = json.loads(Path(path).read_text(encoding="utf-8"))
     if not isinstance(raw, dict) or set(raw) - {
         "schema_version", "armature", "poses", "collision_pairs",
-        "max_p95_edge_stretch", "render"
+        "max_p95_edge_stretch", "min_pose_displacement_m",
+        "max_new_collision_pairs", "render"
     }:
         raise ValueError("Pose QA plan has unknown properties")
     if type(raw.get("schema_version")) is not int or raw["schema_version"] != 1:
@@ -65,6 +66,17 @@ def load_pose_plan(path: str | Path) -> dict:
     if threshold is not None and (type(threshold) not in (float, int)
                                   or not math.isfinite(threshold) or not 0 <= threshold <= 10):
         raise ValueError("max_p95_edge_stretch must be a finite nonnegative ratio")
+    minimum_motion = raw.get("min_pose_displacement_m")
+    if minimum_motion is not None and (
+            type(minimum_motion) not in (int, float) or
+            not math.isfinite(minimum_motion) or not 0 < minimum_motion <= 1):
+        raise ValueError("min_pose_displacement_m must be finite and in (0, 1] meter")
+    maximum_new = raw.get("max_new_collision_pairs")
+    if maximum_new is not None:
+        if type(maximum_new) is not int or not 0 <= maximum_new <= 100000:
+            raise ValueError("max_new_collision_pairs must be an integer in [0, 100000]")
+        if not pairs:
+            raise ValueError("max_new_collision_pairs requires explicit collision_pairs")
     if type(raw.get("render", False)) is not bool:
         raise ValueError("render must be boolean")
     return raw
