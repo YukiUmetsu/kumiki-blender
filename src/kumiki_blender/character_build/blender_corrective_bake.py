@@ -14,22 +14,24 @@ import bpy
 _CORRECTIVE_PATH = re.compile(r'^key_blocks\["(CORR_[A-Za-z0-9_.:-]{1,95})"\]\.value$')
 
 
-def collect_corrective_drivers(bound, rig, enabled: bool):
-    """Fail closed on unrelated face drivers or existing shape-key Action/NLA."""
+def collect_corrective_drivers(bound, rig, enabled: bool, *, allow_facial_actions: bool = False):
+    """Fail closed on unsupported drivers or facial Action that was not opted in."""
     tracked = {}
     for obj in bound:
         keys = obj.data.shape_keys
         if keys is None or keys.animation_data is None:
             continue
         animation = keys.animation_data
+        if animation.nla_tracks:
+            raise ValueError(f"{obj.name}: shape-key NLA cannot be merged into a single clip")
+        if animation.action and not allow_facial_actions:
+            raise ValueError(f"{obj.name}: facial shape-key Action requires --bake-visemes")
         if not enabled:
             if animation.drivers:
                 raise ValueError(
                     f"{obj.name}: joint-driven shapes require --bake-correctives; "
                     "skeleton-only GLB would discard the sculpt correction")
             continue
-        if animation.action or animation.nla_tracks:
-            raise ValueError(f"{obj.name}: existing facial shape-key Action/NLA cannot be mixed yet")
         for curve in animation.drivers:
             match = _CORRECTIVE_PATH.fullmatch(curve.data_path)
             if match is None or curve.array_index != 0 or not curve.is_valid:
@@ -52,7 +54,10 @@ def collect_corrective_drivers(bound, rig, enabled: bool):
             tracked.setdefault(obj.name, {})[name] = keys.key_blocks[name]
         if tracked.get(obj.name):
             for key in list(keys.key_blocks)[1:]:
-                if key.name not in tracked[obj.name] and abs(key.value) > 1e-6:
+                if (key.name not in tracked[obj.name] and
+                        not (allow_facial_actions and key.name in {
+                            f"viseme_{code}" for code in "ABCDEFGH"}) and
+                        abs(key.value) > 1e-6):
                     raise ValueError(
                         f"{obj.name}/{key.name}: non-corrective face shape must be neutral")
     if enabled and not tracked:

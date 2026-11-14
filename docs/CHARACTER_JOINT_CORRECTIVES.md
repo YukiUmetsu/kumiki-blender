@@ -99,11 +99,49 @@ without --bake-correctives on a driven shape still fails **closed**, as before.
 This path is intentionally opt-in and requires --step 1 to avoid dropping
 subframe joint-corrective changes.
 
-**Remaining limitations:** shape-key facial Actions and multiple NLA tracks are
-not yet combined into this exporter. There is no automatic source-faithful
-sculpting or visually certified silhouette in this change. Use source-view
-render comparisons, gesture range checks, and the ContentGen renderer for final
-artistic approval.
+### Combine authored lip-sync with joint animation
+
+The same bake command can now include an existing **facial shape-key Action**
+on a mesh skinned to the same armature. The mouth Action must already contain
+animated `viseme_A` through `viseme_H` shape keys from approved cues. This
+operation does **not** generate speech cues, invent mouth geometry, or merge
+multiple facial NLA tracks.
+
+To export a verified combined skeletal, mouth, and joint-corrective performance,
+save one .blend with the animated control rig, the facial Action, and the
+pose-driven corrective keys, then create the plan with both explicit switches:
+
+```bash
+kumiki-character-build plan-animation-bake \
+  --blend /project/characters/quill/animated-corrected-with-mouth.blend \
+  --clip quill_explains --start 1 --end 96 --step 1 --fps 24 \
+  --bake-visemes --bake-correctives \
+  --output /project/review/quill/combined-plan-r01
+
+kumiki-character-build bake-character-animation \
+  --plan /project/review/quill/combined-plan-r01/bake-plan.json \
+  --output /project/review/quill/combined-glb-r01
+```
+
+For skeletal motion plus face alone, use `--bake-visemes`. For skeleton and
+correctives without facial Action, use `--bake-correctives`. Both switches are
+required when both source track types exist; otherwise the exporter refuses to
+silently drop an animation. A facial Action must contain an actually changing
+viseme shape, not only keyframe names. The exporter rejects incompatible NLA,
+unnamed facial shapes, overdriven simultaneous visemes, nonneutral untracked
+shapes, stale source files, and any missing or incorrect GLB binary morph
+weights. The output report includes `morph_visemes_requested`,
+`morph_viseme_objects`, `morph_correctives_requested` and `morph_parity`.
+Both morph modalities must share **one** GLB clip with the deform skeleton.
+
+**Remaining limitations:** Independent facial and joint keyframes must already
+be authored on the *same* Blender source revision. Lip-sync generation and
+audio alignment remain separate steps; additional blendshape families, blink
+tracks, multiple Actions per mesh, NLA stacks, and multidirectional joint
+correctives still require explicit validation/expansion. No automatic
+source-faithful sculpting or visually certified silhouette is claimed. Compare
+all frames against the character reference and inspect final ContentGen playback
+before approving production output.
 
 **Export limitation:** Do not use raw GLB export to preserve Blender drivers.
 Use the checked --bake-correctives workflow above.

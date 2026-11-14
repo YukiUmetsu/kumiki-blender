@@ -24,11 +24,14 @@ def validate_bake_plan(data: dict) -> None:
         "clip", "start_frame", "end_frame", "step", "fps",
         "max_position_error_m", "max_rotation_error_deg",
     }
+    allowed_optional = {"bake_correctives", "bake_visemes"}
     if (not isinstance(data, dict) or
-            set(data) not in (base_fields, base_fields | {"bake_correctives"})):
+            not base_fields <= set(data) or
+            not set(data) <= base_fields | allowed_optional):
         raise ValueError("Animation bake plan needs explicit source and frame bounds")
-    if type(data.get("bake_correctives", False)) is not bool:
-        raise ValueError("bake_correctives must be boolean")
+    for option in sorted(allowed_optional):
+        if type(data.get(option, False)) is not bool:
+            raise ValueError(f"{option} must be boolean")
     if type(data["schema_version"]) is not int or data["schema_version"] != 1:
         raise ValueError("Unsupported animation bake plan version")
     for label in ("armature", "clip"):
@@ -46,8 +49,9 @@ def validate_bake_plan(data: dict) -> None:
         raise ValueError("Animation must be 2–1201 frames long within 0–10000")
     if not 1 <= step <= 8 or not 1 <= fps <= 120:
         raise ValueError("step or fps outside supported range")
-    if data.get("bake_correctives", False) and step != 1:
-        raise ValueError("Pose corrective morphs require every animation frame (step=1)")
+    if (data.get("bake_correctives", False) or
+            data.get("bake_visemes", False)) and step != 1:
+        raise ValueError("Morph animation baking requires every frame (step=1)")
     for name, maximum in (("max_position_error_m", .1), ("max_rotation_error_deg", 90)):
         value = data[name]
         if type(value) not in (float, int) or not math.isfinite(value) or not 0 < value <= maximum:
@@ -58,7 +62,8 @@ def make_bake_plan(blend: str | Path, clip: str, start: int, end: int, *,
                    armature: str = "CharacterRig", step: int = 1, fps: int = 24,
                    max_position_error_m: float = .002,
                    max_rotation_error_deg: float = 2.0,
-                   bake_correctives: bool = False) -> dict:
+                   bake_correctives: bool = False,
+                   bake_visemes: bool = False) -> dict:
     path = Path(blend).resolve()
     if not path.is_file() or path.suffix.lower() != ".blend":
         raise ValueError("A saved .blend with the animated control rig is required")
@@ -69,6 +74,7 @@ def make_bake_plan(blend: str | Path, clip: str, start: int, end: int, *,
         "fps": fps, "max_position_error_m": max_position_error_m,
         "max_rotation_error_deg": max_rotation_error_deg,
         "bake_correctives": bake_correctives,
+        "bake_visemes": bake_visemes,
     }
     validate_bake_plan(data)
     return data

@@ -57,6 +57,28 @@ class AnimationBakePlanTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "boolean"):
             validate_bake_plan(plan)
 
+    def test_opt_in_viseme_action_requires_full_frame_sampling(self):
+        unified = make_bake_plan(
+            self.blend, "speech_and_wing", 1, 24,
+            bake_visemes=True, bake_correctives=True)
+        self.assertTrue(unified["bake_visemes"])
+        self.assertTrue(unified["bake_correctives"])
+        validate_bake_plan(unified)
+        with self.assertRaisesRegex(ValueError, "step=1"):
+            make_bake_plan(
+                self.blend, "speech_and_wing", 1, 24, step=2, bake_visemes=True)
+        unsupported = dict(unified)
+        unsupported["bake_visemes"] = "false"
+        with self.assertRaisesRegex(ValueError, "boolean"):
+            validate_bake_plan(unsupported)
+        unsupported = dict(unified)
+        unsupported["untrusted_expression"] = "exec('not_allowed')"
+        with self.assertRaisesRegex(ValueError, "explicit source"):
+            validate_bake_plan(unsupported)
+        baseline = make_bake_plan(self.blend, "existing", 1, 8)
+        self.assertFalse(baseline["bake_visemes"])
+        self.assertFalse(baseline["bake_correctives"])
+
     def test_reject_mutated_shape_and_types(self):
         plan = make_bake_plan(self.blend, "walk", 1, 12)
         plan["untrusted-script"] = "print('bad')"

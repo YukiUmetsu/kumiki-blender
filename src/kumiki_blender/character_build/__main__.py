@@ -209,6 +209,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--max-rotation-error-deg", type=float, default=2.)
     p.add_argument("--bake-correctives", action="store_true",
                    help="sample Blender joint-driven shape keys and verify glTF morph animation")
+    p.add_argument("--bake-visemes", action="store_true",
+                   help="sample authored facial viseme Action alongside bones and optional joint correctives")
     p.add_argument("--output", type=Path, required=True, help="new immutable bake plan directory")
 
     p = sub.add_parser("bake-character-animation", help="visually bake Blender controls into deform-only GLB animation")
@@ -929,7 +931,8 @@ def _run(args) -> int:
                                 armature=args.armature, step=args.step, fps=args.fps,
                                 max_position_error_m=args.max_position_error_m,
                                 max_rotation_error_deg=args.max_rotation_error_deg,
-                                bake_correctives=args.bake_correctives)
+                                bake_correctives=args.bake_correctives,
+                                bake_visemes=args.bake_visemes)
         print(json.dumps(report, indent=2))
         return 0
     if args.command == "bake-character-animation":
