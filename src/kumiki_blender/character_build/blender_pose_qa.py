@@ -179,7 +179,8 @@ def main() -> None:
                 vector["XYZ".index(rotation["axis"])] = math.radians(rotation["degrees"])
                 rig.pose.bones[bone_name].rotation_euler = vector
             bpy.context.view_layer.update()
-            entry = {"name": item["name"], "meshes": {}, "collision_candidates": []}
+            entry = {"name": item["name"], "meshes": {},
+                     "collision_candidates": [], "contact_deltas": []}
             for obj in bound:
                 current = snapshot(obj, depsgraph)
                 try:
@@ -217,10 +218,13 @@ def main() -> None:
                     problems.append(
                         f"{item['name']}/{first}-{second}: collision mesh topology changed; "
                         "triangle-index contact deltas are invalid")
+                    entry["contact_deltas"].append({
+                        "objects": [first, second], "status": "topology-changed"})
                     entry["collision_candidates"].append({
                         "objects": [first, second], "status": "topology-changed"})
                     continue
                 delta = collision_delta(baseline, a.overlap(b))
+                entry["contact_deltas"].append({"objects": [first, second], **delta})
                 if delta["posed_overlapping_triangle_pairs"]:
                     entry["collision_candidates"].append({
                         "objects": [first, second],
