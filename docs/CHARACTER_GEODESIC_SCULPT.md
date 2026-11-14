@@ -65,18 +65,16 @@ kumiki-character-build refine-region \
   --blend /path/to/character-approved.blend \
   --plan /path/to/eye-L-geodesic-sculpt.json \
   --output .review/pip/eye-L-geodesic-r01 \
-  --blender /Applications/Blender.app/Contents/MacOS/Blender
-
-kumiki-character-build audit-region-revision \
   --character .review/pip/character-plan-r01 \
   --region eye.L \
-  --after .review/pip/eye-L-geodesic-r01/region-source.obj \
   --max-regression 0.01 \
   --max-contour-regression 0.03 \
-  --output .review/pip/eye-L-source-qa-r01
+  --blender /Applications/Blender.app/Contents/MacOS/Blender
 ```
 
 `refine-region` returns an independent `refined.blend`, the legacy handoff `region.obj`, source-frame `region-source.obj`, and a report with the source mesh fingerprint, movement budget, protected-vertex count and per-operation method/affected vertices. It rejects a stale fingerprint, changed count, excessive displacement, flipped face normals, modifications to other mesh objects or a mismatched loaded source.
+
+With `--character` and `--region`, the command **automatically** executes the existing original-art `audit-region-revision` numeric gate. The character plan must contain verified camera views and either an original `source_mesh` or an explicit `--qa-before` source-frame OBJ/PLY/GLB. A failed per-view silhouette or contour check exits **1** and leaves the rejected sculpt with a `source-fidelity/report.json` and `source-fidelity-receipt.json` for diagnosis. Do not promote that candidate. Without these flags, `refine-region` retains legacy manual-review behavior.
 
 Only `region-source.obj` uses the source-fidelity gate's registered Z-up coordinates. Continue with `validate-rig` on a rigged revision after geometry acceptance, and inspect each verified source view. Numerical acceptance is **never** a claim of feature-film quality or faithful hidden anatomy.
 
@@ -84,6 +82,7 @@ Only `region-source.obj` uses the source-fidelity gate's registered Z-up coordin
 
 - `tests/test_character_surface_distance.py`: thin disconnected sheet, protected boundary, shortest-path cutoff, bad geometry.
 - `tests/test_character_region_sculpt_plan.py`: additive schema, source fingerprint, seed/tolerance bounds.
+- `tests/test_character_region_sculpt_source_qa.py`: source regression blocks promotion, even when Blender sculpting succeeds.
 - `scripts/smoke_character_controls_topology_blender.py`: native Blender saved-mesh inspection and geodesic sculpt exercise (subject to official Blender availability).
 
 Still required: real Pip/Quill source-registered multi-view benchmarks, sculpting detailed eye/feather/hand parts, deformation-aware retopology, species-specific weight painting, correctives, animated rigs, and Blender-to-Kumiki-UI parity.
