@@ -204,8 +204,134 @@ def eye_zone_in_view(shape: tuple[int, int], raw_map: dict, view: str, zones: li
         zone[y[inside], x[inside]] = True
         if zone.any():
             grow = max(1, round(margin * radius / raw_map["scale"]))
-            found |= ndimage.binary_dilation(ndimage.binary_closing(zone, iterations=3), structure=_disc(min(grow, 60)))
+            reach = ndimage.distance_transform_edt(~ndimage.binary_closing(zone, iterations=3))
+            found |= reach <= grow
     return found
+
+
+def _write_eyeballs(globes: list[dict], out: Path, folder: str, view: str, note: str) -> None:
+    """One OBJ with UVs for each eyeball in ``out/folder``, and ``out/anatomy.json`` for ``plan-anatomy``."""
+    (out / folder).mkdir(parents=True, exist_ok=True)
+    for globe in globes:
+        mesh, corner_uv = uv_ellipsoid(np.array(globe["center_m"]), np.array(globe["radii_m"]),
+                                       seam_toward=-np.array(globe["forward_m"]))
+        write_obj_uv(mesh, corner_uv, out / folder / f"{globe['id']}.obj", comment=f"eyeball {globe['id']}")
+        globe["mesh"] = f"{globe['id']}.obj" if folder == "." else f"{folder}/{globe['id']}.obj"
+    anatomy = {"schema_version": 1, "character_id": "from-split-eyes", "parts": [
+        {"id": globe["id"], "kind": "ocular_globe",
+         "evidence": {"status": "inferred", "source_views": [view], "notes": note + "; review before use."},
+         "center_m": globe["center_m"], "forward_m": globe["forward_m"], "up_m": [0, 0, 1], "radii_m": globe["radii_m"],
+         "iris_fraction": globe["iris_fraction"], "pupil_fraction": globe["pupil_fraction"]} for globe in globes]}
+    (out / "anatomy.json").write_text(json.dumps(anatomy, indent=2), encoding="utf-8")
+
+
+def bake_eyeball(part_handoff: Path, mesh: Mesh, corner_uv: np.ndarray, *, view: str = "front", size: int = 1024,
+                 white_percentile: float = 80.0) -> tuple[np.ndarray, dict]:
+    """The texture of one eyeball from the eye pixels of ``view``; what the view cannot see is eye-white.
+
+    ``texture`` fills a texel that no view sees with the nearest painted colour. On an
+    eyeball that is the colour of its rim in the drawing: a dark lid line, or a strip of
+    cheek fur. From the side, Pip's eyeball then was a tan disc. Here the unseen texels
+    take the white of this eye: the median of its lightest, least coloured painted texels.
+    """
+    import tempfile
+
+    from .texture import bake_texture
+
+    with tempfile.TemporaryDirectory() as scratch:
+        image, report = bake_texture(part_handoff, mesh, corner_uv, size=size, views=[view], min_cosine=0.15,
+                                     occlusion_px=0, diagnostics=Path(scratch))
+        with Image.open(Path(scratch) / "owners.png") as picture:
+            unseen = np.asarray(picture.convert("RGB")).max(axis=2) < 30
+    painted = lab(image[~unseen].reshape(-1, 3))
+    chroma = np.hypot(painted[:, 1], painted[:, 2])
+    lightest = painted[:, 0] >= np.percentile(painted[:, 0], white_percentile)
+    lightest &= chroma <= np.median(chroma[lightest])      # the white, not light fur or skin at the rim
+    white = np.median(image[~unseen].reshape(-1, 3)[lightest], axis=0)
+    blend = ndimage.gaussian_filter(unseen.astype(np.float64), max(1.0, size / 256))[..., None]
+    blend = np.where(unseen[..., None], 1.0, blend)
+    result = np.clip(np.round(image * (1 - blend) + white * blend), 0, 255).astype(np.uint8)
+    return result, {"seen_fraction": report["seen_fraction"], "white_rgb": [int(round(v)) for v in white]}
+
+
+def eyeballs_from_part(part_handoff: Path, head: Mesh, out: Path, *, view: str = "front", min_share: float = 0.2,
+                       depth_ratio: float = 0.7, protrude: float = 0.45, grow: float = 1.02,
+                       source_handoff: Path | None = None, zone: float = 1.25) -> dict:
+    """Eyeballs for the eyes that ``split-views`` took out of the drawings, the white of the eye included.
+
+    ``find_eyes`` cannot find the white: it has the colour of light fur. ``split-views``
+    with ``--part "two eyes, each with its iris, its pupil and the white"`` can: the
+    image editor removes the eyes, and the part is where the drawing changed. Each piece
+    of that part in ``view`` (at least ``min_share`` of the largest piece) becomes one
+    ellipsoid on the head, as wide and as high as the piece, with its texture
+    (``bake_eyeball``). Writes ``out/<id>.obj``, ``out/<id>.png``, ``out/anatomy.json``,
+    ``out/eyes.json`` and ``out/eyes.png``.
+
+    With ``source_handoff`` (the handoff that the eyes were split from), it also writes
+    ``out/within/<name>.png`` for each other drawing: where an eye can show there, ``zone``
+    times the eye's size around its place on the head. Give that folder to
+    ``split-views --within`` for the other views, so that a change that the editor made
+    elsewhere does not count as an eye.
+    """
+    spec = json.loads((part_handoff / "spec.json").read_text(encoding="utf-8"))
+    with Image.open(part_handoff / "raw" / f"{view}.png") as picture:
+        rgba = np.asarray(picture.convert("RGBA"))
+    labels, count = ndimage.label(rgba[..., 3] > 200)
+    if not count:
+        raise ValueError(f"The part handoff shows nothing in the {view} view")
+    sizes = ndimage.sum_labels(labels > 0, labels, range(1, count + 1))
+    eyes = []
+    for index, box in enumerate(ndimage.find_objects(labels), start=1):
+        if sizes[index - 1] < min_share * sizes.max():
+            continue
+        alone = rgba.copy()
+        alone[..., 3] = np.where(labels == index, 255, 0)
+        inner, _ = find_eyes(alone, head_share=1.0, max_eyes=1, min_pupil_share=0.01)
+        high, wide = box[0].stop - box[0].start, box[1].stop - box[1].start
+        pupil = inner[0]["pupil_radius_px"] if inner else 0.3 * min(high, wide) / 2
+        eyes.append({"centre_px": [(box[1].start + box[1].stop) / 2, (box[0].start + box[0].stop) / 2],
+                     "radii_px": [wide / 2, high / 2], "pupil_radius_px": float(pupil),
+                     "iris_radius_px": float(inner[0]["iris_radius_px"] if inner else 1.5 * pupil),
+                     "pupil_px": inner[0]["pupil_px"] if inner else [(box[1].start + box[1].stop) / 2, (box[0].start + box[0].stop) / 2],
+                     "iris_lab": inner[0]["iris_lab"] if inner else [0.0, 0.0, 0.0]})
+    eyes.sort(key=lambda eye: eye["centre_px"][0])
+    globes = eye_globes(eyes, spec["raw"][view], head, spec["metres_per_aligned_px"], view=view,
+                        depth_ratio=depth_ratio, protrude=protrude, grow=grow)
+    out.mkdir(parents=True, exist_ok=True)
+    _write_eyeballs(globes, out, ".", view, "The eye region is from split-views (an image edit); placed on the mesh by split-eyes")
+    from .texture import read_obj_uv
+
+    for globe in globes:
+        mesh, corner_uv = read_obj_uv(out / globe["mesh"])
+        texture, baked = bake_eyeball(part_handoff, mesh, corner_uv, view=view)
+        Image.fromarray(texture).save(out / f"{globe['id']}.png")
+        globe.update(texture=f"{globe['id']}.png", **baked)
+    shown = rgba[..., :3].copy()
+    shown[rgba[..., 3] <= 200] = (120, 150, 200)
+    Image.fromarray(shown).save(out / "eyes.png")
+    if source_handoff is not None:
+        source = json.loads((source_handoff / "spec.json").read_text(encoding="utf-8"))
+        raw_map, px = spec["raw"][view], spec["metres_per_aligned_px"]
+        zones = [(np.array([(eye["centre_px"][0] - raw_map["left"]) * raw_map["scale"] + raw_map["x0"] - raw_map.get("shift_px", 0),
+                            (eye["centre_px"][1] - raw_map["top"]) * raw_map["scale"] + raw_map["y0"]]),
+                  zone * max(eye["radii_px"]) * raw_map["scale"]) for eye in eyes]
+        (out / "within").mkdir(exist_ok=True)
+        for name in source["views"]:
+            path = source_handoff / "raw" / f"{name}.png"
+            if name == view or not path.is_file():
+                continue
+            with Image.open(path) as picture:
+                shape = (picture.height, picture.width)
+            # A wide margin: this mask only has to leave out changes far from the eyes, and another
+            # drawing can put the eye a whole eye-width from its place on the mesh.
+            allowed = eye_zone_in_view(shape, source["raw"][name], name, zones, head, px, face_view=view, margin=1.5)
+            Image.fromarray(np.where(allowed, 255, 0).astype(np.uint8)).save(out / "within" / f"{name}.png")
+    report = {"schema_version": 1, "view": view, "white_included": True,
+              "eyes": [{**eye, **{k: globe[k] for k in ("id", "center_m", "radii_m", "mesh", "texture", "seen_fraction",
+                                                        "white_rgb")}} for eye, globe in zip(eyes, globes)],
+              "source_confidence": "estimated", "review": "required"}
+    (out / "eyes.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
+    return report
 
 
 def split_eyes(handoff: Path, head: Mesh, out: Path, *, view: str = "front", zone: float = 1.9, grow_px: int = 3,
@@ -245,18 +371,7 @@ def split_eyes(handoff: Path, head: Mesh, out: Path, *, view: str = "front", zon
         rest[name] = cut
         rows.append({"view": name, "removed_px": int((gone & (images[name][..., 3] > 200)).sum())})
     write_handoff(out / "rest", spec, rest, "without the eyes: only the face view paints around them")
-    for globe in globes:
-        mesh, corner_uv = uv_ellipsoid(np.array(globe["center_m"]), np.array(globe["radii_m"]),
-                                       seam_toward=-np.array(globe["forward_m"]))
-        write_obj_uv(mesh, corner_uv, out / "eyes" / f"{globe['id']}.obj", comment=f"eyeball {globe['id']}")
-        globe["mesh"] = f"eyes/{globe['id']}.obj"
-    anatomy = {"schema_version": 1, "character_id": "from-split-eyes", "parts": [
-        {"id": globe["id"], "kind": "ocular_globe",
-         "evidence": {"status": "inferred", "source_views": [view],
-                      "notes": "Found by colour in the drawing and placed on the mesh by split-eyes; review before use."},
-         "center_m": globe["center_m"], "forward_m": globe["forward_m"], "up_m": [0, 0, 1], "radii_m": globe["radii_m"],
-         "iris_fraction": globe["iris_fraction"], "pupil_fraction": globe["pupil_fraction"]} for globe in globes]}
-    (out / "anatomy.json").write_text(json.dumps(anatomy, indent=2), encoding="utf-8")
+    _write_eyeballs(globes, out, "eyes", view, "Found by colour in the drawing and placed on the mesh by split-eyes")
     # A picture to review: the drawing with the found eyes outlined.
     shown = images[view][..., :3].copy()
     edge = mask ^ ndimage.binary_erosion(mask, iterations=3)

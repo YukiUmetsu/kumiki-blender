@@ -451,6 +451,12 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--zone", type=float, default=1.9,
                    help="the surroundings of an eye, in iris radii: only --view paints there")
     p.add_argument("--protrude", type=float, default=0.5, help="share of the eyeball's depth that stands out of the head")
+    p.add_argument("--from-part", action="store_true",
+                   help="HANDOFF is the eyes part from `split-views` (the white included): make one eyeball for each "
+                        "piece of it, and write no rest/ (use the rest/ of `split-views`)")
+    p.add_argument("--source-handoff", type=Path,
+                   help="with --from-part: the handoff that the eyes were split from; writes within/<view>.png "
+                        "for `split-views --within`")
 
     p = sub.add_parser("redraw-view", help="change one drawing so that it agrees with the design of another")
     p.add_argument("drawing", type=Path, help="the drawing to change (RGBA cut-out, or on a flat background)")
@@ -472,6 +478,10 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--subject", default="the character", help='e.g. "the cartoon squirrel"')
     p.add_argument("--behind", default="the body and the clothes", help="what the part hides, for the editor")
     p.add_argument("--keep", default="", help="what the editor must not take away with the part")
+    p.add_argument("--no-fill", action="store_true",
+                   help="leave a hole in rest/ where the part was (the bake fills it), not the editor's guess")
+    p.add_argument("--within", type=Path,
+                   help="folder with <view>.png masks (white: where the part can be); a change outside is dropped")
     p.add_argument("--server", default="http://127.0.0.1:8188", help="local ComfyUI (loopback only)")
     p.add_argument("--size", type=int, default=768)
     p.add_argument("--steps", type=int, default=20)
@@ -1273,7 +1283,12 @@ def _run(args) -> int:
 
         out = _new_dir(args.output)
         head = read_obj_uv(args.mesh)[0] if args.mesh.suffix.lower() == ".obj" else read_mesh(args.mesh)
-        report = split_eyes(args.handoff, head, out, view=args.view, zone=args.zone, protrude=args.protrude)
+        if args.from_part:
+            from .eyes import eyeballs_from_part
+
+            report = eyeballs_from_part(args.handoff, head, out, view=args.view, source_handoff=args.source_handoff)
+        else:
+            report = split_eyes(args.handoff, head, out, view=args.view, zone=args.zone, protrude=args.protrude)
         print(json.dumps(report, indent=2))
         return 0
     if args.command == "redraw-view":
@@ -1292,6 +1307,7 @@ def _run(args) -> int:
 
         report = split_views(args.handoff, args.output, _LocalComfyClient(args.server), part=args.part,
                              name=args.name, subject=args.subject, behind=args.behind, keep=args.keep,
+                             within=args.within, fill=not args.no_fill,
                              views=args.views.split(",") if args.views else None, size=args.size, steps=args.steps,
                              change_delta_e=args.change_delta_e)
         print(json.dumps(report, indent=2))

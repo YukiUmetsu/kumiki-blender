@@ -152,6 +152,33 @@ class SplitViewsTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             split_views.split_views(self.handoff, self.out, self.client, part="bag", views=["top"])
 
+    def test_within_and_no_fill(self):
+        """A mask limits where the part can be; without fill, the rest has a hole and no edited pixels."""
+        with Image.open(self.handoff / "raw" / "right.png") as picture:
+            raw = np.asarray(picture.convert("RGBA"))
+        bag = (np.abs(raw[..., :3].astype(int) - BAG).sum(axis=2) < 90) & (raw[..., 3] > 127)
+        ys, xs = np.nonzero(bag)
+        with tempfile.TemporaryDirectory() as tmp:
+            allowed = np.zeros(bag.shape, np.uint8)
+            allowed[:, :int(xs.mean())] = 255                      # only the half of the bag on the image left
+            Image.fromarray(allowed).save(Path(tmp) / "right.png")
+            before = len(self.calls)
+            report = split_views.split_views(self.handoff, self.out, self.client, part="bag", name="half", size=512,
+                                             views=["right"], within=Path(tmp), fill=False)
+        self.assertEqual(len(self.calls), before, "the edits are reused")
+        self.assertTrue(report["views"][0]["changes_outside_dropped"])
+        with Image.open(self.out / "half" / "raw" / "right.png") as picture:
+            part = np.asarray(picture)[..., 3] > 127
+        self.assertFalse(part[:, int(xs.mean()) + 2:].any())
+        self.assertGreater(part.sum(), 0.3 * bag.sum())
+        with Image.open(self.out / "rest" / "raw" / "right.png") as picture:
+            rest = np.asarray(picture)
+        self.assertFalse((rest[..., 3] > 127)[part].any(), "a hole where the part was")
+        kept = rest[..., 3] > 127
+        np.testing.assert_array_equal(rest[kept], raw[kept])       # every pixel that is left is the drawing's own
+        # Put the shared folders back for the other tests.
+        split_views.split_views(self.handoff, self.out, self.client, part="bag", size=512, views=["front", "right", "left"])
+
     def test_the_part_folder_has_a_safe_name(self):
         self.assertEqual(self.report["name"], "bag")
         for bad in ("rest", "edits", "../x", "a b"):
@@ -391,6 +418,42 @@ class EyeTests(unittest.TestCase):
         anatomy = json.loads((self.out / "anatomy.json").read_text())
         self.assertEqual([part["kind"] for part in anatomy["parts"]], ["ocular_globe", "ocular_globe"])
         self.assertTrue(all(part["pupil_fraction"] < part["iris_fraction"] for part in anatomy["parts"]))
+
+    def test_eyeballs_from_a_part_include_the_white_of_the_eye(self):
+        """The part is what `split-views` took out: the whole eye, 140 x 120 px, not only the iris."""
+        from kumiki_blender.character_build import split_views as S
+        yy, xx = np.mgrid[:1200, :1600]
+        whole = np.zeros((1200, 1600), bool)
+        for x in (705, 895):
+            whole |= ((xx - x) / 70) ** 2 + ((yy - 500) / 60) ** 2 <= 1
+        whole[300:306, 300:306] = True                  # a speck that the edit also changed: no eye
+        part = self.front.copy()
+        part[..., 3] = np.where(whole, 255, 0)
+        spec = json.loads((self.handoff / "spec.json").read_text())
+        root = Path(self.tmp.name) / "part"
+        S.write_handoff(root, spec, {"front": part}, "eyes")
+        report = self.eyes.eyeballs_from_part(root, self.head, Path(self.tmp.name) / "balls")
+        self.assertTrue(report["white_included"])
+        self.assertEqual(sorted(eye["id"] for eye in report["eyes"]), ["eye.L", "eye.R"])
+        for eye in report["eyes"]:
+            radii = np.array(eye["radii_m"])
+            self.assertAlmostEqual(radii[0], 70 * 1.02 * self.PX, delta=2 * self.PX)
+            self.assertAlmostEqual(radii[2], 60 * 1.02 * self.PX, delta=2 * self.PX)
+            self.assertAlmostEqual(eye["iris_radius_px"], 42, delta=4)
+            self.assertAlmostEqual(abs(eye["center_m"][0]), 95 * self.PX, delta=2 * self.PX)
+            mesh, uv = read_obj_uv(Path(self.tmp.name) / "balls" / eye["mesh"])
+            np.testing.assert_allclose(mesh.vertices.max(axis=0) - mesh.vertices.min(axis=0), 2 * radii, rtol=0.02)
+            # The texture: the drawn iris in front, and eye-white on the side that the drawing cannot see.
+            with Image.open(Path(self.tmp.name) / "balls" / eye["texture"]) as picture:
+                texture = np.asarray(picture.convert("RGB")).astype(int)
+            self.assertLess(np.abs(np.array(eye["white_rgb"]) - (240, 232, 220)).max(), 12)
+            back = texture[texture.shape[0] // 2, 5]            # u = 0: the seam, at the back of the eyeball
+            self.assertLess(np.abs(back - (240, 232, 220)).max(), 12, "not the lid line, not fur")
+            front = texture[texture.shape[0] // 2, texture.shape[1] // 2]
+            self.assertLess(front.max(), 60, "the pupil is at the front")
+        anatomy = json.loads((Path(self.tmp.name) / "balls" / "anatomy.json").read_text())
+        self.assertEqual(len(anatomy["parts"]), 2)
+        self.assertLess(anatomy["parts"][0]["iris_fraction"], 0.75, "the iris is a part of the eyeball, not all of it")
 
     def test_only_the_face_drawing_paints_around_the_eyes(self):
         def alpha(folder, name):

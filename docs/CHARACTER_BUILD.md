@@ -47,7 +47,7 @@ or newer. The other commands need only NumPy, SciPy, scikit-image and Pillow.
 | References | `trim REFS front --output front.png` | A view without the part that its opposite view has no room for |
 | Parts | `split-views HANDOFF --part tail --output split/` | The drawings split into one part and the rest, each a handoff in the character frame |
 | Parts | `place-part split/tail tail.glb --output tail.ply` | A part that was modelled alone, placed in the frame of the whole character |
-| Parts | `split-eyes split/rest body.ply --output eyes/` | The eyes as separate lenses, and only the front drawing paints around them |
+| Parts | `split-eyes eyes/eyes body.ply --from-part --output balls/` | One textured eyeball for each eye that `split-views` took out, the white included |
 | References | `redraw-view front.png back.png --change "..." --output front2.png` | One drawing changed to the design of another |
 | Parts | `seat-part body.ply bag/low.obj --metres-per-px 0.00032 --output bag.obj` | A part moved out of the body that it hangs on, as one rigid piece |
 | Parts | `join-parts a/low.obj:a.png b/low.obj:b.png --output joined/` | One mesh and one texture from placed, textured parts |
@@ -338,32 +338,49 @@ Limits:
 ## Eyes as separate eyeballs
 
 Two drawings never put an eye at the same place on the head. A texture from both
-shows two eyelid lines, and no rule on the drawings removes that.
+shows two eyelid lines, and no rule on the drawings removes that. An eyeball that is
+its own piece of surface, placed from the front drawing, cannot be painted twice.
+
+**The whole eye, with its white (recommended).** The white of an eye has the colour
+of light fur, so colour cannot find it. The image editor can:
 
 ```bash
-kumiki-character-build split-eyes split/rest body.ply --output eyes/
+# 1. Take the eyes out of the front drawing. The face gets closed eyelids.
+kumiki-character-build split-views split/rest --name eyes --views front \
+  --part "two eyes, each with its iris, its pupil and the white of the eye" \
+  --behind "closed eyelids, covered with the same fur as the face" --output eyes/
+# 2. One eyeball for each eye, with its texture, set on the head mesh.
+kumiki-character-build split-eyes eyes/eyes body.ply --from-part \
+  --source-handoff split/rest --output balls/
+# 3. Take the eye out of each other drawing that shows it. `--within` drops what
+#    the editor changed elsewhere (on Pip it repainted the inside of an ear).
+kumiki-character-build split-views eyes/rest --name eyes --views left \
+  --part "eye, with its iris, its pupil, the white, the eyelid line and the lashes" \
+  --behind "only plain fur, with no eyelid and no dark line" \
+  --within balls/within --output eyes2/
 ```
 
-`split-eyes` finds the iris and the pupil of each eye in the front drawing. The pupil
-is a thick, very dark disc. The iris is the most saturated colour around it. It writes:
+Bake the head from `eyes2/rest`. Add `balls/eye.L.obj:balls/eye.L.png` and
+`balls/eye.R.obj:balls/eye.R.png` to `join-parts`. On the side of an eyeball that the
+front drawing cannot see, the texture is the white of that eye.
 
-- `eyes/eyes/<id>.obj`: one lens for each eye, set on the head mesh, with UVs.
-- `eyes/eyes/`: a handoff with the drawing's own iris pixels. Bake each lens from it:
-  `texture eyes/eyes eyes/eyes/eye.L.obj --min-cosine 0.15 --occlusion-px 0 --output eyeL.png`.
-- `eyes/rest/`: the front drawing without the iris discs, and each other drawing
-  without the surroundings of the eyes (`--zone`, in iris radii). Thus only the
-  front drawing paints the white and the lids. Bake the head from this handoff.
-- `eyes.png` to review, and `anatomy.json` with the same eyes for `plan-anatomy`.
+If the editor paints something bad where the part was, add `--no-fill` to step 3.
+The rest then has a hole there, and the bake fills it from the texture around it.
+For Pip's eye in the side view, the editor painted a dark socket.
 
-Then add the lenses to `join-parts`. An eye is now its own piece of surface with its
-own texture, and it can turn.
+On Pip, the eyes with their whites and lid lines are two separate pieces of surface,
+and the second eyelid line at 45 degrees is gone. From the side, an eyeball shows
+mostly its white: the iris is on the front of it.
 
-The white of the eye stays on the head. It has the colour of light fur, and a lid
-line does not always close it. Closed eyes and eyes without a dark pupil are not found.
+**Iris and pupil only, without the editor.** `split-eyes split/rest body.ply --output eyes/`
+finds each pupil (a thick, very dark disc) and the iris around it (the most saturated
+colour). It makes one lens for each iris. In the other drawings it removes the
+surroundings of the eyes (`--zone`), so that only the front drawing paints the white
+and the lids. This is faster. But the white stays on the head, and at 90 degrees the
+removed area takes the nearest colour. Closed eyes and eyes without a dark pupil are
+not found.
 
-On Pip, the second eyelid line at 45 degrees is gone. The cost is at 90 degrees: the
-side drawing loses the area around its eye, the front drawing cannot see that area,
-and it takes the nearest colour (a light patch behind the eye).
+Both write `anatomy.json` with the eyes as `ocular_globe` parts for `plan-anatomy`.
 
 ## One drawing in an older design
 
