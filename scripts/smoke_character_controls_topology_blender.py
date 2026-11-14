@@ -136,6 +136,61 @@ def main():
         assert baked["glb"]["animations"] == 1
         assert baked["glb"]["clip_names"] == ["wing_fold"]
 
+        # M8: a reviewed wing corrective must survive skeletal control baking
+        # as genuine GLB "weights" animation in the SAME action. A morph name
+        # in Blender or a static glTF target alone does not prove portability.
+        bpy.ops.wm.open_mainfile(filepath=str(animated))
+        rig_morph = bpy.data.objects["CharacterRig"]
+        wing_mesh = bpy.data.objects["Wing.L"]
+        wing_mesh.shape_key_add(name="Basis", from_mix=False)
+        corrective = wing_mesh.shape_key_add(name="CORR_WingRaise.L", from_mix=False)
+        for i in range(12):
+            corrective.data[i].co.x += .004
+        driver = corrective.driver_add("value").driver
+        driver.type = "SCRIPTED"
+        variable = driver.variables.new()
+        variable.name = "bend"
+        variable.type = "TRANSFORMS"
+        target = variable.targets[0]
+        target.id = rig_morph
+        target.bone_target = "upper_wing.L"
+        target.transform_type = "ROT_Z"
+        target.transform_space = "LOCAL_SPACE"
+        driver.expression = "min(1.0,max(0.0,bend/0.3))"
+        corrected_animated = folder / "animated-with-pose-corrective.blend"
+        bpy.ops.wm.save_as_mainfile(filepath=str(corrected_animated))
+        corrected_plan = save_bake_plan(
+            corrected_animated, "wing_fold_corrected", 1, 12,
+            folder / "corrective-bake-plan", bake_correctives=True)
+        corrected_out = folder / "baked-with-morph-animation"
+        corrected_receipt = run_worker(corrected_animated, "blender_animation_bake.py", {
+            "plan": corrected_plan, "output": str(corrected_out),
+        }, corrected_out)
+        assert corrected_receipt["glb"]["animations"] == 1
+        assert corrected_receipt["glb"]["deform_joint_channels"] > 0
+        assert corrected_receipt["morph_parity"]["status"] == "exported-morph-parity-verified"
+        assert corrected_receipt["morph_parity"]["checked_correctives"] == 1
+        assert corrected_receipt["morph_parity"]["max_weight_error"] <= .025
+        assert corrected_receipt["morph_parity"]["meshes"][0]["object"] == "Wing.L"
+        assert corrected_receipt["morph_driver_to_baked_pose_max_error"] <= .02
+        assert (corrected_out / "animated.glb").is_file()
+        assert (corrected_out / "baked.blend").is_file()
+        # Explicit opt-in contract: a skeletal-only export must still reject
+        # a driven corrective rather than silently render an incorrect wing.
+        old_plan = save_bake_plan(
+            corrected_animated, "must_reject_morph_drop", 1, 12,
+            folder / "no-morph-opt-in-plan")
+        refused_output = folder / "must-refuse-shape-drop"
+        try:
+            run_worker(corrected_animated, "blender_animation_bake.py", {
+                "plan": old_plan, "output": str(refused_output),
+            }, refused_output)
+        except RuntimeError as exc:
+            assert "require --bake-correctives" in str(exc), str(exc)
+            assert not refused_output.exists()
+        else:
+            raise AssertionError("Skeletal-only bake silently dropped authored morph correction")
+
         topology_spec = save_topology_plan(joints_file, folder / "topology-plan",
                                            mesh="Skin", joints=["neck", "shoulder.L", "elbow.L"])
         topology_out = folder / "topology-output"

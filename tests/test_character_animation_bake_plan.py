@@ -45,6 +45,18 @@ class AnimationBakePlanTest(unittest.TestCase):
             make_bake_plan(self.blend, "clip", 1, 10,
                            max_rotation_error_deg=float("nan"))
 
+    def test_explicit_joint_morph_bake_is_source_locked_and_full_frame(self):
+        plan = make_bake_plan(self.blend, "wing_bend", 1, 12, bake_correctives=True)
+        self.assertTrue(plan["bake_correctives"])
+        validate_bake_plan(plan)
+        self.assertFalse(make_bake_plan(self.blend, "wing_bend", 1, 12)["bake_correctives"])
+        with self.assertRaisesRegex(ValueError, "step=1"):
+            make_bake_plan(self.blend, "wing_bend", 1, 12,
+                           step=2, bake_correctives=True)
+        plan["bake_correctives"] = "yes"
+        with self.assertRaisesRegex(ValueError, "boolean"):
+            validate_bake_plan(plan)
+
     def test_reject_mutated_shape_and_types(self):
         plan = make_bake_plan(self.blend, "walk", 1, 12)
         plan["untrusted-script"] = "print('bad')"
