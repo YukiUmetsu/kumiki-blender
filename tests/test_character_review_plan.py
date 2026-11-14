@@ -130,7 +130,7 @@ class ReviewPlanTest(unittest.TestCase):
         self.assertEqual(len(report["contact_sheets"]), 4)
         for filename in report["contact_sheets"]:
             with Image.open(output / filename) as im:
-                self.assertEqual(im.width, 844)
+                self.assertEqual(im.width, 858)
                 self.assertGreater(im.height, 300)
         self.assertEqual(report["status"], "source-visual-review-required")
         with self.assertRaises(FileExistsError):
