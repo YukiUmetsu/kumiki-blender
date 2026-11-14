@@ -19,6 +19,7 @@ on:
       - "tests/test_character_animation_bake_plan.py"
       - "tests/test_character_glb_animation.py"
       - "tests/test_character_glb_morph_parity.py"
+      - "tests/test_character_glb_surface_roundtrip.py"
       - "tests/test_character_viseme_plan.py"
       - "tests/test_character_performance_plan.py"
       - "tests/test_character_glb_performance.py"
@@ -88,6 +89,7 @@ jobs:
             tests.test_character_animation_bake_plan \
             tests.test_character_glb_animation \
             tests.test_character_glb_morph_parity \
+            tests.test_character_glb_surface_roundtrip \
             tests.test_character_viseme_plan \
             tests.test_character_performance_plan \
             tests.test_character_glb_performance \

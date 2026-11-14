@@ -24,6 +24,7 @@ sys.path.insert(0, str(ROOT / "src"))
 from tests.test_character_rig_controls import rig_fixture  # noqa: E402
 from kumiki_blender.character_build.rig_control_plan import save_control_plan  # noqa: E402
 from kumiki_blender.character_build.animation_bake_plan import save_bake_plan  # noqa: E402
+from kumiki_blender.character_build.roundtrip_plan import make_roundtrip_plan  # noqa: E402
 from kumiki_blender.character_build.topology_zones import save_topology_plan  # noqa: E402
 
 WORKER_DIR = ROOT / "src/kumiki_blender/character_build"
@@ -227,6 +228,47 @@ def main():
         assert (unified_out / "animated.glb").is_file()
         assert (unified_out / "baked.blend").is_file()
         assert hashlib.sha256(unified_source.read_bytes()).hexdigest() == unified_sha
+
+        # Independently re-import the actual combined GLB into a brand-new
+        # Blender scene. Comparing only exported channel names cannot prove
+        # that the facial and wing deformations survived transport.
+        portable = unified_out / "animated.glb"
+        baked_source = unified_out / "baked.blend"
+        portable_sha = hashlib.sha256(portable.read_bytes()).hexdigest()
+        baked_sha = hashlib.sha256(baked_source.read_bytes()).hexdigest()
+        roundtrip = make_roundtrip_plan(
+            baked_source, portable, first_frame=1, last_frame=12, fps=24,
+            samples=5, max_p95_error_m=.002, max_max_error_m=.01)
+        roundtrip_out = folder / "roundtrip-surface-qa"
+        roundtrip_report = run_worker(
+            baked_source, "blender_glb_surface_roundtrip.py", {
+                "plan": roundtrip, "output": str(roundtrip_out),
+            }, roundtrip_out)
+        assert roundtrip_report["status"] == "evaluated-glb-roundtrip-review-required", roundtrip_report["problems"]
+        assert roundtrip_report["source_meshes"] == [
+            "Eye.L", "Mouth", "Skin", "Wing.L",
+        ], roundtrip_report["source_meshes"]
+        assert roundtrip_report["sampled_frames"] == [1, 3, 6, 9, 12]
+        assert roundtrip_report["checked_mesh_frames"] == 5 * len(roundtrip_report["source_meshes"])
+        assert roundtrip_report["global_max_nearest_error_m"] <= .01
+        assert roundtrip_report["global_p95_worst_frame_m"] <= .002
+        assert hashlib.sha256(portable.read_bytes()).hexdigest() == portable_sha
+        assert hashlib.sha256(baked_source.read_bytes()).hexdigest() == baked_sha
+
+        # A structurally valid *different* GLB (without the added animated
+        # Mouth) must fail even though both assets have a skin and one clip.
+        wrong_export = bake_out / "animated.glb"
+        wrong_plan = make_roundtrip_plan(
+            baked_source, wrong_export, first_frame=1, last_frame=12,
+            fps=24, samples=3)
+        wrong_out = folder / "must-reject-incomplete-glb"
+        wrong_receipt = run_worker(
+            baked_source, "blender_glb_surface_roundtrip.py", {
+                "plan": wrong_plan, "output": str(wrong_out),
+            }, wrong_out)
+        assert wrong_receipt["status"] == "structural-fail"
+        assert any("Mouth: GLB must contain exactly one named mesh node" in p
+                   for p in wrong_receipt["problems"]), wrong_receipt["problems"]
 
         # Fail closed when either modality is not explicitly approved.
         no_face_plan = save_bake_plan(
