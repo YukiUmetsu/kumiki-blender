@@ -11,6 +11,8 @@ on:
       - "tests/test_character_pose_spec.py"
       - "tests/test_character_weight_zone_metrics.py"
       - "tests/test_character_weight_repair.py"
+      - "tests/test_character_joint_correctives.py"
+      - "scripts/smoke_character_joint_correctives_blender.py"
       - "tests/test_character_deformation_metrics.py"
       - "tests/test_character_rig_controls.py"
       - "tests/test_character_topology_zones.py"
@@ -78,6 +80,7 @@ jobs:
             tests.test_character_pose_spec \
             tests.test_character_weight_zone_metrics \
             tests.test_character_weight_repair \
+            tests.test_character_joint_correctives \
             tests.test_character_deformation_metrics \
             tests.test_character_rig_controls \
             tests.test_character_topology_zones \
@@ -164,6 +167,9 @@ jobs:
           blender --background --factory-startup --threads 2 \
             --python-exit-code 1 \
             --python scripts/smoke_character_controls_topology_blender.py
+          blender --background --factory-startup --threads 2 \
+            --python-exit-code 1 \
+            --python scripts/smoke_character_joint_correctives_blender.py
           blender --background --factory-startup --threads 2 \
             --python-exit-code 1 \
             --python scripts/smoke_character_visemes_blender.py
