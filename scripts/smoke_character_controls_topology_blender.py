@@ -160,6 +160,44 @@ def main():
         assert (sculpt_out / "region.obj").is_file()
         assert sculpt["flipped_faces"] == 0
 
+        # Inspect source revision without altering its .blend: obtain stable
+        # vertex-order SHA plus a candidate anchor index for surface editing.
+        probe_out = folder / "region-source-probe"
+        probe = run_worker(source, "blender_region_sculpt.py", {
+            "source_blend": str(source),
+            "output": str(probe_out),
+            "inspect_only": True, "object": "Eye.L",
+            "anchors": [[.035, -.053, .275]],
+        }, probe_out)
+        assert probe["status"] == "source-probe-only"
+        seed = probe["anchor_candidates"][0]["nearest_vertex"]
+        assert probe["anchor_candidates"][0]["distance_m"] < .004
+        pinned = (seed + 1) % probe["expected_vertex_count"]
+        geo_out = folder / "geodesic-sculpt-output"
+        geodesic = run_worker(source, "blender_region_sculpt.py", {
+            "source_blend": str(source),
+            "output": str(geo_out),
+            "plan": {
+                "schema_version": 1, "object": "Eye.L",
+                "expected_vertex_count": probe["expected_vertex_count"],
+                "expected_mesh_sha256": probe["expected_mesh_sha256"],
+                "protected_vertex_indices": [pinned],
+                "max_displacement_m": .002,
+                "operations": [{
+                    "center_m": [.035, -.053, .275], "radius_m": .014,
+                    "move_m": [0, -.001, 0], "falloff": "smoothstep",
+                    "distance_mode": "geodesic", "seed_vertex": seed,
+                    "max_seed_distance_m": .004,
+                }]
+            },
+        }, geo_out)
+        assert geodesic["expected_mesh_sha256_verified"]
+        assert geodesic["protected_vertex_count"] == 1
+        assert geodesic["operations"][0]["distance_mode"] == "geodesic"
+        assert geodesic["operations"][0]["edited_vertices"] > 0
+        assert geodesic["flipped_faces"] == 0
+        assert (geo_out / "refined.blend").is_file()
+
         poses_out = folder / "poses-output"
         poses = run_worker(output_controls / "controlled.blend", "blender_pose_qa.py", {
             "source_blend": str(output_controls / "controlled.blend"),
