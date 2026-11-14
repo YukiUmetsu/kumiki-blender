@@ -17,6 +17,7 @@ from mathutils import Vector
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from kumiki_blender.character_build.blender_common import arguments, export_interchange_obj, export_registered_obj, write_report  # noqa: E402
+from kumiki_blender.character_build.surface_distance import surface_distances  # noqa: E402
 
 
 def mesh_digest(obj) -> str:
@@ -37,6 +38,8 @@ def main() -> None:
         raise FileExistsError(f"Output revision already exists: {out}")
     if not bpy.data.filepath:
         raise ValueError("refine-region must load a source .blend, not factory startup")
+    if Path(bpy.data.filepath).resolve() != Path(args["source_blend"]).resolve():
+        raise ValueError("Loaded Blender file differs from requested source .blend")
     if Path(bpy.data.filepath).resolve().is_relative_to(out):
         raise ValueError("Source .blend cannot be inside the output revision")
     obj = bpy.data.objects.get(plan["object"])
@@ -54,26 +57,56 @@ def main() -> None:
     before_other = {o.name: mesh_digest(o) for o in bpy.data.objects
                     if o.type == "MESH" and o != obj}
     before_mesh = mesh_digest(obj)
+    if (plan.get("expected_mesh_sha256") is not None and
+            plan["expected_mesh_sha256"] != before_mesh):
+        raise ValueError("Source mesh has changed; regenerate the geodesic sculpt plan")
+    pinned = frozenset(plan.get("protected_vertex_indices", []))
+    if any(index >= len(obj.data.vertices) for index in pinned):
+        raise ValueError("Protected vertex ID exceeds the source mesh vertex count")
     before_normals = [polygon.normal.copy() for polygon in obj.data.polygons]
     transform = obj.matrix_world
     inverse_basis = transform.inverted_safe().to_3x3()
     initial = [v.co.copy() for v in obj.data.vertices]
     changed = set()
+    operation_reports = []
+    mesh_edges = [tuple(edge.vertices) for edge in obj.data.edges]
     for operation in plan["operations"]:
         center = Vector(operation["center_m"])
         delta = Vector(operation["move_m"])
         radius = float(operation["radius_m"])
-        for vertex in obj.data.vertices:
-            position_world = transform @ vertex.co
-            distance = (position_world - center).length
-            if distance >= radius:
-                continue
+        world_positions = [tuple(transform @ vertex.co) for vertex in obj.data.vertices]
+        mode = operation.get("distance_mode", "euclidean")
+        if mode == "geodesic":
+            seed = operation["seed_vertex"]
+            seed_offset = (Vector(world_positions[seed]) - center).length
+            if seed_offset > operation["max_seed_distance_m"]:
+                raise ValueError(
+                    f"Geodesic seed {seed} is {seed_offset:.6f}m from the expected "
+                    "source anchor; mesh or source alignment changed")
+            distances = surface_distances(world_positions, mesh_edges, seed, radius,
+                                          protected=pinned)
+        else:
+            distances = {
+                i: distance for i, position in enumerate(world_positions)
+                if i not in pinned
+                for distance in ((Vector(position) - center).length,)
+                if distance < radius
+            }
+        edited_this_operation = 0
+        for index, distance in distances.items():
             alpha = max(0.0, 1 - distance / radius)
             if operation["falloff"] == "smoothstep":
                 alpha = alpha * alpha * (3 - 2 * alpha)
-            vertex.co += inverse_basis @ (delta * alpha)
-            if alpha > 0:
-                changed.add(vertex.index)
+            if alpha <= 0:
+                continue
+            obj.data.vertices[index].co += inverse_basis @ (delta * alpha)
+            changed.add(index)
+            edited_this_operation += 1
+        operation_reports.append({
+            "distance_mode": mode,
+            "seed_vertex": operation.get("seed_vertex"),
+            "edited_vertices": edited_this_operation,
+        })
     if not changed:
         raise ValueError("No vertex fell inside the requested sculpt radius")
     obj.data.update()
@@ -113,6 +146,10 @@ def main() -> None:
         "source_mesh_sha256": before_mesh,
         "refined_mesh_sha256": mesh_digest(obj),
         "untouched_mesh_sha256": before_other,
+        "expected_mesh_sha256_verified": plan.get("expected_mesh_sha256") == before_mesh
+            if plan.get("expected_mesh_sha256") else None,
+        "protected_vertex_count": len(pinned),
+        "operations": operation_reports,
         "edited_vertices": len(changed),
         "untouched_vertices": len(untouched),
         "total_vertices": len(obj.data.vertices),
@@ -121,6 +158,8 @@ def main() -> None:
         "files": ["refined.blend", "region.obj", "region-source.obj"],
         "limitations": [
             "This is a bounded positional sculpt adjustment, not semantic anatomy synthesis.",
+            "Geodesic neighborhoods follow existing mesh edges; they cannot repair missing topology.",
+            "Protected vertices are immutable traversal barriers in geodesic mode.",
             "Evaluate full-frame verified source masks and animated deformation before accepting the candidate.",
             "Source .blend is never saved; the generated refined.blend is an independent revision."
         ],
