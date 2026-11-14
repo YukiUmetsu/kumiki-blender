@@ -9,6 +9,7 @@ factory-started in isolated processes with explicit .blend source revisions.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import subprocess
 import sys
@@ -300,6 +301,44 @@ def main():
         assert bad["rest_weight_zones"][0]["violating_vertices"] == 1
         assert bad["rest_weight_zones"][0]["worst_examples"][0]["outside_bones"] == ["spine"]
         assert any("outside-weight limit" in problem for problem in bad["problems"])
+
+        # M7: fix the actual deform weights without introducing new bone
+        # influences, editing the source asset or altering the mesh shape.
+        source_sha_before = hashlib.sha256(leaking.read_bytes()).hexdigest()
+        repair_args = {
+            "source_blend": str(leaking),
+            "source_blend_sha256": source_sha_before,
+            "armature": "CharacterRig",
+            "weight_zones": zone_plan["weight_zones"],
+            "max_removed_weight": .15, "max_changed_vertices": 20,
+        }
+        preview_out = folder / "weight-repair-preview"
+        preview = run_worker(leaking, "blender_weight_repair.py", {
+            **repair_args, "output": str(preview_out), "dry_run": True,
+        }, preview_out)
+        assert preview["status"] == "weight-repair-proposal-only"
+        assert preview["changed_vertices"] == 1
+        assert preview["zones"][0]["before"]["violating_vertices"] == 1
+        assert not (preview_out / "repaired.blend").exists()
+
+        repair_out = folder / "repaired-wing-weights"
+        repaired = run_worker(leaking, "blender_weight_repair.py", {
+            **repair_args, "output": str(repair_out), "dry_run": False,
+        }, repair_out)
+        assert repaired["status"] == "weight-repaired-animation-review-required"
+        assert repaired["changed_vertices"] == 1
+        assert repaired["zones"][0]["after"]["violating_vertices"] == 0
+        assert (repair_out / "repaired.blend").is_file()
+        assert hashlib.sha256(leaking.read_bytes()).hexdigest() == source_sha_before
+
+        repaired_qa_out = folder / "repaired-wing-pose-qa"
+        validated = run_worker(repair_out / "repaired.blend", "blender_pose_qa.py", {
+            "source_blend": str(repair_out / "repaired.blend"),
+            "output": str(repaired_qa_out), "plan": zone_plan,
+        }, repaired_qa_out)
+        assert validated["status"] == "deformation-review-required", validated["problems"]
+        assert validated["rest_weight_zones"][0]["violating_vertices"] == 0
+        assert validated["rest_skin_weights"]["Wing.L"]["non_normalized"] == 0
 
         print(json.dumps({
             "status": "native-workers-executed",

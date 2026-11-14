@@ -268,6 +268,19 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--plan", type=Path, required=True, help="bounded pose battery JSON")
     p.add_argument("--output", type=Path, required=True, help="new immutable report directory")
     p.add_argument("--blender", help="local Blender executable path")
+    p = sub.add_parser("repair-rig-weights",
+                       help="bounded semantic skin-weight correction without changing source mesh or .blend")
+    p.add_argument("--blend", type=Path, required=True, help="original saved rig .blend")
+    p.add_argument("--pose-plan", type=Path, required=True,
+                   help="validated pose QA JSON with explicit weight_zones")
+    p.add_argument("--output", type=Path, required=True, help="new immutable repaired .blend or preview report")
+    p.add_argument("--max-removed-weight", type=float, default=.15,
+                   help="maximum total foreign influence removed from one vertex; default .15, max .5")
+    p.add_argument("--max-changed-vertices", type=int, default=2000,
+                   help="maximum repaired vertices across all marked regions; default 2000")
+    p.add_argument("--dry-run", action="store_true", help="preview affected vertices without editing a .blend")
+    p.add_argument("--blender", help="local Blender executable path")
+
 
     p = sub.add_parser("repair-penetrations", help="bounded BVH collision repair for named Blender object pairs")
     p.add_argument("--blend", type=Path, required=True, help="original editable .blend file")
@@ -951,6 +964,43 @@ def _run(args) -> int:
                             blender=args.blender, blend_file=args.blend.resolve())
         print(json.dumps(report, indent=2))
         return 1 if report["status"] == "structural-fail" else 0
+    if args.command == "repair-rig-weights":
+        import hashlib
+        import math
+        from .pose_spec import load_pose_plan
+        from .blender import run_worker
+        if not args.blend.is_file() or args.blend.suffix.lower() != ".blend":
+            raise ValueError("--blend must be an existing saved Blender .blend")
+        if args.output.exists():
+            raise FileExistsError(f"Output revision already exists: {args.output}")
+        if (not math.isfinite(args.max_removed_weight) or
+                not 0 < args.max_removed_weight <= .5):
+            raise ValueError("--max-removed-weight must be finite in (0, 0.5]")
+        if not 1 <= args.max_changed_vertices <= 10000:
+            raise ValueError("--max-changed-vertices must be within 1 to 10000")
+        plan = load_pose_plan(args.pose_plan)
+        zones = plan.get("weight_zones", [])
+        if not zones:
+            raise ValueError("Pose plan needs nonempty weight_zones with explicit allowed bones")
+        if any(zone["max_outside_weight"] >= args.max_removed_weight for zone in zones):
+            raise ValueError("Each weight-zone outside tolerance must be below the maximum repair weight")
+        digest = hashlib.sha256()
+        with args.blend.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+        report = run_worker("weight-repair", {
+            "source_blend": str(args.blend.resolve()),
+            "source_blend_sha256": digest.hexdigest(),
+            "armature": plan["armature"],
+            "weight_zones": zones,
+            "max_removed_weight": args.max_removed_weight,
+            "max_changed_vertices": args.max_changed_vertices,
+            "dry_run": args.dry_run,
+            "output": str(args.output.resolve()),
+        }, blender=args.blender, blend_file=args.blend.resolve())
+        print(json.dumps(report, indent=2))
+        return 0
+
     if args.command == "ingest":
         used = ingest(args.source, args.mapping, args.destination)
         print(json.dumps(used, indent=2))
