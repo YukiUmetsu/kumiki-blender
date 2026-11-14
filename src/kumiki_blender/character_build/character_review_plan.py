@@ -137,7 +137,8 @@ def validate_character_review_plan(plan: dict) -> None:
             frames != sorted(set(frames))):
         raise ValueError("Invalid ordered review frames")
     if (not isinstance(views, list) or not 1 <= len(views) <= 6 or
-            any(v not in VIEWS for v in views) or len(views) != len(set(views))):
+            any(not isinstance(v, str) or v not in VIEWS for v in views)
+            or len(views) != len(set(views))):
         raise ValueError("Invalid review views")
     if type(plan["resolution"]) is not int or not 256 <= plan["resolution"] <= 2048:
         raise ValueError("Review image resolution outside safe bounds")
@@ -150,6 +151,8 @@ def validate_character_review_plan(plan: dict) -> None:
         raise ValueError("Review references need a verified front anchor")
     if not isinstance(plan["regions"], list) or len(plan["regions"]) > 8:
         raise ValueError("Invalid review region count")
+    if (1 + len(plan["regions"])) * len(views) * len(frames) > 48:
+        raise ValueError("Review request exceeds 48 clay renders; use fewer views, poses or regions")
     seen = set()
     for region in plan["regions"]:
         if not isinstance(region, dict) or set(region) != {
