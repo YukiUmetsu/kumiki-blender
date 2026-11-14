@@ -124,12 +124,12 @@ def inspect_glb(path: Path, *, required_clips: list[str]) -> dict:
             sampler = channel.get("sampler")
             target = channel.get("target", {})
             node = target.get("node")
-            path = target.get("path")
+            track_path = target.get("path")
             if (type(sampler) is not int or not 0 <= sampler < len(samplers)
                     or type(node) is not int or not 0 <= node < len(nodes)
-                    or path not in {"translation", "rotation", "scale", "weights"}):
+                    or track_path not in {"translation", "rotation", "scale", "weights"}):
                 raise ValueError(f"Malformed animation channel in {name}")
-            if path == "weights":
+            if track_path == "weights":
                 count_morph += 1
             elif node in bone_ids:
                 count_joint += 1
