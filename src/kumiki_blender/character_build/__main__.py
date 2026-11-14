@@ -275,11 +275,26 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--output", type=Path, required=True, help="new revision directory")
     p.add_argument("--blender", help="local Blender binary")
 
+    p = sub.add_parser("inspect-region-sculpt-source",
+                       help="read-only Blender mesh SHA and candidate surface seed vertices")
+    p.add_argument("--blend", type=Path, required=True)
+    p.add_argument("--object", required=True, help="exact Blender mesh object name")
+    p.add_argument("--anchor", nargs=3, type=float, action="append",
+                   metavar=("X", "Y", "Z"), help="candidate world-space seed anchor, repeatable")
+    p.add_argument("--output", type=Path, required=True)
+    p.add_argument("--blender")
+
     p = sub.add_parser("refine-region", help="bounded local sculpt edit; preserve all other .blend objects")
     p.add_argument("--blend", type=Path, required=True, help="editable source Blender file")
     p.add_argument("--plan", type=Path, required=True, help="region sculpt correction JSON")
     p.add_argument("--output", type=Path, required=True, help="new revision containing refined.blend and region.obj")
     p.add_argument("--blender")
+    p.add_argument("--character", type=Path, help="frozen CharacterSpec v2 plan for automatic original-art QA")
+    p.add_argument("--region", help="region ID to source-audit; requires --character")
+    p.add_argument("--qa-before", type=Path, help="previous Z-up source-frame part for source QA")
+    p.add_argument("--max-regression", type=float, default=.01)
+    p.add_argument("--max-contour-regression", type=float, default=.03)
+    p.add_argument("--min-iou", type=float)
 
 
 
@@ -704,6 +719,19 @@ def _run(args) -> int:
         print(json.dumps(report, indent=2))
         # A no-op collision check is a valid, non-destructive result.
         return 0
+    if args.command == "inspect-region-sculpt-source":
+        from .blender import run_worker
+        if not args.blend.is_file() or args.blend.suffix.lower() != ".blend":
+            raise ValueError("--blend must be a saved Blender .blend")
+        if args.output.exists():
+            raise FileExistsError(f"Output revision exists: {args.output}")
+        report = run_worker("region-sculpt", {
+            "inspect_only": True, "object": args.object, "anchors": args.anchor or [],
+            "source_blend": str(args.blend.resolve()),
+            "output": str(args.output.resolve()),
+        }, blender=args.blender, blend_file=args.blend.resolve())
+        print(json.dumps(report, indent=2))
+        return 0
     if args.command == "refine-region":
         from .region_sculpt_plan import load_region_sculpt_plan
         from .blender import run_worker
@@ -711,13 +739,63 @@ def _run(args) -> int:
             raise ValueError("--blend must be an existing Blender .blend file")
         if args.output.exists():
             raise FileExistsError(f"Output revision already exists: {args.output}")
+        if (args.character is None) != (args.region is None):
+            raise ValueError("Automatic source QA requires both --character and --region")
+        if args.qa_before is not None and args.character is None:
+            raise ValueError("--qa-before requires --character and --region")
         plan = load_region_sculpt_plan(args.plan)
+        source_gate_before = None
+        if args.character is not None:
+            from .character_spec_v2 import open_plan
+            from .region_revision_gate import _canonical_mesh, _number
+            _number(args.max_regression, "max_regression", 0, 1)
+            _number(args.max_contour_regression, "max_contour_regression", 0, 1)
+            if args.min_iou is not None:
+                _number(args.min_iou, "min_iou", 0, 1)
+            source_plan, character_spec = open_plan(args.character)
+            region = next((r for r in character_spec["regions"]
+                           if r["id"] == args.region), None)
+            if region is None or not region.get("verified_views"):
+                raise ValueError("Original-art QA requires an existing region with verified views")
+            if args.qa_before is None and "source_mesh" not in region:
+                raise ValueError("Region has no original mesh; supply --qa-before")
+            source_gate_before = _canonical_mesh(
+                args.qa_before if args.qa_before is not None
+                else Path(source_plan["source_spec"]).parent / region["source_mesh"],
+                "baseline")
         report = run_worker("region-sculpt", {
             "plan": plan, "output": str(args.output.resolve()),
             "source_blend": str(args.blend.resolve())},
             blender=args.blender, blend_file=args.blend.resolve())
-        print(json.dumps(report, indent=2))
-        return 0
+        if args.character is None:
+            print(json.dumps(report, indent=2))
+            return 0
+        from .region_revision_gate import gate_region_revision
+        qa = gate_region_revision(
+            args.character, args.region, args.output / "region-source.obj",
+            args.output / "source-fidelity", before=source_gate_before,
+            max_regression=args.max_regression,
+            max_contour_regression=args.max_contour_regression,
+            min_iou=args.min_iou)
+        receipt = {
+            "schema_version": 1,
+            "status": ("source-regression-rejected" if not qa["numeric_gate_pass"]
+                       else "source-numeric-gate-artistic-review-required"),
+            "modeling_report": "report.json",
+            "modeling_blend": "refined.blend",
+            "modeling_source_frame_obj": "region-source.obj",
+            "source_qa_report": "source-fidelity/report.json",
+            "source_sha256": qa["source_spec_sha256"],
+            "character_id": character_spec["character_id"],
+            "region_id": args.region,
+            "failed_views": qa["failed_views"],
+            "numeric_gate_pass": qa["numeric_gate_pass"],
+            "artistic_review_required": True,
+        }
+        (args.output / "source-fidelity-receipt.json").write_text(
+            json.dumps(receipt, indent=2) + "\n", encoding="utf-8")
+        print(json.dumps(receipt, indent=2))
+        return 0 if qa["numeric_gate_pass"] else 1
     if args.command == "plan-talking-performance":
         from .talking_plan import save_talking_plan
         report = save_talking_plan(args.blend, args.cues, args.clip, args.start,
