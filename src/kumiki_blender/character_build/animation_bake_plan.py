@@ -46,6 +46,8 @@ def validate_bake_plan(data: dict) -> None:
         raise ValueError("Animation must be 2–1201 frames long within 0–10000")
     if not 1 <= step <= 8 or not 1 <= fps <= 120:
         raise ValueError("step or fps outside supported range")
+    if data.get("bake_correctives", False) and step != 1:
+        raise ValueError("Pose corrective morphs require every animation frame (step=1)")
     for name, maximum in (("max_position_error_m", .1), ("max_rotation_error_deg", 90)):
         value = data[name]
         if type(value) not in (float, int) or not math.isfinite(value) or not 0 < value <= maximum:
