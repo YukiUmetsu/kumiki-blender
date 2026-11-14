@@ -83,7 +83,7 @@ Photogrammetry uses optional Python dependencies (for example `.[photogrammetry]
 | --- | --- | --- |
 | Reusable asset families | Search, validate, and build catalog entries with `kumiki-blender catalog` | [Asset catalog](docs/ASSET_CATALOG.md) |
 | Declarative assemblies | Validate/compile AssetSpec v2, then build editable Blender assemblies | [AssetSpec v2](docs/ASSET_SPEC_V2.md) |
-| Architecture and monuments | Parametric building details, facades, ports, terrain studies, Egyptian monument studies | [Architecture details](docs/ARCHITECTURE_DETAILS.md), [Egyptian monuments](docs/EGYPTIAN_MONUMENTS.md), [Egypt relief map](docs/EGYPT_RELIEF_MAP.md) |
+| Architecture and monuments | Parametric building details, facades, porticos, terrain studies, Egyptian monument studies | [Architecture details](docs/ARCHITECTURE_DETAILS.md), [Egyptian monuments](docs/EGYPTIAN_MONUMENTS.md), [Egypt relief map](docs/EGYPT_RELIEF_MAP.md) |
 | Blender animation bridges | Export baked rigid-body motion and topology-stable deformations for downstream viewers | [Motion bridge](docs/KUMIKI_MOTION_BRIDGE.md), [deformation bridge](docs/KUMIKI_DEFORMATION_BRIDGE.md) |
 | Imported models and materials | Inspect GLBs, record source/provenance, apply explicit material overrides, and produce reviewable revisions | [Material packs](docs/MATERIAL_PACKS.md), [asset integrity](docs/ARCHITECTURE.md) |
 
