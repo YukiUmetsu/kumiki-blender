@@ -361,6 +361,10 @@ own texture, and it can turn.
 The white of the eye stays on the head. It has the colour of light fur, and a lid
 line does not always close it. Closed eyes and eyes without a dark pupil are not found.
 
+On Pip, the second eyelid line at 45 degrees is gone. The cost is at 90 degrees: the
+side drawing loses the area around its eye, the front drawing cannot see that area,
+and it takes the nearest colour (a light patch behind the eye).
+
 ## One drawing in an older design
 
 If you replace some views, the views that stay can show an older design. Pip's front

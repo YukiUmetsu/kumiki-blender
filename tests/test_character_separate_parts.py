@@ -267,6 +267,57 @@ class PlaceAndJoinTests(unittest.TestCase):
         np.testing.assert_allclose(uv_again, corner_uv, atol=1e-5)
 
 
+class RedrawTests(unittest.TestCase):
+    def test_the_change_is_taken_from_the_edit_and_the_rest_from_the_drawing(self):
+        from kumiki_blender.character_build import redraw
+        rng = np.random.default_rng(0)
+        rgba = np.zeros((400, 400, 4), np.uint8)
+        rgba[60:340, 150:250] = (*SKIN, 255)                       # body
+        rgba[60:340, 150:250, :3] = np.clip(SKIN + rng.normal(0, 6, (280, 100, 3)), 0, 255)   # fine detail
+        rgba[150:180, 80:150] = (*SKIN, 255)                       # a bare arm
+        calls = []
+
+        class Client:
+            def upload_image(self, path):
+                return str(path)
+
+        def add_sleeve(client, workflow):
+            calls.append(1)
+            with Image.open(workflow["4"]["inputs"]["image"]) as picture:
+                pixels = np.asarray(picture.convert("RGB")).copy()
+            size = pixels.shape[0]
+            small = np.asarray(Image.fromarray(pixels).resize((size // 2, size // 2)).resize((size, size)))   # softer
+            scale = size / 400
+            a, b, c, d = (int(v * scale) for v in (140, 190, 80, 150))
+            out = small.copy()
+            out[a:b, c:d] = (245, 228, 175)                        # a sleeve, thicker than the arm
+            data = io.BytesIO()
+            Image.fromarray(out).save(data, format="PNG")
+            return data.getvalue()
+
+        original, redraw.run_comfy = redraw.run_comfy, add_sleeve
+        try:
+            with tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                Image.fromarray(rgba).save(root / "front.png")
+                Image.fromarray(rgba).save(root / "back.png")
+                report = redraw.redraw_view(root / "front.png", root / "back.png", root / "new" / "front.png", Client(),
+                                            change="the arm wears a sleeve", size=400)
+                with Image.open(root / "new" / "front.png") as picture:
+                    result = np.asarray(picture)
+                again = redraw.redraw_view(root / "front.png", root / "back.png", root / "new" / "front.png", Client(),
+                                           change="the arm wears a sleeve", size=400)
+        finally:
+            redraw.run_comfy = original
+        self.assertEqual((len(calls), report["reused"], again["reused"]), (1, False, True))
+        self.assertLess(np.abs(result[165, 110, :3].astype(int) - (245, 228, 175)).max(), 12, "the sleeve is there")
+        self.assertEqual(result[145, 110, 3], 255, "also where it is thicker than the arm was")
+        np.testing.assert_array_equal(result[250:330, 160:240], rgba[250:330, 160:240])   # far from the change: the drawing
+        self.assertGreater(report["changed_share_of_figure"], 0.03)
+        self.assertLess(report["changed_share_of_figure"], 0.5)
+        self.assertIn("the arm wears a sleeve", report["prompt"])
+
+
 class EyeTests(unittest.TestCase):
     """A ball head with two drawn eyes: front and left drawings, each with its own idea of where the eye is."""
 
