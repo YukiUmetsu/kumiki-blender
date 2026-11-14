@@ -64,6 +64,12 @@ Anatomical features are authored as actual Blender geometry, not merely simulate
 
 For independent review of a character sheet against an existing Blender model, install `.[character-qa]` and consult [Character Fidelity Review](docs/CHARACTER_FIDELITY_REVIEW.md). Optional local SAM 2.1 and MoGe checkpoints can assist mask and depth analysis; their model weights are **not** included in the core package.
 
+### Incremental region planning and release evidence
+
+When a single part changes, `plan-region-batch` records the affected region dependencies and a bounded execution schedule; `resume-region-batch` checks SHA-256 receipts before reporting which tasks are eligible to run. **These commands plan and audit work; they do not launch Blender workers or certify completed parts.** See [incremental region planning](docs/CHARACTER_REGION_BATCH.md).
+
+The `character-benchmark` command collects existing source-registered region comparisons, texture checks, saved Blender rig/pose reports, and an animated GLB into one provenance-checked release-evidence report. Missing evidence or failed numeric checks remain visible; a numeric pass still requires artistic and animation review. See [character benchmark](docs/CHARACTER_M0_BENCHMARK.md) and the [manifest example](examples/character-benchmark.example.json).
+
 ## Photographs to 3D
 
 There are two distinct reconstruction outputs:
