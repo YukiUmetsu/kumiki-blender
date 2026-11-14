@@ -173,6 +173,36 @@ def main():
         }, poses_out)
         assert len(poses["poses"]) == 1
         assert poses["status"] in ("deformation-review-required", "structural-fail")
+        # New M6 reliability gate: a real deform bone moves evaluated vertices,
+        # while a no-op pose is explicitly rejected instead of marked reviewed.
+        real_out = folder / "verified-moving-pose"
+        real = run_worker(source, "blender_pose_qa.py", {
+            "source_blend": str(source), "output": str(real_out),
+            "plan": {
+                "schema_version": 1, "armature": "CharacterRig",
+                "poses": [{"name": "wing-moves",
+                           "bones": {"upper_wing.L": {"axis": "Z", "degrees": 45}}}],
+                "min_pose_displacement_m": .0005,
+                "collision_pairs": [], "render": False,
+            },
+        }, real_out)
+        assert real["status"] == "deformation-review-required", real["problems"]
+        assert real["poses"][0]["max_vertex_displacement_m"] > .0005
+
+        idle_out = folder / "rejected-noop-pose"
+        idle = run_worker(source, "blender_pose_qa.py", {
+            "source_blend": str(source), "output": str(idle_out),
+            "plan": {
+                "schema_version": 1, "armature": "CharacterRig",
+                "poses": [{"name": "no-op",
+                           "bones": {"root": {"axis": "Z", "degrees": 0}}}],
+                "min_pose_displacement_m": .0005,
+                "collision_pairs": [], "render": False,
+            },
+        }, idle_out)
+        assert idle["status"] == "structural-fail"
+        assert any("moved less than" in message for message in idle["problems"])
+
         print(json.dumps({
             "status": "native-workers-executed",
             "blender_version": bpy.app.version_string,
