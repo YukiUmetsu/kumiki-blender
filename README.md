@@ -1,5 +1,16 @@
 # Kumiki Blender
 
+## M0 reproducible character benchmark and release evidence
+
+[Character benchmark guide](docs/CHARACTER_M0_BENCHMARK.md)
+
+Run character-benchmark with a frozen CharacterSpec v2 plan, per-region
+silhouette/contour QA, original-art texture QA, SHA-locked Blender pose battery
+and a portable animated GLB. Missing evidence is explicitly reported,
+not mistaken for success. A numeric pass **always requires independent artistic
+and animated-player review**. Stage CPU/RSS metrics remain externally sourced
+until instrumented worker runs are available.
+
 ## Character build: reference images to a fitted, rigged model
 
 **[Character build pipeline](docs/CHARACTER_BUILD.md)**: check orthographic character views against each other and in 3D, then make a blockout, fit any mesh (for example an image-to-3D result) to every view, project colours, scatter feather or fur cards, retopologize, estimate joints and rig. Each stage reports IoU against the approved images.
