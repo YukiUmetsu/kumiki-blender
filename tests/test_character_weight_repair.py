@@ -45,7 +45,7 @@ class WeightRepairMathTest(unittest.TestCase):
     def test_large_or_unrelated_influences_require_manual_decision(self):
         for source, reason in [
             ({"upper_wing.L": .7, "head": .3}, "exceeds maximum"),
-            ({"head": 1.0}, "exceeds maximum"),
+            ({"head": 1.0}, "No existing allowed"),
             ({"upper_wing.L": .85, "spine": .05}, "not normalized"),
         ]:
             with self.subTest(source=source), self.assertRaisesRegex(ValueError, reason):
