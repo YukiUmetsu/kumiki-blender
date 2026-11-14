@@ -175,6 +175,88 @@ def main():
         assert corrected_receipt["morph_driver_to_baked_pose_max_error"] <= .02
         assert (corrected_out / "animated.glb").is_file()
         assert (corrected_out / "baked.blend").is_file()
+        # M9: authored mouth viseme Action + pose-driven wing correction +
+        # FK control rig must land in ONE GLB animation, preserving actual
+        # per-frame mouth and wing weights, not merely morph target names.
+        bpy.ops.mesh.primitive_uv_sphere_add(
+            segments=20, ring_count=12, radius=.03, location=(0, -.05, .21))
+        mouth = bpy.context.object
+        mouth.name = "Mouth"
+        mouth_weights = mouth.vertex_groups.new(name="root")
+        mouth_weights.add(list(range(len(mouth.data.vertices))), 1.0, "REPLACE")
+        mouth_skin = mouth.modifiers.new("MouthSkin", "ARMATURE")
+        mouth_skin.object = rig_morph
+        mouth.shape_key_add(name="Basis", from_mix=False)
+        speech_a = mouth.shape_key_add(name="viseme_A", from_mix=False)
+        speech_c = mouth.shape_key_add(name="viseme_C", from_mix=False)
+        for i, vertex in enumerate(mouth.data.vertices):
+            if vertex.co.z > 0:
+                speech_a.data[i].co.z += .008
+            if vertex.co.x > 0:
+                speech_c.data[i].co.x += .008
+        for frame, a_value, c_value in [
+            (1, 0, 0), (6, 1, 0), (12, 0, 1)]:
+            bpy.context.scene.frame_set(frame)
+            for block, value in ((speech_a, a_value), (speech_c, c_value)):
+                block.value = value
+                assert block.keyframe_insert(
+                    data_path="value", frame=frame, group="KumikiVisemes")
+        assert mouth.data.shape_keys.animation_data.action is not None
+        mouth.data.shape_keys.animation_data.action.name = "authored_speech"
+        bpy.context.scene.frame_set(1)
+        unified_source = folder / "animated-with-corrective-and-visemes.blend"
+        bpy.ops.wm.save_as_mainfile(filepath=str(unified_source))
+        unified_sha = hashlib.sha256(unified_source.read_bytes()).hexdigest()
+        unified_plan = save_bake_plan(
+            unified_source, "wing_speech", 1, 12, folder / "unified-bake-plan",
+            bake_correctives=True, bake_visemes=True)
+        unified_out = folder / "unified-glb-clip"
+        unified = run_worker(unified_source, "blender_animation_bake.py", {
+            "plan": unified_plan, "output": str(unified_out),
+        }, unified_out)
+        assert unified["glb"]["animations"] == 1
+        assert unified["glb"]["clip_names"] == ["wing_speech"]
+        assert unified["glb"]["deform_joint_channels"] > 0
+        assert unified["morph_visemes_requested"]
+        assert unified["morph_correctives_requested"]
+        assert unified["morph_viseme_objects"] == ["Mouth"]
+        assert unified["morph_parity"]["checked_correctives"] == 3
+        assert unified["morph_parity"]["target_meshes"] == 2
+        assert {row["object"] for row in unified["morph_parity"]["meshes"]} == {"Mouth", "Wing.L"}
+        assert unified["morph_parity"]["max_weight_error"] <= .025
+        assert (unified_out / "animated.glb").is_file()
+        assert (unified_out / "baked.blend").is_file()
+        assert hashlib.sha256(unified_source.read_bytes()).hexdigest() == unified_sha
+
+        # Fail closed when either modality is not explicitly approved.
+        no_face_plan = save_bake_plan(
+            unified_source, "must_reject_face_drop", 1, 12,
+            folder / "missing-face-opt-in", bake_correctives=True)
+        no_face_out = folder / "must-refuse-face-drop"
+        try:
+            run_worker(unified_source, "blender_animation_bake.py", {
+                "plan": no_face_plan, "output": str(no_face_out),
+            }, no_face_out)
+        except RuntimeError as exc:
+            assert "requires --bake-visemes" in str(exc), str(exc)
+            assert not no_face_out.exists()
+        else:
+            raise AssertionError("Exporter silently discarded authored mouth animation")
+
+        no_corr_plan = save_bake_plan(
+            unified_source, "must_reject_corrective_drop", 1, 12,
+            folder / "missing-corrective-opt-in", bake_visemes=True)
+        no_corr_out = folder / "must-refuse-corrective-drop"
+        try:
+            run_worker(unified_source, "blender_animation_bake.py", {
+                "plan": no_corr_plan, "output": str(no_corr_out),
+            }, no_corr_out)
+        except RuntimeError as exc:
+            assert "require --bake-correctives" in str(exc), str(exc)
+            assert not no_corr_out.exists()
+        else:
+            raise AssertionError("Exporter silently discarded sculpted wing correction")
+
         # Explicit opt-in contract: a skeletal-only export must still reject
         # a driven corrective rather than silently render an incorrect wing.
         old_plan = save_bake_plan(
