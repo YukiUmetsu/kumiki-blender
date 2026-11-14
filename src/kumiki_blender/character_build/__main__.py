@@ -441,6 +441,49 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--resume", action="store_true",
                    help="reuse finished repaints in --output whose render and settings match; repaint the rest")
 
+    p = sub.add_parser("split-views", help="split the drawings into one part and the rest, to model each alone")
+    p.add_argument("handoff", type=Path)
+    p.add_argument("--part", required=True, help='the part to take out, in plain words for the editor, e.g. "tail"')
+    p.add_argument("--name", help="folder name of the part (default: --part with dashes)")
+    p.add_argument("--output", type=Path, required=True, help="folder for <part>/, rest/ and split.json")
+    p.add_argument("--views", help="comma-separated drawings that show the part (default: all)")
+    p.add_argument("--subject", default="the character", help='e.g. "the cartoon squirrel"')
+    p.add_argument("--behind", default="the body and the clothes", help="what the part hides, for the editor")
+    p.add_argument("--keep", default="", help="what the editor must not take away with the part")
+    p.add_argument("--server", default="http://127.0.0.1:8188", help="local ComfyUI (loopback only)")
+    p.add_argument("--size", type=int, default=768)
+    p.add_argument("--steps", type=int, default=20)
+    p.add_argument("--change-delta-e", type=float, default=7.0,
+                   help="inside the figure, a colour change above this belongs to the removed part")
+
+    p = sub.add_parser("place-part", help="put a part that was modelled alone into the frame of the whole character")
+    p.add_argument("handoff", type=Path, help="the part's handoff from `split-views` (masks in the character frame)")
+    p.add_argument("mesh", type=Path, help="the part, with any size, position and turn about the vertical axis")
+    p.add_argument("--output", type=Path, required=True, help=".ply")
+    p.add_argument("--yaw-deg", type=float, help="the turn about Z, if it is known (default: search)")
+    p.add_argument("--stretch", type=float, default=0.15,
+                   help="how far the scale of one direction may differ from the common scale (0: one scale)")
+    p.add_argument("--ignore-thinner-px", type=float, default=0.0,
+                   help="drop pieces of the masks thinner than this (aligned px), e.g. a strap that the mesh lacks")
+    p.add_argument("--voxel-mm", type=float, default=0.0,
+                   help="rebuild the placed part as one solid with this voxel (for a hollow or badly wound mesh)")
+
+    p = sub.add_parser("seat-part", help="move a finished part out of the body it hangs on, as one rigid piece")
+    p.add_argument("body", type=Path, help="the placed mesh that the part hangs on")
+    p.add_argument("part", type=Path, help="the placed part; an OBJ keeps its UVs, so its texture stays valid")
+    p.add_argument("--output", type=Path, required=True, help="the moved part (.obj with UVs, or .ply)")
+    p.add_argument("--metres-per-px", type=float, required=True, help="metres_per_aligned_px of the handoff spec")
+    p.add_argument("--view", help="the side from which the part sits on the body, e.g. left (default: found)")
+    p.add_argument("--embed", type=float, default=0.15, help="share of the part's surface that may stay inside")
+    p.add_argument("--move-m", type=float,
+                   help="move by this distance toward --view and measure nothing (to move a second mesh of the part alike)")
+
+    p = sub.add_parser("join-parts", help="one mesh and one texture from placed, textured parts")
+    p.add_argument("parts", nargs="+", help="each part as low.obj:basecolor.png or low.obj:basecolor.png:normal.png")
+    p.add_argument("--output", type=Path, required=True,
+                   help="new folder: joined.obj, basecolor.png, layout.json (and normal.png if every part has one)")
+    p.add_argument("--size", type=int, default=4096)
+
     p = sub.add_parser("parts", help="recognise the character's parts on the mesh and in each drawing")
     _bake_arguments(p)
     p.add_argument("--output", type=Path, required=True, help="new folder: parts.json, masks, turnaround.png")
@@ -1199,6 +1242,98 @@ def _run(args) -> int:
                                  subject=args.subject, size=args.size, steps=args.steps, denoise=args.denoise,
                                  min_iou=args.min_iou, min_usable=args.min_usable, weight=args.weight, owners=owners)
         print(json.dumps(manifest["views"], indent=2))
+        return 0
+    if args.command == "split-views":
+        from ..reconstruction.completion_image_generation import _LocalComfyClient
+        from .split_views import split_views
+
+        report = split_views(args.handoff, args.output, _LocalComfyClient(args.server), part=args.part,
+                             name=args.name, subject=args.subject, behind=args.behind, keep=args.keep,
+                             views=args.views.split(",") if args.views else None, size=args.size, steps=args.steps,
+                             change_delta_e=args.change_delta_e)
+        print(json.dumps(report, indent=2))
+        return 0
+    if args.command == "place-part":
+        from .handoff import reference_masks
+        from .mesh import orient_faces, read_mesh, weld, write_mesh
+        from .part_place import place_part
+
+        _new_file(args.output)
+        spec = _spec(args.handoff)
+        mesh, flipped = orient_faces(weld(read_mesh(args.mesh)))
+        placed, info = place_part(mesh, reference_masks(args.handoff, 0.25), spec["metres_per_aligned_px"],
+                                  yaw_deg=args.yaw_deg, ignore_thinner_px=args.ignore_thinner_px,
+                                  stretch=args.stretch)
+        if args.voxel_mm > 0:
+            from .hull import solidify
+
+            placed = solidify(placed, args.voxel_mm / 1000)
+        write_mesh(placed, args.output)
+        report = {"source": str(args.mesh.resolve()), "faces_flipped": flipped, **info}
+        _write_json(args.output.with_suffix(".placement.json"), report)
+        print(json.dumps(report, indent=2))
+        return 0
+    if args.command == "seat-part":
+        from .mesh import Mesh, read_mesh, write_mesh
+        from .part_place import seat_part, write_obj_uv
+        from .texture import read_obj_uv
+        from .views import camera
+
+        _new_file(args.output)
+        corner_uv = None
+        if args.part.suffix.lower() == ".obj" and args.output.suffix.lower() == ".obj":
+            try:
+                part, corner_uv = read_obj_uv(args.part)
+            except ValueError:
+                part = read_mesh(args.part)
+        else:
+            part = read_mesh(args.part)
+        if args.move_m is not None:
+            if not args.view:
+                raise SystemExit("error: --move-m needs --view")
+            moved = Mesh(part.vertices + args.move_m * camera(args.view).toward, part.faces, part.colours)
+            info = {"view": args.view, "moved_m": args.move_m}
+        else:
+            body = read_obj_uv(args.body)[0] if args.body.suffix.lower() == ".obj" else read_mesh(args.body)
+            moved, info = seat_part(part, body, args.metres_per_px, view=args.view, embed=args.embed)
+        if corner_uv is not None:
+            write_obj_uv(moved, corner_uv, args.output, comment=f"seated: moved {info['moved_m']} m toward {info['view']}")
+        else:
+            write_mesh(moved, args.output)
+        print(json.dumps(info, indent=2))
+        return 0
+    if args.command == "join-parts":
+        import numpy as np
+        from PIL import Image
+
+        from .part_place import join_parts, write_obj_uv
+        from .texture import read_obj_uv
+
+        out = _new_dir(args.output)
+        loaded, normals, names = [], [], []
+        for item in args.parts:
+            fields = item.split(":")
+            if len(fields) not in (2, 3) or not all(fields):
+                raise SystemExit(f"error: give each part as mesh.obj:texture.png[:normal.png], not {item!r}")
+            mesh, corner_uv = read_obj_uv(Path(fields[0]))
+            with Image.open(fields[1]) as picture:
+                loaded.append((mesh, corner_uv, np.asarray(picture.convert("RGB"))))
+            if len(fields) == 3:
+                with Image.open(fields[2]) as picture:
+                    normals.append((mesh, corner_uv, np.asarray(picture.convert("RGB"))))
+            names.append(str(Path(fields[0]).resolve()))
+        if normals and len(normals) != len(loaded):
+            raise SystemExit("error: give a normal map for every part or for none")
+        mesh, corner_uv, texture, layout = join_parts(loaded, size=args.size)
+        out.mkdir(parents=True, exist_ok=True)
+        write_obj_uv(mesh, corner_uv, out / "joined.obj", comment="joined parts; see layout.json")
+        Image.fromarray(texture).save(out / "basecolor.png")
+        if normals:      # the same layout: it depends only on the meshes
+            Image.fromarray(join_parts(normals, size=args.size)[2]).save(out / "normal.png")
+        report = {"parts": [{**row, "source": name} for row, name in zip(layout, names)], "size": args.size,
+                  "vertices": len(mesh.vertices), "faces": len(mesh.faces)}
+        _write_json(out / "layout.json", report)
+        print(json.dumps(report, indent=2))
         return 0
     if args.command == "parts":
         from .parts import find_parts
