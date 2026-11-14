@@ -20,6 +20,8 @@ on:
       - "tests/test_character_glb_animation.py"
       - "tests/test_character_glb_morph_parity.py"
       - "tests/test_character_glb_surface_roundtrip.py"
+      - "tests/test_character_review_plan.py"
+      - "scripts/smoke_character_multiview_review_blender.py"
       - "tests/test_character_viseme_plan.py"
       - "tests/test_character_performance_plan.py"
       - "tests/test_character_glb_performance.py"
@@ -90,6 +92,7 @@ jobs:
             tests.test_character_glb_animation \
             tests.test_character_glb_morph_parity \
             tests.test_character_glb_surface_roundtrip \
+            tests.test_character_review_plan \
             tests.test_character_viseme_plan \
             tests.test_character_performance_plan \
             tests.test_character_glb_performance \
@@ -174,6 +177,9 @@ jobs:
           blender --background --factory-startup --threads 2 \
             --python-exit-code 1 \
             --python scripts/smoke_character_joint_correctives_blender.py
+          blender --background --factory-startup --threads 2 \
+            --python-exit-code 1 \
+            --python scripts/smoke_character_multiview_review_blender.py
           blender --background --factory-startup --threads 2 \
             --python-exit-code 1 \
             --python scripts/smoke_character_visemes_blender.py
