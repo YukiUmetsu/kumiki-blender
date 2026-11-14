@@ -68,6 +68,22 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="kumiki-character-build", description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
 
+    p = sub.add_parser("plan-region-batch", help="plan deterministic source-locked rebuild tasks with safe Blender worker concurrency")
+    p.add_argument("--character", type=Path, required=True, help="frozen CharacterSpec v2 plan directory")
+    p.add_argument("--changed", action="append", required=True, help="changed region ID; repeat for multiple roots")
+    p.add_argument("--max-workers", type=int, default=1, help="simultaneous heavyweight Blender task ceiling")
+    p.add_argument("--memory-gib", type=int, default=24, help="local host memory budget, default M4 24 GiB")
+    p.add_argument("--output", type=Path, required=True, help="new immutable batch plan revision")
+
+    p = sub.add_parser("resume-region-batch", help="audit source-bound receipts and list unblocked next Blender part tasks")
+    p.add_argument("--plan", type=Path, required=True, help="previous region-batch-plan.json")
+    p.add_argument("--receipts", type=Path, help="optional preserved and completed part SHA receipts")
+    p.add_argument("--output", type=Path, required=True, help="new immutable batch progress snapshot")
+
+    p = sub.add_parser("character-benchmark", help="collect source-locked region, color, rig and GLB evidence into one review")
+    p.add_argument("--manifest", type=Path, required=True, help="frozen CharacterSpec and existing stage report paths")
+    p.add_argument("--output", type=Path, required=True, help="new immutable benchmark report + SUMMARY.md")
+
     p = sub.add_parser("plan-landmark-fit", help="source-lock geodesic mesh fit to explicitly triangulated 3D landmarks")
     p.add_argument("--blend", type=Path, required=True, help="approved unrigged source .blend")
     p.add_argument("--landmarks", type=Path, required=True, help="registered landmark report")
@@ -524,6 +540,23 @@ def main(argv: list[str] | None = None) -> int:
 def _run(args) -> int:
     from .views import ingest
 
+    if args.command == "plan-region-batch":
+        from .region_batch import save_region_batch
+        report = save_region_batch(
+            args.character, args.changed, args.output,
+            max_workers=args.max_workers, memory_gib=args.memory_gib)
+        print(json.dumps(report, indent=2))
+        return 0
+    if args.command == "resume-region-batch":
+        from .region_batch import resume_region_batch
+        report = resume_region_batch(args.plan, args.receipts, args.output)
+        print(json.dumps(report, indent=2))
+        return 0 if report["status"] == "complete-awaiting-source-and-animation-qa" else 1
+    if args.command == "character-benchmark":
+        from .benchmark import character_benchmark
+        report = character_benchmark(args.manifest, args.output)
+        print(json.dumps(report, indent=2))
+        return 0 if report["numeric_gates_pass"] else 1
     if args.command == "plan-landmark-fit":
         from .landmark_fit_plan import save_landmark_fit_plan
         report = save_landmark_fit_plan(args.blend, args.landmarks, args.spec, args.output)
