@@ -218,6 +218,22 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--output", type=Path, required=True, help="new baked.blend / animated.glb revision")
     p.add_argument("--blender")
 
+    p = sub.add_parser("audit-animated-glb",
+                       help="reimport exported GLB and compare evaluated skinned surfaces with baked.blend")
+    p.add_argument("--blend", type=Path, required=True, help="exact saved baked.blend")
+    p.add_argument("--glb", type=Path, required=True, help="exported animated.glb")
+    p.add_argument("--armature", default="CharacterRig")
+    p.add_argument("--start", type=int, required=True, help="first animated frame")
+    p.add_argument("--end", type=int, required=True, help="last animated frame")
+    p.add_argument("--fps", type=int, default=24)
+    p.add_argument("--samples", type=int, default=5, help="distinct frames to compare, 3-11")
+    p.add_argument("--max-vertices", type=int, default=150000,
+                   help="memory guard for each evaluated mesh")
+    p.add_argument("--max-p95-error-m", type=float, default=.002)
+    p.add_argument("--max-max-error-m", type=float, default=.01)
+    p.add_argument("--output", type=Path, required=True, help="new read-only QA report directory")
+    p.add_argument("--blender")
+
     p = sub.add_parser("plan-rig-controls", help="generate native FK/IK animator control rig from reviewed joints")
     p.add_argument("--joints", type=Path, required=True, help="validated joints.json from existing character rig")
     p.add_argument("--profile", required=True, choices=("generic-biped", "stylized-biped-tail", "avian-biped-wings"))
@@ -946,6 +962,23 @@ def _run(args) -> int:
         }, blender=args.blender, blend_file=Path(plan["source_blend"]))
         print(json.dumps(report, indent=2))
         return 0
+    if args.command == "audit-animated-glb":
+        from .roundtrip_plan import make_roundtrip_plan
+        from .blender import run_worker
+        if args.output.exists():
+            raise FileExistsError(f"Roundtrip report directory already exists: {args.output}")
+        plan = make_roundtrip_plan(
+            args.blend, args.glb, armature=args.armature,
+            first_frame=args.start, last_frame=args.end, fps=args.fps,
+            samples=args.samples, max_vertices_per_mesh=args.max_vertices,
+            max_p95_error_m=args.max_p95_error_m,
+            max_max_error_m=args.max_max_error_m,
+        )
+        report = run_worker("glb-surface-qa", {
+            "plan": plan, "output": str(args.output.resolve()),
+        }, blender=args.blender, blend_file=args.blend.resolve())
+        print(json.dumps(report, indent=2))
+        return 1 if report["status"] == "structural-fail" else 0
     if args.command == "plan-rig-controls":
         from .rig_control_plan import save_control_plan
         report = save_control_plan(args.joints, args.profile, args.output,
