@@ -153,10 +153,9 @@ def _create_key(row, ready, rig):
     variable.targets[0].transform_space = "LOCAL_SPACE"
     driver.expression = activation_expression(
         row["direction"], row["start_degrees"], row["full_degrees"])
-    key["kumiki_joint_corrective_v1"] = {
-        "bone": row["bone"], "axis": row["axis"],
-        "direction": row["direction"], "source_sculpt": row["target_object"],
-    }
+    # Blender ShapeKey blocks do not support ID custom properties in 4.5 LTS.
+    # The immutable report and the driver's named bone target are the
+    # authoritative provenance and binding, without unsupported metadata.
     return driver.expression
 
 
