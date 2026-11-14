@@ -41,6 +41,39 @@ kumiki-character-build validate-rig \
 
 New output in `report.json`: `rest_weight_zones` for each zone, with selected vertex count, required minimum, violation count, maximum disallowed fraction, and up to 12 indexed offending vertices/bones. Any violation marks the report `structural-fail`, which the existing source-locked character benchmark treats as a failed pose gate. The benchmark also exposes `weight_zone_count` and `failed_weight_zones`, and independently refuses a malformed receipt that claims success while its zone data reports a violation. The source `.blend` remains unchanged.
 
+## Correct wrong bone influences (optional, source-locked)
+
+Once a semantic zone has been painted and `validate-rig` reports **incorrect deform-bone influences**, the repair worker can fix **small** misassignments. This changes real Blender skinning, unlike a QA-only gate, but does not construct anatomy or certify motion quality.
+
+Preview first (the default worker threshold permits at most **15%** foreign weight on a vertex, and at most 2,000 modified vertices per revision):
+
+```bash
+kumiki-character-build repair-rig-weights \
+  --blend /path/to/rigged.blend \
+  --pose-plan /path/to/region-aware-pose-qa.json \
+  --output .review/quill/weight-preview-r01 \
+  --dry-run
+```
+
+Apply the same source-locked correction to a **new** .blend revision without modifying the original:
+
+```bash
+kumiki-character-build repair-rig-weights \
+  --blend /path/to/rigged.blend \
+  --pose-plan /path/to/region-aware-pose-qa.json \
+  --output .review/quill/weight-repaired-r01
+```
+
+The result contains `repaired.blend` and `report.json`. In preview mode, only `report.json` is produced. Both modes compare a SHA-256 of the exact saved source `.blend` immediately before and after the operation. The output is immutable: use a new directory for every attempt. If all regions already pass, the report says `no-weight-repair-needed`; no duplicate .blend is created.
+
+**Explicit repair policy:** For a marked vertex with disallowed influence above the zone threshold, delete the foreign deform-bone weights and proportionally rescale only its **existing allowed deform bones**. Example: 0.90 `upper_wing.L` + 0.10 `spine` becomes 1.00 `upper_wing.L`. A true two-joint wing blend remains two-joint; no new bone is guessed. Marker and other non-deforming groups are left untouched.
+
+The worker refuses to apply automatically when: a vertex has no existing allowed deform bone, source weights are not already normalized, a vertex requires more than the maximum permitted correction, any modified vertex group is locked, a mesh is not bound to the named armature, one vertex belongs to multiple marked regions, a zone has insufficient coverage, or the job exceeds its vertex budget. Geometry, UVs, materials and separate objects must remain unchanged.
+
+You may lower the safety budgets (or raise them deliberately within hard limits) using `--max-removed-weight` (maximum 0.50) and `--max-changed-vertices` (maximum 10,000). A 0.5 foreign-weight correction is **not** a substitute for a deliberate repaint when the actual joint assignment is ambiguous.
+
+**Mandatory after repair:** run `validate-rig` again on `repaired.blend`, compare articulated reference poses, and inspect wing/tail/facial deformation and source-view silhouette. A weight audit passing does not prove correct character movement.
+
 ## Acceptance and limitations
 
 - Run native Blender smoke tests including a deliberately weight-leaking wing that retains total weight 1.0; only the semantic audit should detect this particular error.
