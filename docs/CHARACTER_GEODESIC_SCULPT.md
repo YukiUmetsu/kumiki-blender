@@ -21,7 +21,7 @@ kumiki-character-build inspect-region-sculpt-source \
 
 This writes `report.json` without changing the input `.blend`. It includes:
 
-- `expected_vertex_count`, `expected_mesh_sha256`: a fingerprint of vertex positions and polygon connectivity for this one named mesh.
+- `expected_vertex_count`, `expected_mesh_sha256`: a fingerprint of vertex positions, all mesh edges (including loose edges), polygon connectivity and the object world transform.
 - `anchor_candidates[].nearest_vertex`, `distance_m`: the closest vertex to each requested **world-space** anchor.
 
 The suggested seed is **not automatically verified** to belong to the intended anatomical surface. Inspect the mesh/point in Blender before using it. A seed too far from the requested 3D anchor is rejected. The mesh digest does not cover materials or UVs, so original reference-image and texture QA remain mandatory.
