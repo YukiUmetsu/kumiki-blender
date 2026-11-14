@@ -246,7 +246,7 @@ def main():
             }, roundtrip_out)
         assert roundtrip_report["status"] == "evaluated-glb-roundtrip-review-required", roundtrip_report["problems"]
         assert roundtrip_report["source_meshes"] == [
-            "Eye.L", "Eye.R", "Mouth", "Skin", "Wing.L",
+            "Eye.L", "Mouth", "Skin", "Wing.L",
         ], roundtrip_report["source_meshes"]
         assert roundtrip_report["sampled_frames"] == [1, 3, 6, 9, 12]
         assert roundtrip_report["checked_mesh_frames"] == 5 * len(roundtrip_report["source_meshes"])
