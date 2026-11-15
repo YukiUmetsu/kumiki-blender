@@ -115,6 +115,30 @@ class RecogniseTests(unittest.TestCase):
         self.assertTrue((smooth[:, 12:] == 2).all() and (smooth[1:, 1:8] == 1).all())
 
 
+class GivenPartTests(unittest.TestCase):
+    def test_the_back_of_a_thin_flap_does_not_take_a_part_that_only_its_front_shows(self):
+        """A thin plate that faces the front camera: its front is in the given part, its back is seen by no drawing."""
+        from kumiki_blender.character_build.mesh import Mesh
+        from kumiki_blender.character_build.views import camera
+        px = 0.00032
+        verts = np.array([[-.02, -.001, .14], [.02, -.001, .14], [.02, -.001, .18], [-.02, -.001, .18],
+                          [-.02, .001, .14], [.02, .001, .14], [.02, .001, .18], [-.02, .001, .18]])
+        faces = np.array([[0, 1, 2], [0, 2, 3], [4, 6, 5], [4, 7, 6], [0, 4, 5], [0, 5, 1], [1, 5, 6], [1, 6, 2],
+                          [2, 6, 7], [2, 7, 3], [3, 7, 4], [3, 4, 0]])
+        plate = Mesh(verts, faces)
+        u, w = np.meshgrid(np.linspace(-.019, .019, 20), np.linspace(.141, .179, 20))
+        front = np.column_stack([u.ravel(), np.full(u.size, -.001), w.ravel()])
+        back = front * [1, -1, 1]
+        points = np.vstack([front, back])
+        normals = np.vstack([np.tile([0, -1.0, 0], (len(front), 1)), np.tile([0, 1.0, 0], (len(back), 1))])
+        col, row, _ = camera("front").project(front, px, 0.5)
+        mask = np.zeros((600, 800), bool)
+        mask[int(row.min()) - 2:int(row.max()) + 3, int(col.min()) - 2:int(col.max()) + 3] = True
+        member = parts.given_part_texels(plate, points, normals, [{"front": mask}], ["front"], px, smooth_px=0)
+        self.assertTrue(member[0, :len(front)].all(), "the front is the part")
+        self.assertFalse(member[0, len(front):].any(), "its back, which no drawing sees, is not")
+
+
 class PolishTests(unittest.TestCase):
     def two_sources(self, size=48, step=30.0):
         rng = np.random.default_rng(1)

@@ -595,7 +595,9 @@ def given_part_texels(mesh: Mesh, points: np.ndarray, normals: np.ndarray, masks
     turns from one drawing to the other, the border would have teeth.
 
     A texel without a vote (the side of a vest behind an arm) takes the answer of the
-    nearest texel that has one and faces the same way.
+    nearest texel that has one and faces the same way (within 60 degrees, and 60 aligned
+    pixels). Without such a texel it is in no given part: the back of a thin ear must not
+    take the pink of its front.
     """
     from scipy.spatial import cKDTree
 
@@ -651,10 +653,20 @@ def given_part_texels(mesh: Mesh, points: np.ndarray, normals: np.ndarray, masks
     member = (share > 0.5) & seen
     member &= np.cumsum(member, axis=0) == 1            # more than one part: the first
     if seen.any() and not seen.all():
-        # Position and facing together: a texel on the outside of a sleeve does not ask the vest under it.
-        where = np.hstack([points, facing * 20 * metres_per_px])
-        _, nearest = cKDTree(where[seen]).query(where[~seen], workers=-1)
-        member[:, ~seen] = member[:, seen][:, nearest]
+        # The nearest voted texel that faces the same way (within 60 degrees): a texel on the outside of
+        # a sleeve does not ask the vest under it, and the back of a thin ear does not ask its front.
+        # With no such texel near, the texel is in no given part.
+        ids = np.nonzero(seen)[0]
+        unseen = np.nonzero(~seen)[0]
+        distance, near = cKDTree(points[ids]).query(points[unseen], k=min(16, len(ids)), workers=-1)
+        if near.ndim == 1:
+            distance, near = distance[:, None], near[:, None]
+        alike = (facing[ids][near] * facing[unseen][:, None, :]).sum(axis=2) > 0.5
+        alike &= distance <= 60 * metres_per_px
+        found = alike.any(axis=1)
+        pick = ids[near[np.arange(len(unseen)), np.argmax(alike, axis=1)]]
+        member[:, unseen] = False
+        member[:, unseen[found]] = member[:, pick[found]]
     if smooth_px > 0 and count > 1:
         # Each texel takes the mean answer of the surface around it, on its side of the surface. The
         # mean is taken over anchors, one for each cell of a quarter of the radius, so that it does

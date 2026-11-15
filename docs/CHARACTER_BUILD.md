@@ -309,6 +309,17 @@ kumiki-character-build parts HANDOFF low.obj --given scarf=g1/scarf --given vest
 
 On Pip, the vest got a straight hem and the scarf a clean edge on the vest.
 
+**Take out of the body's drawings what lies in front of the body.** `split-views`
+takes the tail out where its mask is. On Pip the mask stopped below the top of the
+plume, and the top of the plume stayed in the body's back drawing. It painted the
+back of the head with pale plume fur, which showed as a torn strip behind the ear
+in each side view. Cut such a part out of the body's drawing with `box-part
+--polygon` or `box-part --like`. The bake then fills that surface from the side
+drawing.
+
+A given part goes to a texel that no drawing sees only from a near texel that faces
+the same way. The back of a thin ear does not take the pink of its front.
+
 **Leave out a drawing that disagrees.** Give `parts` and `texture-parts`
 `--views front,left,back`. Pip's back-left drawing puts the end of the scarf and
 the hem of the vest at other places than the back drawing. With it, the back of
