@@ -481,6 +481,43 @@ class SmallPartTests(unittest.TestCase):
         far, _, _ = cut_under(body, None, masks, self.PX, join=[Mesh(small.vertices + [0, 0.2, 0], small.faces)], smooth=0)
         np.testing.assert_array_equal(far.vertices, open_cut.vertices)       # a part out of reach moves nothing
 
+    def test_a_thin_sheet_is_a_plate_with_the_outline_of_its_drawing(self):
+        from kumiki_blender.character_build.part_place import plate_part
+        body, _ = self.body_and_hand()                               # an arm along X at y = 1 cm, z = 16 cm
+        mask = np.zeros((300, 400), bool)                            # the frame at 0.25: a flap that hangs under the arm
+        rows, cols = np.mgrid[:300, :400]
+        mask[(rows >= 150) & (rows < 190) & (cols >= 215) & (cols < 275) & (cols - 215 >= (rows - 150))] = True
+        plate, uv, report = plate_part(mask, self.PX, anchor=body, thickness_m=0.002)
+        self.assertTrue(report["depth_from_anchor"])
+        self.assertGreater(signed_volume(plate), 0, "the outside is out")
+        area = mask.sum() * (self.PX / 0.25) ** 2
+        self.assertAlmostEqual(signed_volume(plate), area * 0.002, delta=0.15 * area * 0.002)
+        edges = np.sort(np.concatenate([plate.faces[:, [0, 1]], plate.faces[:, [1, 2]], plate.faces[:, [2, 0]]]), axis=1)
+        _, times = np.unique(edges, axis=0, return_counts=True)
+        self.assertTrue((times == 2).all(), "closed: each edge has two faces")
+        self.assertAlmostEqual(float(np.ptp(plate.vertices[:, 1])), 0.002, delta=0.0015, msg="a thin sheet")
+        self.assertAlmostEqual(float(plate.vertices[:, 1].mean()), 0.01, delta=0.004, msg="at the depth of the arm")
+        drawn = rasterize(plate, camera("front"), self.PX, 0.25)[0]
+        self.assertGreater((drawn & mask).sum() / (drawn | mask).sum(), 0.85, "it covers its drawing")
+        self.assertEqual(uv.shape, (len(plate.faces), 3, 2))
+        front = plate.face_normals()[0][:, 1] < -0.9
+        self.assertLess(uv[front][..., 0].max(), 0.5, "the side toward the camera has the left half of the texture")
+        self.assertGreater(uv[plate.face_normals()[0][:, 1] > 0.9][..., 0].min(), 0.5)
+        from kumiki_blender.character_build.texture import texel_samples
+        _, _, _, texel_normals = texel_samples(plate, uv, 256)
+        self.assertGreater((np.abs(texel_normals[:, 1]) > 0.9).mean(), 0.95, "the texture is for the two sides, not the rim")
+        # Only what the body lacks: the cells outside the body's silhouette, and a band inside it.
+        wide = np.zeros_like(mask)
+        wide[140:190, 215:275] = True                                # reaches up into the arm
+        added, _, _ = plate_part(wide, self.PX, anchor=body, outside=body, overlap_px=8)
+        # The arm is 18 mm thick at the far end of the flap, so its lower outline is at z = 0.142 there.
+        self.assertLess(added.vertices[:, 2].max(), 0.142 + 8 * self.PX + 0.003, "not over the arm, but a band into it")
+        self.assertGreater(added.vertices[:, 2].max(), 0.16 - 0.03 + 0.001)
+        with self.assertRaises(ValueError):
+            plate_part(np.zeros_like(mask), self.PX)
+        with self.assertRaises(ValueError):
+            plate_part(mask, self.PX, view="az0_el30")
+
     def test_a_mirrored_part_takes_the_depth_of_the_body_on_its_side(self):
         from kumiki_blender.character_build.part_place import mirror_part
         body, hand = self.body_and_hand()
