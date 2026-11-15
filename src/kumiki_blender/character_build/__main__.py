@@ -696,6 +696,9 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--texture-size", type=int, default=1024)
     p.add_argument("--cell-px", type=float, default=4.0,
                    help="size of a square of the plate, aligned px; 2 for a fine outline (a fringe)")
+    p.add_argument("--room", type=Path, metavar="WHOLE_HANDOFF",
+                   help="keep only what the opposite drawing of the whole character has room for, so that a part which "
+                        "hangs beyond the body does not show from the opposite side, where it is not drawn")
     p.add_argument("--both-sides", action="store_true",
                    help="both sides show the drawing of --view (for a part that only one drawing shows)")
     p.add_argument("--drape", action="store_true",
@@ -1688,8 +1691,21 @@ def _run(args) -> int:
                 faces.append(mesh.faces + start)
                 start += len(mesh.vertices)
             anchor = Mesh(np.concatenate(vertices), np.concatenate(faces))
+        room = None
+        if args.room:
+            from scipy import ndimage
+
+            from .views import camera as view_camera
+
+            whole = reference_masks(args.room, 1 / args.cell_px)
+            facing = next((name for name in whole if np.allclose(view_camera(name).toward,
+                                                                   -view_camera(args.view).toward, atol=1e-6)), None)
+            if facing is None:
+                raise SystemExit(f"error: {args.room} has no drawing opposite to {args.view}")
+            # The opposite camera sees the mirror image about the frame centre. Three aligned pixels of slack.
+            room = ndimage.binary_dilation(whole[facing][:, ::-1], iterations=max(1, round(3 / args.cell_px)))
         plate, plate_uv, report = plate_part(masks[args.view], _spec(args.handoff)["metres_per_aligned_px"],
-                                             scale=1 / args.cell_px, both_sides=args.both_sides,
+                                             scale=1 / args.cell_px, both_sides=args.both_sides, room=room,
                                              view=args.view, thickness_m=args.thickness_mm / 1000, anchor=anchor,
                                              outside=any_mesh(args.outside) if args.outside else None,
                                              overlap_px=args.overlap_px, drape=args.drape)

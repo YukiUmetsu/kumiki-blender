@@ -614,7 +614,7 @@ hangs over the right shoulder. Only the back drawing shows it.
 kumiki-character-build box-part HANDOFF --name scarfend --polygon back:... \
   --colour 139,55,60 --colour 100,35,40 --output se/
 kumiki-character-build plate-part se/scarfend --view back --drape --both-sides --cell-px 2 \
-  --anchor body/low.obj --anchor armR/low.obj --thickness-mm 2 \
+  --anchor body/low.obj --anchor armR/low.obj --thickness-mm 2 --room HANDOFF \
   --texture se/plate.png --output se/plate.obj
 ```
 
@@ -623,9 +623,12 @@ the part hangs beyond the body, the plate continues at the depth of the nearest
 surface. `--both-sides` puts the one drawing on both sides. Cut the part from the
 body's drawing too (`box-part`), or the body is painted with it a second time.
 
-The end of the scarf now shows from the front, beside the neck. The front drawing
-does not have it there. The two drawings disagree, and the model follows the back
-drawing.
+A part that hangs beyond the body shows from the opposite side too. Pip's front
+drawing has no scarf end beside the neck, so the two drawings disagree. Add
+`--room WHOLE_HANDOFF`: the plate then keeps only what the opposite drawing of the
+whole character has room for. The front view stays as it is drawn, and from behind
+the scarf end is shorter than in the back drawing. Without `--room`, the back view
+has the whole fringe, and the front view shows a tuft beside the neck.
 
 ## Eyes as separate eyeballs
 

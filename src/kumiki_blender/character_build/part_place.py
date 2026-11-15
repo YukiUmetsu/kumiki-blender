@@ -509,7 +509,7 @@ def shift_under(mesh: Mesh, masks: dict[str, np.ndarray], metres_per_px: float, 
 def plate_part(mask: np.ndarray, metres_per_px: float, *, view: str = "front", scale: float = 0.25,
                thickness_m: float = 0.003, anchor: Mesh | None = None, outside: Mesh | None = None,
                overlap_px: float = 12.0, smooth: int = 3, drape: bool = False, lift_m: float = 0.001,
-               both_sides: bool = False) -> tuple[Mesh, np.ndarray, dict]:
+               both_sides: bool = False, room: np.ndarray | None = None) -> tuple[Mesh, np.ndarray, dict]:
     """A thin plate with the outline of ``mask``, its UVs for each face corner, and a short report.
 
     A generator makes a thin sheet badly: the skin between Pip's arm and body came out a
@@ -530,7 +530,9 @@ def plate_part(mask: np.ndarray, metres_per_px: float, *, view: str = "front", s
     the mask reaches beyond the anchor (a fringe that hangs free), it continues at the
     depth of the nearest surface. The depth is smoothed, so the plate does not follow
     each fold. What hangs free shows from the opposite side too, as it would on the
-    character.
+    character. If the opposite drawing does not have it there, give ``room``: a mask in
+    the frame of ``mask`` (the mirror image of the opposite drawing's figure). Only the
+    cells inside it are kept, so the opposite view stays as it is drawn.
 
     UVs: the side toward the camera has the left half of the texture, the other side the
     right half. With ``both_sides``, the other side uses the left half too: a part that
@@ -545,6 +547,10 @@ def plate_part(mask: np.ndarray, metres_per_px: float, *, view: str = "front", s
     if abs(look.toward[2]) > 1e-9:
         raise ValueError("plate_part needs a level view")
     keep = np.asarray(mask, dtype=bool).copy()
+    if room is not None:
+        if room.shape != keep.shape:
+            raise ValueError("room must have the shape of the mask")
+        keep &= np.asarray(room, dtype=bool)
     if outside is not None:
         body, _ = rasterize(outside, look, metres_per_px, scale)
         # What the body lacks: the mask outside its silhouette, without the slivers where two

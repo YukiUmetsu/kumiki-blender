@@ -632,6 +632,13 @@ class SmallPartTests(unittest.TestCase):
         self.assertLess(centre[on_arm, 1].min(), -0.012, "and so it is no plane")
         self.assertGreater(signed_volume(draped), 0)
         self.assertLess(draped_uv[..., 0].max(), 0.5, "both sides use the half of the texture that has the drawing")
+        room = np.zeros_like(over)                                   # the opposite drawing has no figure above row 140
+        room[140:] = True
+        fitted, _, report = plate_part(over, self.PX, anchor=body, drape=True, room=room)
+        self.assertEqual(report["cells"], int((over & room).sum()))
+        self.assertLess(fitted.vertices[:, 2].max(), (1100 - 140 / 0.25) * self.PX + 1e-9, "nothing where it would show")
+        with self.assertRaises(ValueError):
+            plate_part(over, self.PX, room=np.ones((10, 10), bool))
 
     def test_a_plate_takes_its_texture_from_the_drawings_own_pixels(self):
         from kumiki_blender.character_build.part_place import plate_part, plate_texture
