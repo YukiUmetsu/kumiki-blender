@@ -97,7 +97,21 @@ def estimate_joints(mesh: Mesh, height_m: float, landmarks_z: dict | None = None
         if len(lateral) == 0:
             raise ValueError(f"No {side} {limbs[:-1]} mass found beside the body")
         hand = lateral[np.argmax(np.linalg.norm(lateral - shoulder, axis=1))]
-        elbow = (shoulder + hand) / 2 + np.array([0, 0.02 * height_m, 0])  # a slight bend toward the back
+        bend = np.array([0, 0.02 * height_m, 0])       # a slight bend toward the back
+        if limbs == "arms" and "shoulder" in estimated and len(lateral) >= 10:
+            # A character with a large head has its arms far below 55% of its height, and a bone from
+            # there to the hand runs through the neck. The arm itself says where it comes from: follow
+            # its axis from the hand inward, to halfway between the hand and the midline.
+            centred = lateral - lateral.mean(axis=0)
+            axis = np.linalg.svd(centred, full_matrices=False)[2][0]
+            if axis[0] * sign > 0:
+                axis = -axis                           # from the hand toward the body
+            run = abs(hand[0] - mid) - 0.5 * reach.max()
+            if abs(axis[0]) > 0.3 and run > 0:
+                root = hand + axis * (run / abs(axis[0]))
+                if hand[2] <= root[2] < z["shoulder"] - 0.05 * height_m:
+                    shoulder, bend = root, np.zeros(3)  # the arm is straight along its own axis
+        elbow = (shoulder + hand) / 2 + bend
         joints[f"shoulder.{side}"], joints[f"elbow.{side}"], joints[f"hand.{side}"] = shoulder, elbow, hand
 
     bones = [("root", "root", "hips", None), ("spine", "hips", "spine", "root"), ("chest", "spine", "chest", "spine"),

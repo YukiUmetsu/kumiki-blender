@@ -475,6 +475,29 @@ and its own pixels to take colour from.
    normal map. Each part keeps its own region of the texture
    and stays a separate piece of surface. `compare`, `appearance` and `rig` take
    `joined/joined.obj`.
+7. **Rig.** `joints HANDOFF joined/joined.obj --tail --output joints.json`, then
+   `rig joined/joined.obj joints.json --output rig/ --render-rom`. Give `joints` the
+   joined mesh, not the fitted meshes of the parts: they still have the limbs that
+   you cut, moved or replaced.
+
+   A joined mesh is not one closed surface, and Blender's heat weighting has no
+   solution on it. `rig` then takes the weights from a proxy. The proxy is a voxel
+   remesh of the whole character, without the small pockets that the remesh leaves
+   inside. It is weighted at ten times its size, because the heat weighting also
+   fails on a small mesh with small faces.
+
+   Each vertex of the character takes the
+   weights of the nearest place on the proxy. `report.json` has `proxy_weights`.
+   `--no-proxy-weights` gives each vertex to its nearest bone, as before.
+
+   For a character with a large head, `joints` puts the shoulder on the axis of
+   the arm, halfway between the hand and the midline. The default height (55% of
+   the figure) is in the neck of such a character. A shoulder landmark in
+   `spec.json` is used as it is.
+
+   On Pip, the arms and the head now move without torn sheets of surface. The
+   chest and the scarf still crumple when an arm turns far: parts that touch share
+   weights. Paint the weights there by hand for animation.
 
 What the editor paints behind a part is a guess. In the finished model the part
 hides most of it. Look at `split/rest/raw/` before you generate.
@@ -629,6 +652,26 @@ drawing has no scarf end beside the neck, so the two drawings disagree. Add
 whole character has room for. The front view stays as it is drawn, and from behind
 the scarf end is shorter than in the back drawing. Without `--room`, the back view
 has the whole fringe, and the front view shows a tuft beside the neck.
+
+**Clean a part's drawings before you generate it.** The generator models what
+the drawings show. The editor left fur under Pip's bag in the bag's drawings, and
+the bag came out with a ragged apron of fur. The strap, as a thin piece, came out
+as a stub or as a loop that stood off the bag.
+
+```bash
+# Fur and vest colours are not the bag. Holes are filled, so a highlight inside the bag stays.
+kumiki-character-build box-part bag/bag --name bag --drop-colour 198,149,116 \
+  --drop-colour 70,65,40 --drop-delta-e 13 --open-px 4 --output bag2/
+# The body of the bag for the generator: the rows where the part is wide.
+kumiki-character-build box-part bag2/bag --name bag --box front:0,908,4000,1084 ... --output bag3/
+# The strap: a draped plate from each drawing that shows it.
+kumiki-character-build box-part bag2/bag --name strap --box front:0,0,4000,925 ... --output strap/
+kumiki-character-build plate-part strap/strap --view front --drape --both-sides --cell-px 2 \
+  --room HANDOFF --anchor body/low.obj --texture strap_front.png --output strap_front.obj
+```
+
+On Pip, the bag is now a clean satchel from each side. The strap with its buckle
+lies on the chest as it is drawn.
 
 ## Eyes as separate eyeballs
 

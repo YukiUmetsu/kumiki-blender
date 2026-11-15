@@ -305,7 +305,8 @@ def box_part(handoff: Path, out: Path, *, name: str, boxes: dict[str, list[tuple
              polygons: dict[str, list[list[tuple[int, int]]]] | None = None,
              colours: list[tuple[int, int, int]] | None = None, delta_e: float = 25.0, close_px: int = 3,
              min_share: float = 0.05, open_px: int = 0, like: Path | None = None,
-             aligned_masks: dict[str, np.ndarray] | None = None) -> dict:
+             aligned_masks: dict[str, np.ndarray] | None = None,
+             drop_colours: list[tuple[int, int, int]] | None = None, drop_delta_e: float = 12.0) -> dict:
     """Split off the part of each drawing that lies inside boxes or polygons; no image editor.
 
     ``boxes`` gives, for each view, one or more (x0, y0, x1, y1) in the pixels of
@@ -324,6 +325,11 @@ def box_part(handoff: Path, out: Path, *, name: str, boxes: dict[str, list[tuple
     removes a fringe, so leave it at 0 for a scarf. With colours and no box for a view,
     the whole drawing is searched.
 
+    ``drop_colours`` are colours that the part does not have: a pixel within
+    ``drop_delta_e`` of one of them is not the part. Use it to clean a part that another
+    step cut out with something else on its edge (fur under a leather bag). Holes are
+    filled afterwards, so a highlight of that colour inside the part stays.
+
     ``aligned_masks`` gives, for a view, a mask in the aligned frame of the character
     (1600 x 1200). Its pixels are added to the boxes and polygons of that view. Use it for
     a region that comes from the model, not from the drawing (``part_place.shows_under``).
@@ -340,6 +346,7 @@ def box_part(handoff: Path, out: Path, *, name: str, boxes: dict[str, list[tuple
     if unknown:
         raise ValueError(f"The handoff has no drawing for {unknown}")
     wanted = lab(np.asarray(colours, dtype=np.uint8).reshape(-1, 3)) if colours else None
+    unwanted = lab(np.asarray(drop_colours, dtype=np.uint8).reshape(-1, 3)) if drop_colours else None
     like_spec = json.loads((like / "spec.json").read_text(encoding="utf-8")) if like else None
     part_images, rest_images, rows = {}, {}, []
     for view in spec["views"]:
@@ -350,7 +357,8 @@ def box_part(handoff: Path, out: Path, *, name: str, boxes: dict[str, list[tuple
             original = np.asarray(picture.convert("RGBA"))
         outlined = view in boxes or view in polygons or view in aligned_masks
         other = like / "raw" / f"{view}.png" if like else None
-        if not outlined and not (other and other.is_file()) and (wanted is None or boxes or polygons):
+        by_colour = wanted is not None or unwanted is not None
+        if not outlined and not (other and other.is_file()) and (not by_colour or boxes or polygons):
             rest_images[view] = original
             continue
         inside = region_mask(original.shape[:2], boxes.get(view, []), polygons.get(view, [])) if outlined \
@@ -369,11 +377,13 @@ def box_part(handoff: Path, out: Path, *, name: str, boxes: dict[str, list[tuple
             rest_images[view] = original
             continue
         region = inside & (original[..., 3] > 200)
-        if wanted is not None and region.any():
+        if by_colour and region.any():
             pixels = lab(original[..., :3][region])
-            near = np.zeros(len(pixels), dtype=bool)
-            for colour in wanted:
+            near = np.zeros(len(pixels), dtype=bool) if wanted is not None else np.ones(len(pixels), dtype=bool)
+            for colour in wanted if wanted is not None else []:
                 near |= np.linalg.norm(pixels - colour, axis=1) <= delta_e
+            for colour in unwanted if unwanted is not None else []:
+                near &= np.linalg.norm(pixels - colour, axis=1) > drop_delta_e
             coloured = np.zeros_like(region)
             coloured[region] = near
             if close_px > 0:
@@ -388,7 +398,7 @@ def box_part(handoff: Path, out: Path, *, name: str, boxes: dict[str, list[tuple
                 sizes = ndimage.sum_labels(region, labels, range(1, count + 1))
                 region = np.isin(labels, 1 + np.nonzero(sizes >= min_share * sizes.max())[0])
         if not region.any():
-            if wanted is not None and not outlined:
+            if by_colour and not outlined:
                 rest_images[view] = original           # the colour is not in this drawing
                 continue
             raise ValueError(f"No part of the figure lies inside the boxes and polygons of the {view} drawing")

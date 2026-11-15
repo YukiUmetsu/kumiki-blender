@@ -440,6 +440,16 @@ class SmallPartTests(unittest.TestCase):
                 S.box_part(root / "other", root / "d", name="scarf", like=root / "a" / "scarf")
             with self.assertRaises(ValueError):
                 S.box_part(root / "whole", root / "e", name="scarf")
+            # The other way round: a part that was cut out with something else on its edge is cleaned.
+            bag = np.zeros((160, 200, 4), np.uint8)
+            bag[40:110, 60:140] = (150, 90, 55, 255)                 # leather
+            bag[110:125, 60:140] = (*SKIN, 255)                      # fur that the cut left under it
+            bag[70:76, 90:96] = (*SKIN, 255)                         # a highlight of the same colour inside the bag
+            S.write_handoff(root / "bag", spec, {"front": bag}, "bag")
+            S.box_part(root / "bag", root / "f", name="bag", drop_colours=[SKIN], drop_delta_e=10)
+            cleaned = alpha(root / "f" / "bag" / "raw" / "front.png")
+        self.assertTrue(cleaned[40:110, 60:140].all(), "the leather stays, with the highlight inside it")
+        self.assertFalse(cleaned[112:125, 60:140].any(), "the fur on its edge goes")
         self.assertTrue(part[60:80, 46:154].all(), "the scarf, with the dark line in it")
         self.assertTrue(part[60:69, 40:160].all() and part[71:80, 40:160].all())
         self.assertTrue(part[100, 100], "and its thread")
