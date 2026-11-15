@@ -614,6 +614,9 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--colour", action="append", default=[], metavar="R,G,B",
                    help="keep only the pixels near this colour (a red scarf inside a box around the neck); repeat")
     p.add_argument("--delta-e", type=float, default=25.0, help="with --colour: how near (CIE76)")
+    p.add_argument("--drop-colour", action="append", default=[], metavar="R,G,B",
+                   help="a colour that the part does not have (fur on the edge of a leather bag); repeat")
+    p.add_argument("--drop-delta-e", type=float, default=12.0, help="with --drop-colour: how near (CIE76)")
     p.add_argument("--close-px", type=int, default=3, help="with --colour: close gaps up to this size")
     p.add_argument("--min-share", type=float, default=0.05,
                    help="with --colour: drop a piece smaller than this share of the largest piece")
@@ -851,6 +854,11 @@ def main(argv: list[str] | None = None) -> int:
             p.add_argument("--rom-deg", type=float, default=45.0)
             p.add_argument("--render-rom", action="store_true")
             p.add_argument("--preserve-volume", action="store_true", help="enable Blender armature Preserve Volume skinning")
+            p.add_argument("--no-proxy-weights", action="store_true",
+                           help="if heat weighting fails (a mesh of separate parts), do not take the weights from a "
+                                "closed voxel proxy; use the nearest bone")
+            p.add_argument("--proxy-voxel-mm", type=float,
+                           help="voxel of the weight proxy (default: 1/150 of the largest dimension)")
     args = parser.parse_args(argv)
     try:
         return _run(args)
@@ -1622,15 +1630,16 @@ def _run(args) -> int:
     if args.command == "box-part":
         from .split_views import box_part
 
-        colours = []
-        for item in args.colour:
-            try:
-                values = tuple(int(v) for v in item.split(","))
-            except ValueError:
-                values = ()
-            if len(values) != 3 or not all(0 <= v <= 255 for v in values):
-                raise SystemExit(f"error: give each colour as R,G,B from 0 to 255, not {item!r}")
-            colours.append(values)
+        colours, dropped = [], []
+        for items, target in ((args.colour, colours), (args.drop_colour, dropped)):
+            for item in items:
+                try:
+                    values = tuple(int(v) for v in item.split(","))
+                except ValueError:
+                    values = ()
+                if len(values) != 3 or not all(0 <= v <= 255 for v in values):
+                    raise SystemExit(f"error: give each colour as R,G,B from 0 to 255, not {item!r}")
+                target.append(values)
         aligned = {}
         if args.where_mesh or args.under or args.in_views:
             if not (args.where_mesh and args.under and args.in_views):
@@ -1651,10 +1660,11 @@ def _run(args) -> int:
                     # A side without a drawing is painted by the mirror image of the other side's drawing.
                     view, shown = pairs[view], shown[:, ::-1]
                 aligned[view] = aligned[view] | shown if view in aligned else shown
-        boxes, polygons = _boxes_and_polygons(args.box, args.polygon, required=not (colours or args.like or aligned))
+        boxes, polygons = _boxes_and_polygons(args.box, args.polygon, required=not (colours or dropped or args.like or aligned))
         print(json.dumps(box_part(args.handoff, _new_dir(args.output), name=args.name, boxes=boxes, polygons=polygons,
                                   colours=colours or None, delta_e=args.delta_e, close_px=args.close_px,
                                   min_share=args.min_share, open_px=args.open_px, aligned_masks=aligned or None,
+                                  drop_colours=dropped or None, drop_delta_e=args.drop_delta_e,
                                   like=args.like), indent=2))
         return 0
     if args.command == "detail-part":
@@ -2127,7 +2137,10 @@ def _run(args) -> int:
         validate_joints(joints)
         report = run_worker("rig", {"mesh": str(args.input.resolve()), "joints": joints, "output": str(out.resolve()),
                                     "rom_deg": args.rom_deg, "render_rom": args.render_rom,
-                                    "preserve_volume": args.preserve_volume}, blender=args.blender)
+                                    "preserve_volume": args.preserve_volume,
+                                    "proxy_weights": not args.no_proxy_weights,
+                                    "proxy_voxel_m": args.proxy_voxel_mm / 1000 if args.proxy_voxel_mm else None},
+                            blender=args.blender)
     print(json.dumps(report, indent=2))
     return 0
 

@@ -2,6 +2,12 @@
 
 Arguments (JSON): mesh, joints (validated dict), output, rom_deg, render_rom (bool).
 
+A character that is joined from separate parts (a body, a tail, eyes, a bag) is
+not one closed surface, and Blender's heat weighting then finds no solution. The
+weights then come from a proxy: a voxel remesh of the whole character, which is
+one closed surface, gets the heat weights, and each vertex of the character takes
+the weights of the nearest place on the proxy.
+
 Range of motion: each test bone turns by +rom_deg and -rom_deg about its own X
 axis. The report gives the mesh volume ratio against the rest pose (a joint
 that collapses loses volume) and whether every vertex keeps a weight.
@@ -15,7 +21,7 @@ from pathlib import Path
 
 import bmesh
 import bpy
-from mathutils import Vector
+from mathutils import Matrix, Vector
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from kumiki_blender.character_build.blender_common import (activate, arguments, clear_startup_scene,  # noqa: E402
@@ -31,6 +37,109 @@ def evaluated_volume(obj) -> float:
     volume = abs(bm.calc_volume())
     bm.free()
     return volume
+
+
+def unweighted_fraction(obj) -> float:
+    count = sum(1 for vertex in obj.data.vertices if not any(g.weight > 1e-4 for g in vertex.groups))
+    return count / max(1, len(obj.data.vertices))
+
+
+def keep_largest_island(obj) -> int:
+    """Remove every connected piece of the mesh but the largest; returns the number removed.
+
+    Where parts overlap, a voxel remesh leaves small closed pockets inside the character.
+    No bone is visible from inside a pocket, and the heat weighting then has no solution
+    for the whole mesh.
+    """
+    bm = bmesh.new()
+    bm.from_mesh(obj.data)
+    bm.verts.ensure_lookup_table()
+    island = [-1] * len(bm.verts)
+    sizes = []
+    for start in bm.verts:
+        if island[start.index] >= 0:
+            continue
+        stack, size = [start], 0
+        island[start.index] = len(sizes)
+        while stack:
+            vertex = stack.pop()
+            size += 1
+            for edge in vertex.link_edges:
+                other = edge.other_vert(vertex)
+                if island[other.index] < 0:
+                    island[other.index] = len(sizes)
+                    stack.append(other)
+        sizes.append(size)
+    if len(sizes) > 1:
+        largest = sizes.index(max(sizes))
+        bmesh.ops.delete(bm, geom=[v for v in bm.verts if island[v.index] != largest], context="VERTS")
+        bm.to_mesh(obj.data)
+        obj.data.update()
+    bm.free()
+    return len(sizes) - 1
+
+
+def weights_from_proxy(body, rig, voxel_m: float, work_size_m: float = 3.0) -> dict:
+    """Heat weights on a closed voxel remesh of ``body``, moved to ``body``; returns what happened.
+
+    The heat weighting also fails on a small mesh with many faces: a 0.3 m figure with 2 mm
+    faces has no solution, and the same mesh ten times larger has one. So the proxy and a
+    copy of the armature are weighted at ``work_size_m`` (largest dimension), and the proxy
+    goes back to its size for the transfer.
+    """
+    proxy = body.copy()
+    proxy.data = body.data.copy()
+    proxy.name = "WeightProxy"
+    bpy.context.scene.collection.objects.link(proxy)
+    proxy.parent = None
+    proxy.matrix_world = body.matrix_world.copy()
+    proxy.vertex_groups.clear()
+    for modifier in list(proxy.modifiers):
+        proxy.modifiers.remove(modifier)
+    activate(proxy)
+    proxy.data.remesh_voxel_size = voxel_m
+    bpy.ops.object.voxel_remesh()
+    removed = keep_largest_island(proxy)
+    helper = rig.copy()
+    helper.data = rig.data.copy()
+    helper.name = "WeightProxyRig"
+    bpy.context.scene.collection.objects.link(helper)
+    factor = max(1.0, work_size_m / max(max(body.dimensions), 1e-9))
+    bpy.ops.object.select_all(action="DESELECT")
+    for obj in (proxy, helper):
+        obj.matrix_world = Matrix.Scale(factor, 4) @ obj.matrix_world
+        obj.select_set(True)
+    bpy.context.view_layer.objects.active = helper
+    bpy.ops.object.transform_apply(location=True, rotation=True, scale=True)
+    bpy.ops.object.parent_set(type="ARMATURE_AUTO")
+    failed = unweighted_fraction(proxy)
+    report = {"voxel_m": voxel_m, "proxy_vertices": len(proxy.data.vertices), "proxy_islands_removed": removed,
+              "weighted_at_scale": round(factor, 3), "proxy_unweighted_fraction": round(failed, 4), "used": failed < 0.5}
+    if report["used"]:
+        for modifier in list(proxy.modifiers):
+            proxy.modifiers.remove(modifier)
+        proxy.parent = None
+        proxy.matrix_world = Matrix.Scale(1.0 / factor, 4)       # its vertices were scaled; back to the size of the body
+        bpy.context.view_layer.update()
+        body.vertex_groups.clear()
+        for group in proxy.vertex_groups:                # the same names; the modifier fills them
+            body.vertex_groups.new(name=group.name)
+        activate(body)
+        transfer = body.modifiers.new("WeightTransfer", "DATA_TRANSFER")
+        transfer.object = proxy
+        transfer.use_object_transform = True
+        transfer.use_vert_data = True
+        transfer.data_types_verts = {"VGROUP_WEIGHTS"}
+        transfer.vert_mapping = "POLYINTERP_NEAREST"
+        transfer.layers_vgroup_select_src = "ALL"
+        transfer.layers_vgroup_select_dst = "NAME"
+        bpy.ops.object.modifier_move_to_index(modifier=transfer.name, index=0)
+        bpy.ops.object.modifier_apply(modifier=transfer.name)
+    helper_data = helper.data
+    bpy.data.objects.remove(proxy, do_unlink=True)
+    bpy.data.objects.remove(helper, do_unlink=True)
+    bpy.data.armatures.remove(helper_data)
+    return report
 
 
 def main() -> None:
@@ -65,6 +174,12 @@ def main() -> None:
         raise RuntimeError("Automatic armature parenting did not install a skinning modifier")
     for modifier in modifiers:
         modifier.use_deform_preserve_volume = bool(args.get("preserve_volume", False))
+
+    proxy = None
+    heat_failed = unweighted_fraction(body)
+    if heat_failed > 0.01 and args.get("proxy_weights", True):
+        proxy = weights_from_proxy(body, rig, float(args.get("proxy_voxel_m") or max(body.dimensions) / 150))
+        proxy["heat_unweighted_fraction"] = round(heat_failed, 4)
 
     activate(body)
     bpy.ops.object.vertex_group_limit_total(group_select_mode="ALL", limit=MAX_INFLUENCES)
@@ -134,7 +249,12 @@ def main() -> None:
     if fallback > 0.01:
         warnings.append(f"Heat weighting failed for {fallback:.0%} of vertices; they use nearest-bone weights. "
                         "Check that the mesh is one closed surface.")
+    if proxy and proxy["used"]:
+        warnings.append("Heat weighting had no solution on the mesh itself (separate parts, or small faces). The "
+                        f"weights come from a closed voxel proxy ({proxy['voxel_m'] * 1000:.1f} mm). Parts that touch "
+                        "(a tail on a back) share weights there.")
     write_report(output, {"mesh": mesh_stats(body), "bones": len(bones), "vertices_given_nearest_bone": fixed,
+                          "proxy_weights": proxy,
                           "nearest_bone_fraction": round(fallback, 4), "warnings": warnings,
                           "bones_without_weights": empty_bones, "max_influences": MAX_INFLUENCES, "preserve_volume": bool(args.get("preserve_volume", False)),
                           "rom_deg": math.degrees(angle), "range_of_motion": rom, "worst_volume_change": worst,

@@ -769,6 +769,27 @@ class JointsAndAssemblyTests(SharedSet):
         broken["bones"][1]["parent"] = "nothing"
         with self.assertRaises(ValueError):
             validate_joints(broken)
+        # A large head: the arms leave the body far below 55% of the height. The shoulder follows the arm.
+        pieces = [ellipsoid_mesh(centre=(0, 0, .6), radii=(.22, .2, .4), subdivisions=4)]
+        for sign in (1, -1):
+            pieces.append(ellipsoid_mesh(centre=(sign * .1, 0, .15), radii=(.06, .07, .15), subdivisions=4))   # a leg
+            arm = ellipsoid_mesh(centre=(0, 0, 0), radii=(.16, .03, .03), subdivisions=3)
+            a = np.radians(30 * sign)                                 # the hand lower than the shoulder
+            turn = np.array([[np.cos(a), 0, np.sin(a)], [0, 1, 0], [-np.sin(a), 0, np.cos(a)]])
+            pieces.append(Mesh(arm.vertices @ turn.T + [sign * .3, 0, .3], arm.faces))
+        offsets = np.cumsum([0] + [len(m.vertices) for m in pieces[:-1]])
+        chibi = Mesh(np.concatenate([m.vertices for m in pieces]),
+                     np.concatenate([m.faces + start for m, start in zip(pieces, offsets)]))
+        low = estimate_joints(chibi, 1.0)
+        validate_joints(low)
+        for side, sign in (("L", 1), ("R", -1)):
+            shoulder, hand = np.array(low["joints"][f"shoulder.{side}"]), np.array(low["joints"][f"hand.{side}"])
+            self.assertLess(shoulder[2], 0.45, "not at 55% of the height, where the head is")
+            self.assertGreater(shoulder[2], hand[2])
+            along = (shoulder - hand) / np.linalg.norm(shoulder - hand)
+            self.assertGreater(abs(along @ [np.cos(np.radians(30)) * -sign, 0, np.sin(np.radians(30))]), 0.95, "along the arm")
+        given = estimate_joints(chibi, 1.0, {"shoulder": 0.5})
+        self.assertAlmostEqual(given["joints"]["shoulder.L"][2], 0.5, msg="a given landmark is kept")
         short = Mesh(mesh.vertices * [1, 1, 0.93], mesh.faces)        # 7% shorter than the drawing: below the drawn crown
         validate_joints(estimate_joints(short, HEIGHT_M))
         self.assertLessEqual(estimate_joints(short, HEIGHT_M)["joints"]["head_top"][2], 0.93 * HEIGHT_M + 1e-9)
