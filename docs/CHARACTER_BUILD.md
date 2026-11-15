@@ -55,6 +55,7 @@ or newer. The other commands need only NumPy, SciPy, scikit-image and Pillow.
 | Parts | `cut-part body/low.obj arm/arm --output body_cut.obj` | The body without the faces that a separate part replaces |
 | Parts | `mirror-part arm/low.obj --output arm_R.obj` | The same part on the other side of the character |
 | Parts | `smooth-part body/low.obj flaps/flaps --output body_s.obj` | A crumpled thin sheet smoothed under the masks of a part |
+| Parts | `plate-part flap/flap --anchor body.obj --outside body.obj --output flap.obj` | A thin sheet as a plate with the outline of its drawing |
 | Parts | `seat-part body.ply bag/low.obj --metres-per-px 0.00032 --output bag.obj` | A part moved out of the body that it hangs on, as one rigid piece |
 | Parts | `join-parts a/low.obj:a.png b/low.obj:b.png --output joined/` | One mesh and one texture from placed, textured parts |
 | Fit | `fit HANDOFF mesh.ply --lattice auto` | Lattice deformation for detailed generator meshes. A finer lattice is kept only if it does no harm |
@@ -513,6 +514,35 @@ Fit the body only to drawings that agree: `fit ... --views front left back`. One
 
 Start the part at a line that hides the joint. Pip's forearm starts inside the
 rolled cuff of the sleeve.
+
+### A thin sheet: a skin flap, a fin
+
+A generator makes a thin sheet badly. The skin between Pip's arm and body came out
+a third as wide as it is drawn. A sheet that one drawing shows face-on needs no
+generator:
+
+```bash
+# 1. Mark the sheet in the drawings (front and back), in a handoff without the arm.
+kumiki-character-build box-part arms/rest --name flap --polygon front:... --polygon back:... --output flapL/
+# 2. A plate with the outline of the drawing, for what the body lacks.
+kumiki-character-build plate-part flapL/flap --anchor body/low.obj --anchor arm/low.obj \
+  --outside body/low.obj --overlap-px 14 --thickness-mm 2.5 --output flapL/plate.obj
+# 3. Both sides of the plate take their colours from the front and the back drawing.
+kumiki-character-build texture flapL/flap flapL/plate.obj --size 512 --output flapL/plate.png
+```
+
+- Each cell of the mask (1.3 mm for a 0.32 m figure) becomes a square of the plate.
+  The outline is smoothed.
+- `--anchor` gives the meshes that the sheet hangs between. The plate lies in the
+  plane that fits them best where the sheet is. Repeat the option.
+- `--outside BODY` makes only what lies outside the silhouette of the body, and a
+  band of `--overlap-px` inside it. Where the two outlines differ by a pixel or
+  two, nothing is added.
+- The side toward the camera has the left half of the texture, and the other
+  side the right half. The rim takes the colour just inside the outline.
+
+Add the plate to `join-parts` as a part. On Pip, the flaps now reach from the hip to
+the wrist, as in the front and back drawings.
 
 ## Eyes as separate eyeballs
 

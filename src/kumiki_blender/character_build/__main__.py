@@ -641,6 +641,18 @@ def main(argv: list[str] | None = None) -> int:
                    help="what stays: 0.1 removes fine wrinkles only; 0.01, with more rounds, also waves of several faces")
     p.add_argument("--grow-px", type=float, default=0.0, help="smooth this far around the part's masks (aligned px)")
 
+    p = sub.add_parser("plate-part", help="a thin sheet (a skin flap, a fin) as a plate with the outline of its drawing")
+    p.add_argument("handoff", type=Path, help="the part's handoff from `box-part` or `split-views`")
+    p.add_argument("--output", type=Path, required=True, help=".obj with UVs; bake it with `texture HANDOFF plate.obj`")
+    p.add_argument("--view", default="front", help="the level view that shows the sheet face-on")
+    p.add_argument("--thickness-mm", type=float, default=3.0)
+    p.add_argument("--anchor", type=Path, action="append", default=[],
+                   help="a mesh that the sheet hangs on (the body, an arm): the plate lies in the plane that fits "
+                        "them where the sheet is; repeat")
+    p.add_argument("--outside", type=Path,
+                   help="the body mesh: make only what lies outside its silhouette, and --overlap-px inside it")
+    p.add_argument("--overlap-px", type=float, default=12.0)
+
     p = sub.add_parser("mirror-part", help="the same part on the other side of the character")
     p.add_argument("mesh", type=Path, help="the placed part (.obj with UVs)")
     p.add_argument("--output", type=Path, required=True, help=".obj; it uses the same texture")
@@ -1580,6 +1592,37 @@ def _run(args) -> int:
 
         report = detail_views(args.handoff, args.output, _LocalComfyClient(args.server), part=args.part,
                               subject=args.subject, detail=args.detail, size=args.size, steps=args.steps)
+        print(json.dumps(report, indent=2))
+        return 0
+    if args.command == "plate-part":
+        import numpy as np
+
+        from .handoff import reference_masks
+        from .mesh import Mesh, read_mesh
+        from .part_place import plate_part, write_obj_uv
+        from .texture import read_obj_uv
+
+        def any_mesh(path: Path) -> Mesh:
+            return read_obj_uv(path)[0] if path.suffix.lower() == ".obj" else read_mesh(path)
+
+        _new_file(args.output)
+        masks = reference_masks(args.handoff, 0.25)
+        if args.view not in masks:
+            raise SystemExit(f"error: the handoff has no {args.view} drawing of the part (it has {sorted(masks)})")
+        anchor = None
+        if args.anchor:
+            loaded = [any_mesh(path) for path in args.anchor]
+            start, vertices, faces = 0, [], []
+            for mesh in loaded:
+                vertices.append(mesh.vertices)
+                faces.append(mesh.faces + start)
+                start += len(mesh.vertices)
+            anchor = Mesh(np.concatenate(vertices), np.concatenate(faces))
+        plate, plate_uv, report = plate_part(masks[args.view], _spec(args.handoff)["metres_per_aligned_px"],
+                                             view=args.view, thickness_m=args.thickness_mm / 1000, anchor=anchor,
+                                             outside=any_mesh(args.outside) if args.outside else None,
+                                             overlap_px=args.overlap_px)
+        write_obj_uv(plate, plate_uv, args.output, comment=f"plate from the {args.view} drawing")
         print(json.dumps(report, indent=2))
         return 0
     if args.command in ("cut-part", "mirror-part", "smooth-part"):

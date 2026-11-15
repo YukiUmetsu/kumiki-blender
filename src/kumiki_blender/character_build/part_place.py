@@ -411,6 +411,138 @@ def smooth_under(mesh: Mesh, masks: dict[str, np.ndarray], metres_per_px: float,
         "max_move_mm": round(float(moved.max() * 1000), 3)}
 
 
+def plate_part(mask: np.ndarray, metres_per_px: float, *, view: str = "front", scale: float = 0.25,
+               thickness_m: float = 0.003, anchor: Mesh | None = None, outside: Mesh | None = None,
+               overlap_px: float = 12.0, smooth: int = 3) -> tuple[Mesh, np.ndarray, dict]:
+    """A thin plate with the outline of ``mask``, its UVs for each face corner, and a short report.
+
+    A generator makes a thin sheet badly: the skin between Pip's arm and body came out a
+    third as wide as it is drawn. A sheet that one drawing shows face-on needs no
+    generator. ``mask`` is its silhouette in the camera frame of ``view`` at ``scale``
+    (``handoff.reference_masks`` of a part handoff). Each mask cell becomes a square of the
+    plate, ``thickness_m`` thick, and the outline is smoothed ``smooth`` times.
+
+    The plate lies in the plane that fits ``anchor`` (the body and the parts beside it)
+    best where the mask is, so it meets the arm and the hip that it hangs between.
+    Without an anchor it lies in the plane through the origin. With ``outside`` (the
+    body), only the cells outside that mesh's silhouette are kept, and ``overlap_px``
+    aligned pixels inside it: the plate then adds what the body lacks. Where the two
+    outlines differ by a pixel or two, nothing is added.
+
+    UVs: the side toward the camera has the left half of the texture, the other side the
+    right half. ``texture`` bakes both from the drawings of the part handoff. The rim takes
+    the colour just inside the outline: the outline itself is pale, mixed with the
+    background of the drawing.
+    """
+    from .mesh import rasterize
+
+    look = camera(view)
+    if abs(look.toward[2]) > 1e-9:
+        raise ValueError("plate_part needs a level view")
+    keep = np.asarray(mask, dtype=bool).copy()
+    if outside is not None:
+        body, _ = rasterize(outside, look, metres_per_px, scale)
+        # What the body lacks: the mask outside its silhouette, without the slivers where two
+        # outlines differ by a pixel or two, and without specks.
+        lacking = ndimage.binary_opening(keep & ~body, iterations=max(1, round(4 * scale)))
+        labels, count = ndimage.label(lacking)
+        if count > 1:
+            sizes = ndimage.sum_labels(lacking, labels, range(1, count + 1))
+            lacking = np.isin(labels, 1 + np.nonzero(sizes >= 0.1 * sizes.max())[0])
+        band = max(1, round(overlap_px * scale))
+        reach = ndimage.binary_dilation(lacking, iterations=band + max(1, round(4 * scale))) if lacking.any() else lacking
+        inner = ndimage.binary_erosion(body, iterations=band) if overlap_px > 0 else body
+        keep &= reach & ~inner
+    if not keep.any():
+        raise ValueError("No cell of the mask is left for the plate")
+    rows, cols = np.nonzero(keep)
+    grid = np.full((keep.shape[0] + 1, keep.shape[1] + 1), -1)
+    corners = np.unique(np.concatenate([np.column_stack([rows + dr, cols + dc]) for dr in (0, 1) for dc in (0, 1)]), axis=0)
+    grid[corners[:, 0], corners[:, 1]] = np.arange(len(corners))
+    a, b, c, d = grid[rows, cols], grid[rows, cols + 1], grid[rows + 1, cols + 1], grid[rows + 1, cols]
+    quads = np.column_stack([a, b, c, d])
+    flat = corners.astype(np.float64)                   # (row, col) of each corner, in mask cells
+    edges = np.concatenate([quads[:, [0, 1]], quads[:, [1, 2]], quads[:, [2, 3]], quads[:, [3, 0]]])
+    ordered, times = np.unique(np.sort(edges, axis=1), axis=0, return_counts=True)
+    rim = ordered[times == 1]
+    on_rim = np.zeros(len(corners), bool)
+    on_rim[rim.ravel()] = True
+    for _ in range(max(0, smooth)):                     # the staircase of the cells, rounded off
+        total, number = np.zeros_like(flat), np.zeros(len(flat))
+        for first, second in ((0, 1), (1, 0)):
+            np.add.at(total, rim[:, first], flat[rim[:, second]])
+            np.add.at(number, rim[:, first], 1)
+        move = on_rim & (number >= 2)
+        flat[move] = 0.5 * flat[move] + 0.5 * total[move] / number[move, None]
+        shift = flat - corners                          # at most a third of a cell, so that no face turns over
+        length = np.linalg.norm(shift, axis=1)
+        far = length > 0.33
+        flat[far] = corners[far] + shift[far] * (0.33 / length[far])[:, None]
+    u = (flat[:, 1] / scale - CX) * metres_per_px
+    z = (BASELINE - flat[:, 0] / scale) * metres_per_px
+    depth, fitted = np.zeros(len(flat)), False
+    if anchor is not None:
+        col, row, reach = look.project(anchor.vertices, metres_per_px, scale)
+        near_mask = ndimage.binary_dilation(keep, iterations=max(1, round(8 * scale)))
+        ci, ri = np.floor(col).astype(int), np.floor(row).astype(int)
+        ok = (ci >= 0) & (ci < keep.shape[1]) & (ri >= 0) & (ri < keep.shape[0])
+        ok[ok] = near_mask[ri[ok], ci[ok]]
+        if ok.sum() >= 3:
+            au, az = anchor.vertices[ok] @ look.right, anchor.vertices[ok][:, 2]
+            design = np.column_stack([au, az, np.ones(ok.sum())])
+            plane = np.linalg.lstsq(design, reach[ok], rcond=None)[0]
+            slope = np.clip(plane[:2], -0.6, 0.6)       # near to face-on: the sheet is drawn in this view
+            offset = float(np.median(reach[ok] - design[:, :2] @ slope))
+            depth, fitted = u * slope[0] + z * slope[1] + offset, True
+    centre = np.outer(u, look.right) + np.outer(depth, look.toward)
+    centre[:, 2] += z
+    half = 0.5 * thickness_m * look.toward
+    count = len(corners)
+    vertices = np.concatenate([centre + half, centre - half])
+    front = np.concatenate([quads[:, [0, 1, 2]], quads[:, [0, 2, 3]]])
+    normal = np.cross(vertices[front[0, 1]] - vertices[front[0, 0]], vertices[front[0, 2]] - vertices[front[0, 0]])
+    if normal @ look.toward < 0:
+        front = front[:, [0, 2, 1]]
+    back = front[:, [0, 2, 1]] + count
+    # The rim: two triangles for each open edge. Of the two ways to wind them, the right one gives
+    # the solid its volume (area times thickness).
+    code = np.sort(edges, axis=1) @ np.array([count, 1])
+    directed = edges[np.isin(code, rim @ np.array([count, 1]))]
+    wall = np.concatenate([np.column_stack([directed[:, 1], directed[:, 0], directed[:, 0] + count]),
+                           np.column_stack([directed[:, 1], directed[:, 0] + count, directed[:, 1] + count])])
+    local = vertices - vertices.mean(axis=0)
+
+    def volume(triangles: np.ndarray) -> float:
+        return float(np.einsum("ij,ij->i", local[triangles[:, 0]],
+                               np.cross(local[triangles[:, 1]], local[triangles[:, 2]])).sum() / 6)
+
+    sides = volume(np.concatenate([front, back]))
+    cell = (metres_per_px / scale) ** 2
+    wanted = float(keep.sum()) * cell * thickness_m
+    if abs(sides + volume(wall[:, [0, 2, 1]]) - wanted) < abs(sides + volume(wall) - wanted):
+        wall = wall[:, [0, 2, 1]]
+    faces = np.concatenate([front, back, wall])
+    span = np.maximum(corners.max(axis=0) - corners.min(axis=0), 1).astype(np.float64)
+    uv_front = np.column_stack([0.02 + 0.46 * (flat[:, 1] - corners[:, 1].min()) / span[1],
+                                0.98 - 0.96 * (flat[:, 0] - corners[:, 0].min()) / span[0]])
+    uv = np.concatenate([uv_front, uv_front + [0.5, 0.0]])
+    corner_uv = uv[faces]
+    # The rim takes the colour just inside the outline, on the side toward the camera (the fourth
+    # nearest inner corner). With its own corners in both halves of the texture, each rim triangle
+    # would cross the whole texture.
+    inward = np.arange(count)
+    interior = np.nonzero(~on_rim)[0]
+    if len(interior):
+        from scipy.spatial import cKDTree
+
+        inward[on_rim] = interior[cKDTree(flat[interior]).query(flat[on_rim], k=min(4, len(interior)))[1].reshape(
+            int(on_rim.sum()), -1)[:, -1]]
+    corner_uv[len(front) + len(back):] = uv_front[inward[wall % count]]
+    mesh = Mesh(vertices, faces)
+    return mesh, corner_uv, {"cells": int(keep.sum()), "faces": int(len(faces)), "depth_from_anchor": fitted,
+                             "area_cm2": round(float(keep.sum()) * (metres_per_px / scale) ** 2 * 1e4, 2)}
+
+
 def mirror_part(mesh: Mesh, corner_uv: np.ndarray | None, mid_x: float = 0.0, *, anchor: Mesh | None = None
                 ) -> tuple[Mesh, np.ndarray | None]:
     """The part on the other side of the character (x -> 2 mid_x - x), with the same texture.
