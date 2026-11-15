@@ -56,6 +56,7 @@ or newer. The other commands need only NumPy, SciPy, scikit-image and Pillow.
 | Parts | `mirror-part arm/low.obj --output arm_R.obj` | The same part on the other side of the character |
 | Parts | `smooth-part body/low.obj flaps/flaps --output body_s.obj` | A crumpled thin sheet smoothed under the masks of a part |
 | Parts | `plate-part flap/flap --anchor body.obj --outside body.obj --output flap.obj` | A thin sheet as a plate with the outline of its drawing |
+| Parts | `shift-part body/low.obj armL/armL --move-mm 0,16.5,0 --output body_s.obj` | A limb moved to the depth that a drawing shows |
 | Parts | `seat-part body.ply bag/low.obj --metres-per-px 0.00032 --output bag.obj` | A part moved out of the body that it hangs on, as one rigid piece |
 | Parts | `join-parts a/low.obj:a.png b/low.obj:b.png --output joined/` | One mesh and one texture from placed, textured parts |
 | Fit | `fit HANDOFF mesh.ply --lattice auto` | Lattice deformation for detailed generator meshes. A finer lattice is kept only if it does no harm |
@@ -343,12 +344,47 @@ Pip's scarf as a thin fin on the shoulder. Without the scarf end in the back
 drawing, the fin took the colour of the sleeve and looked torn. Look at the
 bare shape before you cut something from a drawing.
 
-A drawing can show a limb at another depth than the model has it. Pip's side
-drawing has the arm 50 pixels behind the arm of the model. The drawing then paints
-the vest on the arm of the model, and the arm on the vest. Cut both places from
-that drawing: the drawn limb, and the place where the limb of the model is
-(`box-part HANDOFF --name limb --box left:...`, then bake from `rest/`). The other
-drawings and the fill paint them.
+**A limb at another depth than a drawing shows it.**
+
+Pip's side drawing has the arm 50 pixels (16 mm) behind the left arm of the model. The drawing then paints the
+vest on the arm of the model, and the arm on the vest. The front and back drawings
+cannot show this fault: they look along the depth. Overlay the outline of the limb
+on the side drawing to find it.
+
+Move the limb of the model. Do not cut the drawing to hide the fault. An earlier
+Pip model had the whole arm area cut from the side drawing. The side of the vest
+was then a fill colour, without its pocket and its seams.
+
+```bash
+# 1. Mark the whole limb, from where it leaves the body, in the front and back drawings.
+kumiki-character-build box-part HANDOFF --name armL --box front:... --box back:... --output armL/
+# 2. Move it. +Y is toward the back of the character.
+kumiki-character-build shift-part body/low.obj armL/armL --move-mm 0,16.5,0 --output body_s.obj
+```
+
+The limb keeps its shape. The move fades over `--fade` rings of vertices on the
+body, and the faces that it pushed together there are spread again. The faces and
+the UVs stay. Move a part that is modelled alone (a forearm) by the same vector.
+
+A drawing still shows two things that the body must not take from it:
+
+- What lies in front of the body in the drawing and is a part of its own (the
+  forearm, the hand). Cut it out with `box-part --polygon`.
+- The place where a thin part of the model shows. Seen from the side, the skin flap
+  of Pip's model lies in front of the vest of the side drawing. Cut out the pixels
+  where the model's flap is the nearest surface:
+
+```bash
+kumiki-character-build box-part HANDOFF --name modelflap --where-mesh body_s.obj \
+  --under flaps/flaps --in-views left,right --output cut/
+```
+
+`--in-views` takes a side without a drawing too. Its pixels go, mirrored, to the
+drawing of the other side, because the mirror image of that drawing paints it.
+
+On Pip, the side of the vest now has its pocket, its buttons and its hem, and the
+sleeve hangs where the drawing has it. Median colour error of the side view: 6.0 to
+5.5 delta E.
 
 Limits:
 

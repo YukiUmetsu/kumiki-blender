@@ -481,6 +481,55 @@ class SmallPartTests(unittest.TestCase):
         far, _, _ = cut_under(body, None, masks, self.PX, join=[Mesh(small.vertices + [0, 0.2, 0], small.faces)], smooth=0)
         np.testing.assert_array_equal(far.vertices, open_cut.vertices)       # a part out of reach moves nothing
 
+    def test_a_limb_at_the_wrong_depth_is_moved_and_stays_joined(self):
+        from kumiki_blender.character_build.part_place import shift_under
+        body, hand = self.body_and_hand()                            # the arm along X; the hand marks its end
+        masks = {name: rasterize(hand, camera(name), self.PX, 0.25)[0] for name in ("front", "back")}
+        moved, report = shift_under(body, masks, self.PX, (0.0, 0.016, 0.0), fade=6)
+        np.testing.assert_array_equal(moved.faces, body.faces)
+        shift = moved.vertices - body.vertices
+        end, far = body.vertices[:, 0] > 0.11, body.vertices[:, 0] < 0.0
+        self.assertLess(float(np.abs(shift[end] - np.array([0.0, 0.016, 0.0])).max()), 1e-9, "the limb keeps its shape")
+        self.assertEqual(float(np.abs(shift[far]).max()), 0.0, "the rest of the body stays")
+        between = (shift[:, 1] > 1e-4) & (shift[:, 1] < 0.016 - 1e-4)
+        self.assertGreater(between.sum(), 10, "the move fades over the rings around the region")
+        self.assertGreaterEqual(report["vertices_in_region"], int(end.sum()))
+        edge = lambda mesh: np.linalg.norm(mesh.vertices[mesh.faces[:, 0]] - mesh.vertices[mesh.faces[:, 1]], axis=1)
+        self.assertLess((edge(moved) / edge(body)).max(), 3.0, "no edge is torn")
+        same, _ = shift_under(body, {"front": np.zeros_like(masks["front"])}, self.PX, (0.0, 0.016, 0.0))
+        np.testing.assert_array_equal(same.vertices, body.vertices)
+
+    def test_the_place_of_the_models_limb_is_cut_from_a_drawing(self):
+        """Seen from the side, the end of the model's arm lies where the drawing shows something else."""
+        from kumiki_blender.character_build import split_views as S
+        from kumiki_blender.character_build.part_place import shows_under
+        body, hand = self.body_and_hand()
+        masks = {name: rasterize(hand, camera(name), self.PX, 0.25)[0] for name in ("front", "back")}
+        shown = shows_under(body, masks, "left", self.PX, grow_px=0)
+        self.assertEqual(shown.shape, (1200, 1600))
+        rows, cols = np.nonzero(shown)
+        self.assertAlmostEqual(float(cols.mean()), 800 + 0.01 / self.PX, delta=6)      # the arm is at y = 1 cm
+        self.assertAlmostEqual(float(rows.mean()), 1100 - 0.16 / self.PX, delta=6)
+        self.assertLess(np.ptp(cols), 2 * 0.03 / self.PX, "the end of the arm, not all of it")
+        wider = shows_under(body, masks, "left", self.PX, grow_px=6)
+        self.assertGreater(wider.sum(), shown.sum())
+        self.assertFalse(shows_under(body, {"front": np.zeros_like(masks["front"])}, "left", self.PX).any())
+        # box_part takes such a mask in the aligned frame and cuts it from the drawing, whatever the drawing's own frame.
+        maps = {"left": {"left": 20, "top": 10, "scale": 2.0, "x0": 600, "y0": 300, "shift_px": 0}}
+        spec = {"schema_version": 1, "height_m": 0.32, "metres_per_aligned_px": self.PX, "views": ["left"], "raw": maps}
+        drawing = np.zeros((300, 300, 4), np.uint8)
+        drawing[...] = (*SKIN, 255)
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            S.write_handoff(root / "in", spec, {"left": drawing}, "side")
+            S.box_part(root / "in", root / "out", name="limb", aligned_masks={"left": shown})
+            with Image.open(root / "out" / "rest" / "raw" / "left.png") as picture:
+                hole = np.asarray(picture)[..., 3] < 128
+        rows, cols = np.nonzero(hole)
+        self.assertAlmostEqual(hole.sum(), shown.sum() / 4, delta=0.15 * shown.sum() / 4)   # at half the size
+        self.assertAlmostEqual(float(cols.mean()), (800 + 0.01 / self.PX - 600) / 2 + 20, delta=4)
+        self.assertAlmostEqual(float(rows.mean()), (1100 - 0.16 / self.PX - 300) / 2 + 10, delta=4)
+
     def test_a_thin_sheet_is_a_plate_with_the_outline_of_its_drawing(self):
         from kumiki_blender.character_build.part_place import plate_part
         body, _ = self.body_and_hand()                               # an arm along X at y = 1 cm, z = 16 cm
