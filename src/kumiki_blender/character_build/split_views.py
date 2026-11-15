@@ -152,6 +152,17 @@ def to_aligned(rgba: np.ndarray, raw_map: dict) -> Image.Image:
     return Image.fromarray(rgba).transform((CANVAS_W, CANVAS_H), Image.AFFINE, coefficients, Image.BILINEAR)
 
 
+def from_aligned(mask: np.ndarray, raw_map: dict, shape: tuple[int, int]) -> np.ndarray:
+    """A mask of the aligned frame in the pixel frame of a drawing (height, width)."""
+    rows, cols = np.mgrid[:shape[0], :shape[1]]
+    u = np.floor((cols + 0.5 - raw_map["left"]) * raw_map["scale"] + raw_map["x0"] - raw_map.get("shift_px", 0)).astype(int)
+    v = np.floor((rows + 0.5 - raw_map["top"]) * raw_map["scale"] + raw_map["y0"]).astype(int)
+    ok = (u >= 0) & (u < mask.shape[1]) & (v >= 0) & (v < mask.shape[0])
+    result = np.zeros(shape, dtype=bool)
+    result[ok] = mask[v[ok], u[ok]]
+    return result
+
+
 def write_handoff(root: Path, spec: dict, images: dict[str, np.ndarray], note: str) -> None:
     """A handoff in the character's frame from drawing-frame RGBA images (alpha marks the figure)."""
     for folder in ("raw", "masks", "aligned"):
@@ -293,7 +304,8 @@ def region_mask(shape: tuple[int, int], boxes: list[tuple[int, int, int, int]],
 def box_part(handoff: Path, out: Path, *, name: str, boxes: dict[str, list[tuple[int, int, int, int]]] | None = None,
              polygons: dict[str, list[list[tuple[int, int]]]] | None = None,
              colours: list[tuple[int, int, int]] | None = None, delta_e: float = 25.0, close_px: int = 3,
-             min_share: float = 0.05, open_px: int = 0, like: Path | None = None) -> dict:
+             min_share: float = 0.05, open_px: int = 0, like: Path | None = None,
+             aligned_masks: dict[str, np.ndarray] | None = None) -> dict:
     """Split off the part of each drawing that lies inside boxes or polygons; no image editor.
 
     ``boxes`` gives, for each view, one or more (x0, y0, x1, y1) in the pixels of
@@ -312,6 +324,10 @@ def box_part(handoff: Path, out: Path, *, name: str, boxes: dict[str, list[tuple
     removes a fringe, so leave it at 0 for a scarf. With colours and no box for a view,
     the whole drawing is searched.
 
+    ``aligned_masks`` gives, for a view, a mask in the aligned frame of the character
+    (1600 x 1200). Its pixels are added to the boxes and polygons of that view. Use it for
+    a region that comes from the model, not from the drawing (``part_place.shows_under``).
+
     ``like`` is a part handoff of the same drawings (from ``split_views`` or this function).
     Its pixels are the part: this takes a part out of another handoff of the character,
     one that an earlier step changed.
@@ -319,8 +335,8 @@ def box_part(handoff: Path, out: Path, *, name: str, boxes: dict[str, list[tuple
     spec = json.loads((handoff / "spec.json").read_text(encoding="utf-8"))
     if not name.replace("-", "").replace("_", "").isalnum() or name in ("rest", "edits"):
         raise ValueError(f"Not a usable folder name for the part: {name!r}")
-    boxes, polygons = boxes or {}, polygons or {}
-    unknown = sorted((set(boxes) | set(polygons)) - set(spec["views"]))
+    boxes, polygons, aligned_masks = boxes or {}, polygons or {}, aligned_masks or {}
+    unknown = sorted((set(boxes) | set(polygons) | set(aligned_masks)) - set(spec["views"]))
     if unknown:
         raise ValueError(f"The handoff has no drawing for {unknown}")
     wanted = lab(np.asarray(colours, dtype=np.uint8).reshape(-1, 3)) if colours else None
@@ -332,13 +348,15 @@ def box_part(handoff: Path, out: Path, *, name: str, boxes: dict[str, list[tuple
             continue
         with Image.open(path) as picture:
             original = np.asarray(picture.convert("RGBA"))
-        outlined = view in boxes or view in polygons
+        outlined = view in boxes or view in polygons or view in aligned_masks
         other = like / "raw" / f"{view}.png" if like else None
         if not outlined and not (other and other.is_file()) and (wanted is None or boxes or polygons):
             rest_images[view] = original
             continue
         inside = region_mask(original.shape[:2], boxes.get(view, []), polygons.get(view, [])) if outlined \
             else np.ones(original.shape[:2], bool)
+        if view in aligned_masks:
+            inside |= from_aligned(np.asarray(aligned_masks[view], dtype=bool), spec["raw"][view], original.shape[:2])
         if other and other.is_file():
             if like_spec["raw"].get(view) != spec["raw"][view]:
                 raise ValueError(f"{like} has another frame for the {view} drawing than {handoff}")
@@ -382,7 +400,7 @@ def box_part(handoff: Path, out: Path, *, name: str, boxes: dict[str, list[tuple
                      "boxes": [list(map(int, box)) for box in boxes.get(view, [])],
                      "polygons": [[[int(x), int(y)] for x, y in outline] for outline in polygons.get(view, [])]})
     if not part_images:
-        raise ValueError("Give at least one box or polygon, colours, or a part handoff")
+        raise ValueError("Give at least one box, polygon or mask, colours, or a part handoff")
     write_handoff(out / name, spec, part_images, f"{name}: the figure inside boxes and polygons")
     write_handoff(out / "rest", spec, rest_images, f"without {name}: a hole where it was")
     report = {"schema_version": 1, "name": name, "views": rows,

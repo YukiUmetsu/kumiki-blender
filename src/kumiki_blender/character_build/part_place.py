@@ -370,6 +370,31 @@ def _under_masks(points: np.ndarray, masks: dict[str, np.ndarray], metres_per_px
     return np.logical_and.reduce(list(along.values())) if along else np.zeros(len(points), bool)
 
 
+def shows_under(mesh: Mesh, masks: dict[str, np.ndarray], view: str, metres_per_px: float, *, scale: float = 0.25,
+                grow_px: float = 6.0, depth_tolerance_m: float = 0.0015) -> np.ndarray:
+    """Where the mesh under a part's masks shows in ``view``: a mask in the aligned frame (full size).
+
+    A drawing can show a limb at another place than the model has it. Seen from the side,
+    the skin flap of Pip's model lies in front of the vest of the side drawing, and the bake
+    paints it green. The pixels of that drawing where the model's limb is the nearest
+    surface must not paint: cut them out with ``split_views.box_part(aligned_masks=...)``.
+    The faces are those under ``masks`` (as for ``cut_under``); the result is grown by
+    ``grow_px`` aligned pixels.
+    """
+    from .mesh import rasterize
+
+    centre = mesh.vertices[mesh.faces].mean(axis=1)
+    under = _under_masks(centre, masks, metres_per_px, scale, 0.0)
+    look = camera(view)
+    whole, nearest = rasterize(mesh, look, metres_per_px, 1.0)
+    if not under.any():
+        return np.zeros(whole.shape, dtype=bool)
+    part, depth = rasterize(Mesh(mesh.vertices, mesh.faces[under]), look, metres_per_px, 1.0)
+    front = part & (np.nan_to_num(depth, nan=-np.inf) >= np.nan_to_num(nearest, nan=np.inf) - depth_tolerance_m)
+    front = ndimage.binary_closing(front, iterations=3)
+    return ndimage.binary_dilation(front, iterations=max(1, round(grow_px))) if grow_px > 0 else front
+
+
 def smooth_under(mesh: Mesh, masks: dict[str, np.ndarray], metres_per_px: float, *, scale: float = 0.25,
                  grow_px: float = 0.0, rounds: int = 30, strength: float = 0.5, pass_band: float = 0.1,
                  fade: int = 4) -> tuple[Mesh, dict]:
@@ -409,6 +434,50 @@ def smooth_under(mesh: Mesh, masks: dict[str, np.ndarray], metres_per_px: float,
         "vertices_in_region": int(inside.sum()), "vertices_moved": int((moved > 1e-9).sum()),
         "mean_move_mm": round(float(moved[inside].mean() * 1000), 3) if inside.any() else 0.0,
         "max_move_mm": round(float(moved.max() * 1000), 3)}
+
+
+def shift_under(mesh: Mesh, masks: dict[str, np.ndarray], metres_per_px: float, move_m: tuple[float, float, float],
+                *, scale: float = 0.25, grow_px: float = 0.0, fade: int = 8, relax: int = 30) -> tuple[Mesh, dict]:
+    """The mesh with what lies under a part's masks moved by ``move_m``; the faces, and so the UVs, stay.
+
+    A generated body can hold a limb at another depth than a drawing shows it. Pip's left
+    arm was 16 mm further forward than the side drawing has it, and than the right arm.
+    The side drawing then painted the vest on the sleeve. The front and back drawings
+    cannot see such a fault: they look along the depth.
+
+    The vertices inside ``masks`` (as for ``cut_under``) move by the whole vector. Around
+    them the move fades to nothing over ``fade`` rings of vertices. Mark the whole limb, from
+    where it leaves the body: the fade then lies on the body, where the limb slides along
+    the surface, and the limb keeps its shape. Behind the limb the faces of the fade are
+    pushed together and fold. ``relax`` rounds of smoothing (as ``smooth_under``) on the
+    vertices of the fade spread them again.
+    """
+    count = len(mesh.vertices)
+    edges = np.unique(np.sort(np.concatenate([mesh.faces[:, [0, 1]], mesh.faces[:, [1, 2]], mesh.faces[:, [2, 0]]]),
+                              axis=1), axis=0)
+    link = sparse.coo_matrix((np.ones(len(edges) * 2), (np.concatenate([edges[:, 0], edges[:, 1]]),
+                                                        np.concatenate([edges[:, 1], edges[:, 0]]))),
+                             shape=(count, count)).tocsr()
+    inside = _under_masks(mesh.vertices, masks, metres_per_px, scale, grow_px)
+    rings = np.where(inside, 0.0, np.inf)               # rings of vertices away from the region
+    reached = inside.copy()
+    for ring in range(1, max(0, fade) + 1):
+        new = ((link @ reached.astype(np.float64)) > 0) & ~reached
+        rings[new] = ring
+        reached |= new
+    t = np.clip(1.0 - rings / (max(0, fade) + 1), 0.0, 1.0)
+    weight = t * t * (3 - 2 * t)                        # 1 in the region, 0 beyond the last ring, smooth between
+    vertices = mesh.vertices + weight[:, None] * np.asarray(move_m, dtype=np.float64)
+    between = ((weight > 0) & (weight < 1)).astype(np.float64)
+    if relax > 0 and between.any():
+        degree = np.maximum(np.asarray(link.sum(axis=1)).ravel(), 1)
+        mean = sparse.diags(1.0 / degree) @ link
+        for _ in range(relax):
+            for step in (0.5, -0.5 / (1 - 0.02 * 0.5)):          # Taubin, as smooth_under with a pass band of 0.02
+                vertices += (step * between)[:, None] * (mean @ vertices - vertices)
+    return Mesh(vertices, mesh.faces, mesh.colours), {
+        "vertices_in_region": int(inside.sum()), "vertices_moved": int((weight > 0).sum()),
+        "move_mm": [round(float(v) * 1000, 3) for v in move_m]}
 
 
 def plate_part(mask: np.ndarray, metres_per_px: float, *, view: str = "front", scale: float = 0.25,

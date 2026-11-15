@@ -608,6 +608,13 @@ def main(argv: list[str] | None = None) -> int:
                    help="with --colour: remove what is thinner than twice this (tufts on an edge; also a fringe)")
     p.add_argument("--like", type=Path,
                    help="a part handoff of the same drawings: its pixels are the part (to take it out of another handoff)")
+    p.add_argument("--where-mesh", type=Path, metavar="MESH",
+                   help="with --under and --in-views: add the pixels where this mesh, under the masks of a part, is the "
+                        "nearest surface (the model has a limb where the drawing shows something else)")
+    p.add_argument("--under", type=Path, metavar="PART_HANDOFF", help="the part whose masks mark the limb on --where-mesh")
+    p.add_argument("--in-views",
+                   help="comma-separated views to add those pixels to, e.g. left,right; a side without a drawing "
+                        "goes, mirrored, to the drawing of the other side")
     p.add_argument("--output", type=Path, required=True, help="folder for <name>/, rest/ and box.json")
 
     p = sub.add_parser("detail-part", help="enlarge and redraw the drawings of a small part (a hand), for shape and texture")
@@ -640,6 +647,15 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--pass-band", type=float, default=0.1,
                    help="what stays: 0.1 removes fine wrinkles only; 0.01, with more rounds, also waves of several faces")
     p.add_argument("--grow-px", type=float, default=0.0, help="smooth this far around the part's masks (aligned px)")
+
+    p = sub.add_parser("shift-part", help="move what lies under the masks of a part (a limb at the wrong depth)")
+    p.add_argument("mesh", type=Path, help="the mesh, e.g. the body's low.obj (faces and UVs are kept)")
+    p.add_argument("handoff", type=Path, help="a part handoff that marks the whole limb, from `box-part`")
+    p.add_argument("--move-mm", required=True, metavar="X,Y,Z",
+                   help="the move in millimetres; +Y is toward the back of the character, +X toward its left")
+    p.add_argument("--fade", type=int, default=8, help="rings of vertices around the region over which the move fades")
+    p.add_argument("--grow-px", type=float, default=0.0)
+    p.add_argument("--output", type=Path, required=True, help=".obj")
 
     p = sub.add_parser("plate-part", help="a thin sheet (a skin flap, a fin) as a plate with the outline of its drawing")
     p.add_argument("handoff", type=Path, help="the part's handoff from `box-part` or `split-views`")
@@ -1580,10 +1596,30 @@ def _run(args) -> int:
             if len(values) != 3 or not all(0 <= v <= 255 for v in values):
                 raise SystemExit(f"error: give each colour as R,G,B from 0 to 255, not {item!r}")
             colours.append(values)
-        boxes, polygons = _boxes_and_polygons(args.box, args.polygon, required=not (colours or args.like))
+        aligned = {}
+        if args.where_mesh or args.under or args.in_views:
+            if not (args.where_mesh and args.under and args.in_views):
+                raise SystemExit("error: give --where-mesh, --under and --in-views together")
+            from .handoff import reference_masks
+            from .mesh import read_mesh
+            from .part_place import shows_under
+            from .texture import read_obj_uv
+
+            mesh = read_obj_uv(args.where_mesh)[0] if args.where_mesh.suffix.lower() == ".obj" else read_mesh(args.where_mesh)
+            masks = reference_masks(args.under, 0.25)
+            drawn = _spec(args.handoff)["views"]
+            pairs = {"left": "right", "right": "left", "front_left": "front_right", "front_right": "front_left",
+                     "back_left": "back_right", "back_right": "back_left"}
+            for view in args.in_views.split(","):
+                shown = shows_under(mesh, masks, view, _spec(args.handoff)["metres_per_aligned_px"])
+                if view not in drawn and pairs.get(view) in drawn:
+                    # A side without a drawing is painted by the mirror image of the other side's drawing.
+                    view, shown = pairs[view], shown[:, ::-1]
+                aligned[view] = aligned[view] | shown if view in aligned else shown
+        boxes, polygons = _boxes_and_polygons(args.box, args.polygon, required=not (colours or args.like or aligned))
         print(json.dumps(box_part(args.handoff, _new_dir(args.output), name=args.name, boxes=boxes, polygons=polygons,
                                   colours=colours or None, delta_e=args.delta_e, close_px=args.close_px,
-                                  min_share=args.min_share, open_px=args.open_px,
+                                  min_share=args.min_share, open_px=args.open_px, aligned_masks=aligned or None,
                                   like=args.like), indent=2))
         return 0
     if args.command == "detail-part":
@@ -1625,12 +1661,27 @@ def _run(args) -> int:
         write_obj_uv(plate, plate_uv, args.output, comment=f"plate from the {args.view} drawing")
         print(json.dumps(report, indent=2))
         return 0
-    if args.command in ("cut-part", "mirror-part", "smooth-part"):
+    if args.command in ("cut-part", "mirror-part", "smooth-part", "shift-part"):
         from .part_place import cut_under, mirror_part, smooth_under, write_obj_uv
         from .texture import read_obj_uv
 
         _new_file(args.output)
         mesh, corner_uv = read_obj_uv(args.mesh)
+        if args.command == "shift-part":
+            from .handoff import reference_masks
+            from .part_place import shift_under
+
+            try:
+                move = tuple(float(v) / 1000 for v in args.move_mm.split(","))
+            except ValueError:
+                move = ()
+            if len(move) != 3:
+                raise SystemExit(f"error: give --move-mm as X,Y,Z, not {args.move_mm!r}")
+            moved, report = shift_under(mesh, reference_masks(args.handoff, 0.25), _spec(args.handoff)["metres_per_aligned_px"],
+                                        move, fade=args.fade, grow_px=args.grow_px)
+            write_obj_uv(moved, corner_uv, args.output, comment=f"moved by {args.move_mm} mm under the masks of a part")
+            print(json.dumps(report, indent=2))
+            return 0
         if args.command == "smooth-part":
             from .handoff import reference_masks
 
