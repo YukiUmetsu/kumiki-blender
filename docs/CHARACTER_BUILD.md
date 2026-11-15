@@ -309,12 +309,14 @@ kumiki-character-build parts HANDOFF low.obj --given scarf=g1/scarf --given vest
 
 On Pip, the vest got a straight hem and the scarf a clean edge on the vest.
 
-**A torn strip where two drawings meet is often a crumpled surface.** The top of
-Pip's plume lies in front of the head in the back drawing, so the back of the head
-has plume fur. In each side view that showed as a torn pale strip behind the ear.
-The cause was the shape: the generator made the back of the head with deep folds,
-and the border between the side drawing and the back drawing followed each fold.
-`smooth-part` on the back of the head made the border one clean line.
+**A torn strip where two drawings meet is often a crumpled surface.**
+
+In the back drawing, the top of Pip's plume lies in front of the head. The back
+of the head thus has plume fur. In each side view that showed as a torn pale
+strip behind the ear. The cause was the shape. The generator made the back of the
+head with deep folds. The border between the side drawing and the back drawing
+followed each fold. `smooth-part` on the back of the head made the border one
+clean line.
 
 Do not cut the plume out of the back drawing to remove the strip. That was tried.
 The surface then has no drawing, the fill paints it a flat brown, and the pink of
