@@ -307,6 +307,21 @@ class PlaceAndJoinTests(unittest.TestCase):
         np.testing.assert_allclose(again.vertices, mesh.vertices, atol=1e-6)
         np.testing.assert_array_equal(again.faces, mesh.faces)
         np.testing.assert_allclose(uv_again, corner_uv, atol=1e-5)
+        # A part and its mirror image use one texture: one column for both, and the big part gets more of the width.
+        other = Mesh(small.vertices * [-1, 1, 1], small.faces[:, [0, 2, 1]])
+        apart = join_parts([(big, planar(big), red), (small, planar(small), blue), (other, planar(small), blue)], size=256)[3]
+        shared = join_parts([(big, planar(big), red), (small, planar(small), blue), (other, planar(small), blue)],
+                            size=256, share=[0, 1, 1])
+        rows = shared[3]
+        self.assertEqual(rows[1]["u_range"], rows[2]["u_range"])
+        self.assertEqual(rows[1]["u_range"][1], 1.0)
+        self.assertGreater(rows[0]["u_range"][1], apart[0]["u_range"][1], "the texture is stored once")
+        uv = shared[1][rows[2]["faces"][0]:rows[2]["faces"][1]].reshape(-1, 2)
+        inner = uv[(uv[:, 0] > rows[2]["u_range"][0] + 0.02) & (uv[:, 0] < rows[2]["u_range"][1] - 0.02)]
+        sampled = shared[2][np.clip(((1 - inner[:, 1]) * 256).astype(int), 0, 255), (inner[:, 0] * 256).astype(int)]
+        self.assertLess(np.abs(sampled.astype(int) - (30, 30, 200)).max(), 12)
+        with self.assertRaises(ValueError):
+            join_parts([(big, planar(big), red)], share=[0, 1])
 
 
 class SmallPartTests(unittest.TestCase):
@@ -431,6 +446,46 @@ class SmallPartTests(unittest.TestCase):
         self.assertFalse(part[32, 52], "a small piece of the colour elsewhere is dropped")
         self.assertFalse(part[50, 100] or part[90, 60])
         self.assertTrue(opened[62:78, 44:156].all() and not opened[100, 100], "open_px removes what is thin")
+
+    def test_a_limb_is_taken_from_the_good_side_for_the_other_side(self):
+        from kumiki_blender.character_build.part_place import cut_under, mirror_part
+        body, hand = self.body_and_hand()
+        masks = {name: rasterize(hand, camera(name), self.PX, 0.25)[0] for name in ("front", "back")}
+        uv = np.zeros((len(body.faces), 3, 2))
+        uv[:, :, 0] = np.arange(len(body.faces))[:, None]
+        rest, _, removed = cut_under(body, uv, masks, self.PX, loose_faces=0)
+        piece, piece_uv, taken = cut_under(body, uv, masks, self.PX, take=True)
+        self.assertEqual((taken, len(piece.faces) + len(rest.faces)), (removed, len(body.faces)))
+        self.assertGreater(piece.vertices[:, 0].min(), 0.09, "only the end of the arm")
+        kept = piece_uv[:, 0, 0].astype(int)                         # the piece keeps the UVs of the mesh
+        np.testing.assert_allclose(piece.vertices[piece.faces], body.vertices[body.faces[kept]])
+        other, other_uv = mirror_part(piece, piece_uv)
+        self.assertLess(other.vertices[:, 0].max(), -0.09)
+        self.assertEqual(len(other_uv), len(piece_uv))
+
+    def test_a_fin_sinks_into_the_surface_and_the_region_takes_the_shape_of_the_other_side(self):
+        from scipy.spatial import cKDTree
+        from kumiki_blender.character_build.mesh import surface_samples
+        from kumiki_blender.character_build.part_place import mirror_part, smooth_under
+        body, hand = self.body_and_hand()
+        bumpy = body.vertices.copy()
+        end = bumpy[:, 0] > 0.095
+        rng = np.random.default_rng(2)
+        bumpy[end] += body.vertex_normals()[end] * np.abs(rng.normal(0, 0.004, (int(end.sum()), 1)))   # spikes at one end
+        rough = Mesh(bumpy, body.faces)
+        masks = {name: rasterize(hand, camera(name), self.PX, 0.25)[0] for name in ("front", "back")}
+        clean = mirror_part(rough, None)[0]                          # the other end, which has no spikes, mirrored
+        target = cKDTree(surface_samples(clean, 0.0005)[0])
+        inside = rough.vertices[:, 0] > 0.105
+        shrunk, _ = smooth_under(rough, masks, self.PX, grow_px=20, rounds=80, shrink=True)
+        wrapped, report = smooth_under(rough, masks, self.PX, grow_px=20, rounds=80, shrink=True, wrap=clean)
+        np.testing.assert_array_equal(wrapped.faces, rough.faces)
+        far = lambda mesh: target.query(mesh.vertices[inside])[0]
+        self.assertGreater(np.median(far(rough)), 0.001, "the spikes stand off the clean shape")
+        self.assertLess(far(wrapped).max(), 0.0006, "wrapped: the region lies on the clean shape")
+        self.assertGreater(np.median(far(shrunk)), 3 * np.median(far(wrapped)), "shrunk alone: smooth, but it lost volume")
+        self.assertEqual(float(np.abs(wrapped.vertices - rough.vertices)[rough.vertices[:, 0] < 0.04].max()), 0.0)
+        self.assertGreater(report["vertices_moved"], 0)
 
     def test_a_crumpled_sheet_is_smoothed_under_the_masks_of_a_part(self):
         from kumiki_blender.character_build.part_place import smooth_under
@@ -566,6 +621,48 @@ class SmallPartTests(unittest.TestCase):
             plate_part(np.zeros_like(mask), self.PX)
         with self.assertRaises(ValueError):
             plate_part(mask, self.PX, view="az0_el30")
+        # Draped: no plane, but on the surface of the anchor that the view sees; beyond it, at the nearest depth.
+        over = np.zeros_like(mask)
+        over[130:160, 215:290] = True                                # over the arm (rows 138 to 162 at this scale) and above it
+        draped, draped_uv, _ = plate_part(over, self.PX, anchor=body, drape=True, thickness_m=0.002, both_sides=True)
+        centre = draped.vertices[: len(draped.vertices) // 2] * 0.5 + draped.vertices[len(draped.vertices) // 2:] * 0.5
+        on_arm = (centre[:, 2] > 0.145) & (centre[:, 2] < 0.175) & (centre[:, 0] < 0.09)
+        surface = 0.01 - 0.03 * np.sqrt(np.clip(1 - (centre[on_arm, 0] / .12) ** 2 - ((centre[on_arm, 2] - .16) / .03) ** 2, 0, 1))
+        self.assertLess(np.abs(centre[on_arm, 1] - surface).max(), 0.006, "it follows the front of the arm")
+        self.assertLess(centre[on_arm, 1].min(), -0.012, "and so it is no plane")
+        self.assertGreater(signed_volume(draped), 0)
+        self.assertLess(draped_uv[..., 0].max(), 0.5, "both sides use the half of the texture that has the drawing")
+        room = np.zeros_like(over)                                   # the opposite drawing has no figure above row 140
+        room[140:] = True
+        fitted, _, report = plate_part(over, self.PX, anchor=body, drape=True, room=room)
+        self.assertEqual(report["cells"], int((over & room).sum()))
+        self.assertLess(fitted.vertices[:, 2].max(), (1100 - 140 / 0.25) * self.PX + 1e-9, "nothing where it would show")
+        with self.assertRaises(ValueError):
+            plate_part(over, self.PX, room=np.ones((10, 10), bool))
+
+    def test_a_plate_takes_its_texture_from_the_drawings_own_pixels(self):
+        from kumiki_blender.character_build.part_place import plate_part, plate_texture
+        from kumiki_blender.character_build.texture import render_textured
+        mask = np.zeros((300, 400), bool)
+        mask[150:190, 215:275] = True
+        plate, uv, report = plate_part(mask, self.PX, thickness_m=0.002, smooth=0)
+        self.assertEqual(report["box_aligned_px"], [860.0, 600.0, 1100.0, 760.0])
+        near = np.zeros((1200, 1600, 4), np.uint8)                   # the front drawing: a red part with a blue stripe
+        near[600:760, 860:1100] = (200, 40, 40, 255)
+        near[600:760, 900:920] = (30, 30, 220, 255)
+        far = np.zeros_like(near)                                    # the back drawing, as the back camera sees it: green
+        far[600:760, 1600 - 1100:1600 - 860] = (40, 180, 60, 255)
+        far[600:760, 1600 - 920:1600 - 900] = (240, 240, 40, 255)    # with a yellow stripe at the same place on the plate
+        texture = plate_texture(report["box_aligned_px"], near, far, size=512)
+        front, shown = render_textured(plate, uv, texture, "front", self.PX, 1.0)
+        back, shown_back = render_textured(plate, uv, texture, "back", self.PX, 1.0)
+        self.assertLess(np.abs(front[680, 910] - (30, 30, 220)).max(), 30, "the stripe is where the drawing has it")
+        self.assertLess(np.abs(front[680, 1000] - (200, 40, 40)).max(), 30)
+        self.assertLess(np.abs(back[680, 1600 - 910] - (240, 240, 40)).max(), 30, "and the other side shows the other drawing")
+        self.assertLess(np.abs(back[680, 1600 - 1000] - (40, 180, 60)).max(), 30)
+        alone = plate_texture(report["box_aligned_px"], near, None, size=512)
+        back, _ = render_textured(plate, uv, alone, "back", self.PX, 1.0)
+        self.assertLess(np.abs(back[680, 1600 - 910] - (30, 30, 220)).max(), 30, "one drawing: it is on both sides")
 
     def test_a_mirrored_part_takes_the_depth_of_the_body_on_its_side(self):
         from kumiki_blender.character_build.part_place import mirror_part

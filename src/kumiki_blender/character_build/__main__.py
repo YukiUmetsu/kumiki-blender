@@ -64,6 +64,19 @@ def _write_json(path: Path, data: dict) -> None:
     path.write_text(json.dumps(data, indent=2), encoding="utf-8")
 
 
+def _any_mesh(path: Path):
+    """A mesh from an OBJ with UVs (as `retopo` and the part commands write it) or from any other mesh file."""
+    from .mesh import read_mesh
+    from .texture import read_obj_uv
+
+    if path.suffix.lower() == ".obj":
+        try:
+            return read_obj_uv(path)[0]
+        except ValueError:
+            pass
+    return read_mesh(path)
+
+
 def _boxes_and_polygons(box_items: list[str], polygon_items: list[str], required: bool = True) -> tuple[dict, dict]:
     """``VIEW:X0,Y0,X1,Y1`` and ``VIEW:X,Y,X,Y,X,Y...`` options as {view: [boxes]} and {view: [polygons]}."""
     def numbers_of(item: str) -> tuple[str, list[int]]:
@@ -632,6 +645,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("handoff", type=Path, help="the handoff of the part that replaces them")
     p.add_argument("--output", type=Path, required=True, help=".obj")
     p.add_argument("--grow-px", type=float, default=6.0, help="cut this far around the part's masks (aligned px)")
+    p.add_argument("--take", action="store_true",
+                   help="write the other piece: only the faces under the part's masks, with the UVs of the mesh")
     p.add_argument("--join", type=Path, action="append", default=[],
                    help="the mesh of a new part, in place: the cut edge is smoothed and set on its surface; repeat")
     p.add_argument("--join-px", type=float, default=14.0, help="with --join: how far an edge vertex may move (aligned px)")
@@ -644,6 +659,13 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--output", type=Path, required=True, help=".obj")
     p.add_argument("--rounds", type=int, default=30)
     p.add_argument("--strength", type=float, default=0.5, help="step of each round, 0 to 1")
+    p.add_argument("--shrink", action="store_true",
+                   help="no step back: a fin or a deep fold sinks into the surface, and the region gets a little smaller")
+    p.add_argument("--fade", type=int, default=4,
+                   help="rings of vertices inside the border of the region over which the effect grows to its full strength")
+    p.add_argument("--wrap", type=Path,
+                   help="after the smoothing, set the region on the nearest surface of this mesh, e.g. the mirror image "
+                        "of the mesh (`mirror-part`) where the other side came out clean")
     p.add_argument("--pass-band", type=float, default=0.1,
                    help="what stays: 0.1 removes fine wrinkles only; 0.01, with more rounds, also waves of several faces")
     p.add_argument("--grow-px", type=float, default=0.0, help="smooth this far around the part's masks (aligned px)")
@@ -668,6 +690,19 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--outside", type=Path,
                    help="the body mesh: make only what lies outside its silhouette, and --overlap-px inside it")
     p.add_argument("--overlap-px", type=float, default=12.0)
+    p.add_argument("--texture", type=Path,
+                   help="also write the plate's texture (.png) from the drawings' own pixels: --view on one side, the "
+                        "opposite view on the other (or --view again, if the handoff has no opposite view)")
+    p.add_argument("--texture-size", type=int, default=1024)
+    p.add_argument("--cell-px", type=float, default=4.0,
+                   help="size of a square of the plate, aligned px; 2 for a fine outline (a fringe)")
+    p.add_argument("--room", type=Path, metavar="WHOLE_HANDOFF",
+                   help="keep only what the opposite drawing of the whole character has room for, so that a part which "
+                        "hangs beyond the body does not show from the opposite side, where it is not drawn")
+    p.add_argument("--both-sides", action="store_true",
+                   help="both sides show the drawing of --view (for a part that only one drawing shows)")
+    p.add_argument("--drape", action="store_true",
+                   help="lay the plate on the surface of --anchor that --view sees (the end of a scarf on a shoulder)")
 
     p = sub.add_parser("mirror-part", help="the same part on the other side of the character")
     p.add_argument("mesh", type=Path, help="the placed part (.obj with UVs)")
@@ -1642,7 +1677,9 @@ def _run(args) -> int:
             return read_obj_uv(path)[0] if path.suffix.lower() == ".obj" else read_mesh(path)
 
         _new_file(args.output)
-        masks = reference_masks(args.handoff, 0.25)
+        if not 1 <= args.cell_px <= 16:
+            raise SystemExit("error: --cell-px must be from 1 to 16")
+        masks = reference_masks(args.handoff, 1 / args.cell_px)
         if args.view not in masks:
             raise SystemExit(f"error: the handoff has no {args.view} drawing of the part (it has {sorted(masks)})")
         anchor = None
@@ -1654,11 +1691,46 @@ def _run(args) -> int:
                 faces.append(mesh.faces + start)
                 start += len(mesh.vertices)
             anchor = Mesh(np.concatenate(vertices), np.concatenate(faces))
+        room = None
+        if args.room:
+            from scipy import ndimage
+
+            from .views import camera as view_camera
+
+            whole = reference_masks(args.room, 1 / args.cell_px)
+            facing = next((name for name in whole if np.allclose(view_camera(name).toward,
+                                                                   -view_camera(args.view).toward, atol=1e-6)), None)
+            if facing is None:
+                raise SystemExit(f"error: {args.room} has no drawing opposite to {args.view}")
+            # The opposite camera sees the mirror image about the frame centre. Three aligned pixels of slack.
+            room = ndimage.binary_dilation(whole[facing][:, ::-1], iterations=max(1, round(3 / args.cell_px)))
         plate, plate_uv, report = plate_part(masks[args.view], _spec(args.handoff)["metres_per_aligned_px"],
+                                             scale=1 / args.cell_px, both_sides=args.both_sides, room=room,
                                              view=args.view, thickness_m=args.thickness_mm / 1000, anchor=anchor,
                                              outside=any_mesh(args.outside) if args.outside else None,
-                                             overlap_px=args.overlap_px)
+                                             overlap_px=args.overlap_px, drape=args.drape)
         write_obj_uv(plate, plate_uv, args.output, comment=f"plate from the {args.view} drawing")
+        if args.texture:
+            from PIL import Image
+
+            from .part_place import plate_texture
+            from .views import camera
+
+            _new_file(args.texture)
+
+            def aligned(view: str):
+                path = args.handoff / "aligned" / f"{view}.png"
+                if not path.is_file():
+                    return None
+                with Image.open(path) as picture:
+                    return np.asarray(picture.convert("RGBA"))
+
+            opposite = next((name for name in masks if name != args.view
+                             and np.allclose(camera(name).toward, -camera(args.view).toward, atol=1e-6)), None)
+            far = aligned(opposite) if opposite and not args.both_sides else None
+            Image.fromarray(plate_texture(report["box_aligned_px"], aligned(args.view), far, size=args.texture_size)
+                            ).save(args.texture)
+            report["texture"] = {"near": args.view, "far": opposite if far is not None else args.view}
         print(json.dumps(report, indent=2))
         return 0
     if args.command in ("cut-part", "mirror-part", "smooth-part", "shift-part"):
@@ -1689,7 +1761,8 @@ def _run(args) -> int:
                 raise SystemExit("error: --strength must be above 0 and at most 1")
             smooth, report = smooth_under(mesh, reference_masks(args.handoff, 0.25), _spec(args.handoff)["metres_per_aligned_px"],
                                           rounds=args.rounds, strength=args.strength, grow_px=args.grow_px,
-                                          pass_band=args.pass_band)
+                                          pass_band=args.pass_band, shrink=args.shrink, fade=args.fade,
+                                          wrap=_any_mesh(args.wrap) if args.wrap else None)
             write_obj_uv(smooth, corner_uv, args.output, comment="smoothed under the masks of a part")
             print(json.dumps(report, indent=2))
             return 0
@@ -1700,7 +1773,11 @@ def _run(args) -> int:
             cut, cut_uv, removed = cut_under(mesh, corner_uv, reference_masks(args.handoff, 0.25),
                                              _spec(args.handoff)["metres_per_aligned_px"], grow_px=args.grow_px,
                                              loose_faces=args.loose_faces, join_px=args.join_px,
-                                             join=[read_mesh(path) for path in args.join] or None)
+                                             join=[_any_mesh(path) for path in args.join] or None, take=args.take)
+            if args.take:
+                write_obj_uv(cut, cut_uv, args.output, comment=f"{removed} faces taken from under the masks of a part")
+                print(json.dumps({"faces_taken": removed}, indent=2))
+                return 0
             write_obj_uv(cut, cut_uv, args.output, comment=f"{removed} faces cut under a separate part")
             print(json.dumps({"faces_removed": removed, "faces_left": len(cut.faces)}, indent=2))
         else:
@@ -1735,12 +1812,15 @@ def _run(args) -> int:
             names.append(str(Path(fields[0]).resolve()))
         if normals and len(normals) != len(loaded):
             raise SystemExit("error: give a normal map for every part or for none")
-        mesh, corner_uv, texture, layout = join_parts(loaded, size=args.size)
+        # Parts that name one texture file share it: a part and its mirror image, or a piece cut from a body.
+        textures = [str(Path(item.split(":")[1]).resolve()) for item in args.parts]
+        share = [textures.index(value) for value in textures]
+        mesh, corner_uv, texture, layout = join_parts(loaded, size=args.size, share=share)
         out.mkdir(parents=True, exist_ok=True)
         write_obj_uv(mesh, corner_uv, out / "joined.obj", comment="joined parts; see layout.json")
         Image.fromarray(texture).save(out / "basecolor.png")
         if normals:      # the same layout: it depends only on the meshes
-            Image.fromarray(join_parts(normals, size=args.size)[2]).save(out / "normal.png")
+            Image.fromarray(join_parts(normals, size=args.size, share=share)[2]).save(out / "normal.png")
         report = {"parts": [{**row, "source": name} for row, name in zip(layout, names)], "size": args.size,
                   "vertices": len(mesh.vertices), "faces": len(mesh.faces)}
         _write_json(out / "layout.json", report)
