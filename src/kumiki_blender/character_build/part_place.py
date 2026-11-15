@@ -411,10 +411,26 @@ def smooth_under(mesh: Mesh, masks: dict[str, np.ndarray], metres_per_px: float,
         "max_move_mm": round(float(moved.max() * 1000), 3)}
 
 
-def mirror_part(mesh: Mesh, corner_uv: np.ndarray | None, mid_x: float = 0.0) -> tuple[Mesh, np.ndarray | None]:
-    """The part on the other side of the character (x -> 2 mid_x - x), with the same texture."""
+def mirror_part(mesh: Mesh, corner_uv: np.ndarray | None, mid_x: float = 0.0, *, anchor: Mesh | None = None
+                ) -> tuple[Mesh, np.ndarray | None]:
+    """The part on the other side of the character (x -> 2 mid_x - x), with the same texture.
+
+    A generated body is not exactly symmetric: Pip's right sleeve ends 16 mm further
+    back than the left one, and the mirror image of the left hand floated in front of
+    it. With ``anchor`` (the body), the mirrored part moves front or back (along y) to
+    where the body is at its place: the median depth of the body's vertices inside the
+    part's extent in x and z, as ``place_part`` sets a depth that no view measures. Only
+    a translation: the part keeps its shape and its texture.
+    """
     vertices = mesh.vertices.copy()
     vertices[:, 0] = 2 * mid_x - vertices[:, 0]
+    if anchor is not None:
+        low, high = vertices.min(axis=0), vertices.max(axis=0)
+        near = np.ones(len(anchor.vertices), bool)
+        for index in (0, 2):
+            near &= (anchor.vertices[:, index] >= low[index]) & (anchor.vertices[:, index] <= high[index])
+        if near.any():
+            vertices[:, 1] += float(np.median(anchor.vertices[near, 1])) - (low[1] + high[1]) / 2
     faces = mesh.faces[:, [0, 2, 1]]                   # keep the outside out
     return Mesh(vertices, faces, mesh.colours), (corner_uv[:, [0, 2, 1]] if corner_uv is not None else None)
 

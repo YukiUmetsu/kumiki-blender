@@ -441,11 +441,17 @@ kumiki-character-build place-part armL_detail arm.glb --anchor body/fitted.ply \
   --tilt-range-deg 40 --output arm.ply
 # 4. fit, retopo and texture with armL_detail, as for each part.
 # 5. The same part on the other side. It uses the same texture.
-kumiki-character-build mirror-part arm/low.obj --mid-x 0.0 --output arm_R/low.obj
+kumiki-character-build mirror-part arm/low.obj --anchor body/fitted.ply --output arm_R/low.obj
 # 6. Remove from the body what the parts replace.
 kumiki-character-build cut-part body/low.obj arms/arm --join arm/low.obj --join arm_R/low.obj \
   --output body_cut/low.obj
 ```
+
+A generated body is not exactly symmetric. Pip's right sleeve ends 16 mm further
+back than the left one. The exact mirror image of the left hand floated in
+front of it. `mirror-part --anchor body.ply` moves the mirrored part front or back
+to the depth of the body at its place. It is only a translation, so the shape and
+the texture stay.
 
 `box-part` uses no image editor: the figure's pixels inside the boxes and polygons
 are the part. Use it where the editor does not do what you ask. Asked to remove
