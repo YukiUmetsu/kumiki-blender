@@ -366,25 +366,51 @@ The limb keeps its shape. The move fades over `--fade` rings of vertices on the
 body, and the faces that it pushed together there are spread again. The faces and
 the UVs stay. Move a part that is modelled alone (a forearm) by the same vector.
 
-A drawing still shows two things that the body must not take from it:
+A drawing still shows things that the body must not take from it:
 
 - What lies in front of the body in the drawing and is a part of its own (the
-  forearm, the hand). Cut it out with `box-part --polygon`.
-- The place where a thin part of the model shows. Seen from the side, the skin flap
-  of Pip's model lies in front of the vest of the side drawing. Cut out the pixels
-  where the model's flap is the nearest surface:
+  forearm, the whole hand). Cut it out with `box-part --polygon`. One finger tip
+  that stayed in Pip's side drawing made pink specks on the vest.
+- A detail that only this drawing has. Pip's side drawing has a chest pocket, and
+  the front drawing has none there. With both, the vest had two pockets at 45
+  degrees. Cut the detail from one of the two drawings.
+
+`box-part --where-mesh MESH --under PART_HANDOFF --in-views left,right` cuts from a
+drawing the pixels where a part of the model is the nearest surface. `--in-views`
+takes a side without a drawing too. Its pixels go, mirrored, to the drawing of the
+other side. Look at how much it cuts. For Pip's two skin flaps it cut most of the
+side of the vest from the side drawing, and the bake was better without it.
+
+On Pip, the side of the vest now has its pocket, its buttons and its hem on both
+sides. The sleeve hangs where the drawing has it. Median colour error of the side
+view: 6.0 to 5.5 delta E.
+
+**A limb that the generator made badly on one side.** Pip's left arm came out
+clean. The right arm was crumpled, and the end of the scarf stood off the shoulder
+as a fin.
 
 ```bash
-kumiki-character-build box-part HANDOFF --name modelflap --where-mesh body_s.obj \
-  --under flaps/flaps --in-views left,right --output cut/
+# 1. The good arm, cut out of the body. It keeps the UVs of the body.
+kumiki-character-build cut-part body/low.obj armL/armL --take --grow-px 0 --output armL.obj
+# 2. Its mirror image is the other arm. It uses the texture of the body.
+kumiki-character-build mirror-part armL.obj --output armR/low.obj
+# 3. The body without the bad arm; the cut edge goes onto the new arm.
+kumiki-character-build cut-part body/low.obj armR_mask/armR --grow-px 0 --join armR/low.obj \
+  --join-px 30 --output body_cut.obj
+# 4. The fin sinks into the shoulder, and the shoulder takes the shape of the good side.
+kumiki-character-build mirror-part body/low.obj --output body_mirror.obj
+kumiki-character-build smooth-part body_cut.obj shoulderR/shoulderR --shrink --rounds 400 \
+  --fade 6 --wrap body_mirror.obj --output body_fixed.obj
 ```
 
-`--in-views` takes a side without a drawing too. Its pixels go, mirrored, to the
-drawing of the other side, because the mirror image of that drawing paints it.
+`smooth-part --shrink` has no step back, so a fin or a deep fold sinks into the
+surface. The region loses volume. `--wrap MESH` gives it back: each vertex of the
+region then moves to the nearest point of that mesh. Keep the armpit out of the
+region: the two sides differ there, and the wrap makes a crease.
 
-On Pip, the side of the vest now has its pocket, its buttons and its hem, and the
-sleeve hangs where the drawing has it. Median colour error of the side view: 6.0 to
-5.5 delta E.
+In `join-parts`, parts that name the same texture file share one column of the
+joined texture. Give the mirrored arm the texture of the body, and a mirrored
+forearm the texture of the forearm.
 
 Limits:
 
@@ -560,25 +586,46 @@ generator:
 ```bash
 # 1. Mark the sheet in the drawings (front and back), in a handoff without the arm.
 kumiki-character-build box-part arms/rest --name flap --polygon front:... --polygon back:... --output flapL/
-# 2. A plate with the outline of the drawing, for what the body lacks.
+# 2. A plate with the outline of the drawing, for what the body lacks, and its texture.
 kumiki-character-build plate-part flapL/flap --anchor body/low.obj --anchor arm/low.obj \
-  --outside body/low.obj --overlap-px 14 --thickness-mm 2.5 --output flapL/plate.obj
-# 3. Both sides of the plate take their colours from the front and the back drawing.
-kumiki-character-build texture flapL/flap flapL/plate.obj --size 512 --output flapL/plate.png
+  --outside body/low.obj --overlap-px 14 --thickness-mm 2.5 \
+  --texture flapL/plate.png --output flapL/plate.obj
 ```
 
-- Each cell of the mask (1.3 mm for a 0.32 m figure) becomes a square of the plate.
-  The outline is smoothed.
+- Each cell of the mask becomes a square of the plate (`--cell-px`, default 4
+  aligned pixels, 1.3 mm for a 0.32 m figure). The outline is smoothed.
 - `--anchor` gives the meshes that the sheet hangs between. The plate lies in the
   plane that fits them best where the sheet is. Repeat the option.
 - `--outside BODY` makes only what lies outside the silhouette of the body, and a
   band of `--overlap-px` inside it. Where the two outlines differ by a pixel or
   two, nothing is added.
-- The side toward the camera has the left half of the texture, and the other
-  side the right half. The rim takes the colour just inside the outline.
+- `--texture` writes the texture from the drawings' own pixels. The side toward
+  the camera shows the drawing of `--view`, and the other side the opposite
+  drawing. Do not bake a plate with `texture`. The bake does not trust pixels near
+  an outline, and two thirds of a fringe came out as a fill colour.
 
 Add the plate to `join-parts` as a part. On Pip, the flaps now reach from the hip to
 the wrist, as in the front and back drawings.
+
+**A part that lies on the body and only one drawing shows.** The end of Pip's scarf
+hangs over the right shoulder. Only the back drawing shows it.
+
+```bash
+kumiki-character-build box-part HANDOFF --name scarfend --polygon back:... \
+  --colour 139,55,60 --colour 100,35,40 --output se/
+kumiki-character-build plate-part se/scarfend --view back --drape --both-sides --cell-px 2 \
+  --anchor body/low.obj --anchor armR/low.obj --thickness-mm 2 \
+  --texture se/plate.png --output se/plate.obj
+```
+
+`--drape` lays the plate on the surface that `--view` sees, 1 mm above it. Where
+the part hangs beyond the body, the plate continues at the depth of the nearest
+surface. `--both-sides` puts the one drawing on both sides. Cut the part from the
+body's drawing too (`box-part`), or the body is painted with it a second time.
+
+The end of the scarf now shows from the front, beside the neck. The front drawing
+does not have it there. The two drawings disagree, and the model follows the back
+drawing.
 
 ## Eyes as separate eyeballs
 

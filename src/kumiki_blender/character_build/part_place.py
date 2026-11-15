@@ -280,7 +280,7 @@ def seat_part(part: Mesh, body: Mesh, metres_per_px: float, *, view: str | None 
 
 def cut_under(mesh: Mesh, corner_uv: np.ndarray | None, masks: dict[str, np.ndarray], metres_per_px: float, *,
               scale: float = 0.25, grow_px: float = 6.0, loose_faces: int = 200,
-              join: list[Mesh] | None = None, join_px: float = 14.0, smooth: int = 2
+              join: list[Mesh] | None = None, join_px: float = 14.0, smooth: int = 2, take: bool = False
               ) -> tuple[Mesh, np.ndarray | None, int]:
     """The mesh without the faces that a separate part replaces; its UVs; the number of faces removed.
 
@@ -295,6 +295,11 @@ def cut_under(mesh: Mesh, corner_uv: np.ndarray | None, masks: dict[str, np.ndar
     goes too. The cut leaves an open edge, which the new part covers. A piece of fewer
     than ``loose_faces`` faces that the cut separated from the mesh (a fingertip outside
     the outline) goes too.
+
+    With ``take``, the result is the other piece: only the faces that would go (and the
+    number is that of the faces taken). The piece keeps the UVs of the mesh, so it can use
+    the texture of the mesh. Mirrored (``mirror_part``), it replaces the same limb on the
+    side where the generator made it badly.
 
     Whole faces go, so the open edge has teeth of the size of a face, and between it and
     the new part a gap can show. With ``join`` (the meshes of the new parts, in place),
@@ -313,6 +318,10 @@ def cut_under(mesh: Mesh, corner_uv: np.ndarray | None, masks: dict[str, np.ndar
         at_cut = np.unique(piece[np.unique(mesh.faces[gone])])
         loose = at_cut[faces_in[at_cut] < loose_faces]
         gone[~gone] = np.isin(piece[kept[:, 0]], loose)
+    if take:
+        used, inverse = np.unique(mesh.faces[gone], return_inverse=True)
+        piece = Mesh(mesh.vertices[used], inverse.reshape(-1, 3))
+        return piece, (corner_uv[gone] if corner_uv is not None else None), int(gone.sum())
     used, inverse = np.unique(mesh.faces[~gone], return_inverse=True)
     cut = Mesh(mesh.vertices[used], inverse.reshape(-1, 3))
     if join and gone.any():
@@ -397,7 +406,7 @@ def shows_under(mesh: Mesh, masks: dict[str, np.ndarray], view: str, metres_per_
 
 def smooth_under(mesh: Mesh, masks: dict[str, np.ndarray], metres_per_px: float, *, scale: float = 0.25,
                  grow_px: float = 0.0, rounds: int = 30, strength: float = 0.5, pass_band: float = 0.1,
-                 fade: int = 4) -> tuple[Mesh, dict]:
+                 fade: int = 4, shrink: bool = False, wrap: Mesh | None = None) -> tuple[Mesh, dict]:
     """The mesh with the surface under a part's masks smoothed; the faces, and so the UVs, stay.
 
     A generator makes a thin sheet (the skin between an arm and a body) with a crumpled
@@ -405,7 +414,12 @@ def smooth_under(mesh: Mesh, masks: dict[str, np.ndarray], metres_per_px: float,
     ``cut_under``) are smoothed ``rounds`` times. Each round is one step toward the mean
     of the neighbours and one step back (Taubin), so that the sheet keeps its size.
     ``pass_band`` sets what stays: at 0.1 only fine wrinkles go, and at 0.01, with more
-    rounds, waves of several faces go too. The effect fades over ``fade`` rings of vertices at the border of the region, and a vertex
+    rounds, waves of several faces go too. With ``shrink`` there is no step back: a fin
+    or a deep fold that the generator made (the end of a scarf as a sheet that stands off
+    a shoulder) sinks into the surface, and the region gets smaller. ``wrap`` gives the
+    volume back: after the smoothing, each vertex of the region moves to the nearest
+    point of that mesh. Use the mirror image of the mesh (``mirror_part``) where the other
+    side came out clean. The effect fades over ``fade`` rings of vertices at the border of the region, and a vertex
     on an open edge of the mesh does not move.
     """
     count = len(mesh.vertices)
@@ -425,10 +439,22 @@ def smooth_under(mesh: Mesh, masks: dict[str, np.ndarray], metres_per_px: float,
         weight = np.minimum(weight, mean @ weight)
     weight[open_edge] = 0.0
     vertices = mesh.vertices.copy()
-    shrink, swell = strength, -strength / (1 - pass_band * strength)     # Taubin: 1/shrink + 1/swell = pass_band
+    steps = (strength,) if shrink else (strength, -strength / (1 - pass_band * strength))   # Taubin: 1/a + 1/b = pass band
     for _ in range(max(0, rounds)):
-        for step in (shrink, swell):
+        for step in steps:
             vertices += (step * weight)[:, None] * (mean @ vertices - vertices)
+    if wrap is not None and (weight > 0).any():
+        from scipy.spatial import cKDTree
+
+        length = float(np.median(np.linalg.norm(mesh.vertices[unique[:, 0]] - mesh.vertices[unique[:, 1]], axis=1)))
+        target = cKDTree(surface_samples(wrap, length / 4)[0])
+        ids = np.nonzero(weight > 0)[0]
+        for _ in range(3):                             # onto the target, and spread along it
+            _, nearest = target.query(vertices[ids], workers=-1)
+            vertices[ids] += weight[ids, None] * (target.data[nearest] - vertices[ids])
+            vertices += (0.5 * weight)[:, None] * (mean @ vertices - vertices)
+        _, nearest = target.query(vertices[ids], workers=-1)
+        vertices[ids] += weight[ids, None] * (target.data[nearest] - vertices[ids])
     moved = np.linalg.norm(vertices - mesh.vertices, axis=1)
     return Mesh(vertices, mesh.faces, mesh.colours), {
         "vertices_in_region": int(inside.sum()), "vertices_moved": int((moved > 1e-9).sum()),
@@ -482,7 +508,8 @@ def shift_under(mesh: Mesh, masks: dict[str, np.ndarray], metres_per_px: float, 
 
 def plate_part(mask: np.ndarray, metres_per_px: float, *, view: str = "front", scale: float = 0.25,
                thickness_m: float = 0.003, anchor: Mesh | None = None, outside: Mesh | None = None,
-               overlap_px: float = 12.0, smooth: int = 3) -> tuple[Mesh, np.ndarray, dict]:
+               overlap_px: float = 12.0, smooth: int = 3, drape: bool = False, lift_m: float = 0.001,
+               both_sides: bool = False) -> tuple[Mesh, np.ndarray, dict]:
     """A thin plate with the outline of ``mask``, its UVs for each face corner, and a short report.
 
     A generator makes a thin sheet badly: the skin between Pip's arm and body came out a
@@ -498,8 +525,17 @@ def plate_part(mask: np.ndarray, metres_per_px: float, *, view: str = "front", s
     aligned pixels inside it: the plate then adds what the body lacks. Where the two
     outlines differ by a pixel or two, nothing is added.
 
+    With ``drape``, the plate is no plane: it lies on the surface of ``anchor`` that
+    ``view`` sees, ``lift_m`` above it, as the end of a scarf lies on a shoulder. Where
+    the mask reaches beyond the anchor (a fringe that hangs free), it continues at the
+    depth of the nearest surface. The depth is smoothed, so the plate does not follow
+    each fold. What hangs free shows from the opposite side too, as it would on the
+    character.
+
     UVs: the side toward the camera has the left half of the texture, the other side the
-    right half. ``texture`` bakes both from the drawings of the part handoff. The rim takes
+    right half. With ``both_sides``, the other side uses the left half too: a part that
+    only one drawing shows (the end of a scarf, seen from behind) has that drawing on both
+    of its sides, and no side is a fill colour. ``texture`` bakes both from the drawings of the part handoff. The rim takes
     the colour just inside the outline: the outline itself is pale, mixed with the
     background of the drawing.
     """
@@ -550,7 +586,16 @@ def plate_part(mask: np.ndarray, metres_per_px: float, *, view: str = "front", s
     u = (flat[:, 1] / scale - CX) * metres_per_px
     z = (BASELINE - flat[:, 0] / scale) * metres_per_px
     depth, fitted = np.zeros(len(flat)), False
-    if anchor is not None:
+    if anchor is not None and drape:
+        seen, nearest = rasterize(anchor, look, metres_per_px, scale)
+        if seen.any():
+            _, (iy, ix) = ndimage.distance_transform_edt(~seen, return_indices=True)
+            surface = np.nan_to_num(nearest, nan=0.0)[iy, ix]              # beyond the anchor: the nearest surface
+            surface = ndimage.gaussian_filter(surface, max(1.0, 6 * scale))
+            ri = np.clip(np.round(flat[:, 0]).astype(int), 0, keep.shape[0] - 1)
+            ci = np.clip(np.round(flat[:, 1]).astype(int), 0, keep.shape[1] - 1)
+            depth, fitted = surface[ri, ci] + lift_m + 0.5 * thickness_m, True
+    elif anchor is not None:
         col, row, reach = look.project(anchor.vertices, metres_per_px, scale)
         near_mask = ndimage.binary_dilation(keep, iterations=max(1, round(8 * scale)))
         ci, ri = np.floor(col).astype(int), np.floor(row).astype(int)
@@ -594,7 +639,7 @@ def plate_part(mask: np.ndarray, metres_per_px: float, *, view: str = "front", s
     span = np.maximum(corners.max(axis=0) - corners.min(axis=0), 1).astype(np.float64)
     uv_front = np.column_stack([0.02 + 0.46 * (flat[:, 1] - corners[:, 1].min()) / span[1],
                                 0.98 - 0.96 * (flat[:, 0] - corners[:, 0].min()) / span[0]])
-    uv = np.concatenate([uv_front, uv_front + [0.5, 0.0]])
+    uv = np.concatenate([uv_front, uv_front if both_sides else uv_front + [0.5, 0.0]])
     corner_uv = uv[faces]
     # The rim takes the colour just inside the outline, on the side toward the camera (the fourth
     # nearest inner corner). With its own corners in both halves of the texture, each rim triangle
@@ -608,8 +653,52 @@ def plate_part(mask: np.ndarray, metres_per_px: float, *, view: str = "front", s
             int(on_rim.sum()), -1)[:, -1]]
     corner_uv[len(front) + len(back):] = uv_front[inward[wall % count]]
     mesh = Mesh(vertices, faces)
+    low, high = corners.min(axis=0) / scale, corners.max(axis=0) / scale      # (row, column) in aligned pixels
     return mesh, corner_uv, {"cells": int(keep.sum()), "faces": int(len(faces)), "depth_from_anchor": fitted,
-                             "area_cm2": round(float(keep.sum()) * (metres_per_px / scale) ** 2 * 1e4, 2)}
+                             "area_cm2": round(float(keep.sum()) * (metres_per_px / scale) ** 2 * 1e4, 2),
+                             "box_aligned_px": [float(low[1]), float(low[0]), float(high[1]), float(high[0])]}
+
+
+def plate_texture(box_aligned_px: list[float], near: np.ndarray, far: np.ndarray | None = None, *, size: int = 1024
+                  ) -> np.ndarray:
+    """The texture of a plate from ``plate_part``: the drawings' own pixels, with no bake.
+
+    ``box_aligned_px`` is from the report of ``plate_part``. ``near`` is the aligned
+    drawing (RGBA, 1600 x 1200) of the plate's view, masked to the part. It fills the
+    left half of the texture, where the side toward the camera has its UVs. ``far`` is the
+    aligned drawing of the opposite view. It is mirrored, so that it lines up with the
+    near view, and fills the right half. Without it, the right half is the near drawing
+    again. Outside the part, each texel takes the nearest pixel of the part.
+
+    The bake does not trust pixels near an outline, and a fringe is all outline: baked,
+    two thirds of the end of Pip's scarf were a fill colour.
+    """
+    x0, y0, x1, y1 = box_aligned_px
+    width, height = round(0.46 * size), round(0.96 * size)
+
+    def half(rgba: np.ndarray) -> np.ndarray:
+        picture = Image.fromarray(rgba).transform((width, height), Image.AFFINE,
+                                                  ((x1 - x0) / width, 0, x0, 0, (y1 - y0) / height, y0), Image.BILINEAR)
+        tile = np.asarray(picture)
+        shown = tile[..., 3] > 127
+        if not shown.any():
+            return np.zeros((height, width, 3), dtype=np.uint8)
+        _, (iy, ix) = ndimage.distance_transform_edt(~shown, return_indices=True)
+        return tile[..., :3][iy, ix]
+
+    texture = np.zeros((size, size, 3), dtype=np.uint8)
+    left = half(near)
+    right = half(far[:, ::-1]) if far is not None else left
+    if not right.any():
+        right = left
+    top = round(0.02 * size)
+    for start, tile in ((round(0.02 * size), left), (round(0.52 * size), right)):
+        texture[top:top + height, start:start + width] = tile
+    covered = np.zeros((size, size), dtype=bool)
+    covered[top:top + height, round(0.02 * size):round(0.02 * size) + width] = True
+    covered[top:top + height, round(0.52 * size):round(0.52 * size) + width] = True
+    _, (iy, ix) = ndimage.distance_transform_edt(~covered, return_indices=True)
+    return texture[iy, ix]
 
 
 def mirror_part(mesh: Mesh, corner_uv: np.ndarray | None, mid_x: float = 0.0, *, anchor: Mesh | None = None
@@ -636,27 +725,41 @@ def mirror_part(mesh: Mesh, corner_uv: np.ndarray | None, mid_x: float = 0.0, *,
     return Mesh(vertices, faces, mesh.colours), (corner_uv[:, [0, 2, 1]] if corner_uv is not None else None)
 
 
-def join_parts(parts: list[tuple[Mesh, np.ndarray, np.ndarray]], *, size: int = 4096, min_share: float = 0.15
-               ) -> tuple[Mesh, np.ndarray, np.ndarray, list[dict]]:
+def join_parts(parts: list[tuple[Mesh, np.ndarray, np.ndarray]], *, size: int = 4096, min_share: float = 0.15,
+               share: list[int] | None = None) -> tuple[Mesh, np.ndarray, np.ndarray, list[dict]]:
     """One mesh, its UVs per face corner, one texture, and where each part went.
 
     Each part is (mesh, UVs per face corner, texture). The parts get columns of the new
     texture, as wide as their share of the surface (at least ``min_share``). The meshes
     are not welded to each other: a part stays a separate piece of surface.
+
+    ``share`` gives a group number for each part. Parts of one group use one texture (that
+    of the first) and one column: a part and its mirror image (``mirror_part``), or a
+    piece that was cut out of a body and keeps the body's UVs. The texture is then stored
+    once, and the other parts keep more of the resolution.
     """
     if not parts:
         raise ValueError("join_parts needs at least one part")
-    area = np.array([part[0].area() for part in parts])
-    width = np.maximum(area / area.sum(), min_share if len(parts) > 1 else 1.0)
+    if share is None:
+        share = list(range(len(parts)))
+    if len(share) != len(parts):
+        raise ValueError("share needs one group number for each part")
+    groups = list(dict.fromkeys(share))                 # in the order of their first part
+    column_of = np.array([groups.index(value) for value in share])
+    area = np.bincount(column_of, weights=[part[0].area() for part in parts], minlength=len(groups))
+    width = np.maximum(area / area.sum(), min_share if len(groups) > 1 else 1.0)
     width /= width.sum()
     edges = np.round(np.concatenate([[0], np.cumsum(width)]) * size).astype(int)
     texture = np.zeros((size, size, 3), dtype=np.uint8)
     vertices, faces, corner_uv, layout = [], [], [], []
-    start = 0
+    start, filled = 0, set()
     for index, (mesh, uv, image) in enumerate(parts):
-        left, right = int(edges[index]), int(edges[index + 1])
-        tile = Image.fromarray(np.asarray(image)[..., :3]).resize((right - left, size), Image.LANCZOS)
-        texture[:, left:right] = np.asarray(tile)
+        column = int(column_of[index])
+        left, right = int(edges[column]), int(edges[column + 1])
+        if column not in filled:
+            tile = Image.fromarray(np.asarray(image)[..., :3]).resize((right - left, size), Image.LANCZOS)
+            texture[:, left:right] = np.asarray(tile)
+            filled.add(column)
         placed = uv.astype(np.float64).copy()
         placed[..., 0] = (left + np.clip(placed[..., 0], 0, 1) * (right - left)) / size
         vertices.append(mesh.vertices)
