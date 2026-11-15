@@ -645,6 +645,8 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("mesh", type=Path, help="the placed part (.obj with UVs)")
     p.add_argument("--output", type=Path, required=True, help=".obj; it uses the same texture")
     p.add_argument("--mid-x", type=float, default=0.0, help="x of the mirror plane, metres")
+    p.add_argument("--anchor", type=Path,
+                   help="the body mesh: move the mirrored part front or back to where the body is at its place")
 
     p = sub.add_parser("join-parts", help="one mesh and one texture from placed, textured parts")
     p.add_argument("parts", nargs="+", help="each part as low.obj:basecolor.png or low.obj:basecolor.png:normal.png")
@@ -1608,7 +1610,12 @@ def _run(args) -> int:
             write_obj_uv(cut, cut_uv, args.output, comment=f"{removed} faces cut under a separate part")
             print(json.dumps({"faces_removed": removed, "faces_left": len(cut.faces)}, indent=2))
         else:
-            other, other_uv = mirror_part(mesh, corner_uv, args.mid_x)
+            anchor = None
+            if args.anchor:
+                from .mesh import read_mesh
+
+                anchor = read_obj_uv(args.anchor)[0] if args.anchor.suffix.lower() == ".obj" else read_mesh(args.anchor)
+            other, other_uv = mirror_part(mesh, corner_uv, args.mid_x, anchor=anchor)
             write_obj_uv(other, other_uv, args.output, comment=f"mirrored about x = {args.mid_x}")
             print(json.dumps({"mid_x": args.mid_x, "faces": len(other.faces)}, indent=2))
         return 0

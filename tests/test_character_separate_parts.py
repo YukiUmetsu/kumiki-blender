@@ -481,6 +481,21 @@ class SmallPartTests(unittest.TestCase):
         far, _, _ = cut_under(body, None, masks, self.PX, join=[Mesh(small.vertices + [0, 0.2, 0], small.faces)], smooth=0)
         np.testing.assert_array_equal(far.vertices, open_cut.vertices)       # a part out of reach moves nothing
 
+    def test_a_mirrored_part_takes_the_depth_of_the_body_on_its_side(self):
+        from kumiki_blender.character_build.part_place import mirror_part
+        body, hand = self.body_and_hand()
+        bent = body.vertices.copy()
+        bent[:, 1] += np.where(bent[:, 0] < 0, 0.012 * (-bent[:, 0] / .12), 0.0)    # the other arm lies 12 mm further back at its end
+        uneven = Mesh(bent, body.faces)
+        plain, _ = mirror_part(hand, None)
+        moved, _ = mirror_part(hand, None, anchor=uneven)
+        np.testing.assert_allclose(plain.vertices[:, [0, 2]], moved.vertices[:, [0, 2]])
+        shift = moved.vertices[:, 1] - plain.vertices[:, 1]
+        np.testing.assert_allclose(shift, shift[0], atol=1e-12)                       # one translation
+        self.assertAlmostEqual(float(shift[0]), 0.012, delta=0.003)
+        same, _ = mirror_part(hand, None, anchor=body)                                # a symmetric body: no move
+        self.assertLess(np.abs(same.vertices[:, 1] - plain.vertices[:, 1]).max(), 0.001)
+
     def test_mirror_keeps_the_outside_out(self):
         from kumiki_blender.character_build.part_place import mirror_part
         _, hand = self.body_and_hand()
